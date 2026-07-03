@@ -497,7 +497,8 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         fileSeq: 0,
         modelAlias,
         copyVerbatimInstruction: "copy",
-        E2E_AUTHOR_OUT: {},
+        E2E_AUTHOR_OUT: { author: true },
+        ADJUDICATOR_OUT: { adjudicator: true },
         RAW_OUT: {},
         EXEC_AGENT_MODEL: "sonnet",
         E2E_KINDS: new Set(["spawn", "done", "failed", "reopen", "suspend"]),
@@ -552,6 +553,63 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
       })();
       expect(out).toEqual({ kind: "reopen", task_id: "T1" });
       expect(calls).toHaveLength(0);
+    });
+
+    it('an expects:"adjudication-results" spawn picks the ADJUDICATOR schema/label and records verdicts (D7)', async () => {
+      const { agent, calls } = makeAgent([
+        { status: "STATUS: DONE", verdicts: [{ spec_path: "e2e/x.spec.ts" }] },
+        { raw: "envelope-bytes" },
+      ]);
+      const cli = async () => ({
+        kind: "spawn",
+        expects: "adjudication-results",
+        prompt: "adjudicate",
+        model: "opus",
+      });
+      const parseEnvelope = () => ({ kind: "done", run_id: "run-1" });
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "done", run_id: "run-1" });
+      expect(calls[0]?.opts["label"]).toBe("e2e-adjudicator");
+      expect(calls[0]?.opts["schema"]).toEqual({ adjudicator: true });
+      expect(calls[1]?.prompt).toContain('"verdicts":[{"spec_path":"e2e/x.spec.ts"}]');
+      expect(calls[1]?.prompt).not.toContain('"manifest"');
+    });
+
+    it("a dead adjudicator records a RETRYABLE status (no BLOCKED/ESCALATE/NEEDS/DONE) with EMPTY verdicts", async () => {
+      const { agent, calls } = makeAgent([null, { raw: "envelope-bytes" }]);
+      const cli = async () => ({
+        kind: "spawn",
+        expects: "adjudication-results",
+        prompt: "adjudicate",
+        model: "opus",
+      });
+      const parseEnvelope = () => ({ kind: "failed", reason: "adjudicator died twice" });
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "failed", reason: "adjudicator died twice" });
+      expect(calls[1]?.prompt).toContain("e2e adjudicator agent skipped or died");
+      for (const keyword of ["BLOCKED", "ESCALATE", "NEEDS", "STATUS: DONE"]) {
+        expect(calls[1]?.prompt).not.toContain(keyword);
+      }
+      expect(calls[1]?.prompt).toContain('"verdicts":[]');
+    });
+
+    it('an author spawn (expects:"author-results") still picks the AUTHOR schema/label', async () => {
+      const { agent, calls } = makeAgent([
+        { status: "STATUS: DONE", manifest: [] },
+        { raw: "envelope-bytes" },
+      ]);
+      const cli = async () => ({
+        kind: "spawn",
+        expects: "author-results",
+        prompt: "author e2e",
+        model: "opus",
+      });
+      const parseEnvelope = () => ({ kind: "done", run_id: "run-1" });
+      await build(agent, cli, parseEnvelope)();
+      expect(calls[0]?.opts["label"]).toBe("e2e-author");
+      expect(calls[0]?.opts["schema"]).toEqual({ author: true });
+      expect(calls[1]?.prompt).toContain('"manifest":[]');
+      expect(calls[1]?.prompt).not.toContain('"verdicts"');
     });
   });
 

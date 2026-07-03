@@ -527,6 +527,41 @@ export const E2eManifestEntrySchema = z.object({
 export type E2eManifestEntry = z.infer<typeof E2eManifestEntrySchema>;
 
 /**
+ * One spec awaiting ADJUDICATION (Decision 40 D7): a pre-existing committed spec
+ * (not in this run's manifest) that failed the suite. `mode` pre-routes the
+ * adjudicator's job: `update` — the assessment forecast this task-driven change
+ * (`needs-update`), so the spec is rewritten directly, no verdict needed;
+ * `adjudicate` — unforecast, the adjudicator must first rule regression (fail the
+ * run) vs intentional-change (rewrite, citing the authorizing task/spec language).
+ */
+export const E2eAdjudicationSpecSchema = z.object({
+  /** Repo-relative path of the failing committed spec. */
+  spec_path: z.string().min(1),
+  /** The failing spec's human-readable title (from the Playwright results). */
+  title: z.string(),
+  /** The failing assertion/step detail (D8), threaded into the adjudicator prompt. */
+  error: z.string().optional(),
+  mode: z.enum(["adjudicate", "update"]),
+});
+export type E2eAdjudicationSpec = z.infer<typeof E2eAdjudicationSpecSchema>;
+
+/**
+ * The in-flight adjudication CURSOR (Decision 40 D7) — present only between "the
+ * suite hit unmappable pre-existing failures" and "the adjudicator's result was
+ * recorded". Its presence is what routes `runE2eRecord` to the adjudication leg
+ * (the results shape carries no discriminator of its own). Cleared on conclusion
+ * (either way); dropped by rescue's `--reset-e2e` (a stale cursor must never
+ * re-spawn against a torn-down worktree).
+ */
+export const E2eAdjudicationSchema = z.object({
+  specs: z.array(E2eAdjudicationSpecSchema).min(1),
+  /** Adjudicator SPAWN attempts (crash retry, mirrors `author_attempts`). */
+  attempts: z.number().int().nonnegative(),
+  requested_at: z.string(),
+});
+export type E2eAdjudication = z.infer<typeof E2eAdjudicationSchema>;
+
+/**
  * Run-level e2e phase marker + author manifest (engine-owned e2e phase, ordered
  * BEFORE docs). Unlike {@link DocsPhaseSchema} — written once and never
  * re-entered — this object's `status` is CLEARED (set back to absent) on every
@@ -561,6 +596,15 @@ export const E2ePhaseSchema = z.object({
   manifest: z.array(E2eManifestEntrySchema).default([]),
   /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
   reopen_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+  adjudication: E2eAdjudicationSchema.optional(),
+  /**
+   * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+   * A spec failing AGAIN after its one adjudication is a regression — the run
+   * fails rather than adjudicating in a loop. Survives rescue's reset (like
+   * `reopen_counts`): the cap holds across the whole run.
+   */
+  adjudication_counts: z.record(z.string(), z.number().int().nonnegative()).optional(),
   ended_at: z.string().optional(),
 });
 export type E2ePhase = z.infer<typeof E2ePhaseSchema>;

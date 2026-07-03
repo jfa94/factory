@@ -199,7 +199,8 @@ describe("runE2eEmit", () => {
   it("first entry spawns the e2e-author off the staging tip", async () => {
     const env = await runE2eEmit(deps(), RUN_ID);
     expect(env.kind).toBe("spawn");
-    if (env.kind !== "spawn") throw new Error("expected spawn");
+    if (env.kind !== "spawn" || env.expects !== "author-results")
+      throw new Error("expected author spawn");
     expect(env.staging_branch).toBe(`staging-${RUN_ID}`);
     expect(env.e2e_branch).toBe(`e2e-${RUN_ID}`);
     expect(env.base_ref).toBe("origin/develop");
@@ -876,7 +877,9 @@ describe("runSuiteAndDecide (via runE2eEmit re-entry)", () => {
     expect(task.e2e_feedback).toContain('getByRole("button", { name: "Pay" })');
   });
 
-  it("an unmappable critical failure (no manifest entry names it) fails the run", async () => {
+  it("an unmappable critical failure (no manifest entry names it) routes to adjudication, not a hard fail", async () => {
+    // Pre-D7 this failed the run outright; now the pre-existing failing spec gets
+    // an adjudicator ruling first (mode "adjudicate" — no assessment forecast row).
     await state.update(RUN_ID, (s) => ({
       ...s,
       e2e_phase: {
@@ -890,10 +893,18 @@ describe("runSuiteAndDecide (via runE2eEmit re-entry)", () => {
       { file: "unknown.spec.ts", title: "some other journey", status: "failed" },
     ]);
     const env = await runE2eEmit(deps({ playwright: tool }), RUN_ID);
-    expect(env.kind).toBe("failed");
-    if (env.kind !== "failed") throw new Error("expected failed");
-    expect(env.reason).toContain("unmappable");
-    expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
+    expect(env.kind).toBe("spawn");
+    if (env.kind !== "spawn" || env.expects !== "adjudication-results")
+      throw new Error("expected adjudication spawn");
+    const phase = (await state.read(RUN_ID)).e2e_phase;
+    expect(phase?.status).toBeUndefined();
+    expect(phase?.adjudication?.specs).toEqual([
+      {
+        spec_path: "e2e/unknown.spec.ts",
+        title: "some other journey",
+        mode: "adjudicate",
+      },
+    ]);
   });
 
   it("a critical spec MISSING entirely from results (never collected) reopens its owning task, not a silent pass", async () => {
@@ -1467,5 +1478,276 @@ describe("boot config resolution (Decision 40 D10)", () => {
     const env = await runE2eEmit(deps({ config: defaultConfig() }), RUN_ID);
     expect(env.kind).toBe("suspend");
     expect((await state.read(RUN_ID)).status).toBe("suspended");
+  });
+});
+
+describe("adjudication of pre-existing failing specs (Decision 40 D7)", () => {
+  const MANIFEST = [
+    { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+  ];
+  const CURSOR_SPEC = {
+    spec_path: "e2e/legacy.spec.ts",
+    title: "legacy journey",
+    mode: "adjudicate" as const,
+  };
+
+  /** Seed an authored phase (+ optional forecast/cursor/counts) in one update. */
+  async function seedPhase(opts: {
+    affected?: Array<{
+      spec_path: string;
+      task_ids: string[];
+      expectation: "needs-update" | "should-still-pass";
+    }>;
+    cursor?: { specs: (typeof CURSOR_SPEC)[]; attempts: number; requested_at: string };
+    counts?: Record<string, number>;
+  }): Promise<void> {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      ...(opts.affected !== undefined
+        ? { e2e_assessment: { status: "done" as const, affected_specs: opts.affected } }
+        : {}),
+      e2e_phase: {
+        manifest: MANIFEST,
+        reopen_counts: {},
+        ...(opts.cursor !== undefined ? { adjudication: opts.cursor } : {}),
+        ...(opts.counts !== undefined ? { adjudication_counts: opts.counts } : {}),
+      },
+    }));
+  }
+
+  /** Suite results: the manifest spec green, one pre-existing spec red. */
+  function failingLegacyTool(): ScriptedPlaywrightTool {
+    return new ScriptedPlaywrightTool(() => [
+      { file: "e2e/checkout.spec.ts", title: `${CONTROL_TITLE_PREFIX} boots`, status: "passed" },
+      {
+        file: "e2e/legacy.spec.ts",
+        title: "legacy journey",
+        status: "failed",
+        error: "expect(locator).toBeVisible() failed",
+      },
+    ]);
+  }
+
+  it("a should-still-pass forecast row reopens its mapped tasks like any manifest failure", async () => {
+    await seedPhase({
+      affected: [
+        { spec_path: "e2e/legacy.spec.ts", task_ids: ["task-a"], expectation: "should-still-pass" },
+      ],
+    });
+    const env = await runE2eEmit(deps({ playwright: failingLegacyTool() }), RUN_ID);
+    expect(env.kind).toBe("reopen");
+    if (env.kind !== "reopen") throw new Error("expected reopen");
+    expect(env.task_ids).toEqual(["task-a"]);
+    expect(env.reason).toContain("e2e/legacy.spec.ts");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.reopen_counts).toEqual({ "task-a": 1 });
+    expect(run.e2e_phase?.adjudication).toBeUndefined();
+  });
+
+  it("a needs-update forecast row spawns the adjudicator in pre-authorized update mode", async () => {
+    await seedPhase({
+      affected: [
+        { spec_path: "e2e/legacy.spec.ts", task_ids: ["task-a"], expectation: "needs-update" },
+      ],
+    });
+    const env = await runE2eEmit(deps({ playwright: failingLegacyTool() }), RUN_ID);
+    expect(env.kind).toBe("spawn");
+    if (env.kind !== "spawn" || env.expects !== "adjudication-results")
+      throw new Error("expected adjudication spawn");
+    expect(env.adjudicate_branch).toBe(`e2e-adjudicate-${RUN_ID}`);
+    expect(env.prompt).toContain("e2e/legacy.spec.ts");
+    expect(env.prompt).toContain("toBeVisible() failed"); // D8 detail reaches the prompt
+    const cursor = (await state.read(RUN_ID)).e2e_phase?.adjudication;
+    expect(cursor?.specs).toEqual([
+      {
+        spec_path: "e2e/legacy.spec.ts",
+        title: "legacy journey",
+        error: "expect(locator).toBeVisible() failed",
+        mode: "update",
+      },
+    ]);
+    expect(cursor?.attempts).toBe(0);
+  });
+
+  it("a spec failing AGAIN after its one adjudication fails the run (cap 1 per spec per run)", async () => {
+    await seedPhase({ counts: { "e2e/legacy.spec.ts": 1 } });
+    const env = await runE2eEmit(deps({ playwright: failingLegacyTool() }), RUN_ID);
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("failing AGAIN after their one adjudication");
+    expect(env.reason).toContain("e2e/legacy.spec.ts");
+    expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
+  });
+
+  it("emit re-enters the adjudicator spawn idempotently from a persisted cursor", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    const env = await runE2eEmit(deps(), RUN_ID);
+    expect(env.kind).toBe("spawn");
+    if (env.kind !== "spawn" || env.expects !== "adjudication-results")
+      throw new Error("expected adjudication spawn");
+    expect(env.worktree).toContain(".e2e-adjudicate");
+  });
+
+  it("a regression verdict fails the run loud with the adjudicator's plain-language reason, cursor cleared", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    const env = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [
+        {
+          spec_path: "e2e/legacy.spec.ts",
+          verdict: "regression",
+          reason: "The checkout button no longer submits the order",
+        },
+      ],
+    });
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("regression verdict");
+    expect(env.reason).toContain("The checkout button no longer submits the order");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(run.e2e_phase?.adjudication).toBeUndefined();
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
+  });
+
+  it("intentional-change happy path: cited verdict → diff-scope ok → fail-first re-proof → merge+push → counts stamped, cursor cleared, suite re-run", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    git.branchFiles.set(`e2e-adjudicate-${RUN_ID}`, ["e2e/legacy.spec.ts"]);
+    const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID);
+    const tool = new ScriptedPlaywrightTool((opts) => [
+      { file: "e2e/legacy.spec.ts", title: `${CONTROL_TITLE_PREFIX} boots`, status: "passed" },
+      {
+        file: "e2e/legacy.spec.ts",
+        title: "legacy journey",
+        // Red on the base app (new behavior absent there), green everywhere else.
+        status: opts.cwd === baseWt ? "failed" : "passed",
+      },
+      // The suite re-run also sees the manifest spec green.
+      { file: "e2e/checkout.spec.ts", title: `${CONTROL_TITLE_PREFIX} app`, status: "passed" },
+    ]);
+    const env = await runE2eRecord(deps({ playwright: tool }), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [
+        {
+          spec_path: "e2e/legacy.spec.ts",
+          verdict: "intentional-change",
+          reason: "The new one-page checkout replaced the old two-step flow",
+          citation: "task-a: a user can complete checkout",
+        },
+      ],
+    });
+    expect(env.kind).toBe("done");
+    expect(git.mergesInto[`staging-${RUN_ID}`]).toContain(`e2e-adjudicate-${RUN_ID}`);
+    expect(git.calls.some((c) => c === `push origin staging-${RUN_ID}`)).toBe(true);
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.adjudication).toBeUndefined();
+    expect(run.e2e_phase?.adjudication_counts).toEqual({ "e2e/legacy.spec.ts": 1 });
+    expect(run.e2e_phase?.status).toBe("done");
+  });
+
+  it("a diff-scope violation (branch touches a non-adjudicated path) fails the run — never merged", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    git.branchFiles.set(`e2e-adjudicate-${RUN_ID}`, ["e2e/legacy.spec.ts", "src/backdoor.ts"]);
+    const env = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [
+        {
+          spec_path: "e2e/legacy.spec.ts",
+          verdict: "intentional-change",
+          reason: "intended",
+          citation: "task-a",
+        },
+      ],
+    });
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("src/backdoor.ts");
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
+  });
+
+  it("a missing verdict or an uncited intentional-change is an incomplete response — retried, not failed", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    const missing = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [],
+    });
+    expect(missing.kind).toBe("spawn");
+    expect((await state.read(RUN_ID)).e2e_phase?.adjudication?.attempts).toBe(1);
+
+    const uncited = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [
+        { spec_path: "e2e/legacy.spec.ts", verdict: "intentional-change", reason: "intended" },
+      ],
+    });
+    expect(uncited.kind).toBe("failed"); // second incomplete response hits the cap
+    if (uncited.kind !== "failed") throw new Error("expected failed");
+    expect(uncited.reason).toContain("citation");
+    expect(uncited.reason).toContain("(after 2 attempts)");
+    expect((await state.read(RUN_ID)).e2e_phase?.adjudication).toBeUndefined();
+  });
+
+  it("an adjudicator crash re-spawns once, then fails; the cursor never outlives the failure", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    const first = await runE2eRecord(deps(), RUN_ID, {
+      status: "e2e adjudicator agent skipped or died (no STATUS line)",
+      manifest: [],
+      verdicts: [],
+    });
+    expect(first.kind).toBe("spawn");
+    if (first.kind !== "spawn" || first.expects !== "adjudication-results")
+      throw new Error("expected adjudication spawn");
+    expect((await state.read(RUN_ID)).e2e_phase?.adjudication?.attempts).toBe(1);
+
+    const second = await runE2eRecord(deps(), RUN_ID, {
+      status: "gibberish",
+      manifest: [],
+      verdicts: [],
+    });
+    expect(second.kind).toBe("failed");
+    if (second.kind !== "failed") throw new Error("expected failed");
+    expect(second.reason).toContain("(after 2 attempts)");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(run.e2e_phase?.adjudication).toBeUndefined();
+  });
+
+  it("an adjudicated spec not actually rewritten on the branch is retried as incomplete", async () => {
+    await seedPhase({
+      cursor: { specs: [CURSOR_SPEC], attempts: 0, requested_at: "2026-07-03T00:00:00.000Z" },
+    });
+    git.branchFiles.set(`e2e-adjudicate-${RUN_ID}`, []); // nothing committed
+    const env = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest: [],
+      verdicts: [
+        {
+          spec_path: "e2e/legacy.spec.ts",
+          verdict: "intentional-change",
+          reason: "intended",
+          citation: "task-a",
+        },
+      ],
+    });
+    expect(env.kind).toBe("spawn");
+    expect((await state.read(RUN_ID)).e2e_phase?.adjudication?.attempts).toBe(1);
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
   });
 });

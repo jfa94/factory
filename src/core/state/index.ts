@@ -64,6 +64,8 @@ export type {
   E2eSpecKind,
   E2eManifestEntry,
   E2ePhase,
+  E2eAdjudicationSpec,
+  E2eAdjudication,
   E2eAffectedSpec,
   E2eAssessment,
 } from "./schema.js";

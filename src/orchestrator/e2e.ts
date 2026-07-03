@@ -10,12 +10,14 @@
  *     shells Playwright via `runE2e`, no LLM) — happens on EVERY entry, including
  *     every re-entry after a reopened task settles back to terminal.
  *
- * So only ONE spawn ever exists in this phase (`runE2eEmit`'s first-entry branch);
- * every other call — `runE2eEmit`'s re-entry branch and `runE2eRecord` after the
- * author returns — drives `runSuiteAndDecide` directly and returns a CONCLUSIVE
- * action (`done` | `failed` | `reopen` | `suspend`), never another spawn. The runner
- * therefore only ever spawns an agent for `kind: "spawn"`; every other kind means
- * "state already updated, no agent needed, continue the next-task loop."
+ * Spawns exist in three places (all `kind: "spawn"`, discriminated by `expects`):
+ * the first-entry AUTHOR spawn, its crash-retry re-spawn (D5), and the ADJUDICATOR
+ * spawn (D7 — a pre-existing committed spec failed unmappably and needs a
+ * regression-vs-intentional-change ruling). Every other call drives
+ * `runSuiteAndDecide` and returns a CONCLUSIVE action (`done` | `failed` |
+ * `reopen` | `suspend`). The runner therefore loops while `kind === "spawn"`,
+ * picking the results shape off `expects`; every other kind means "state already
+ * updated, no agent needed, continue the next-task loop."
  *
  * Ordering vs. commit (a deliberate refinement over the plan's literal worked
  * example): the fail-first proof runs BEFORE the critical specs are merged into
@@ -47,6 +49,8 @@ import {
   type SpecManifest,
   type RunState,
   type E2ePhase,
+  type E2eAdjudication,
+  type E2eAdjudicationSpec,
   type E2eManifestEntry,
   type PlaywrightTool,
   type E2eSpecResult,
@@ -93,12 +97,25 @@ export interface E2eRunDeps {
 export type E2eAction =
   | {
       readonly kind: "spawn";
+      /** Which results shape the runner records back (D7) — author manifest vs adjudication verdicts. */
+      readonly expects: "author-results";
       readonly run_id: string;
       readonly worktree: string;
       readonly base_ref: string;
       readonly staging_branch: string;
       readonly e2e_branch: string;
       readonly throwaway_dir: string;
+      readonly model: string;
+      readonly max_turns: number;
+      readonly prompt: string;
+    }
+  | {
+      readonly kind: "spawn";
+      readonly expects: "adjudication-results";
+      readonly run_id: string;
+      readonly worktree: string;
+      readonly staging_branch: string;
+      readonly adjudicate_branch: string;
       readonly model: string;
       readonly max_turns: number;
       readonly prompt: string;
@@ -127,6 +144,23 @@ const E2E_AUTHOR_MAX_TURNS = 90;
 /** Title prefix marking a spec's CONTROL assertion (fail-first-proof discipline). */
 export const CONTROL_TITLE_PREFIX = "control:";
 
+/** One adjudicator ruling on a pre-existing failing spec (Decision 40 D7). */
+export const E2eAdjudicationVerdictSchema = z
+  .object({
+    spec_path: z.string().min(1),
+    verdict: z.enum(["regression", "intentional-change"]),
+    /** Plain-language explanation — surfaced verbatim on a regression fail. */
+    reason: z.string().min(1),
+    /**
+     * The authorizing task/spec language quoted verbatim. REQUIRED on every
+     * intentional-change verdict — enforced at record (retry), not here, so a
+     * missing citation reads as an incomplete response rather than a parse crash.
+     */
+    citation: z.string().optional(),
+  })
+  .strict();
+export type E2eAdjudicationVerdict = z.infer<typeof E2eAdjudicationVerdictSchema>;
+
 export const E2eResultsSchema = z
   .object({
     status: z.string().min(1),
@@ -140,6 +174,12 @@ export const E2eResultsSchema = z
      * manifest is treated as ambiguous, not a silent pass.
      */
     no_ui_surface: z.boolean().optional(),
+    /**
+     * The adjudication-results leg's payload (D7) — populated only when an
+     * adjudication cursor is in flight (the cursor's presence in run state, not
+     * any field here, is what routes the record; author results omit it).
+     */
+    verdicts: z.array(E2eAdjudicationVerdictSchema).optional(),
   })
   .strict();
 // Named distinctly from `verifier/e2e`'s `E2eResults` (the Playwright run outcome,
@@ -174,8 +214,17 @@ export function e2eThrowawayDir(dataDir: string, runId: string): string {
   return join(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 
+/** The adjudicator's worktree (D7) — torn down once its spec updates are merged/rejected. */
+export function e2eAdjudicateWorktreePath(dataDir: string, runId: string): string {
+  return join(dataDir, "worktrees", runId, ".e2e-adjudicate");
+}
+
 function e2eBranchName(runId: string): string {
   return `e2e-${runId}`;
+}
+
+function adjudicateBranchName(runId: string): string {
+  return `e2e-adjudicate-${runId}`;
 }
 
 /** The boot pair every Playwright invocation + author prompt needs. */
@@ -300,6 +349,12 @@ export async function runE2eEmit(deps: E2eRunDeps, runId: string): Promise<E2eAc
     return prepareAuthorSpawn(deps, run, runId, boot, cfg.testDir);
   }
 
+  // In-flight adjudication (D7): the cursor survived a crash/resume — idempotently
+  // re-emit the adjudicator spawn (its record leg concludes or retries it).
+  if (run.e2e_phase.status === undefined && run.e2e_phase.adjudication !== undefined) {
+    return prepareAdjudicatorSpawn(deps, run, runId, boot);
+  }
+
   // Re-entry after a reopened task settled: the manifest is already authored
   // (throwaway specs are RE-RUN, not re-authored) — go straight to the mechanical
   // suite run. The fail-first proof already ran once, at authoring time.
@@ -339,6 +394,7 @@ async function prepareAuthorSpawn(
   const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
   return {
     kind: "spawn",
+    expects: "author-results",
     run_id: runId,
     worktree,
     base_ref: baseRef,
@@ -356,6 +412,105 @@ async function prepareAuthorSpawn(
       baseURL: boot.baseURL,
       spec: deps.spec,
     }),
+  };
+}
+
+/** Build the adjudicator prompt (D7): rule each unmapped failing spec regression vs
+ * intentional-change, then rewrite every pre-authorized/ruled-intentional spec. */
+function buildAdjudicationPrompt(args: {
+  worktree: string;
+  boot: BootConfig;
+  cursor: E2eAdjudication;
+  spec: SpecManifest;
+}): string {
+  const taskLines = args.spec.tasks
+    .map((t) => `  - ${t.task_id} — ${t.title}: ${t.acceptance_criteria.join("; ")}`)
+    .join("\n");
+  const specLines = (rows: readonly E2eAdjudicationSpec[]): string =>
+    rows
+      .map((s) => {
+        const detail = s.error === undefined ? "" : `\n    ${s.error.replace(/\n/g, "\n    ")}`;
+        return `  - ${s.spec_path} — "${s.title}"${detail}`;
+      })
+      .join("\n");
+  const adjudicate = args.cursor.specs.filter((s) => s.mode === "adjudicate");
+  const update = args.cursor.specs.filter((s) => s.mode === "update");
+  const lines = [
+    "You are the factory e2e-adjudicator: pre-existing committed e2e specs are failing " +
+      "against staging and no manifest entry maps them to a task in this run. Decide " +
+      "whether each failure is a REGRESSION this run introduced or an INTENTIONAL " +
+      "behavior change this run's spec authorizes.",
+    `1. cd into your worktree: ${args.worktree} (checked out on the adjudication branch off the staging tip).`,
+    `2. Boot the app: \`${args.boot.startCommand}\` → ${args.boot.baseURL} (reuse if already running).`,
+    "3. The tasks this run delivered (the ONLY authority for 'intentional'):",
+    taskLines,
+  ];
+  if (adjudicate.length > 0) {
+    lines.push(
+      "4. ADJUDICATE each failing spec below — read its source, reproduce against the live app:",
+      specLines(adjudicate),
+      '   Verdict "regression": the old behavior should still work and this run broke it.',
+      '   Verdict "intentional-change": a task above deliberately changed this behavior — you ' +
+        "MUST include a `citation` quoting the authorizing task/criterion language verbatim; " +
+        "an uncited intentional-change verdict is rejected.",
+    );
+  }
+  if (update.length > 0 || adjudicate.length > 0) {
+    lines.push(
+      `${adjudicate.length > 0 ? "5" : "4"}. UPDATE these pre-authorized specs${
+        adjudicate.length > 0 ? " plus every spec you ruled intentional-change" : ""
+      } — rewrite each to assert the NEW behavior, keep its "${CONTROL_TITLE_PREFIX}"-titled ` +
+        "assertion, validate it green against the live staging app, and COMMIT it in this worktree:",
+      ...(update.length > 0 ? [specLines(update)] : []),
+    );
+  }
+  lines.push(
+    "Only the spec files listed above may change — touching anything else fails the run. Do NOT push.",
+    'Finish with your terminal STATUS line and return {"status": "<line>", "verdicts": [...]} — ' +
+      "one {spec_path, verdict, reason, citation?} row per ADJUDICATED spec only (pre-authorized " +
+      "updates need no verdict row); `reason` is plain language a non-technical reader understands.",
+  );
+  return lines.join("\n");
+}
+
+/** Prepare (idempotently) the adjudicator worktree + spawn off the persisted cursor (D7). */
+async function prepareAdjudicatorSpawn(
+  deps: E2eRunDeps,
+  run: RunState,
+  runId: string,
+  boot: BootConfig,
+): Promise<E2eAction> {
+  const cursor = run.e2e_phase?.adjudication;
+  if (cursor === undefined) {
+    throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`);
+  }
+  const staging = resolveStagingBranch(runId, run.staging_branch);
+  const branch = adjudicateBranchName(runId);
+  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+
+  await deps.git.fetch("origin", staging);
+  if (!(await deps.git.worktreeExists(worktree))) {
+    // `-B`: same crash-safety rationale as prepareAuthorSpawn.
+    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
+    await (deps.provision ?? provisionWorktree)({
+      path: worktree,
+      setupCommand: deps.config.quality.setupCommand,
+    });
+  } else if (cursor.attempts >= 1) {
+    // Re-spawn after a crashed adjudicator: discard its partial work (mirrors D5).
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
+  }
+
+  return {
+    kind: "spawn",
+    expects: "adjudication-results",
+    run_id: runId,
+    worktree,
+    staging_branch: staging,
+    adjudicate_branch: branch,
+    model: E2E_AUTHOR_MODEL,
+    max_turns: E2E_AUTHOR_MAX_TURNS,
+    prompt: buildAdjudicationPrompt({ worktree, boot, cursor, spec: deps.spec }),
   };
 }
 
@@ -434,6 +589,14 @@ export async function runE2eRecord(
   runId: string,
   results: E2eAuthorResults,
 ): Promise<E2eAction> {
+  // A persisted adjudication cursor — not anything in the results shape — is what
+  // says which spawn these results answer (D7): the cursor only exists while an
+  // adjudicator is in flight.
+  const run0 = await deps.state.read(runId);
+  if (run0.e2e_phase?.adjudication !== undefined) {
+    return recordAdjudication(deps, runId, run0, results);
+  }
+
   const worktree = e2eWorktreePath(deps.dataDir, runId);
 
   const outcome = parseProducerStatus(results.status);
@@ -562,6 +725,182 @@ export async function runE2eRecord(
     },
   }));
 
+  return runSuiteAndDecide(deps, runId);
+}
+
+/** Fail the phase AND clear the adjudication cursor + worktree — every
+ * {@link recordAdjudication} failure exit routes through here so a failed run never
+ * leaves a live cursor behind (emit would re-spawn against a removed worktree). */
+async function failAdjudication(
+  deps: E2eRunDeps,
+  runId: string,
+  worktree: string,
+  reason: string,
+): Promise<Extract<E2eAction, { kind: "failed" }>> {
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await deps.state.update(runId, (s) =>
+    s.e2e_phase === undefined
+      ? s
+      : { ...s, e2e_phase: { ...s.e2e_phase, adjudication: undefined } },
+  );
+  await markFailed(deps, runId, reason);
+  return { kind: "failed", run_id: runId, reason };
+}
+
+/** Adjudicator crash/no-STATUS → one automatic re-spawn, same cap + rationale as
+ * {@link retryAuthorOrFail} (D5); the attempt count lives on the cursor. */
+async function retryAdjudicatorOrFail(
+  deps: E2eRunDeps,
+  runId: string,
+  worktree: string,
+  reason: string,
+): Promise<E2eAction> {
+  const run = await deps.state.read(runId);
+  const cursor = run.e2e_phase?.adjudication;
+  const attempts = (cursor?.attempts ?? 0) + 1;
+  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
+    return failAdjudication(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
+  }
+  await deps.state.update(runId, (s) =>
+    s.e2e_phase?.adjudication === undefined
+      ? s
+      : {
+          ...s,
+          e2e_phase: {
+            ...s.e2e_phase,
+            adjudication: { ...s.e2e_phase.adjudication, attempts },
+          },
+        },
+  );
+  log.warn(
+    `run '${runId}': e2e-adjudicator attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} failed — re-spawning (${reason})`,
+  );
+  return runE2eEmit(deps, runId);
+}
+
+/**
+ * Record the adjudicator's verdicts (D7): any `regression` fails the run loud with
+ * the adjudicator's plain-language reason; all-intentional (verdicts complete, every
+ * intentional-change cited) gates the rewritten specs exactly like fresh-authored
+ * ones — diff scope, fail-first re-proof, merge — then clears the cursor, stamps the
+ * per-spec adjudication count (cap 1/run), and re-runs the suite.
+ */
+async function recordAdjudication(
+  deps: E2eRunDeps,
+  runId: string,
+  run: RunState,
+  results: E2eAuthorResults,
+): Promise<E2eAction> {
+  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+  // Non-null by the runE2eRecord dispatch guard.
+  const cursor = run.e2e_phase!.adjudication!;
+
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "error") {
+    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${outcome.reason}`);
+  }
+  if (outcome.status !== "done") {
+    const reason = `e2e-adjudicator: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+
+  // Verdict completeness — an incomplete/malformed response is a retryable crash-
+  // equivalent (the adjudicator half-finished), not a deliberate ruling.
+  const verdicts = results.verdicts ?? [];
+  const cursorPaths = new Set(cursor.specs.map((s) => s.spec_path));
+  const ruled = new Set(verdicts.map((v) => v.spec_path));
+  const unruled = cursor.specs.filter((s) => s.mode === "adjudicate" && !ruled.has(s.spec_path));
+  const unknown = verdicts.filter((v) => !cursorPaths.has(v.spec_path));
+  const uncited = verdicts.filter(
+    (v) => v.verdict === "intentional-change" && (v.citation === undefined || v.citation === ""),
+  );
+  if (unruled.length > 0 || unknown.length > 0 || uncited.length > 0) {
+    const parts = [
+      ...(unruled.length > 0
+        ? [`missing verdict(s) for: ${unruled.map((s) => s.spec_path).join(", ")}`]
+        : []),
+      ...(unknown.length > 0
+        ? [
+            `verdict(s) for spec(s) not under adjudication: ${unknown.map((v) => v.spec_path).join(", ")}`,
+          ]
+        : []),
+      ...(uncited.length > 0
+        ? [
+            `intentional-change verdict(s) missing the required citation: ${uncited.map((v) => v.spec_path).join(", ")}`,
+          ]
+        : []),
+    ];
+    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${parts.join("; ")}`);
+  }
+
+  const regressions = verdicts.filter((v) => v.verdict === "regression");
+  if (regressions.length > 0) {
+    const reason =
+      "e2e adjudication: regression verdict — " +
+      regressions.map((v) => `${v.spec_path}: ${v.reason}`).join("; ");
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+
+  // All intentional — gate the rewritten specs exactly like fresh-authored ones.
+  const staging = resolveStagingBranch(runId, run.staging_branch);
+  const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
+    cwd: worktree,
+  });
+  const stray = changed.filter((f) => !cursorPaths.has(f));
+  if (stray.length > 0) {
+    const reason =
+      "e2e-adjudicator: branch touches path(s) outside the adjudicated spec set — " +
+      `refusing to merge unreviewed changes: ${stray.join(", ")}`;
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+  const unrewritten = cursor.specs.filter((s) => !changed.includes(s.spec_path));
+  if (unrewritten.length > 0) {
+    return retryAdjudicatorOrFail(
+      deps,
+      runId,
+      worktree,
+      `e2e-adjudicator: spec(s) not rewritten: ${unrewritten.map((s) => s.spec_path).join(", ")}`,
+    );
+  }
+
+  const boot = resolveBootConfig(deps.config.e2e, run);
+  if (boot === null) {
+    return failAdjudication(
+      deps,
+      runId,
+      worktree,
+      "e2e-adjudicator: boot config vanished between spawn and record (config or assessment state changed mid-run)",
+    );
+  }
+  // Fail-first re-proof: the rewritten spec must be red on base (new behavior absent
+  // there) and green on the adjudicator's worktree — same trust boundary as authoring.
+  const proof = await proveCriticals(
+    deps,
+    runId,
+    changed.map((f) => ({ task_ids: [], spec_path: f, kind: "critical" as const })),
+    worktree,
+    boot,
+  );
+  if (!proof.ok) {
+    return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`);
+  }
+
+  await deps.git.mergeFfOrCommit(staging, adjudicateBranchName(runId));
+  await deps.git.push("origin", staging);
+  await deps.git.worktreeRemove([worktree, "--force"]);
+
+  await deps.state.update(runId, (s) => {
+    if (s.e2e_phase === undefined) return s;
+    const counts = { ...(s.e2e_phase.adjudication_counts ?? {}) };
+    for (const spec of cursor.specs) counts[spec.spec_path] = (counts[spec.spec_path] ?? 0) + 1;
+    return {
+      ...s,
+      e2e_phase: { ...s.e2e_phase, adjudication: undefined, adjudication_counts: counts },
+    };
+  });
+  log.info(
+    `run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) — re-running the suite`,
+  );
   return runSuiteAndDecide(deps, runId);
 }
 
@@ -775,15 +1114,18 @@ function findEntry(
   return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`));
 }
 
+/** Bidirectional suffix match — the Playwright reporter's `file` and the assessment
+ * map's `spec_path` may each carry or lack the testDir prefix. */
+function specPathMatches(file: string, specPath: string): boolean {
+  return file === specPath || file.endsWith(`/${specPath}`) || specPath.endsWith(`/${file}`);
+}
+
 /**
  * The mechanical heart of the phase: sync the run-worktree to CURRENT staging, run
  * the full suite (critical + throwaway), join failures to tasks via the manifest,
  * and apply the cadence (Decision 8) + disposition (Decision 9) rules.
  */
-async function runSuiteAndDecide(
-  deps: E2eRunDeps,
-  runId: string,
-): Promise<Extract<E2eAction, { kind: "done" | "failed" | "reopen" | "suspend" }>> {
+async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAction> {
   const run = await deps.state.read(runId);
   const manifest = run.e2e_phase?.manifest ?? [];
   const attempts = (run.e2e_phase?.attempts ?? 0) + 1;
@@ -912,12 +1254,64 @@ async function runSuiteAndDecide(
   const unmappableCritical = criticalSpecFailures.filter(
     (s) => findEntry(manifest, s) === undefined,
   );
+
+  // Unmappable = a PRE-EXISTING committed spec (this run's manifest doesn't name it)
+  // is failing. Route three ways off the assessment's affected-specs forecast (D7):
+  // mapped should-still-pass → reopen its tasks like any manifest failure;
+  // needs-update → adjudicator in pre-authorized update mode; unmapped/unforecast →
+  // adjudicator rules regression vs intentional-change. One adjudication per spec
+  // per run — failing AGAIN after its update merged is a regression, fail loud.
+  const stillPass: Array<{ spec: E2eSpecResult; entry: E2eManifestEntry }> = [];
   if (unmappableCritical.length > 0) {
-    const reason =
-      `unmappable critical e2e failure(s): ${unmappableCritical.map((s) => s.file).join(", ")} ` +
-      "— no manifest entry names this spec";
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    const affected = run.e2e_assessment?.affected_specs ?? [];
+    const counts = run.e2e_phase?.adjudication_counts ?? {};
+    const readjudicated: string[] = [];
+    const cursorSpecs: E2eAdjudicationSpec[] = [];
+    for (const s of unmappableCritical) {
+      const row = affected.find((r) => specPathMatches(s.file, r.spec_path));
+      const specPath =
+        row?.spec_path ??
+        (s.file.startsWith(`${cfg.testDir}/`) ? s.file : `${cfg.testDir}/${s.file}`);
+      if ((counts[specPath] ?? 0) >= 1) {
+        readjudicated.push(specPath);
+      } else if (row?.expectation === "should-still-pass") {
+        stillPass.push({
+          spec: s,
+          entry: { task_ids: [...row.task_ids], spec_path: row.spec_path, kind: "critical" },
+        });
+      } else {
+        cursorSpecs.push({
+          spec_path: specPath,
+          title: s.title,
+          ...(s.error !== undefined ? { error: s.error } : {}),
+          mode: row?.expectation === "needs-update" ? "update" : "adjudicate",
+        });
+      }
+    }
+    if (readjudicated.length > 0) {
+      const reason =
+        "pre-existing e2e spec(s) failing AGAIN after their one adjudication — treating " +
+        `as a regression: ${readjudicated.join(", ")}`;
+      await markFailed(deps, runId, reason, attempts);
+      return { kind: "failed", run_id: runId, reason };
+    }
+    if (cursorSpecs.length > 0) {
+      // Task-attributed reopens (stillPass + any mappable misses) wait for the
+      // post-adjudication suite re-run — one decision at a time. Suite `attempts`
+      // is deliberately NOT persisted here: this pass didn't conclude, and the
+      // re-run recomputes the same value.
+      await deps.state.update(runId, (st) => ({
+        ...st,
+        e2e_phase: {
+          ...(st.e2e_phase ?? defaultE2ePhase()),
+          adjudication: { specs: cursorSpecs, attempts: 0, requested_at: nowIso() },
+        },
+      }));
+      log.info(
+        `run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`,
+      );
+      return prepareAdjudicatorSpawn(deps, await deps.state.read(runId), runId, boot);
+    }
   }
 
   // Cadence (Decision 8): pass 1 reopens for ANY mappable failure (critical + throwaway);
@@ -931,6 +1325,7 @@ async function runSuiteAndDecide(
   const mappable: Array<{ spec?: E2eSpecResult; entry: E2eManifestEntry }> = [
     ...criticalMisses,
     ...throwawayCandidates,
+    ...stillPass,
   ];
 
   if (mappable.length === 0) {

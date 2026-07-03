@@ -155,21 +155,31 @@ If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), r
 e2e stage:
   eenv = factory run e2e --run <run_id>
   loop while eenv.kind == "spawn":
-    spawn the e2e author (subagent_type `e2e-author`, model per eenv.model,
-    isolation OMITTED — it works IN eenv.worktree), prompt = eenv.prompt
-    VERBATIM. It explores the live staging app (Playwright MCP), authors
-    throwaway journey specs (into eenv.throwaway_dir — never committed) and
-    any load-bearing journey specs (into eenv.worktree's e2e/ — committed),
-    self-validates green, and finishes with its terminal STATUS line plus a
-    manifest joining each spec to the task_id(s) it covers.
-    Write {"status":"<line>","manifest":[{"task_ids":[...],
-    "spec_path":"...","kind":"critical|throwaway","title":"..."}, ...]} to a
-    results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
-    (If the author died/was skipped, write {"status":"e2e-author agent skipped
-    or died (no STATUS line)","manifest":[]} — a status containing none of
-    BLOCKED/ESCALATE/NEEDS/DONE, so the engine spends its one author retry
-    instead of failing on a phantom deliberate verdict.)
-    eenv = factory run e2e --run <run_id> --results <file>   # may re-spawn once (D5)
+    branch on eenv.expects (BOTH spawns use subagent_type `e2e-author`, model
+    per eenv.model, isolation OMITTED — the agent works IN eenv.worktree,
+    prompt = eenv.prompt VERBATIM):
+    "author-results" → the e2e AUTHOR: explores the live staging app
+      (Playwright MCP), authors throwaway journey specs (into
+      eenv.throwaway_dir — never committed) and any load-bearing journey
+      specs (into eenv.worktree's e2e/ — committed), self-validates green,
+      and finishes with its terminal STATUS line plus a manifest joining each
+      spec to the task_id(s) it covers.
+      Write {"status":"<line>","manifest":[{"task_ids":[...],
+      "spec_path":"...","kind":"critical|throwaway","title":"..."}, ...]} to
+      a results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+      (If the author died/was skipped, write {"status":"e2e-author agent
+      skipped or died (no STATUS line)","manifest":[]} — a status containing
+      none of BLOCKED/ESCALATE/NEEDS/DONE, so the engine spends its one
+      author retry instead of failing on a phantom deliberate verdict.)
+    "adjudication-results" → the e2e ADJUDICATOR (Decision 40 D7): rules each
+      pre-existing failing spec regression vs intentional-change, rewrites
+      the pre-authorized/ruled-intentional ones in eenv.worktree and commits.
+      Write {"status":"<line>","verdicts":[{"spec_path":"...",
+      "verdict":"regression|intentional-change","reason":"...",
+      "citation":"..."}, ...]} to a results file.
+      (If it died/was skipped, write {"status":"e2e adjudicator agent skipped
+      or died (no STATUS line)","verdicts":[]} — same retryable-wording rule.)
+    eenv = factory run e2e --run <run_id> --results <file>   # may re-spawn (D5 retry / D7 adjudication)
   case eenv.kind:
     "done"    → loop  # phase concluded clean (0 critical red; a residual throwaway
                        #   red is folded into the report as an advisory, not a stop)

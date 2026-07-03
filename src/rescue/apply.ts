@@ -46,10 +46,13 @@ import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js
  * empty-manifest phase that `runSuiteAndDecide` would silently `markDone`
  * (Decision 39's "re-enters and re-derives" contract falsified for exactly this case).
  *
- * Otherwise (a manifest was authored), drop `status`/`reason`/`advisory`/`ended_at`
- * (the concluded verdict); PRESERVE `manifest`/`reopen_counts`/`attempts` (the
- * authored suite + per-task reopen-cap history a fresh pass still needs) — the
- * author is not re-invoked once it has produced a manifest.
+ * Otherwise (a manifest was authored), the triage rule is: DROP live cursors and
+ * concluded verdicts (`status`/`reason`/`advisory`/`ended_at`/`adjudication` — a
+ * rescued run's adjudication worktree is dead, and a stale cursor would re-spawn
+ * against it); PRESERVE history and caps (`manifest`/`reopen_counts`/`attempts`/
+ * `adjudication_counts` — the authored suite + per-task/per-spec cap spend a fresh
+ * pass still needs). The author is not re-invoked once it has produced a manifest;
+ * a dropped adjudication cursor is re-derived by the next suite pass.
  *
  * Lives here (not in orchestrator/e2e.ts, its only other natural home) to avoid a
  * circular import: e2e.ts already imports `resetTaskRow` from this module via
@@ -62,6 +65,7 @@ function reopenE2ePhase(phase: E2ePhase): E2ePhase | undefined {
     reason: _reason,
     advisory: _advisory,
     ended_at: _endedAt,
+    adjudication: _adjudication,
     ...rest
   } = phase;
   return rest;

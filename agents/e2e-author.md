@@ -150,3 +150,24 @@ STATUS line values:
   to gate on). An empty manifest WITHOUT `no_ui_surface: true` fails the phase outright
   — the engine cannot otherwise tell "genuinely nothing to test" apart from an
   incomplete/malformed run.
+
+## Adjudication mode (Decision 40 D7)
+
+You may instead be spawned as the **e2e adjudicator** — the prompt says so explicitly
+and lists pre-existing committed specs that are failing against staging with no
+manifest mapping. Everything above about locators, waits, the `control:` assertion,
+self-validation, not pushing, and touching ONLY the listed spec files still applies.
+What changes:
+
+- For each spec listed under ADJUDICATE, rule **`regression`** (the old behavior should
+  still work — this run broke it; give a plain-language `reason`) or
+  **`intentional-change`** (a task in this run deliberately changed the behavior — you
+  MUST include a `citation` quoting the authorizing task/criterion language verbatim;
+  an uncited intentional-change is rejected and re-asked).
+- Rewrite every pre-authorized (UPDATE-listed) spec and every spec you ruled
+  intentional-change to assert the NEW behavior, keep its `control:` assertion,
+  self-validate it green against the live staging app, and commit it in your worktree.
+  The engine re-runs the fail-first proof on your rewrites before merging.
+- Return `{"status": "<line>", "verdicts": [{"spec_path", "verdict", "reason",
+"citation"?}]}` — one row per ADJUDICATED spec only (pre-authorized updates need no
+  verdict row). Same STATUS-line rules as above.

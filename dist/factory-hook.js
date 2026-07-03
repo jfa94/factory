@@ -7553,6 +7553,21 @@ var E2eManifestEntrySchema = external_exports.object({
    */
   title: external_exports.string().min(1).optional()
 });
+var E2eAdjudicationSpecSchema = external_exports.object({
+  /** Repo-relative path of the failing committed spec. */
+  spec_path: external_exports.string().min(1),
+  /** The failing spec's human-readable title (from the Playwright results). */
+  title: external_exports.string(),
+  /** The failing assertion/step detail (D8), threaded into the adjudicator prompt. */
+  error: external_exports.string().optional(),
+  mode: external_exports.enum(["adjudicate", "update"])
+});
+var E2eAdjudicationSchema = external_exports.object({
+  specs: external_exports.array(E2eAdjudicationSpecSchema).min(1),
+  /** Adjudicator SPAWN attempts (crash retry, mirrors `author_attempts`). */
+  attempts: external_exports.number().int().nonnegative(),
+  requested_at: external_exports.string()
+});
 var E2ePhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]).optional(),
   reason: external_exports.string().optional(),
@@ -7575,6 +7590,15 @@ var E2ePhaseSchema = external_exports.object({
   manifest: external_exports.array(E2eManifestEntrySchema).default([]),
   /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
   reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+  /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+  adjudication: E2eAdjudicationSchema.optional(),
+  /**
+   * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+   * A spec failing AGAIN after its one adjudication is a regression — the run
+   * fails rather than adjudicating in a loop. Survives rescue's reset (like
+   * `reopen_counts`): the cap holds across the whole run.
+   */
+  adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional(),
   ended_at: external_exports.string().optional()
 });
 var E2eAffectedSpecSchema = external_exports.object({

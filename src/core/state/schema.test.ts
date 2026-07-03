@@ -486,6 +486,53 @@ describe("e2e phase marker + author manifest", () => {
     expect(run.e2e_phase?.reopen_counts).toEqual({});
   });
 
+  it("round-trips an adjudication cursor + adjudication_counts (Decision 40 D7); both optional, absent by default", () => {
+    const bare = parseRunState(minimalRun({ e2e_phase: { status: "done", ended_at: NOW } }));
+    expect(bare.e2e_phase?.adjudication).toBeUndefined();
+    expect(bare.e2e_phase?.adjudication_counts).toBeUndefined();
+
+    const run = parseRunState(
+      minimalRun({
+        e2e_phase: {
+          manifest: [],
+          reopen_counts: {},
+          adjudication: {
+            specs: [
+              {
+                spec_path: "e2e/legacy.spec.ts",
+                title: "legacy journey",
+                error: "expect failed",
+                mode: "adjudicate",
+              },
+              { spec_path: "e2e/nav.spec.ts", title: "nav", mode: "update" },
+            ],
+            attempts: 1,
+            requested_at: NOW,
+          },
+          adjudication_counts: { "e2e/old.spec.ts": 1 },
+        },
+      }),
+    );
+    expect(run.e2e_phase?.adjudication?.specs).toHaveLength(2);
+    expect(run.e2e_phase?.adjudication?.specs[0]?.mode).toBe("adjudicate");
+    expect(run.e2e_phase?.adjudication?.attempts).toBe(1);
+    expect(run.e2e_phase?.adjudication_counts).toEqual({ "e2e/old.spec.ts": 1 });
+  });
+
+  it("rejects an adjudication cursor with an empty spec list (a cursor must name work)", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          e2e_phase: {
+            manifest: [],
+            reopen_counts: {},
+            adjudication: { specs: [], attempts: 0, requested_at: NOW },
+          },
+        }),
+      ),
+    ).toThrow();
+  });
+
   it("manifest entry `title` is optional and round-trips (Decision 40 D12 — pre-D12 manifests lack it)", () => {
     const run = parseRunState(
       minimalRun({

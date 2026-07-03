@@ -169,6 +169,28 @@ const E2E_AUTHOR_OUT = {
     },
   },
 };
+// The e2e-adjudicator's structured output (Decision 40 D7) — status line + verdict
+// rows, mirroring src/orchestrator/e2e.ts's E2eAdjudicationVerdictSchema.
+const ADJUDICATOR_OUT = {
+  type: "object",
+  required: ["status", "verdicts"],
+  properties: {
+    status: { type: "string" },
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["spec_path", "verdict", "reason"],
+        properties: {
+          spec_path: { type: "string" },
+          verdict: { type: "string", enum: ["regression", "intentional-change"] },
+          reason: { type: "string" },
+          citation: { type: "string" },
+        },
+      },
+    },
+  },
+};
 // The e2e-assessor's structured output (Decision 40) — mirrors
 // src/orchestrator/assessment.ts's AssessmentResultsSchema ("error" is reserved for
 // the dead-agent synthesis below; the assessor itself never returns it).
@@ -563,22 +585,30 @@ async function runDocs() {
 async function runE2e() {
   let env = await cli(`factory run e2e --run ${runId}`, "e2e", "E2E", E2E_KINDS, "e2e");
   while (env.kind === "spawn") {
+    // The envelope's `expects` names which spawn this is (D7) — author manifest vs
+    // adjudication verdicts. Both reuse the e2e-author agent definition.
+    const isAdj = env.expects === "adjudication-results";
     const out = await agent(env.prompt, {
-      label: "e2e-author",
+      label: isAdj ? "e2e-adjudicator" : "e2e-author",
       phase: "E2E",
       agentType: "factory:e2e-author",
       model: modelAlias(env.model),
-      schema: E2E_AUTHOR_OUT,
+      schema: isAdj ? ADJUDICATOR_OUT : E2E_AUTHOR_OUT,
     });
-    // A skipped/dead author is synthesized as status "error" — the RETRYABLE status
+    // A skipped/dead agent is synthesized as status "error" — the RETRYABLE status
     // (must contain none of BLOCKED/ESCALATE/NEEDS/DONE, which would parse as a
     // deliberate FINAL verdict and skip the retry; the R2 dead-agent-wording lesson).
-    const status = out === null ? "e2e-author agent skipped or died (no STATUS line)" : out.status;
-    const manifest = out === null ? [] : out.manifest;
+    const results = isAdj
+      ? out === null
+        ? { status: "e2e adjudicator agent skipped or died (no STATUS line)", verdicts: [] }
+        : { status: out.status, verdicts: out.verdicts }
+      : out === null
+        ? { status: "e2e-author agent skipped or died (no STATUS line)", manifest: [] }
+        : { status: out.status, manifest: out.manifest };
 
     fileSeq += 1;
     const path = `${dataDir}/results/${runId}/wf-e2e-${fileSeq}.json`;
-    const json = JSON.stringify({ status, manifest });
+    const json = JSON.stringify(results);
     const record = await agent(
       `Two steps, in order:\n` +
         `1. With the Write tool, create "${path}" containing EXACTLY the JSON document between ` +

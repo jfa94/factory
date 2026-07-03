@@ -217,6 +217,33 @@ describe("applyRescue", () => {
     expect(run.e2e_phase?.author_attempts).toBe(1);
   });
 
+  it("resetE2e:true DROPS a live adjudication cursor (dead worktree) but PRESERVES adjudication_counts (D7 cap history)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        status: "failed",
+        reason: "e2e-adjudicator: unparseable producer status: gibberish (after 2 attempts)",
+        manifest: [{ task_ids: ["a"], spec_path: "checkout.spec.ts", kind: "critical" }],
+        reopen_counts: {},
+        adjudication: {
+          specs: [{ spec_path: "e2e/legacy.spec.ts", title: "legacy journey", mode: "adjudicate" }],
+          attempts: 1,
+          requested_at: "2026-07-03T00:00:00.000Z",
+        },
+        adjudication_counts: { "e2e/old.spec.ts": 1 },
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.adjudication).toBeUndefined();
+    expect(run.e2e_phase?.adjudication_counts).toEqual({ "e2e/old.spec.ts": 1 });
+  });
+
   it("resetE2e:true on a PRE-authoring failure (empty manifest) clears e2e_phase entirely so the author re-spawns, instead of leaving a false-done empty-manifest phase", async () => {
     // The author crashed/timed out/emitted an unparseable status before ANY
     // manifest was produced — markFailed writes status:"failed" with manifest:[].
