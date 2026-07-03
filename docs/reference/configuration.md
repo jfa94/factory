@@ -179,11 +179,18 @@ the frozen defaults, not a per-run override.
 
 The judgment panel.
 
-| Key             | Type              | Default | Meaning                                                       |
-| --------------- | ----------------- | ------- | ------------------------------------------------------------- |
-| `model`         | string (optional) | —       | Reviewer model id (panel runs on a fixed model, Decision 26). |
-| `maxTurnsDeep`  | int >0            | `40`    | Max turns for a deep review pass.                             |
-| `maxTurnsQuick` | int >0            | `20`    | Max turns for a quick review pass.                            |
+| Key                  | Type                | Default | Meaning                                                                                                                                                                                                                                                                                                                            |
+| -------------------- | ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`              | string (optional)   | —       | Reviewer model id (panel runs on a fixed model, Decision 26).                                                                                                                                                                                                                                                                      |
+| `maxTurnsDeep`       | int >0              | `40`    | Max turns for a deep review pass.                                                                                                                                                                                                                                                                                                  |
+| `maxTurnsQuick`      | int >0              | `20`    | Max turns for a quick review pass.                                                                                                                                                                                                                                                                                                 |
+| `requireCrossVendor` | `"warn" \| "block"` | `warn`  | Policy when no cross-vendor (Codex) reviewer ran on the advancing verify pass ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)). `warn` records the absence loudly; `block` additionally fails the merge gate so a task cannot ship single-vendor. |
+
+Cross-vendor availability is **probed at spawn time** (`codex --version`, memoized),
+never inferred from config presence — the engine stamps `cross_vendor` on the verify
+spawn manifest and the runner executes the quality-reviewer via `codex exec` when
+Codex is present. `requireCrossVendor` only sets the policy for when it is **absent**.
+See [verifier.md](../explanation/verifier.md).
 
 ## `testWriter`
 

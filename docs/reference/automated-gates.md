@@ -186,6 +186,10 @@ synthesizes a `verdict:"error"` review for every `PANEL_ROLES` entry missing fro
 supplied `--results`, and demotes any unknown reviewer name to `error` — either failing
 the unanimity conjunction loudly. The cross-vendor reviewer is an **executor of a roster
 role** (e.g. quality-reviewer via Codex), never an extra reviewer name, so it stays
-additive/optional. (`/factory:debug`'s whole-scope `runPanel` is deliberately outside this
+additive to the roster — supplying it never changes the required four roles. Its
+_availability_ is policy-gated separately: `review.requireCrossVendor: "block"` (default
+`warn`) fails the gate when no cross-vendor reviewer ran, by demoting the quality-reviewer
+to `verdict:"error"` ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)).
+(`/factory:debug`'s whole-scope `runPanel` is deliberately outside this
 check — it is not a task merge gate.)
 </content>
