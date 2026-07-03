@@ -62,6 +62,21 @@ import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
 import { taskExemptReader } from "./exempt.js";
 import { FsHoldoutVerdictStore, deriveHoldoutEvidence } from "../verifier/holdout/index.js";
+import { withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning } from "../shared/index.js";
+import { join } from "node:path";
+
+/**
+ * Preflight git-lock tuning — same values as the MergeSerializer's
+ * MERGE_LOCK_DEFAULTS: worktree creation shells real git (fetch + worktree add),
+ * so hold times are seconds, not millis; retries stretch accordingly.
+ */
+const PREFLIGHT_GIT_LOCK_TUNING: FileLockTuning = {
+  ...DEFAULT_FILE_LOCK_TUNING,
+  stale: 30_000,
+  retries: 100,
+  retryMinTimeout: 25,
+  retryMaxTimeout: 1000,
+};
 
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8
@@ -209,13 +224,30 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     async preflight(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "preflight");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
-      await createTaskWorktree({
-        gitClient: deps.git,
-        runId: ctx.run.run_id,
-        taskId: task.task_id,
-        path: worktree,
-        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
-      });
+      const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch);
+      // Parallel preflights share the main repo's .git: `fetch` + `worktree add`
+      // contend on index.lock, and the shared origin/<staging> tracking ref can move
+      // between one task's fetch and another's assertBaseIsStagingTip — spuriously
+      // tripping D12 invariant #4. Serialize the whole fetch→add→assert section per
+      // staging branch. provisionWorktree (slow dep install) stays OUTSIDE the lock.
+      const lockScope = staging.replace(/[^\w.-]/g, "-");
+      await withFileLock(
+        {
+          dir: join(deps.dataDir, "locks"),
+          lockfile: join(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          label: `preflight git '${staging}'`,
+          dirPolicy: "create",
+          tuning: PREFLIGHT_GIT_LOCK_TUNING,
+        },
+        () =>
+          createTaskWorktree({
+            gitClient: deps.git,
+            runId: ctx.run.run_id,
+            taskId: task.task_id,
+            path: worktree,
+            base: staging,
+          }),
+      );
       // Make the worktree runnable BEFORE the command-gates: install deps via the
       // configured setupCommand (else a lockfile-detected install). FAILS LOUD on a
       // bad env so it halts here, not as an opaque test/type/build gate failure.

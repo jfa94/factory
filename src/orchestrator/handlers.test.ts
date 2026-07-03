@@ -237,6 +237,94 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(provisionCalls).toBe(2);
   });
 
+  // N2 (S2 parallel enablers): concurrent preflights on the SAME staging branch must
+  // serialize their git critical section (fetch → worktree add → assertBaseIsStagingTip).
+  // The shared main-repo .git contends on index.lock, and the shared origin/staging-<run>
+  // tracking ref can move between one task's fetch and another's assert, spuriously
+  // tripping D12 invariant #4. The preflight file lock makes the section atomic.
+  it("N2: concurrent preflights never interleave the fetch→add→assert git section", async () => {
+    // Instrument the fake so every git op yields to the event loop — without the
+    // lock, two concurrent preflights deterministically interleave (maxActive 2).
+    // Critical section = fetch entry → mergeBase exit (assertBaseIsStagingTip's
+    // last call in createTaskWorktree).
+    let active = 0;
+    let maxActive = 0;
+    const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    const origFetch = git.fetch.bind(git);
+    git.fetch = async (...args: Parameters<FakeGitClient["fetch"]>) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await tick();
+      return origFetch(...args);
+    };
+    const origWorktreeAdd = git.worktreeAdd.bind(git);
+    git.worktreeAdd = async (...args: Parameters<FakeGitClient["worktreeAdd"]>) => {
+      await tick();
+      return origWorktreeAdd(...args);
+    };
+    const origRevParse = git.revParse.bind(git);
+    git.revParse = async (...args: Parameters<FakeGitClient["revParse"]>) => {
+      await tick();
+      return origRevParse(...args);
+    };
+    const origMergeBase = git.mergeBase.bind(git);
+    git.mergeBase = async (...args: Parameters<FakeGitClient["mergeBase"]>) => {
+      const result = await origMergeBase(...args);
+      active -= 1;
+      await tick();
+      return result;
+    };
+
+    const handlers = makePhaseHandlers(makeDeps({ provision: async () => {} }));
+    const ctx1 = await ctxFor({ task_id: "t-par-1" });
+    const ctx2 = await ctxFor({ task_id: "t-par-2" });
+
+    const [r1, r2] = await Promise.all([handlers.preflight(ctx1), handlers.preflight(ctx2)]);
+
+    expect(r1).toEqual({ kind: "advance", to: "tests" });
+    expect(r2).toEqual({ kind: "advance", to: "tests" });
+    expect(git.worktrees.get(taskWorktreePath(dataDir, RUN_ID, "t-par-1"))).toBeDefined();
+    expect(git.worktrees.get(taskWorktreePath(dataDir, RUN_ID, "t-par-2"))).toBeDefined();
+    // The load-bearing assertion: the git sections ran strictly one-at-a-time.
+    expect(maxActive).toBe(1);
+  });
+
+  it("N2: provisionWorktree stays OUTSIDE the preflight lock (slow install does not block the sibling's git section)", async () => {
+    // The FIRST task to provision blocks until the SECOND task's fetch is observed.
+    // If the lock (wrongly) covered provision, the sibling's fetch could never start
+    // while the first held the lock → deadlock (test timeout). Both preflights
+    // completing proves provision runs outside the critical section.
+    let fetches = 0;
+    let resolveSecondFetch!: () => void;
+    const secondFetchSeen = new Promise<void>((resolve) => {
+      resolveSecondFetch = resolve;
+    });
+    const origFetch = git.fetch.bind(git);
+    git.fetch = async (...args: Parameters<FakeGitClient["fetch"]>) => {
+      fetches += 1;
+      if (fetches === 2) resolveSecondFetch();
+      return origFetch(...args);
+    };
+
+    let provisions = 0;
+    const deps = makeDeps({
+      provision: async () => {
+        provisions += 1;
+        if (provisions === 1) await secondFetchSeen;
+      },
+    });
+    const handlers = makePhaseHandlers(deps);
+    const ctx1 = await ctxFor({ task_id: "t-slow-1" });
+    const ctx2 = await ctxFor({ task_id: "t-slow-2" });
+
+    const [r1, r2] = await Promise.all([handlers.preflight(ctx1), handlers.preflight(ctx2)]);
+
+    expect(r1).toEqual({ kind: "advance", to: "tests" });
+    expect(r2).toEqual({ kind: "advance", to: "tests" });
+    expect(provisions).toBe(2);
+  });
+
   // -- tests ----------------------------------------------------------------
 
   it("tests persists the holdout answer-key and spawns the test-writer (rung 0)", async () => {
