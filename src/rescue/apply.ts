@@ -280,8 +280,6 @@ export async function applyRescue(
       ...(assessReset ? { e2e_assessment: undefined } : {}),
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
-      // Idle time is banked by StateManager.update() itself (the sole
-      // paused_minutes writer, D7) — no crediting here.
       ...(reopen ? { status: "running" as const, ended_at: null } : {}),
     };
   });

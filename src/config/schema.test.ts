@@ -13,13 +13,21 @@ describe("ConfigSchema", () => {
     // Quota defaults (verbatim from pipeline-lib.sh).
     expect(cfg.quota.sleepCapSec).toBe(540);
     expect(cfg.quota.maxWaitCycles).toBe(60);
-    expect(cfg.quota.maxStaleCycles).toBe(6);
     expect(cfg.quota.wallBudgetMin).toBe(75);
     expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90]);
     expect(cfg.quota.dailyThresholds).toEqual([20, 40, 60, 80, 95, 95, 95]);
     // Top-level.
     expect(cfg.maxConsecutiveFailures).toBe(3);
-    expect(cfg.maxRuntimeMinutes).toBe(480);
+  });
+
+  it("stale overlay keys (pruned config fields) are stripped, not fatal", () => {
+    // Regression guard: an on-disk config written by an older plugin version may
+    // still carry pruned keys; ConfigSchema must strip them and keep loading.
+    const cfg = ConfigSchema.parse({
+      maxRuntimeMinutes: 480,
+      quota: { maxStaleCycles: 6 },
+    });
+    expect(cfg).toEqual(defaultConfig());
   });
 
   it("defaultConfig() equals parsing {}", () => {

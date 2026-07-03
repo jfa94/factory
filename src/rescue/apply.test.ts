@@ -498,29 +498,6 @@ describe("applyRescue", () => {
     });
   });
 
-  // D7: rescue no longer credits paused_minutes itself — idle time is banked by
-  // StateManager.update() (the sole writer). Reopen must preserve the balance.
-  it("E: reopen preserves the prior paused_minutes balance (never resets)", async () => {
-    // Seed terminal run with a prior paused_minutes balance + a stuck task to reset.
-    await state.update(RUN_ID, (s) => ({
-      ...s,
-      status: "failed" as const,
-      ended_at: "2026-06-08T00:00:00.000Z",
-      paused_minutes: 30,
-      tasks: {
-        a: task({ task_id: "a", status: "failed", failure_class: "blocked-environmental" }),
-      },
-    }));
-
-    const result = await applyRescue(state, RUN_ID);
-    expect(result.reopened).toBe(true);
-
-    const run = await state.read(RUN_ID);
-    // Exactly the seeded balance: the gap since seeding is sub-grace, so the
-    // manager credits 0 and rescue itself must not touch the field.
-    expect(run.paused_minutes).toBe(30);
-  });
-
   it("reset clears the phase cursor and merge_resyncs", async () => {
     await seed([
       {

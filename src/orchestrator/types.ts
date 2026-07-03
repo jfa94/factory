@@ -17,7 +17,7 @@
  *     records the previous spawn's agent results into state, and runs the
  *     deterministic phase machine until it needs agents (it RETURNS the spawn
  *     request to the caller) or the task is terminal. The in-session runner
- *     (or the workflow runner) owns every Agent() spawn; the engine owns every
+ *     owns every Agent() spawn; the engine owns every
  *     StateManager write.
  *
  * {@link HandlerDeps} carries ONLY what a reporter needs — it has no agent runner,

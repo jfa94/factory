@@ -5845,8 +5845,6 @@ var QuotaSchema = external_exports.object({
   sleepCapSec: external_exports.number().int().positive().default(540),
   /** Max wait cycles before the gate ends a wait, count. */
   maxWaitCycles: external_exports.number().int().positive().default(60),
-  /** Max consecutive stale-cache cycles before graceful end, count. */
-  maxStaleCycles: external_exports.number().int().positive().default(6),
   /** Accumulated wall-clock wait budget across cycles, minutes. */
   wallBudgetMin: external_exports.number().int().positive().default(75),
   /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
@@ -5988,9 +5986,7 @@ var ConfigSchema = external_exports.object({
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
    * total capability-budget drops); the field keeps its name for config back-compat.
    */
-  maxConsecutiveFailures: external_exports.number().int().positive().default(3),
-  /** Hard wall-clock cap for a whole run, minutes. */
-  maxRuntimeMinutes: external_exports.number().int().positive().default(480)
+  maxConsecutiveFailures: external_exports.number().int().positive().default(3)
 }).default({});
 
 // src/config/load.ts
@@ -6438,10 +6434,16 @@ function refineTaskCrossFields(task, ctx) {
 }
 var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
 var QuotaCheckpointSchema = external_exports.object({
-  /** Epoch (seconds) when the binding window resets — the resume horizon. */
+  /** Epoch (seconds) when the binding window resets — the resume horizon.
+   *  Absent for `unavailable` (no observed horizon; resume rechecks the live signal). */
   resets_at_epoch: external_exports.number().int().nonnegative().optional(),
-  /** Which window forced the last pause/suspend, if any. */
-  binding_window: external_exports.enum(["5h", "7d"]).optional()
+  /**
+   * Which window forced the last pause/suspend, if any. `unavailable` = the usage
+   * signal could not be read (fail-closed suspend). INVARIANT: `run.quota` is
+   * present ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase
+   * parks) never write a checkpoint, which is how planResume tells them apart.
+   */
+  binding_window: external_exports.enum(["5h", "7d", "unavailable"]).optional()
 });
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
@@ -6537,7 +6539,6 @@ var E2eAssessmentSchema = external_exports.object({
   ended_at: external_exports.string().optional()
 });
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
-var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
@@ -6546,7 +6547,6 @@ var RunStateSchema = external_exports.object({
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
   execution_mode: ExecutionModeEnum.default("sequential"),
-  mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("live"),
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
@@ -6578,9 +6578,8 @@ var RunStateSchema = external_exports.object({
   /**
    * When true, the quota gate skips pacing and returns null unconditionally. Set once at
    * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both orchestrators and both runners skip the gate without per-call flag
-   * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
-   * are unaffected.
+   * Persisted so both orchestrators skip the gate without per-call flag threading.
+   * Default false: legacy runs (no field) are unaffected.
    */
   ignore_quota: external_exports.boolean().default(false),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
@@ -6621,16 +6620,6 @@ var RunStateSchema = external_exports.object({
    * false: a run without the flag finalizes exactly as before.
    */
   debug: external_exports.boolean().default(false),
-  /**
-   * Cumulative idle minutes, deducted from wall-time by the runtime circuit-breaker
-   * so a long real-world pause never falsely trips it (D7). SOLE writer:
-   * `StateManager.update()`, which on every write banks the gap since the previous
-   * write beyond ACTIVE_GAP_CAP_MINUTES — crediting at the one place the idle anchor
-   * (`updated_at`) is erased, so no write path can outrun it. Session-mode runs
-   * accumulate it too, but cosmetically (their runtime arm is disarmed). Default 0 —
-   * absent on legacy runs → treated as 0 (no regression).
-   */
-  paused_minutes: external_exports.number().nonnegative().default(0),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -6897,16 +6886,6 @@ function nowIso() {
 function nowEpoch() {
   return Math.floor(Date.now() / 1e3);
 }
-function parseIso8601ToEpoch(iso) {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) {
-    throw new RangeError(`parseIso8601ToEpoch: unparseable ISO-8601 timestamp: ${iso}`);
-  }
-  return Math.floor(ms / 1e3);
-}
-function epochToIso(epochSeconds) {
-  return new Date(epochSeconds * 1e3).toISOString();
-}
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
@@ -6981,13 +6960,6 @@ function specBuildDir(dataDir, repo, issueNumber) {
 
 // src/core/state/manager.ts
 var log4 = createLogger("state");
-var ACTIVE_GAP_CAP_MINUTES = 60;
-function idleGapCredit(prevUpdatedAt, nowMs = Date.now()) {
-  const prevMs = Date.parse(prevUpdatedAt);
-  if (Number.isNaN(prevMs)) return 0;
-  const gapMinutes = Math.floor((nowMs - prevMs) / 6e4);
-  return Math.max(0, gapMinutes - ACTIVE_GAP_CAP_MINUTES);
-}
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class _StateManager {
   dataDir;
@@ -7082,7 +7054,6 @@ var StateManager = class _StateManager {
       run_id: args.run_id,
       status: "running",
       execution_mode: args.execution_mode ?? "sequential",
-      mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
@@ -7252,12 +7223,6 @@ var StateManager = class _StateManager {
    * and returns the next state; the result is re-validated through the schema
    * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
    * stamped. This is the ONLY write path for an existing run.
-   *
-   * Idle crediting (D7): because this is also the only place `updated_at` is
-   * re-stamped — i.e. the only place the idle anchor is erased — it is the ONE
-   * sanctioned writer of `paused_minutes`: any gap since the previous write
-   * beyond {@link ACTIVE_GAP_CAP_MINUTES} is banked as idle in the same write,
-   * so no later write path can erase a pause before it is credited.
    */
   async update(runId, mutator) {
     return this.withLock(runId, async () => {
@@ -7275,7 +7240,6 @@ var StateManager = class _StateManager {
       }
       const validated = parseRunState({
         ...next,
-        paused_minutes: next.paused_minutes + idleGapCredit(current.updated_at),
         updated_at: nowIso()
       });
       await atomicWriteFile(this.statePath(runId), stringifyJson(validated));
@@ -9559,6 +9523,12 @@ function buildCheckpoint(decision) {
       };
   }
 }
+function buildUnavailableCheckpoint() {
+  return {
+    status: "suspended",
+    quota: QuotaCheckpointSchema.parse({ binding_window: "unavailable" })
+  };
+}
 function clearCheckpoint() {
   return { status: "running", quota: void 0 };
 }
@@ -9567,8 +9537,8 @@ function clearCheckpoint() {
 function isNonNegativeFinite(value) {
   return Number.isFinite(value) && value >= 0;
 }
-function evaluate2(input, config, nowEpoch2) {
-  const { cumulativeFailures, pausedMinutes, startedAtIso } = input;
+function evaluate2(input, config) {
+  const { cumulativeFailures } = input;
   if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
@@ -9576,38 +9546,12 @@ function evaluate2(input, config, nowEpoch2) {
       reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
     };
   }
-  if (!isNonNegativeFinite(pausedMinutes)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`
-    };
-  }
-  const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
+  const { maxConsecutiveFailures } = config;
   if (cumulativeFailures >= maxConsecutiveFailures) {
     return {
       tripped: true,
       arm: "failures",
       reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
-    };
-  }
-  let startEpoch;
-  try {
-    startEpoch = parseIso8601ToEpoch(startedAtIso);
-  } catch {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`
-    };
-  }
-  const wallMinutes = Math.floor((nowEpoch2 - startEpoch) / 60);
-  const runtimeMinutes = Math.max(0, wallMinutes - pausedMinutes);
-  if (runtimeMinutes >= maxRuntimeMinutes) {
-    return {
-      tripped: true,
-      arm: "runtime",
-      reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`
     };
   }
   return { tripped: false };
@@ -9633,10 +9577,10 @@ function planResume(run10, reading, config, nowEpoch2) {
   if (run10.status !== "paused" && run10.status !== "suspended") {
     return { kind: "not-resumable", status: run10.status };
   }
-  if (run10.mode === "workflow") {
+  if (run10.ignore_quota) {
     return { kind: "resume", clear: clearCheckpoint() };
   }
-  if (run10.ignore_quota) {
+  if (run10.quota === void 0) {
     return { kind: "resume", clear: clearCheckpoint() };
   }
   const decision = evaluate(reading, config, nowEpoch2);
@@ -12211,8 +12155,6 @@ async function applyRescue(state, runId, opts = {}) {
       ...assessReset ? { e2e_assessment: void 0 } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
-      // Idle time is banked by StateManager.update() itself (the sole
-      // paused_minutes writer, D7) — no crediting here.
       ...reopen ? { status: "running", ended_at: null } : {}
     };
   });
@@ -13023,8 +12965,8 @@ function isSpawnPhase(phase) {
 
 // src/orchestrator/quota-gate.ts
 var log24 = createLogger("quota-gate");
-async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false) {
-  if (mode === "workflow" || ignoreQuota) return null;
+async function applyQuotaGate(deps, runId, ignoreQuota = false) {
+  if (ignoreQuota) return null;
   const reading = await deps.usage.read();
   const decision = evaluate(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {
@@ -13048,11 +12990,12 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
       };
     }
     case "unavailable-halt": {
+      const patch = buildUnavailableCheckpoint();
       log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run10 = await deps.state.update(runId, (s) => ({
         ...s,
-        status: "suspended",
-        quota: void 0
+        status: patch.status,
+        quota: patch.quota
       }));
       return { scope: "unavailable", reason: decision.reason, run: run10 };
     }
@@ -13228,7 +13171,7 @@ async function nextAction(deps, runId, taskId, results) {
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "done", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run10.mode, run10.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.ignore_quota);
   if (stop !== null) {
     return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }
@@ -13436,22 +13379,10 @@ async function runDocsRecord(deps, runId, results) {
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
   const run10 = await deps.state.read(runId);
-  const now = deps.now();
   const capabilityFailures = Object.values(run10.tasks).filter(
     (t) => t.status === "failed" && t.failure_class === "capability-budget"
   ).length;
-  const startedAtIso = run10.mode === "workflow" ? run10.started_at : epochToIso(now);
-  const verdict = evaluate2(
-    {
-      startedAtIso,
-      cumulativeFailures: capabilityFailures,
-      // Persisted idle plus the still-pending gap since the last write — the first
-      // next-task after a pause evaluates BEFORE any write banks that gap (D7).
-      pausedMinutes: (run10.paused_minutes ?? 0) + idleGapCredit(run10.updated_at, now * 1e3)
-    },
-    deps.config,
-    now
-  );
+  const verdict = evaluate2({ cumulativeFailures: capabilityFailures }, deps.config);
   return verdict.tripped ? verdict : null;
 }
 
@@ -13499,7 +13430,7 @@ async function nextTask(deps, runId) {
     }
     return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run10.mode, run10.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.ignore_quota);
   if (stop !== null) {
     return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
@@ -13550,15 +13481,6 @@ async function nextTask(deps, runId) {
   }
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
-    if (breaker.arm === "runtime") {
-      run10 = await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-      return {
-        ...ctx(),
-        kind: "pause",
-        scope: "runtime-budget",
-        reason: `circuit breaker: ${breaker.reason} \u2014 the run's ACTIVE runtime budget is spent (idle time is already excluded). Raise maxRuntimeMinutes in config.json, then factory resume / relaunch; resuming without raising the cap re-suspends here.`
-      };
-    }
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
       await failTask(
         deps,

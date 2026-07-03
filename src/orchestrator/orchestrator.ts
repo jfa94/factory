@@ -271,9 +271,9 @@ export async function nextAction(
   }
 
   // 2. Quota gate — a breach persists the checkpoint and stops cleanly. Only reached
-  //    for non-terminal tasks so the checkpoint is always meaningful. Workflow mode
-  //    and --ignore-quota skip pacing (Decision 24).
-  const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
+  //    for non-terminal tasks so the checkpoint is always meaningful. --ignore-quota
+  //    skips pacing (Decision 24).
+  const stop = await applyQuotaGate(deps, runId, run.ignore_quota);
   if (stop !== null) {
     return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }

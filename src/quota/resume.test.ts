@@ -103,16 +103,49 @@ describe("Δ F resume from checkpoint — still-over reading stays blocked (fail
     }
   });
 
-  it("a suspended WORKFLOW run resumes even on an unavailable reading (Decision 24: the pacer has no say)", () => {
-    // A workflow suspend is non-quota by construction (runtime breaker, e2e/docs);
-    // fail-closing on the pacer would strand a run that is defined to ignore quota.
-    const run = parseRunState({ ...suspendedRun(), mode: "workflow" });
+  it("an unavailable-shape checkpoint rechecks like any window: still unobservable → still blocked", () => {
+    // A2: the quota gate's fail-closed halt writes {binding_window:"unavailable"};
+    // resuming it goes through the same fresh pacer recheck as a 5h/7d park.
+    const run = parseRunState({ ...suspendedRun(), quota: { binding_window: "unavailable" } });
     const plan = planResume(
       run,
       { kind: "unavailable", reason: "usage-cache-missing" },
       CONFIG,
       NOW,
     );
+    expect(plan.kind).toBe("pause");
+    if (plan.kind === "pause") expect(plan.decision.kind).toBe("unavailable-halt");
+  });
+
+  it("an unavailable-shape checkpoint + recovered under-curve reading → resume", () => {
+    const run = parseRunState({ ...suspendedRun(), quota: { binding_window: "unavailable" } });
+    const plan = planResume(run, underCurveReading(), CONFIG, NOW);
+    expect(plan.kind).toBe("resume");
+  });
+});
+
+describe("Δ F resume — non-quota suspends clear unconditionally (resume IS the sign-off)", () => {
+  // A2 invariant: run.quota present ⇔ the stop was quota-caused. A suspend with NO
+  // quota checkpoint is a park (docs/e2e/spec-approval) — or a legacy pre-A2
+  // unavailable-halt, which self-heals here: cleared as non-quota, re-suspended by
+  // the next quota gate if usage is still unobservable.
+  it("a suspended run without a quota checkpoint resumes even on an unavailable reading", () => {
+    const run = parseRunState({ ...suspendedRun(), quota: undefined });
+    const plan = planResume(
+      run,
+      { kind: "unavailable", reason: "usage-cache-missing" },
+      CONFIG,
+      NOW,
+    );
+    expect(plan.kind).toBe("resume");
+    if (plan.kind === "resume") {
+      expect(plan.clear).toEqual({ status: "running", quota: undefined });
+    }
+  });
+
+  it("a suspended run without a quota checkpoint resumes even on a still-over reading", () => {
+    const run = parseRunState({ ...suspendedRun(), quota: undefined });
+    const plan = planResume(run, stillOver7dReading(), CONFIG, NOW);
     expect(plan.kind).toBe("resume");
   });
 });

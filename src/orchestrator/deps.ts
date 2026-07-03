@@ -117,6 +117,7 @@ export type { PartialRunReport, FailureLine } from "../scoring/index.js";
 export {
   evaluate as evaluateQuota,
   buildCheckpoint,
+  buildUnavailableCheckpoint,
   clearCheckpoint,
   selectProducerModel,
 } from "../quota/index.js";

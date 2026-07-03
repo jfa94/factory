@@ -20,7 +20,7 @@ import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/f
 import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
-import type { TaskState, RunStatus, RunState } from "../types/index.js";
+import type { TaskState, RunStatus } from "../types/index.js";
 import { isTerminalRunStatus } from "../core/state/schema.js";
 import type { OrchestratorDeps } from "./orchestrator.js";
 
@@ -118,11 +118,6 @@ export interface MakeOrchestratorDepsOpts {
    * Useful for nextTask tests that need a paused/completed run at seed time.
    */
   runStatusOverride?: RunStatus;
-  /**
-   * Override the run mode at creation (additive). Workflow mode makes the quota
-   * gate skip pacing, so nextTask/nextAction proceed regardless of the usage signal.
-   */
-  modeOverride?: RunState["mode"];
   /** Docs-applicability gate result (default false → existing all-terminal tests unaffected). */
   docsApplicable?: boolean;
 }
@@ -156,7 +151,6 @@ export async function makeOrchestratorDeps(
   await state.create({
     run_id: runId,
     spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
-    ...(opts.modeOverride !== undefined ? { mode: opts.modeOverride } : {}),
   });
 
   // Seed tasks — overrides apply only when task_id matches (or T1 by default)

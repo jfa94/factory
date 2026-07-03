@@ -462,10 +462,16 @@ const TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
  * pacing logic; the schema only freezes what `suspended`/`paused` resume needs.
  */
 export const QuotaCheckpointSchema = z.object({
-  /** Epoch (seconds) when the binding window resets — the resume horizon. */
+  /** Epoch (seconds) when the binding window resets — the resume horizon.
+   *  Absent for `unavailable` (no observed horizon; resume rechecks the live signal). */
   resets_at_epoch: z.number().int().nonnegative().optional(),
-  /** Which window forced the last pause/suspend, if any. */
-  binding_window: z.enum(["5h", "7d"]).optional(),
+  /**
+   * Which window forced the last pause/suspend, if any. `unavailable` = the usage
+   * signal could not be read (fail-closed suspend). INVARIANT: `run.quota` is
+   * present ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase
+   * parks) never write a checkpoint, which is how planResume tells them apart.
+   */
+  binding_window: z.enum(["5h", "7d", "unavailable"]).optional(),
 });
 export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>;
 
@@ -667,26 +673,13 @@ export const ExecutionModeEnum = z.enum(["sequential", "balanced"]);
 export type ExecutionMode = z.infer<typeof ExecutionModeEnum>;
 
 /**
- * Execution mode (Decision 24). `session` runs in the runner's live
- * session and can observe the usage cache → fully paced. `workflow` runs as a
- * background Workflow script that cannot observe usage → quota pacing is
- * disabled (the run hard-stops on rate-limit errors; the user is warned at
- * opt-in). An immutable run property set once at `run create`, never a derived
- * verdict; the quota gate skips pacing when it is `workflow`.
- */
-export const RunModeEnum = z.enum(["session", "workflow"]);
-export type RunMode = z.infer<typeof RunModeEnum>;
-
-/**
  * Ship mode for the run's rollup. `live` (the DEFAULT) auto-merges each task into
  * staging and serial-merges the staging→develop rollup — the pipeline's purpose,
  * gated by branch protection + the review panel + TDD + the holdout. `no-merge`
  * (the `--no-ship` opt-out) opens the rollup PR but never merges. An immutable run
  * property set once at `run create` (from the absence/presence of `--no-ship`) —
- * persisted so the workflow runner, `resume`, and `finalize` read it from the run
- * (the source of truth) instead of re-marshaling it through fragile Workflow `args`
- * or re-prompting the user. Mirrors {@link RunModeEnum}: a stored property, never a
- * derived verdict.
+ * persisted so `resume` and `finalize` read it from the run (the source of truth)
+ * instead of re-prompting the user. A stored property, never a derived verdict.
  */
 export const ShipModeEnum = z.enum(["no-merge", "live"]);
 export type ShipMode = z.infer<typeof ShipModeEnum>;
@@ -711,7 +704,6 @@ export const RunStateSchema = z.object({
   run_id: z.string().min(1),
   status: RunStatusEnum.default("running"),
   execution_mode: ExecutionModeEnum.default("sequential"),
-  mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("live"),
 
   /**
@@ -748,9 +740,8 @@ export const RunStateSchema = z.object({
   /**
    * When true, the quota gate skips pacing and returns null unconditionally. Set once at
    * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both orchestrators and both runners skip the gate without per-call flag
-   * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
-   * are unaffected.
+   * Persisted so both orchestrators skip the gate without per-call flag threading.
+   * Default false: legacy runs (no field) are unaffected.
    */
   ignore_quota: z.boolean().default(false),
 
@@ -800,17 +791,6 @@ export const RunStateSchema = z.object({
    * false: a run without the flag finalizes exactly as before.
    */
   debug: z.boolean().default(false),
-
-  /**
-   * Cumulative idle minutes, deducted from wall-time by the runtime circuit-breaker
-   * so a long real-world pause never falsely trips it (D7). SOLE writer:
-   * `StateManager.update()`, which on every write banks the gap since the previous
-   * write beyond ACTIVE_GAP_CAP_MINUTES — crediting at the one place the idle anchor
-   * (`updated_at`) is erased, so no write path can outrun it. Session-mode runs
-   * accumulate it too, but cosmetically (their runtime arm is disarmed). Default 0 —
-   * absent on legacy runs → treated as 0 (no regression).
-   */
-  paused_minutes: z.number().nonnegative().default(0),
 
   /** Lifecycle timestamps (ISO-8601). */
   started_at: z.string(),

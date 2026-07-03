@@ -4,9 +4,9 @@
  * decideStop is pure and only ever ALLOWS — the hook never blocks a stop and never
  * mutates state (the old state-only finalize-on-stop arm is removed: it bypassed the
  * real finalizeRun delivery and stranded runs in a healthy-looking but undelivered
- * terminal state). null/terminal/paused/suspended pass through; workflow mode, debug
- * runs, and a non-owner session pass through; a live run with pending work passes
- * through (it stays resumable); a session-mode run whose tasks are ALL terminal is
+ * terminal state). null/terminal/paused/suspended pass through; debug runs and a
+ * non-owner session pass through; a live run with pending work passes
+ * through (it stays resumable); an owned run whose tasks are ALL terminal is
  * left `running` with the `allow-unfinalized` hint — `factory resume` routes it
  * through the real finalizeRun. runStopGate wires that to the StateManager; the only
  * `{decision:"block"}` output left is the data-dir corruption case.
@@ -58,24 +58,6 @@ describe("decideStop — pass-through statuses", () => {
   );
 });
 
-describe("decideStop — workflow mode → plain allow (the Workflow drives, not the session)", () => {
-  it("workflow-mode run with pending work → allow", () => {
-    const action = decideStop(run({ mode: "workflow" }, { t1: task({ status: "executing" }) }));
-    expect(action).toEqual({ kind: "allow" });
-  });
-
-  it("workflow-mode run with zero tasks (setup unfinished) → allow", () => {
-    expect(decideStop(run({ mode: "workflow" }, {}))).toEqual({ kind: "allow" });
-  });
-
-  it("workflow-mode all-terminal run → plain allow (the Workflow finalizes; no hint here)", () => {
-    const action = decideStop(
-      run({ mode: "workflow" }, { a: task({ task_id: "a", status: "done" }) }),
-    );
-    expect(action).toEqual({ kind: "allow" });
-  });
-});
-
 describe("decideStop — debug mode → plain allow (the debug driver owns finalize between passes)", () => {
   it("session-owned, running, all-terminal, debug:true → plain allow (no hint)", () => {
     const action = decideStop(run({ debug: true }, { a: task({ task_id: "a", status: "done" }) }));
@@ -98,7 +80,7 @@ describe("decideStop — session-ownership", () => {
 
   it("owner known + stopping session != owner → plain allow, even all-terminal (another session's run)", () => {
     const action = decideStop(
-      run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
+      run({ owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       "some-other-session",
     );
     expect(action).toEqual({ kind: "allow" });
@@ -106,7 +88,7 @@ describe("decideStop — session-ownership", () => {
 
   it("owner known + stopping session == owner + all-terminal → allow-unfinalized (the real owner gets the hint)", () => {
     const action = decideStop(
-      run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
+      run({ owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       OWNER,
     );
     expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
@@ -114,7 +96,7 @@ describe("decideStop — session-ownership", () => {
 
   it("owner known + stopping session == owner + pending work → allow (NO hostage; resumable)", () => {
     const action = decideStop(
-      run({ mode: "session", owner_session: OWNER }, { t1: task({ status: "executing" }) }),
+      run({ owner_session: OWNER }, { t1: task({ status: "executing" }) }),
       OWNER,
     );
     expect(action).toEqual({ kind: "allow" });
@@ -122,14 +104,14 @@ describe("decideStop — session-ownership", () => {
 
   it("owner known + stopping session UNKNOWN (no stdin) + all-terminal → allow-unfinalized (degraded path still hints)", () => {
     const action = decideStop(
-      run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
+      run({ owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       undefined,
     );
     expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 });
 
-describe("decideStop — session-mode pending work → allow (the session-hostage fix)", () => {
+describe("decideStop — pending work → allow (the session-hostage fix)", () => {
   it("allows the stop when a task is in-flight (no block, run stays resumable)", () => {
     const action = decideStop(run({}, { t1: task({ task_id: "t1", status: "executing" }) }));
     expect(action).toEqual({ kind: "allow" });
@@ -140,7 +122,7 @@ describe("decideStop — session-mode pending work → allow (the session-hostag
   });
 });
 
-describe("decideStop — session-mode, all tasks terminal → allow-unfinalized (NEVER a state-only finalize)", () => {
+describe("decideStop — all tasks terminal → allow-unfinalized (NEVER a state-only finalize)", () => {
   it("every task done → allow-unfinalized; the run stays running/resumable for the real finalizeRun", () => {
     const action = decideStop(
       run(
@@ -239,21 +221,10 @@ describe("runStopGate — I/O wiring", () => {
     expect(out[0]!).not.toContain("runs/current"); // must not blame a foreign pointer
   });
 
-  it("workflow-mode run → allow, emits nothing (session is not the orchestrator)", async () => {
-    const { out, emit } = emitter();
-    const manager = {
-      findActiveByOwner: async (s: string) =>
-        s === "sess-a" ? run({ mode: "workflow" }, { t1: task({ status: "executing" }) }) : null,
-    };
-    const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
-    expect(code).toBe(EXIT.OK);
-    expect(out).toEqual([]);
-  });
-
   it("reads the stopping session_id from stdin → an unrelated session resolves nothing (owner-scoped)", async () => {
     const { out, emit } = emitter();
     const owner1 = run(
-      { mode: "session", owner_session: "owner-1" },
+      { owner_session: "owner-1" },
       { a: task({ task_id: "a", status: "done" }) },
     );
     const manager = {

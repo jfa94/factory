@@ -1147,7 +1147,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     ).rejects.toMatchObject({ isUsageError: true });
   });
 
-  it("no mode/ship flags → persists the no-flag defaults: session + live", async () => {
+  it("no ship flag → persists the no-flag default: live", async () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-def"], {
       gitClient: gitWithOrigin(REPO),
       ghClient: new FakeGhClient(),
@@ -1156,7 +1156,6 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     });
     expect(code).toBe(EXIT.OK);
     const run = await new StateManager({ dataDir }).read("run-def");
-    expect(run.mode).toBe("session");
     expect(run.ship_mode).toBe("live");
   });
 
@@ -1168,7 +1167,6 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
       dataDir,
     });
     const run = await new StateManager({ dataDir }).read("run-ns");
-    expect(run.mode).toBe("session");
     expect(run.ship_mode).toBe("no-merge");
   });
 });
@@ -1602,18 +1600,6 @@ describe("applyResume", () => {
       );
     },
   );
-
-  // D7: resume no longer credits paused_minutes itself — idle time is banked by
-  // StateManager.update() (the sole writer; see manager.test.ts + the breaker
-  // gate's D7 blind-spot tests). Resume must simply not DISTURB the balance.
-  it("E: resume preserves the persisted paused_minutes balance", async () => {
-    await createBareRun("r1");
-    await setStatus("r1", "paused", "5h");
-    await state.update("r1", (s) => ({ ...s, paused_minutes: 30 }));
-    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
-    expect(env.run.status).toBe("running");
-    expect(env.run.paused_minutes).toBe(30);
-  });
 
   describe("Decision 39: run.debug routes to a distinct 'debug-resume' envelope", () => {
     function asDebugResume(env: ResumeResult): Extract<ResumeResult, { kind: "debug-resume" }> {

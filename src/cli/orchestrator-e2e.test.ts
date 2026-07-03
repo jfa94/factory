@@ -8,7 +8,7 @@
  *   nextAction → spawn | terminal | quota-blocked
  *
  * The `driveToTerminal` helper below IS the documented orchestrator contract: it is the
- * thinnest possible loop a real runner (session or workflow) runs.  The test's
+ * thinnest possible loop the real runner runs.  The test's
  * job is to prove that CONTRACT produces the right run-state end-states — not to test
  * individual orchestrator internals (those live in orchestrator.test.ts / next.test.ts).
  *
@@ -176,7 +176,7 @@ interface Answerer {
 }
 
 /**
- * Drive a run to its terminal state, exactly as a real in-session or workflow
+ * Drive a run to its terminal state, exactly as the real in-session
  * orchestrator would.  This loop IS the documented orchestrator contract:
  *
  *   nextTask → ready → nextAction (record results) loop → terminal → repeat

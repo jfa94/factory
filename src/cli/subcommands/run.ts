@@ -556,8 +556,6 @@ export async function applyResume(
       // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
       return { kind: "resumed", run };
     case "resume": {
-      // Idle time is banked by StateManager.update() itself (the sole
-      // paused_minutes writer, D7) — this just clears the quota checkpoint.
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
