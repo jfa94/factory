@@ -76,6 +76,15 @@ so an incomplete panel can never pass. The cross-vendor reviewer is an executor 
 roster role (quality-reviewer via Codex), never an extra name, so it stays additive and
 optional; supplying it does not change the required roster.
 
+Cross-vendor availability is **probed, not assumed** (Decision 44): the engine runs
+`codex --version` (memoized, `src/verifier/judgment/codex-probe.ts`) and stamps the
+verify spawn manifest with `cross_vendor: {status:"present",model} | {status:"absent",reason}`.
+The runner executes the quality-reviewer via `codex exec` when present and reports an
+honest `crossVendorAbsent` reason when it can't. Absence is surfaced per shipped task in
+`report.md` (`## Review independence`) and the run summary; `review.requireCrossVendor`
+(`warn` default) escalates to `block`, which demotes the quality-reviewer to
+`verdict:"error"` so the merge gate cannot pass single-vendor.
+
 ## How the panel and holdout inspect a task
 
 Both the review panel and the holdout-validator are spawned against the **task
@@ -114,10 +123,20 @@ task:
 
 1. **Citation-verify** — the finding's quoted code is checked against the actual
    worktree source. An uncitable finding (missing `file`/`line`, or a quote that
-   does not match) is failed.
+   does not match) is failed. One rescue exists (Decision 44): a single-line quote
+   that misses at the cited line but matches **exactly one** line elsewhere in the
+   file is relocated there (`RELOCATE relocated_ok` in the audit) instead of
+   dropped — reviewers are frequently right about the code and off by a few lines.
+   Zero or multiple matches, multi-line quotes, and whitespace-only quotes stay
+   fail-closed. Confirmation still keys on the reviewer's **cited** line (what the
+   verifier agent saw); the relocated line is what reaches the producer.
 2. **Independent confirmation** — a separate finding-verifier, whose identity
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
+   The verifier is **claim-only** (anti-anchoring, Decision 44): its prompt is
+   built from `{reviewer, severity, claim, file, line, quote}` — never the
+   reviewer's `description` reasoning chain, so it can't be led to the same
+   wrong conclusion.
 
 Only confirmed blockers reach the producer. This is why the runner must run a
 finding-verifier for each blocking + citable finding and feed its verdict back: a
