@@ -24,18 +24,20 @@
  *    strictly consecutive: once N tasks have GENUINELY failed, the run is pathological
  *    enough to abort in lights-out mode; the cap is configurable.)
  *
- *  - RUNTIME arm (WORKFLOW mode ONLY) — wall-time since `run.started_at`. It is exact
- *    only in workflow mode: workflow never pauses on quota (Decision 24), so wall-time
- *    IS the effective runtime. Session mode pauses/suspends, `run.started_at` is never
- *    reset (not by resume, preserved by rescue), and paused minutes are untracked — so
- *    an un-deducted wall clock would falsely trip the ceiling on every resume of a run
- *    older than the cap, breaking suspend/resume. Session mode's time/quota budget is
- *    owned by the usage pacer instead, so we DISARM the runtime ceiling there by
- *    feeding `now` as the start (0 wall minutes → cannot trip). `run.paused_minutes`
- *    (accumulated on resume / rescue-reopen) is deducted so a rescued workflow run
- *    does not falsely trip on the idle time it spent waiting for the rescue.
+ *  - RUNTIME arm (WORKFLOW mode ONLY) — activity time since `run.started_at`. It is
+ *    armed only in workflow mode: workflow never pauses on quota (Decision 24), so a
+ *    human pause is an EMERGENT condition (nobody drives the loop) that no status ever
+ *    records. Session mode's time/quota budget is owned by the usage pacer instead, so
+ *    we DISARM the runtime ceiling there by feeding `now` as the start (0 wall minutes
+ *    → cannot trip). Idle is deducted from wall-time via `run.paused_minutes`, whose
+ *    SOLE writer is `StateManager.update()` (D7): every write banks the gap since the
+ *    previous write beyond ACTIVE_GAP_CAP_MINUTES, and this gate adds the same credit
+ *    for the still-pending gap since the LAST write — required because `nextTask`
+ *    evaluates the breaker before any post-pause write lands. Counted runtime is thus
+ *    Σ min(gap, cap): a multi-day park costs one cap, not its wall-clock.
  */
 import { evaluate, type CircuitBreakerResult } from "../quota/circuit-breaker.js";
+import { idleGapCredit } from "../core/state/index.js";
 import { epochToIso } from "../shared/time.js";
 import type { Config, StateManager } from "./deps.js";
 
@@ -66,7 +68,7 @@ export async function applyCircuitBreaker(
     (t) => t.status === "failed" && t.failure_class === "capability-budget",
   ).length;
 
-  // Runtime arm: exact only in workflow mode; disarmed in session mode by feeding
+  // Runtime arm: armed only in workflow mode; disarmed in session mode by feeding
   // `now` as the start (→ 0 wall minutes → the runtime branch cannot trip).
   const startedAtIso = run.mode === "workflow" ? run.started_at : epochToIso(now);
 
@@ -74,7 +76,9 @@ export async function applyCircuitBreaker(
     {
       startedAtIso,
       cumulativeFailures: capabilityFailures,
-      pausedMinutes: run.paused_minutes ?? 0,
+      // Persisted idle plus the still-pending gap since the last write — the first
+      // next-task after a pause evaluates BEFORE any write banks that gap (D7).
+      pausedMinutes: (run.paused_minutes ?? 0) + idleGapCredit(run.updated_at, now * 1000),
     },
     deps.config,
     now,

@@ -498,9 +498,9 @@ describe("applyRescue", () => {
     });
   });
 
-  // Group-2-E: rescue-reopen accumulates idle time into paused_minutes so the
-  // runtime circuit-breaker deducts the rescue gap from the wall-clock ceiling.
-  it("E: reopen accumulates paused_minutes (additive — does not reset prior balance)", async () => {
+  // D7: rescue no longer credits paused_minutes itself — idle time is banked by
+  // StateManager.update() (the sole writer). Reopen must preserve the balance.
+  it("E: reopen preserves the prior paused_minutes balance (never resets)", async () => {
     // Seed terminal run with a prior paused_minutes balance + a stuck task to reset.
     await state.update(RUN_ID, (s) => ({
       ...s,
@@ -516,8 +516,9 @@ describe("applyRescue", () => {
     expect(result.reopened).toBe(true);
 
     const run = await state.read(RUN_ID);
-    // Must not reset to 0: prior 30 + idle gap (≥0) = ≥30.
-    expect(run.paused_minutes).toBeGreaterThanOrEqual(30);
+    // Exactly the seeded balance: the gap since seeding is sub-grace, so the
+    // manager credits 0 and rescue itself must not touch the field.
+    expect(run.paused_minutes).toBe(30);
   });
 
   it("reset clears the phase cursor and merge_resyncs", async () => {

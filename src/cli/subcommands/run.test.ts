@@ -1733,62 +1733,16 @@ describe("applyResume", () => {
     },
   );
 
-  // Group-2-E: paused_minutes accumulates the idle gap so the runtime breaker can
-  // deduct real pause time from the wall-clock ceiling.
-  it("E: accumulates idle gap into paused_minutes on resume", async () => {
+  // D7: resume no longer credits paused_minutes itself — idle time is banked by
+  // StateManager.update() (the sole writer; see manager.test.ts + the breaker
+  // gate's D7 blind-spot tests). Resume must simply not DISTURB the balance.
+  it("E: resume preserves the persisted paused_minutes balance", async () => {
     await createBareRun("r1");
     await setStatus("r1", "paused", "5h");
-    // 2 hours after the last update → the idle gap should be ≥119 minutes (floor math,
-    // minus at most 1 second of test latency between setStatus and this call).
-    const futureNow = Math.floor(Date.now() / 1000) + 7200;
-    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), futureNow));
-    expect(env.run.paused_minutes).toBeGreaterThanOrEqual(119);
-    // Verify the value is persisted, not just in-memory.
-    const reread = await state.read("r1");
-    expect(reread.paused_minutes).toBeGreaterThanOrEqual(119);
-  });
-
-  it("E: paused_minutes accumulates across multiple resumes (additive, not reset)", async () => {
-    await createBareRun("r1");
-    // First suspend + resume: accumulate ~60 minutes
-    await setStatus("r1", "paused", "5h");
-    const after1h = Math.floor(Date.now() / 1000) + 3600;
-    await applyResume(state, "r1", underCurve(), defaultConfig(), after1h);
-    const afterFirst = (await state.read("r1")).paused_minutes ?? 0;
-    expect(afterFirst).toBeGreaterThanOrEqual(59);
-    // Second suspend + resume: same gap again → cumulative should be ≥118
-    await setStatus("r1", "paused", "5h");
-    const after2h = Math.floor(Date.now() / 1000) + 7200;
-    await applyResume(state, "r1", underCurve(), defaultConfig(), after2h);
-    const afterSecond = (await state.read("r1")).paused_minutes ?? 0;
-    expect(afterSecond).toBeGreaterThanOrEqual(afterFirst + 59);
-  });
-
-  it("F: priorUpdatedAt overrides run.updated_at for idle-time (--ignore-quota write fix)", async () => {
-    // Simulate a run paused ~60min ago (updated_at = 3600s before NOW).
-    await createBareRun("r1");
-    const T0 = NOW - 3600;
-    await state.update("r1", (s) => ({
-      ...s,
-      status: "paused",
-      quota: { binding_window: "5h" as const, resets_at_epoch: 0 },
-      updated_at: new Date(T0 * 1000).toISOString(),
-    }));
-    // Stamp updated_at to NOW (mimics the --ignore-quota state.update write).
-    await state.update("r1", (s) => ({ ...s, ignore_quota: true }));
-    // Without priorUpdatedAt the idle gap would be ~0 (updated_at just got stomped).
-    // With priorUpdatedAt = T0 the idle gap should be ~60 minutes.
-    const env = asResumed(
-      await applyResume(
-        state,
-        "r1",
-        underCurve(),
-        defaultConfig(),
-        NOW,
-        new Date(T0 * 1000).toISOString(),
-      ),
-    );
-    expect(env.run.paused_minutes ?? 0).toBeGreaterThanOrEqual(59);
+    await state.update("r1", (s) => ({ ...s, paused_minutes: 30 }));
+    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
+    expect(env.run.status).toBe("running");
+    expect(env.run.paused_minutes).toBe(30);
   });
 
   describe("Decision 39: run.debug routes to a distinct 'debug-resume' envelope", () => {

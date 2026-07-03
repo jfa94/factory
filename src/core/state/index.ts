@@ -87,6 +87,8 @@ export type { GateId, EvidenceGate, GateEvidence, GateVerdict } from "./derive.j
 // --- StateManager + path helpers ---
 export {
   StateManager,
+  ACTIVE_GAP_CAP_MINUTES,
+  idleGapCredit,
   type StateManagerOptions,
   type CreateRunArgs,
   type LockTuning,

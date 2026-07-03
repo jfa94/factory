@@ -802,10 +802,13 @@ export const RunStateSchema = z.object({
   debug: z.boolean().default(false),
 
   /**
-   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
-   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
-   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
-   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   * Cumulative idle minutes, deducted from wall-time by the runtime circuit-breaker
+   * so a long real-world pause never falsely trips it (D7). SOLE writer:
+   * `StateManager.update()`, which on every write banks the gap since the previous
+   * write beyond ACTIVE_GAP_CAP_MINUTES — crediting at the one place the idle anchor
+   * (`updated_at`) is erased, so no write path can outrun it. Session-mode runs
+   * accumulate it too, but cosmetically (their runtime arm is disarmed). Default 0 —
+   * absent on legacy runs → treated as 0 (no regression).
    */
   paused_minutes: z.number().nonnegative().default(0),
 

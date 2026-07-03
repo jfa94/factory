@@ -31,7 +31,7 @@ import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager, seedTaskRows, assertAcyclic } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
-import { nowEpoch, parseIso8601ToEpoch } from "../../shared/time.js";
+import { nowEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
@@ -552,11 +552,6 @@ export async function applyResume(
   reading: UsageReading,
   config: Config,
   nowEpochSec: number,
-  /** Pre-write snapshot of `updated_at` — callers that stamp the run before calling
-   * (e.g. `--ignore-quota` persists `ignore_quota:true`) must pass the value they
-   * captured BEFORE the write so idle time is computed against the real pause epoch,
-   * not the stamp time. Omit when there is no preceding write. */
-  priorUpdatedAt?: string,
 ): Promise<ResumeResult> {
   const run = await state.read(runId);
   if (isTerminalRunStatus(run.status)) {
@@ -576,19 +571,12 @@ export async function applyResume(
       // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
       return { kind: "resumed", run };
     case "resume": {
-      // Accumulate the idle gap into paused_minutes so the runtime breaker deducts
-      // real suspend/pause time from the wall-clock ceiling on the next evaluation.
-      // Use priorUpdatedAt when a caller stamped updated_at before calling us (e.g.
-      // --ignore-quota write), otherwise fall back to the run's own timestamp.
-      const idleMinutes = Math.max(
-        0,
-        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run.updated_at)) / 60),
-      );
+      // Idle time is banked by StateManager.update() itself (the sole
+      // paused_minutes writer, D7) — this just clears the quota checkpoint.
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
-        paused_minutes: (s.paused_minutes ?? 0) + idleMinutes,
       }));
       return { kind: "resumed", run: updated };
     }
@@ -894,10 +882,6 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
 
-  // Capture updated_at BEFORE any write so the idle-time calculation in applyResume
-  // uses the real pause epoch, not the timestamp we're about to stamp.
-  const { updated_at: priorUpdatedAt } = await state.read(runId);
-
   // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
   // to resume regardless of the live reading. Persisting also prevents re-suspension on
   // subsequent steps (both orchestrators read run.ignore_quota via the gate).
@@ -906,7 +890,7 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   }
 
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  const envelope = await applyResume(state, runId, reading, config, nowEpoch(), priorUpdatedAt);
+  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
   emitJson(envelope);
   return EXIT.OK;
 }

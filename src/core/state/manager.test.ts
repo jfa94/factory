@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StateManager } from "./manager.js";
+import { StateManager, ACTIVE_GAP_CAP_MINUTES, idleGapCredit } from "./manager.js";
 import { runStatePath, runsRoot, specDir } from "./paths.js";
 import { parseRunState, type SpecPointer } from "./schema.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
@@ -151,6 +151,39 @@ describe("lifecycle: create / read / update / finalize", () => {
     const onDisk = await m.read("run-1");
     expect(onDisk.run_id).toBe("run-1");
     expect(onDisk.spec).toEqual(spec);
+  });
+});
+
+describe("D7 idle crediting: update() is the sole paused_minutes writer", () => {
+  /** Backdate `updated_at` on disk, bypassing update() (which always re-stamps it). */
+  async function backdateUpdatedAt(runId: string, iso: string): Promise<void> {
+    const path = runStatePath(dataDir, runId);
+    const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await atomicWriteFile(path, JSON.stringify({ ...onDisk, updated_at: iso }));
+  }
+
+  it("folds an over-grace gap into paused_minutes on any write", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec });
+    // Idle 3 days since the last write (nobody drove the loop).
+    const threeDaysMin = 3 * 24 * 60;
+    await backdateUpdatedAt("run-1", new Date(Date.now() - threeDaysMin * 60_000).toISOString());
+    const run = await m.update("run-1", (s) => s);
+    // Whole gap minus the grace, ±1 min of test latency / floor math.
+    expect(run.paused_minutes).toBeGreaterThanOrEqual(threeDaysMin - ACTIVE_GAP_CAP_MINUTES - 1);
+    expect(run.paused_minutes).toBeLessThanOrEqual(threeDaysMin - ACTIVE_GAP_CAP_MINUTES + 1);
+  });
+
+  it("credits 0 for a sub-grace gap (an active step is runtime, not idle)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec });
+    await backdateUpdatedAt("run-1", new Date(Date.now() - 30 * 60_000).toISOString());
+    const run = await m.update("run-1", (s) => s);
+    expect(run.paused_minutes).toBe(0);
+  });
+
+  it("idleGapCredit never bricks a write on an unparseable timestamp", () => {
+    expect(idleGapCredit("not-a-timestamp")).toBe(0);
   });
 });
 

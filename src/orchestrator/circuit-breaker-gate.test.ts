@@ -11,9 +11,12 @@
  * can be spread-overridden, and `started_at` is set via state.update.
  */
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import { makeOrchestratorDeps, NOW } from "./orchestrator-fixtures.js";
+import { runStatePath } from "../core/state/paths.js";
+import { atomicWriteFile } from "../shared/atomic-write.js";
 import { epochToIso } from "../shared/time.js";
 import type { FailureClass } from "../types/index.js";
 
@@ -154,6 +157,57 @@ describe("applyCircuitBreaker — runtime arm (workflow-armed, session-disarmed)
     try {
       await state.update(runId, (s) => ({ ...s, started_at: epochToIso(NOW - 479 * 60) }));
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("applyCircuitBreaker — D7: idle time never counts toward the runtime ceiling", () => {
+  /**
+   * Backdate timestamps on disk, bypassing StateManager.update() (which always
+   * re-stamps `updated_at` and would bank the gap itself — here we need the gap
+   * still PENDING when the gate evaluates, the exact first-next-task-after-a-pause
+   * shape that cascade-failed the field run).
+   */
+  async function backdateOnDisk(
+    dataDir: string,
+    runId: string,
+    fields: { started_at: string; updated_at: string },
+  ): Promise<void> {
+    const path = runStatePath(dataDir, runId);
+    const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await atomicWriteFile(path, JSON.stringify({ ...onDisk, ...fields }));
+  }
+
+  it("a running workflow run parked idle for 3 days does NOT trip (the D7 false positive)", async () => {
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
+      modeOverride: "workflow",
+    });
+    try {
+      // One write at start, then nobody drove the loop for 3 days: the whole
+      // wall-clock is a pending idle gap the gate must credit before evaluating.
+      const threeDaysAgo = epochToIso(NOW - 3 * 24 * 60 * 60);
+      await backdateOnDisk(dataDir, runId, { started_at: threeDaysAgo, updated_at: threeDaysAgo });
+      expect(await applyCircuitBreaker(deps, runId)).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a genuinely ACTIVE workflow run at the cap still trips (recent write, full wall runtime)", async () => {
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
+      modeOverride: "workflow",
+    });
+    try {
+      // Last write 30min ago (sub-grace → pending credit 0), running since 480min ago.
+      await backdateOnDisk(dataDir, runId, {
+        started_at: epochToIso(NOW - 480 * 60),
+        updated_at: epochToIso(NOW - 30 * 60),
+      });
+      const v = await applyCircuitBreaker(deps, runId);
+      expect(v?.tripped).toBe(true);
+      if (v) expect(v.reason).toMatch(/max runtime/);
     } finally {
       await cleanup();
     }
