@@ -168,12 +168,11 @@ The spec-build pipeline.
 | `passReviewThreshold` | int 0–60 | `56`    | The single spec-review pass threshold out of 60.                                 |
 | `dimensionFloor`      | int 0–10 | `5`     | Any rubric dimension scoring `≤` this forces NEEDS_REVISION regardless of total. |
 | `maxRegenIterations`  | int >0   | `5`     | Max generate ⇄ review revision iterations before a loud give-up.                 |
-| `specModel`           | string   | `opus`  | Apex model the spec generator AND reviewer are pinned to (Decision 21).          |
-| `specEffort`          | string   | `max`   | Apex effort for the spec generator AND reviewer.                                 |
 | `prdBodyMaxBytes`     | int >0   | `65536` | Max bytes of PRD body retained before truncation.                                |
 
-`specModel`/`specEffort` are an _unconditional_ apex pin: the apex boundary reads
-the frozen defaults, not a per-run override.
+The Decision-21 apex pin (the model/effort the spec generator AND reviewer run at)
+is deliberately **not** a config key: it is an _unconditional_ pin, hard consts in
+`src/spec/agents.ts` — invariant by construction.
 
 ## `review`
 
@@ -234,14 +233,13 @@ eagerly checks three static prerequisites — `package.json`, a `@playwright/tes
 and a `playwright.config.ts` — and fails loud at create time if any is missing. Set the two
 keys only to **override** what the assessment would otherwise resolve.
 
-| Key              | Type               | Default | Meaning                                                                                                                                                                                                                                                |
-| ---------------- | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`        | boolean (optional) | —       | Repo-level "e2e is configured" signal, distinct from the run's `--e2e` flag. Informational/future-gating only today.                                                                                                                                   |
-| `startCommand`   | string (optional)  | —       | **Optional override.** Command that boots the target app — for Playwright's `webServer` (test runs) and the e2e-author's live-exploration boot. Unset ⇒ the assessment-resolved value in `playwright.config.ts` is used instead.                       |
-| `baseURL`        | URL (optional)     | —       | **Optional override.** Base URL the app serves once `startCommand` is up. Validated as a well-formed URL at config-parse time. Unset ⇒ the assessment-resolved value is used.                                                                          |
-| `testDir`        | string             | `e2e`   | Repo-relative directory the **committed critical suite** lives in. Persistence in this directory IS the criticality signal — no `@critical` tag exists. **Schema-locked to `e2e`**: any other value is rejected at config-parse time (see note below). |
-| `readyTimeoutMs` | int >0             | `30000` | Max wait for `startCommand` to become ready before the boot is a failure (ms).                                                                                                                                                                         |
-| `reopenCap`      | int ≥0             | `2`     | Per-task cap on e2e-triggered reopens. A critical spec still red after this many reopens of its mapped task fails the run outright instead of looping forever.                                                                                         |
+| Key              | Type              | Default | Meaning                                                                                                                                                                                                                                                |
+| ---------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `startCommand`   | string (optional) | —       | **Optional override.** Command that boots the target app — for Playwright's `webServer` (test runs) and the e2e-author's live-exploration boot. Unset ⇒ the assessment-resolved value in `playwright.config.ts` is used instead.                       |
+| `baseURL`        | URL (optional)    | —       | **Optional override.** Base URL the app serves once `startCommand` is up. Validated as a well-formed URL at config-parse time. Unset ⇒ the assessment-resolved value is used.                                                                          |
+| `testDir`        | string            | `e2e`   | Repo-relative directory the **committed critical suite** lives in. Persistence in this directory IS the criticality signal — no `@critical` tag exists. **Schema-locked to `e2e`**: any other value is rejected at config-parse time (see note below). |
+| `readyTimeoutMs` | int >0            | `30000` | Max wait for `startCommand` to become ready before the boot is a failure (ms).                                                                                                                                                                         |
+| `reopenCap`      | int ≥0            | `2`     | Per-task cap on e2e-triggered reopens. A critical spec still red after this many reopens of its mapped task fails the run outright instead of looping forever.                                                                                         |
 
 To override the assessment-resolved boot config, set either or both keys:
 
@@ -261,10 +259,10 @@ factory configure --set e2e.baseURL="http://localhost:3000"
 
 ## Root keys
 
-| Key                      | Type   | Default | Meaning                                                                                                                                                                                                               |
-| ------------------------ | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxConsecutiveFailures` | int >0 | `3`     | Cumulative genuine `capability-budget` task failures before the run aborts (cascade/wedge fails excluded). The signal is run-cumulative, not strictly consecutive; the key keeps its historical name for back-compat. |
-| `maxParallelTasks`       | int >0 | `3`     | Max tasks the runner drives in flight at once; emitted to the runner as `max_parallel` on the `work` envelope (the runner reads the envelope, never this file). `1` = sequential.                                     |
+| Key                      | Type   | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxConsecutiveFailures` | int >0 | `3`     | **Floor** of the circuit-breaker threshold: the run aborts when cumulative genuine `capability-budget` failures (cascade/wedge fails excluded) reach `max(floor, ceil(0.15 × total tasks))` — big task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3; 30 → 5, 40 → 6). The ratio is a module constant, not config. The key keeps its historical name for back-compat. |
+| `maxParallelTasks`       | int >0 | `3`     | Max tasks the runner drives in flight at once; emitted to the runner as `max_parallel` on the `work` envelope (the runner reads the envelope, never this file). `1` = sequential.                                                                                                                                                                                                                |
 
 ## Retired keys
 

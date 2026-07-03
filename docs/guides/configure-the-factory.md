@@ -67,9 +67,9 @@ change to its default.
 ## Notes
 
 - `--get` cannot be combined with `--set`/`--unset`.
-- The spec apex pin (`spec.specModel` / `spec.specEffort`) is surfaced as a
-  default but the apex boundary reads the frozen value, not a per-run override — see
-  the [configuration reference](../reference/configuration.md).
+- The spec apex pin (the model/effort the spec generator + reviewer run at) is
+  not config — it is hard consts in `src/spec/agents.ts`, invariant by
+  construction — see the [configuration reference](../reference/configuration.md).
 - The trusted-compute-base write-deny is **hardcoded** in the hooks, not
   config-sourced; there is no config key to widen it.
   </content>

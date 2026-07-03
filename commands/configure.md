@@ -126,17 +126,15 @@ config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md))
 
 ### Spec apex gate (`spec.*`)
 
-| Key                   | Default | Meaning                                                  |
-| --------------------- | ------- | -------------------------------------------------------- |
-| `passReviewThreshold` | 56      | Spec-review pass threshold out of 60                     |
-| `dimensionFloor`      | 5       | Any rubric dimension ≤ this auto-fails the spec          |
-| `maxRegenIterations`  | 5       | Max generate→review revisions before a loud give-up      |
-| `specModel`           | opus    | Apex model the generator + reviewer are pinned to (D21)  |
-| `specEffort`          | max     | Apex effort the generator + reviewer are pinned to (D21) |
-| `prdBodyMaxBytes`     | 65536   | Max PRD body bytes retained before truncation            |
+| Key                   | Default | Meaning                                             |
+| --------------------- | ------- | --------------------------------------------------- |
+| `passReviewThreshold` | 56      | Spec-review pass threshold out of 60                |
+| `dimensionFloor`      | 5       | Any rubric dimension ≤ this auto-fails the spec     |
+| `maxRegenIterations`  | 5       | Max generate→review revisions before a loud give-up |
+| `prdBodyMaxBytes`     | 65536   | Max PRD body bytes retained before truncation       |
 
-> `specModel`/`specEffort` are the Decision-21 apex pin. The spec boundary reads the frozen
-> defaults, not a per-run override — changing them here is for unusual setups only.
+> The Decision-21 apex pin (spec generator + reviewer model/effort) is NOT config —
+> it is invariant by construction, hard consts in `src/spec/agents.ts`.
 
 ### Review panel (`review.*`)
 
@@ -156,7 +154,6 @@ config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md))
 
 | Key              | Default | Meaning                                                                                                                         |
 | ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`        | —       | Repo-level "e2e is configured" signal (informational only)                                                                      |
 | `startCommand`   | —       | **Optional override** (D10) of the boot command — normally the run-start e2e-assessment resolves this itself                    |
 | `baseURL`        | —       | **Optional override** (D10) of the base URL the app serves once booted — normally assessment-resolved                           |
 | `testDir`        | e2e     | Repo-relative dir the COMMITTED critical suite lives in — persistence here IS the criticality signal, no `@critical` tag exists |
@@ -190,7 +187,8 @@ producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by ri
 
 ### Other roots
 
-`testWriter.maxTurns` (30), `codex.model` (—), `maxConsecutiveFailures` (3),
+`testWriter.maxTurns` (30), `codex.model` (—), `maxConsecutiveFailures` (3 — the
+circuit-breaker FLOOR; effective threshold `max(floor, ceil(0.15 × total tasks))`),
 `maxParallelTasks` (3 — max tasks the runner drives in flight; emitted as
 `max_parallel` on the work envelope).
 
