@@ -7,7 +7,7 @@ import {
 } from "./finding-verifier.js";
 
 const finding: Finding = parseFinding({
-  reviewer: "security-reviewer",
+  reviewer: "quality-reviewer",
   severity: "critical",
   blocking: true,
   file: "src/app.ts",
@@ -28,7 +28,7 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
     const out = await confirmBlocker(
       finding,
       runner(async () => ({ holds: true, note: "matched at line 3" })),
-      "security-reviewer",
+      "quality-reviewer",
     );
     expect(out.status).toBe("confirmed");
     if (out.status === "confirmed") expect(out.evidence.note).toMatch(/line 3/);
@@ -38,14 +38,14 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
     const out = await confirmBlocker(
       finding,
       runner(async () => ({ holds: false, note: "code already sanitises" })),
-      "security-reviewer",
+      "quality-reviewer",
     );
     expect(out.status).toBe("refuted");
   });
 
   it("D27 (bounded): the verifier runs EXACTLY ONCE per finding (no debate loop)", async () => {
     const spy = vi.fn(async () => ({ holds: true, note: "ok" }));
-    await confirmBlocker(finding, runner(spy), "security-reviewer");
+    await confirmBlocker(finding, runner(spy), "quality-reviewer");
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -53,8 +53,8 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
     await expect(
       confirmBlocker(
         finding,
-        runner(async () => ({ holds: true, note: "ok" }), "security-reviewer"),
-        "security-reviewer",
+        runner(async () => ({ holds: true, note: "ok" }), "quality-reviewer"),
+        "quality-reviewer",
       ),
     ).rejects.toThrow(/INDEPENDENT/i);
   });
@@ -65,7 +65,7 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
       runner(async () => {
         throw new Error("agent crashed");
       }),
-      "security-reviewer",
+      "quality-reviewer",
     );
     expect(out.status).toBe("error");
     if (out.status === "error") expect(out.reason).toMatch(/errored/i);
@@ -77,7 +77,7 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
       runner(async () => {
         throw new Error("boom");
       }),
-      "security-reviewer",
+      "quality-reviewer",
     );
     expect(out.status).not.toBe("confirmed");
     expect(out.status).not.toBe("refuted");

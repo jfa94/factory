@@ -544,7 +544,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     const handlers = makePhaseHandlers(makeDeps());
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
-      { reviewer: "security-reviewer", verdict: "approve", confirmed_blockers: 0 },
+      { reviewer: "quality-reviewer", verdict: "approve", confirmed_blockers: 0 },
     ];
     const ctx = await ctxFor({ task_id: "t-multi", reviewers });
     const result = await handlers.verify(ctx);
@@ -606,7 +606,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     const handlers = makePhaseHandlers(deps);
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
-      { reviewer: "security-reviewer", verdict: "approve", confirmed_blockers: 0 },
+      { reviewer: "quality-reviewer", verdict: "approve", confirmed_blockers: 0 },
     ];
     const ctx = await ctxFor({ task_id: "t-multi", reviewers });
     const result = await handlers.verify(ctx);

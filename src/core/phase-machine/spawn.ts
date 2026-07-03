@@ -22,19 +22,16 @@ import { EffortEnum } from "../../config/schema.js";
 /**
  * The reviewer/producer roles the engine may ask the orchestrator to spawn. CLOSED set:
  * a role outside it is a loud parse error. Producers (`test-writer`/`implementer`)
- * plus the verifier panel (Decision 26/27: implementation + quality always; the
- * risk-tier fan-out adds architecture/security; the CCR-pattern reviewers
- * silent-failure-hunter/type-design-reviewer) plus the run-level `scribe`.
+ * plus the four-lens verifier panel (Decision 26/27/43: implementation-reviewer,
+ * quality-reviewer — the merged adversarial quality+security+architecture+type-design
+ * lens — silent-failure-hunter, systemic-failure-reviewer) plus the run-level `scribe`.
  */
 export const SpawnRoleEnum = z.enum([
   "test-writer",
   "implementer",
   "implementation-reviewer",
   "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer",
   "systemic-failure-reviewer",
   "scribe",
 ]);

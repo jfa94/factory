@@ -10,7 +10,7 @@ import type { Finding } from "../verifier/judgment/index.js";
 /** Build a minimal {@link Finding} for tests (citable by default). */
 export function fakeFinding(overrides: Partial<Finding> = {}): Finding {
   return {
-    reviewer: overrides.reviewer ?? "security-reviewer",
+    reviewer: overrides.reviewer ?? "quality-reviewer",
     severity: overrides.severity ?? "critical",
     blocking: overrides.blocking ?? true,
     file: overrides.file ?? "src/x.ts",

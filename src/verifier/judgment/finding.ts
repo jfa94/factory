@@ -122,8 +122,25 @@ export const RawReviewSchema = z.object({
   verdict: RawReviewVerdictEnum,
   /** Findings raised. May be empty (an `approve` with no findings). */
   findings: z.array(FindingSchema),
+  /**
+   * How many findings the reviewer dropped to stay under the findings cap
+   * (self-reported per the review-protocol contract). {@link parseRawReview} adds
+   * any engine-side truncation overflow on top, so silent cap truncation is
+   * always visible rather than reading as full coverage.
+   */
+  dropped_by_cap: z.number().int().min(0).optional(),
 });
 export type RawReview = z.infer<typeof RawReviewSchema>;
+
+/**
+ * Hard per-review findings cap (Decision 43). The charter instructs reviewers to
+ * report their top findings by likelihood × impact and self-report the dropped
+ * tail as `dropped_by_cap`; this engine-side bound is the deterministic backstop —
+ * a review exceeding it is truncated to its FIRST {@link MAX_FINDINGS_PER_REVIEW}
+ * entries (the reviewer's own ranking) rather than rejected, because a ZodError on
+ * finding #11 would burn an escalation rung on noise.
+ */
+export const MAX_FINDINGS_PER_REVIEW = 10;
 
 // Known top-level keys — derived from schema shape, not hand-maintained.
 const KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
@@ -175,7 +192,7 @@ function warnStrippedKeys(
  * JSDoc) and logged via `log.warn` for observability.
  */
 export function parseRawReview(raw: unknown): RawReview {
-  const result = RawReviewSchema.parse(raw);
+  let result = RawReviewSchema.parse(raw);
   // Derive reviewer label for the warn context (raw may have it before or after parse).
   const reviewerLabel =
     raw !== null && typeof raw === "object" && !Array.isArray(raw)
@@ -186,6 +203,25 @@ export function parseRawReview(raw: unknown): RawReview {
       ? (raw as Record<string, unknown>).findings
       : undefined;
   warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
+  if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
+    const overflow = result.findings.length - MAX_FINDINGS_PER_REVIEW;
+    log.warn(
+      `review parse: reviewer '${reviewerLabel}' exceeded the findings cap ` +
+        `(${result.findings.length} > ${MAX_FINDINGS_PER_REVIEW}) — kept the first ` +
+        `${MAX_FINDINGS_PER_REVIEW}, ${overflow} truncated into dropped_by_cap`,
+    );
+    result = {
+      ...result,
+      findings: result.findings.slice(0, MAX_FINDINGS_PER_REVIEW),
+      dropped_by_cap: (result.dropped_by_cap ?? 0) + overflow,
+    };
+  }
+  if (result.dropped_by_cap !== undefined && result.dropped_by_cap > 0) {
+    log.warn(
+      `review parse: reviewer '${reviewerLabel}' dropped ${result.dropped_by_cap} finding(s) ` +
+        `by cap — coverage is truncated, not exhaustive`,
+    );
+  }
   return result;
 }
 

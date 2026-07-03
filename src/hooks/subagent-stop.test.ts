@@ -75,10 +75,7 @@ describe("reviewerNameOf", () => {
   it("maps each reviewer role to its identity (and strips factory: prefix)", () => {
     expect(reviewerNameOf("implementation-reviewer")).toBe("implementation");
     expect(reviewerNameOf("factory:quality-reviewer")).toBe("quality");
-    expect(reviewerNameOf("architecture-reviewer")).toBe("architecture");
-    expect(reviewerNameOf("security-reviewer")).toBe("security");
     expect(reviewerNameOf("silent-failure-hunter")).toBe("silent-failure");
-    expect(reviewerNameOf("type-design-reviewer")).toBe("type-design");
     expect(reviewerNameOf("systemic-failure-reviewer")).toBe("systemic-failure");
   });
 
@@ -139,7 +136,7 @@ describe("handleSubagentStop — observational (NO state write)", () => {
     const result = await handleSubagentStop(
       input({
         session_id: "test-session",
-        agent_type: "security-reviewer",
+        agent_type: "systemic-failure-reviewer",
         last_assistant_message: "STATUS: BLOCKED",
       }),
       { manager, explicitTaskId: "t1" },

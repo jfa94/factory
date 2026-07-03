@@ -19,8 +19,7 @@
  *
  * Reviewer subagent role → ReviewerResult.reviewer name:
  *   implementation-reviewer → "implementation"; quality-reviewer → "quality";
- *   architecture-reviewer → "architecture"; security-reviewer → "security";
- *   silent-failure-hunter → "silent-failure"; type-design-reviewer → "type-design";
+ *   silent-failure-hunter → "silent-failure";
  *   systemic-failure-reviewer → "systemic-failure".
  *
  * The reviewer's verdict is parsed from the last assistant message's STATUS line
@@ -57,14 +56,8 @@ export function reviewerNameOf(agentType: string): string | null {
       return "implementation";
     case "quality-reviewer":
       return "quality";
-    case "architecture-reviewer":
-      return "architecture";
-    case "security-reviewer":
-      return "security";
     case "silent-failure-hunter":
       return "silent-failure";
-    case "type-design-reviewer":
-      return "type-design";
     case "systemic-failure-reviewer":
       return "systemic-failure";
     default:

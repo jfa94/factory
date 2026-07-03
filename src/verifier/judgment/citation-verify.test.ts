@@ -71,7 +71,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
 
   it("Δ K: DROPS an uncitable finding (no file:line)", () => {
     const finding = parseFinding({
-      reviewer: "architecture-reviewer",
+      reviewer: "quality-reviewer",
       severity: "warning",
       blocking: true,
       quote: "vague concern",
@@ -100,7 +100,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
     };
     const r: SourceReader = { readLines: (file) => secretSrc[file] ?? null };
     const finding = parseFinding({
-      reviewer: "security-reviewer",
+      reviewer: "quality-reviewer",
       severity: "critical",
       blocking: true,
       file: "src/leak.ts",
@@ -122,7 +122,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
     };
     const r: SourceReader = { readLines: (file) => secretSrc[file] ?? null };
     const finding = parseFinding({
-      reviewer: "security-reviewer",
+      reviewer: "quality-reviewer",
       severity: "critical",
       blocking: true,
       file: "src/leak.ts",
