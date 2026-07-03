@@ -59,6 +59,8 @@ export type NextTask =
       readonly kind: "work";
       readonly ready: readonly string[];
       readonly cascade_failed: readonly string[];
+      /** Max tasks the runner may drive in flight at once (config `maxParallelTasks`). */
+      readonly max_parallel: number;
     })
   | (NextContext & {
       readonly kind: "finalize";
@@ -323,5 +325,11 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
 
-  return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
+  return {
+    ...ctx(),
+    kind: "work",
+    ready: ordered,
+    cascade_failed: cascadeFailed,
+    max_parallel: deps.config.maxParallelTasks,
+  };
 }

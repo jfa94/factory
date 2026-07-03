@@ -5986,7 +5986,13 @@ var ConfigSchema = external_exports.object({
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
    * total capability-budget drops); the field keeps its name for config back-compat.
    */
-  maxConsecutiveFailures: external_exports.number().int().positive().default(3)
+  maxConsecutiveFailures: external_exports.number().int().positive().default(3),
+  /**
+   * How many tasks the runner may have in flight at once. Surfaced to the
+   * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
+   * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
+   */
+  maxParallelTasks: external_exports.number().int().positive().default(3)
 }).default({});
 
 // src/config/load.ts
@@ -7872,7 +7878,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join20 } from "node:path";
+import { join as join21 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -12389,6 +12395,14 @@ function taskExemptReader(deps, worktree) {
 }
 
 // src/orchestrator/handlers.ts
+import { join as join13 } from "node:path";
+var PREFLIGHT_GIT_LOCK_TUNING = {
+  ...DEFAULT_FILE_LOCK_TUNING,
+  stale: 3e4,
+  retries: 100,
+  retryMinTimeout: 25,
+  retryMaxTimeout: 1e3
+};
 function makePhaseHandlers(deps) {
   function requireTask3(ctx, phase) {
     if (ctx.task === void 0) {
@@ -12475,13 +12489,24 @@ function makePhaseHandlers(deps) {
     async preflight(ctx) {
       const task = requireTask3(ctx, "preflight");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
-      await createTaskWorktree({
-        gitClient: deps.git,
-        runId: ctx.run.run_id,
-        taskId: task.task_id,
-        path: worktree,
-        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
-      });
+      const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch);
+      const lockScope = staging.replace(/[^\w.-]/g, "-");
+      await withFileLock(
+        {
+          dir: join13(deps.dataDir, "locks"),
+          lockfile: join13(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          label: `preflight git '${staging}'`,
+          dirPolicy: "create",
+          tuning: PREFLIGHT_GIT_LOCK_TUNING
+        },
+        () => createTaskWorktree({
+          gitClient: deps.git,
+          runId: ctx.run.run_id,
+          taskId: task.task_id,
+          path: worktree,
+          base: staging
+        })
+      );
       await (deps.provision ?? provisionWorktree)({
         path: worktree,
         setupCommand: deps.config.quality.setupCommand
@@ -12650,7 +12675,7 @@ function shipBody(runId, specTask) {
 
 // src/orchestrator/artifacts.ts
 import { mkdir as mkdir8, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7, join as join13 } from "node:path";
+import { dirname as dirname7, join as join14 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -12659,7 +12684,7 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join13(runDir(this.dataDir, runId), ref);
+    return join14(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
@@ -12677,7 +12702,7 @@ var FsArtifactStore = class {
 
 // src/orchestrator/docs-applicable.ts
 import { readFile as readFile10, stat } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -12697,17 +12722,17 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join14(repoRoot, "docs"));
+    const s = await stat(join15(repoRoot, "docs"));
     if (!s.isDirectory()) return false;
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join14(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
 import { readFile as readFile11 } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -12777,7 +12802,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile11(join15(worktree, file), "utf8");
+      const text = await readFile11(join16(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -13303,12 +13328,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join16(dataDir, "worktrees", runId, ".docs");
+  return join17(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -13514,12 +13539,18 @@ async function nextTask(deps, runId) {
     run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
+  return {
+    ...ctx(),
+    kind: "work",
+    ready: ordered,
+    cascade_failed: cascadeFailed,
+    max_parallel: deps.config.maxParallelTasks
+  };
 }
 
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute, join as join17 } from "node:path";
+import { dirname as dirname8, isAbsolute, join as join18 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
@@ -13567,19 +13598,19 @@ var E2eResultsSchema = external_exports.object({
   verdicts: external_exports.array(E2eAdjudicationVerdictSchema).optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-author");
+  return join18(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-run");
+  return join18(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join18(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join18(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join18(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -14012,7 +14043,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   }
   try {
     for (const entry of critical) {
-      await files.copySpec(join17(authorWorktree, entry.spec_path), join17(wtPath, entry.spec_path));
+      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -14109,7 +14140,7 @@ async function markFailed(deps, runId, reason, attempts) {
   log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
-  return join17(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join18(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -14314,13 +14345,13 @@ async function runSuiteAndDecide(deps, runId) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 var log28 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "opus";
 var ASSESSOR_MAX_TURNS = 60;
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-assess");
+  return join19(dataDir, "worktrees", runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -14554,7 +14585,7 @@ async function loadCliDeps(opts) {
 
 // src/cli/subcommands/run.ts
 import { access as access4, readFile as readFile12 } from "node:fs/promises";
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -14859,7 +14890,7 @@ async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile12(join19(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile12(join20(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -14873,7 +14904,7 @@ async function assertE2ePrereqs(cwd) {
     if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
-    await access4(join19(cwd, "playwright.config.ts"));
+    await access4(join20(cwd, "playwright.config.ts"));
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -15587,10 +15618,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join20(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join21(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join20(dataDir, "debug", runId, `pass-${pass}`);
+  return join21(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -15664,8 +15695,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join20(passDir, "findings.json");
-  const reportPath = join20(passDir, "findings.md");
+  const findingsPath = join21(passDir, "findings.json");
+  const reportPath = join21(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -15964,13 +15995,13 @@ var stateCommand = {
 import { mkdir as mkdir11, readFile as readFile14, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join22, relative } from "node:path";
+import { dirname as dirname9, join as join23, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir10, readFile as readFile13 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -16039,8 +16070,8 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join21(opts.targetRoot, ".claude");
-  const path5 = join21(dir, "settings.json");
+  const dir = join22(opts.targetRoot, ".claude");
+  const path5 = join22(dir, "settings.json");
   const created = !existsSync7(path5);
   let existing = {};
   if (!created) {
@@ -16111,8 +16142,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname9(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join22(dir, "templates");
-    if (existsSync8(join22(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join23(dir, "templates");
+    if (existsSync8(join23(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname9(dir);
@@ -16136,8 +16167,8 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join22(templatesDir, ...segs);
-  const dest = join22(targetRoot, ...segs);
+  const src = join23(templatesDir, ...segs);
+  const dest = join23(targetRoot, ...segs);
   if (!existsSync8(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
@@ -16165,7 +16196,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join22(root, ".gitignore");
+  const path5 = join23(root, ".gitignore");
   const rel = relative(root, path5);
   if (!existsSync8(path5)) {
     await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
@@ -16193,7 +16224,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync8(join22(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync8(join23(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
@@ -16501,7 +16532,7 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the runner adopts them
 from the first \`next-task\`:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...] }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  \u2192 call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
@@ -16640,7 +16671,7 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile15 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -16678,7 +16709,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join23(dataDir, "merged-settings.json");
+  return join24(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -16754,7 +16785,7 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join23(pluginRoot, ".claude-plugin", "plugin.json");
+  const path5 = join24(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync9(path5)) return void 0;
   try {
     const parsed = JSON.parse(await readFile15(path5, "utf8"));
@@ -16767,7 +16798,7 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join23(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join24(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
@@ -16779,7 +16810,7 @@ async function runAutonomyEnsure(opts = {}) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join23(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join24(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile15(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
