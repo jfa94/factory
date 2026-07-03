@@ -6615,7 +6615,13 @@ var ConfigSchema = external_exports.object({
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
    * total capability-budget drops); the field keeps its name for config back-compat.
    */
-  maxConsecutiveFailures: external_exports.number().int().positive().default(3)
+  maxConsecutiveFailures: external_exports.number().int().positive().default(3),
+  /**
+   * How many tasks the runner may have in flight at once. Surfaced to the
+   * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
+   * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
+   */
+  maxParallelTasks: external_exports.number().int().positive().default(3)
 }).default({});
 
 // src/config/load.ts

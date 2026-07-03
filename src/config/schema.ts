@@ -325,6 +325,12 @@ export const ConfigSchema = z
      * total capability-budget drops); the field keeps its name for config back-compat.
      */
     maxConsecutiveFailures: z.number().int().positive().default(3),
+    /**
+     * How many tasks the runner may have in flight at once. Surfaced to the
+     * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
+     * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
+     */
+    maxParallelTasks: z.number().int().positive().default(3),
   })
   .default({});
 

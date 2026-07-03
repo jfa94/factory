@@ -141,6 +141,24 @@ describe("nextTask", () => {
     }
   });
 
+  // N4 (S2): the work envelope carries the parallelism cap so the runner reads it
+  // from the envelope, never the config file.
+  it("work envelope carries max_parallel from config.maxParallelTasks", async () => {
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
+    });
+    try {
+      const env = await nextTask(deps, runId);
+      expect(env).toMatchObject({ kind: "work", max_parallel: 3 }); // schema default
+
+      const bumped = { ...deps, config: { ...deps.config, maxParallelTasks: 5 } };
+      const env5 = await nextTask(bumped, runId);
+      expect(env5).toMatchObject({ kind: "work", max_parallel: 5 });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("all tasks terminal → all-terminal", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [

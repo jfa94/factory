@@ -18,6 +18,7 @@ describe("ConfigSchema", () => {
     expect(cfg.quota.dailyThresholds).toEqual([20, 40, 60, 80, 95, 95, 95]);
     // Top-level.
     expect(cfg.maxConsecutiveFailures).toBe(3);
+    expect(cfg.maxParallelTasks).toBe(3);
   });
 
   it("stale overlay keys (pruned config fields) are stripped, not fatal", () => {
@@ -81,6 +82,9 @@ describe("ConfigSchema", () => {
   it("rejects out-of-range values (loud, not silent)", () => {
     expect(() => ConfigSchema.parse({ quality: { holdoutPercent: 150 } })).toThrow();
     expect(() => ConfigSchema.parse({ quota: { sleepCapSec: -1 } })).toThrow();
+    // maxParallelTasks: min 1 (N4) — 0 and negatives reject.
+    expect(() => ConfigSchema.parse({ maxParallelTasks: 0 })).toThrow();
+    expect(() => ConfigSchema.parse({ maxParallelTasks: -1 })).toThrow();
   });
 
   it("rejects a wrong-length threshold curve", () => {
