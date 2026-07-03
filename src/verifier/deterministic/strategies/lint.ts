@@ -8,6 +8,7 @@
  * (excluded from the conjunction), mirroring the sast "no-security-command"
  * precedent. When applicable and eslint reports problems (exit≠0), it fail-closes.
  */
+import { contractCommand } from "../gate-contract.js";
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
 import { skip } from "../strategy.js";
 import type { GateTools } from "../tools.js";
@@ -36,6 +37,16 @@ export const lintStrategy: GateStrategy<GateTools> = {
   id: "lint",
   async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
     const opts = { cwd: ctx.worktree };
+    // Gate contract (S7, Decision 46): a contracted `command` override (e.g.
+    // `deno lint`) replaces eslint entirely — the bin/config probes are moot.
+    const command = contractCommand(ctx.contract, "lint");
+    if (command !== undefined) {
+      return procOutcome(
+        "lint",
+        `contract:${command.join(" ")}`,
+        await ctx.tools.command.run(command, opts),
+      );
+    }
     const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts);
     if (!hasBin) {
       return skip("lint", "no-eslint-binary");

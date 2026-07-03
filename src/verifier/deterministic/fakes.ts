@@ -8,6 +8,7 @@
  * reproduced exactly with zero real CLI invocation.
  */
 import type {
+  CommandRunner,
   CommitInfo,
   CoverageRead,
   CoverageReader,
@@ -73,6 +74,16 @@ export class FakeBuild extends FakeProcTool implements BuildTool {
 
 /** Scripted SemgrepTool. Records the argv it was handed (post-allowlist). */
 export class FakeSemgrep implements SemgrepTool {
+  readonly calls: Array<readonly string[]> = [];
+  constructor(private readonly result: ProcResult) {}
+  async run(command: readonly string[], _opts: ToolRunOpts): Promise<ProcResult> {
+    this.calls.push(command);
+    return this.result;
+  }
+}
+
+/** Scripted CommandRunner. Records the contract argv it was handed. */
+export class FakeCommandRunner implements CommandRunner {
   readonly calls: Array<readonly string[]> = [];
   constructor(private readonly result: ProcResult) {}
   async run(command: readonly string[], _opts: ToolRunOpts): Promise<ProcResult> {
@@ -251,6 +262,7 @@ export interface FakeToolsOptions {
   stryker?: StrykerTool;
   coverage?: CoverageReader;
   fs?: FsProbe;
+  command?: CommandRunner;
 }
 
 /** Assemble a full GateTools bag from overrides, all-green by default. */
@@ -270,5 +282,6 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
         after: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
       }),
     fs: opts.fs ?? new FakeFs(),
+    command: opts.command ?? new FakeCommandRunner(proc(0)),
   };
 }

@@ -107,6 +107,16 @@ export interface SemgrepTool {
   run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>;
 }
 
+/**
+ * Contracted gate-command runner (S7, Decision 46): executes a `.factory/gates.json`
+ * `command` override (argv form, already allowlist-validated by contractCommand).
+ * Pass = exit 0. The command-gate strategies (test/type/build/lint) route through
+ * this instead of their built-in tool when the contract carries a command.
+ */
+export interface CommandRunner {
+  run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>;
+}
+
 // ---------------------------------------------------------------------------
 // Report-reading tools (mutation / coverage): parse JSON, fail loud on truncation.
 // ---------------------------------------------------------------------------
@@ -200,6 +210,7 @@ export interface GateTools {
   readonly stryker: StrykerTool;
   readonly coverage: CoverageReader;
   readonly fs: FsProbe;
+  readonly command: CommandRunner;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +389,19 @@ export class DefaultSemgrepTool implements SemgrepTool {
     const [bin, ...rest] = command;
     if (bin === undefined) {
       throw new Error("DefaultSemgrepTool: empty command");
+    }
+    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
+  }
+}
+
+/** Default CommandRunner: run the already-validated contract argv directly. */
+export class DefaultCommandRunner implements CommandRunner {
+  constructor(private readonly env: Record<string, string> = {}) {}
+
+  async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
+    const [bin, ...rest] = command;
+    if (bin === undefined) {
+      throw new Error("DefaultCommandRunner: empty command");
     }
     return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
   }
@@ -687,5 +711,6 @@ export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTool
     stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
     coverage: new DefaultCoverageReader(),
     fs: new DefaultFsProbe(),
+    command: new DefaultCommandRunner(gateEnv),
   };
 }

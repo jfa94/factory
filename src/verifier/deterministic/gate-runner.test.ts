@@ -17,6 +17,7 @@ import {
   covOk,
   FakeCoverageReader,
   FakeEslint,
+  FakeFs,
   FakeGitProbe,
   FakeStryker,
   FakeVitest,
@@ -25,6 +26,7 @@ import {
   strykerResult,
 } from "./fakes.js";
 import { GateRunner, strategyFor, type GateContext } from "./gate-runner.js";
+import type { GateContract, GateContractLoad } from "./gate-contract.js";
 import { GateMemo } from "./memo.js";
 import type { CoverageSummary, GateTools } from "./tools.js";
 
@@ -151,6 +153,121 @@ describe("GateRunner — tree-SHA evidence memo (Δ O)", () => {
 
     // Distinct tree SHAs ⇒ no memo hit ⇒ the tool is invoked each run.
     expect(vitest.calls).toHaveLength(2);
+  });
+});
+
+describe("GateRunner — gate contract (S7, Decision 46)", () => {
+  /** A full 8-gate contract, everything waived except the overrides. */
+  function contractWith(overrides: Partial<GateContract["gates"]> = {}): GateContract {
+    const gates = Object.fromEntries(
+      GATE_IDS.map((id) => [id, { contracted: false, reason: "test-waived" }]),
+    ) as GateContract["gates"];
+    return { version: 1, stack: "npm", gates: { ...gates, ...overrides } };
+  }
+
+  const loads = (contract: GateContract) => async (): Promise<GateContractLoad> => ({
+    state: "ok",
+    contract,
+  });
+
+  it("a TOOLING skip on a CONTRACTED gate becomes a loud FAIL (contracted-but-unrunnable)", async () => {
+    // lint contracted, but no eslint binary in the worktree → today's skip is
+    // converted to failing evidence and the conjunction fails.
+    const tools = makeFakeTools({ git: greenGit(), fs: new FakeFs([]) });
+    const res = await new GateRunner().run({
+      ...baseCtx(tools, ["lint"]),
+      loadContract: loads(contractWith({ lint: { contracted: true } })),
+    });
+    expect(res.verdict.passed).toBe(false);
+    expect(res.skipped).toHaveLength(0);
+    expect(res.evidence).toHaveLength(1);
+    expect(res.evidence[0]?.observed).toBe(false);
+    expect(res.evidence[0]?.detail).toContain("contracted-but-unrunnable: no-eslint-binary");
+  });
+
+  it("a SCOPE skip on a CONTRACTED gate stays excluded (task property, not broken tooling)", async () => {
+    // mutation contracted with stryker fully installed, but the diff has no
+    // mutable changes → no-mutable-changes is a scope skip; the other gate's
+    // green evidence carries the verdict.
+    const tools = makeFakeTools({
+      git: greenGit(),
+      fs: new FakeFs(["node_modules/.bin/stryker", ".stryker.config.json"]),
+    });
+    const res = await new GateRunner().run({
+      ...baseCtx(tools, ["mutation", "type"]),
+      loadContract: loads(
+        contractWith({ mutation: { contracted: true }, type: { contracted: true } }),
+      ),
+    });
+    expect(res.skipped).toEqual([{ gate: "mutation", reason: "no-mutable-changes" }]);
+    expect(res.verdict.passed).toBe(true);
+  });
+
+  it("an UNCONTRACTED gate skips cleanly WITHOUT invoking the strategy", async () => {
+    const eslint = new FakeEslint(proc(0));
+    const tools = makeFakeTools({ git: greenGit(), eslint }); // fs all-present: probes would pass
+    const res = await new GateRunner().run({
+      ...baseCtx(tools, ["lint"]),
+      loadContract: loads(contractWith({ lint: { contracted: false, reason: "not opted in" } })),
+    });
+    expect(res.skipped).toEqual([{ gate: "lint", reason: "uncontracted: not opted in" }]);
+    expect(eslint.calls).toHaveLength(0);
+    expect(res.evidence).toHaveLength(0);
+    // Empty evidence still fails closed — an all-uncontracted sweep never default-opens.
+    expect(res.verdict.passed).toBe(false);
+  });
+
+  it("ABSENT contract keeps legacy skip semantics (tooling skip stays a skip)", async () => {
+    const tools = makeFakeTools({ git: greenGit(), fs: new FakeFs([]) });
+    const res = await new GateRunner().run({
+      ...baseCtx(tools, ["lint"]),
+      loadContract: async () => ({ state: "absent" }),
+    });
+    expect(res.skipped).toEqual([{ gate: "lint", reason: "no-eslint-binary" }]);
+    expect(res.evidence).toHaveLength(0);
+  });
+
+  it("an INVALID contract throws — never degrades to legacy", async () => {
+    const tools = makeFakeTools({ git: greenGit() });
+    await expect(
+      new GateRunner().run({
+        ...baseCtx(tools, ["lint"]),
+        loadContract: async () => ({ state: "invalid", error: "gates.test: required" }),
+      }),
+    ).rejects.toThrow(/INVALID.*gates\.test/);
+  });
+
+  it("a contracted-but-unrunnable failure is NOT memoized (installing the tool fixes it)", async () => {
+    // Same tree SHA + shared memo across both runs: run 1 fails (no eslint), run 2
+    // has the tool installed — it must RUN and pass, not replay the stale failure
+    // (node_modules changes never move the git tree SHA).
+    const memo = new GateMemo();
+    const gitOpts = {
+      refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
+      changedFiles: [],
+      commits: [],
+      treeSha: "tree-C",
+    } as const;
+    const contract = loads(contractWith({ lint: { contracted: true } }));
+
+    const broken = makeFakeTools({ git: new FakeGitProbe(gitOpts), fs: new FakeFs([]) });
+    const first = await new GateRunner().run({
+      ...baseCtx(broken, ["lint"]),
+      memo,
+      loadContract: contract,
+    });
+    expect(first.verdict.passed).toBe(false);
+
+    const fixed = makeFakeTools({
+      git: new FakeGitProbe(gitOpts),
+      eslint: new FakeEslint(proc(0)),
+    });
+    const second = await new GateRunner().run({
+      ...baseCtx(fixed, ["lint"]),
+      memo,
+      loadContract: contract,
+    });
+    expect(second.verdict.passed).toBe(true);
   });
 });
 

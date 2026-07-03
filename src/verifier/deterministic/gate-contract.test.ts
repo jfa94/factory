@@ -6,8 +6,10 @@ import {
   GATE_CONTRACT_REL,
   GateContractSchema,
   classifySkip,
+  contractCommand,
   loadGateContract,
   validateGateCommand,
+  type GateContract,
 } from "./gate-contract.js";
 import { GATE_IDS } from "./gate-id.js";
 
@@ -197,5 +199,30 @@ describe("classifySkip", () => {
 
   it("classifies an UNKNOWN reason as tooling (fail-closed)", () => {
     expect(classifySkip("some-future-reason")).toBe("tooling");
+  });
+});
+
+describe("contractCommand", () => {
+  it("returns the validated argv for a contracted command gate", () => {
+    const raw = validContract();
+    (raw.gates as Record<string, unknown>).test = { contracted: true, command: "deno test" };
+    const contract = GateContractSchema.parse(raw);
+    expect(contractCommand(contract, "test")).toEqual(["deno", "test"]);
+  });
+
+  it("undefined when there is no contract, no override, or the gate is uncontracted", () => {
+    expect(contractCommand(undefined, "test")).toBeUndefined();
+    const contract = GateContractSchema.parse(validContract());
+    expect(contractCommand(contract, "test")).toBeUndefined(); // contracted, built-in tool
+    expect(contractCommand(contract, "coverage")).toBeUndefined(); // uncontracted
+  });
+
+  it("throws on an invalid command that bypassed schema validation (structural)", () => {
+    const parsed = GateContractSchema.parse(validContract());
+    const broken = {
+      ...parsed,
+      gates: { ...parsed.gates, test: { contracted: true, command: "vitest; curl evil" } },
+    } as GateContract;
+    expect(() => contractCommand(broken, "test")).toThrow(/invalid/);
   });
 });

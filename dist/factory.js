@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile16;
-      function readFile16(path5, options, cb) {
+      fs2.readFile = readFile17;
+      function readFile17(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path5, options, cb);
@@ -7886,7 +7886,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -10477,6 +10477,145 @@ function skip(gate, reason) {
   return { kind: "skip", gate, reason };
 }
 
+// src/verifier/deterministic/gate-contract.ts
+import { readFile as readFile5 } from "node:fs/promises";
+import { join as join10 } from "node:path";
+
+// src/shared/command-allowlist.ts
+var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+function runnerName(argv) {
+  const bin = argv[0] ?? "";
+  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+}
+function validateCommand(command, isAllowedRunner) {
+  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (!SAFE_TOKEN.test(t)) {
+      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
+    }
+  }
+  if (tokens[0] === void 0) {
+    return { ok: false, reason: "unsafe_command", detail: "empty command" };
+  }
+  if (!isAllowedRunner(tokens)) {
+    return {
+      ok: false,
+      reason: "unallowed_runner",
+      detail: `runner '${runnerName(tokens)}' not allowlisted`
+    };
+  }
+  return { ok: true, argv: tokens };
+}
+
+// src/verifier/deterministic/gate-contract.ts
+var GATE_CONTRACT_REL = ".factory/gates.json";
+var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
+var COMMAND_GATES = ["test", "type", "build", "lint"];
+function isAllowedGateRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  switch (runner) {
+    case "deno":
+      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
+    case "go":
+      return a1 === "test";
+    case "cargo":
+      return a1 === "test" || a1 === "check" || a1 === "build";
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return a1 === "run" && argv[2] !== void 0;
+    case "vitest":
+    case "tsc":
+    case "eslint":
+    case "jest":
+    case "mocha":
+    case "pytest":
+      return true;
+    default:
+      return false;
+  }
+}
+function validateGateCommand(command) {
+  return validateCommand(command, isAllowedGateRunner);
+}
+var ContractedSchema = external_exports.object({
+  contracted: external_exports.literal(true),
+  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+  command: external_exports.string().optional()
+}).strict();
+var UncontractedSchema = external_exports.object({
+  contracted: external_exports.literal(false),
+  /** Why this gate is waived — required; the committed audit trail. */
+  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
+}).strict();
+var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var GateContractSchema = external_exports.object({
+  version: external_exports.literal(1),
+  stack: external_exports.enum(GATE_CONTRACT_STACKS),
+  gates: external_exports.object(
+    Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))
+  ).strict()
+}).strict().superRefine((contract, issues) => {
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (!entry.contracted || entry.command === void 0) continue;
+    if (!COMMAND_GATES.includes(id)) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
+      });
+      continue;
+    }
+    const v = validateGateCommand(entry.command);
+    if (!v.ok) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `${v.reason}: ${v.detail}`
+      });
+    }
+  }
+});
+async function loadGateContract(rootAbs) {
+  let raw;
+  try {
+    raw = await readFile5(join10(rootAbs, GATE_CONTRACT_REL), "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return { state: "absent" };
+    return { state: "invalid", error: `unreadable: ${err.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { state: "invalid", error: `not JSON: ${err.message}` };
+  }
+  const result = GateContractSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    return { state: "invalid", error: issues };
+  }
+  return { state: "ok", contract: result.data };
+}
+var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set([
+  "no-vitest-runnable-tests-in-scope",
+  "no-mutable-changes"
+]);
+function classifySkip(reason) {
+  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
+}
+function contractCommand(contract, id) {
+  const entry = contract?.gates[id];
+  if (entry === void 0 || !entry.contracted || entry.command === void 0) return void 0;
+  const v = validateGateCommand(entry.command);
+  if (!v.ok) {
+    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
+  }
+  return v.argv;
+}
+
 // src/verifier/deterministic/memo.ts
 var GateMemo = class {
   /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
@@ -10552,6 +10691,40 @@ function filterDedup(files, keep) {
   return out;
 }
 
+// src/verifier/deterministic/strategies/proc-strategy.ts
+var EXCERPT_MAX_CHARS = 1e3;
+function excerpt(text) {
+  const trimmed = text.trim();
+  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
+  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)`;
+}
+function procOutcome(id, label, result) {
+  if (result.truncated) {
+    throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
+  }
+  const base = `${label} exit=${result.code ?? "null"}`;
+  if (result.code === 0) return ran(id, true, base);
+  const output = excerpt(result.stderr || result.stdout);
+  return ran(id, false, output ? `${base}: ${output}` : base);
+}
+function procStrategy(id, label, invoke) {
+  return {
+    id,
+    async run(ctx) {
+      const opts = { cwd: ctx.worktree };
+      const command = contractCommand(ctx.contract, id);
+      if (command !== void 0) {
+        return procOutcome(
+          id,
+          `contract:${command.join(" ")}`,
+          await ctx.tools.command.run(command, opts)
+        );
+      }
+      return procOutcome(id, label, await invoke(ctx.tools, opts));
+    }
+  };
+}
+
 // src/verifier/deterministic/strategies/test.ts
 function isVitestRunnable(file) {
   return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file) && !file.endsWith(".d.ts");
@@ -10559,6 +10732,14 @@ function isVitestRunnable(file) {
 var testStrategy = {
   id: "test",
   async run(ctx) {
+    const command = contractCommand(ctx.contract, "test");
+    if (command !== void 0) {
+      return procOutcome(
+        "test",
+        `contract:${command.join(" ")}`,
+        await ctx.tools.command.run(command, { cwd: ctx.worktree })
+      );
+    }
     const base = `origin/${ctx.baseRef}`;
     const changed = await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree });
     const scoped = diffScopedTestFiles(changed);
@@ -10794,32 +10975,6 @@ var mutationStrategy = {
   }
 };
 
-// src/shared/command-allowlist.ts
-var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
-function runnerName(argv) {
-  const bin = argv[0] ?? "";
-  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-}
-function validateCommand(command, isAllowedRunner) {
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
-  for (const t of tokens) {
-    if (!SAFE_TOKEN.test(t)) {
-      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
-    }
-  }
-  if (tokens[0] === void 0) {
-    return { ok: false, reason: "unsafe_command", detail: "empty command" };
-  }
-  if (!isAllowedRunner(tokens)) {
-    return {
-      ok: false,
-      reason: "unallowed_runner",
-      detail: `runner '${runnerName(tokens)}' not allowlisted`
-    };
-  }
-  return { ok: true, argv: tokens };
-}
-
 // src/verifier/deterministic/strategies/sast.ts
 function isAllowedSecurityRunner(argv) {
   const runner = runnerName(argv);
@@ -10883,31 +11038,6 @@ ${result.stderr}`.trim();
   }
 };
 
-// src/verifier/deterministic/strategies/proc-strategy.ts
-var EXCERPT_MAX_CHARS = 1e3;
-function excerpt(text) {
-  const trimmed = text.trim();
-  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
-  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)`;
-}
-function procOutcome(id, label, result) {
-  if (result.truncated) {
-    throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
-  }
-  const base = `${label} exit=${result.code ?? "null"}`;
-  if (result.code === 0) return ran(id, true, base);
-  const output = excerpt(result.stderr || result.stdout);
-  return ran(id, false, output ? `${base}: ${output}` : base);
-}
-function procStrategy(id, label, invoke) {
-  return {
-    id,
-    async run(ctx) {
-      return procOutcome(id, label, await invoke(ctx.tools, { cwd: ctx.worktree }));
-    }
-  };
-}
-
 // src/verifier/deterministic/strategies/type.ts
 var typeStrategy = procStrategy(
   "type",
@@ -10935,6 +11065,14 @@ var lintStrategy = {
   id: "lint",
   async run(ctx) {
     const opts = { cwd: ctx.worktree };
+    const command = contractCommand(ctx.contract, "lint");
+    if (command !== void 0) {
+      return procOutcome(
+        "lint",
+        `contract:${command.join(" ")}`,
+        await ctx.tools.command.run(command, opts)
+      );
+    }
     const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts);
     if (!hasBin) {
       return skip("lint", "no-eslint-binary");
@@ -10992,7 +11130,27 @@ var GateRunner = class {
     const evidence = [];
     const skipped = [];
     const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
+    const load = await (ctx.loadContract ?? loadGateContract)(ctx.worktree);
+    if (load.state === "invalid") {
+      throw new Error(
+        `gate contract: .factory/gates.json is INVALID (${load.error}) \u2014 fix or re-run \`factory scaffold\``
+      );
+    }
+    const contract = load.state === "ok" ? load.contract : void 0;
+    if (contract === void 0) {
+      log18.warn(
+        `run ${ctx.runId} task ${ctx.taskId}: no .factory/gates.json in worktree \u2014 legacy skip semantics (contracted-but-unrunnable enforcement OFF)`
+      );
+    }
     for (const id of gates) {
+      const entry = contract?.gates[id];
+      if (entry !== void 0 && !entry.contracted) {
+        const reason = `uncontracted: ${entry.reason}`;
+        report.push({ gate: id, outcome: { kind: "skip", gate: id, reason } });
+        skipped.push({ gate: id, reason });
+        log18.debug(`gate ${id} skipped: ${reason}`);
+        continue;
+      }
       const cached = memo.getEvidence(id, treeSha);
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
@@ -11009,13 +11167,20 @@ var GateRunner = class {
         config: ctx.config,
         tools: ctx.tools,
         exemptReader: ctx.exemptReader,
-        memo
+        memo,
+        contract
       };
-      const outcome = await strategy.run(sctx);
+      let outcome = await strategy.run(sctx);
+      if (outcome.kind === "skip" && entry?.contracted === true && classifySkip(outcome.reason) === "tooling") {
+        outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`);
+        log18.warn(`gate ${id} contracted but unrunnable \u2014 failing loud`);
+      }
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
-        memo.putEvidence(id, treeSha, outcome.evidence);
+        if (!outcome.evidence.detail?.startsWith("contracted-but-unrunnable")) {
+          memo.putEvidence(id, treeSha, outcome.evidence);
+        }
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
         log18.debug(`gate ${id} skipped: ${outcome.reason}`);
@@ -11026,79 +11191,8 @@ var GateRunner = class {
   }
 };
 
-// src/verifier/deterministic/gate-contract.ts
-var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint"];
-function isAllowedGateRunner(argv) {
-  const runner = runnerName(argv);
-  const a1 = argv[1];
-  switch (runner) {
-    case "deno":
-      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
-    case "go":
-      return a1 === "test";
-    case "cargo":
-      return a1 === "test" || a1 === "check" || a1 === "build";
-    case "npm":
-    case "pnpm":
-    case "yarn":
-      return a1 === "run" && argv[2] !== void 0;
-    case "vitest":
-    case "tsc":
-    case "eslint":
-    case "jest":
-    case "mocha":
-    case "pytest":
-      return true;
-    default:
-      return false;
-  }
-}
-function validateGateCommand(command) {
-  return validateCommand(command, isAllowedGateRunner);
-}
-var ContractedSchema = external_exports.object({
-  contracted: external_exports.literal(true),
-  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-  command: external_exports.string().optional()
-}).strict();
-var UncontractedSchema = external_exports.object({
-  contracted: external_exports.literal(false),
-  /** Why this gate is waived — required; the committed audit trail. */
-  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
-}).strict();
-var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
-var GateContractSchema = external_exports.object({
-  version: external_exports.literal(1),
-  stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(
-    Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))
-  ).strict()
-}).strict().superRefine((contract, issues) => {
-  for (const id of GATE_IDS) {
-    const entry = contract.gates[id];
-    if (!entry.contracted || entry.command === void 0) continue;
-    if (!COMMAND_GATES.includes(id)) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
-      });
-      continue;
-    }
-    const v = validateGateCommand(entry.command);
-    if (!v.ok) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `${v.reason}: ${v.detail}`
-      });
-    }
-  }
-});
-
 // src/verifier/deterministic/tdd-exempt.ts
-import { readFile as readFile5 } from "node:fs/promises";
+import { readFile as readFile6 } from "node:fs/promises";
 import path2 from "node:path";
 var log19 = createLogger("verifier:tdd-exempt");
 function isTddExempt(taskId, tasksJson, packageJson) {
@@ -11133,7 +11227,7 @@ var DefaultExemptReader = class {
 async function readJsonOrNull(file) {
   let raw;
   try {
-    raw = await readFile5(file, "utf8");
+    raw = await readFile6(file, "utf8");
   } catch (err) {
     if (err.code !== "ENOENT") {
       log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
@@ -11149,7 +11243,7 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, readFile as readFile6 } from "node:fs/promises";
+import { access as access2, readFile as readFile7 } from "node:fs/promises";
 import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -11242,6 +11336,18 @@ var DefaultSemgrepTool = class {
     return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
   }
 };
+var DefaultCommandRunner = class {
+  constructor(env = {}) {
+    this.env = env;
+  }
+  async run(command, opts) {
+    const [bin, ...rest] = command;
+    if (bin === void 0) {
+      throw new Error("DefaultCommandRunner: empty command");
+    }
+    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
+  }
+};
 var DefaultStrykerTool = class _DefaultStrykerTool {
   constructor(resolve2 = defaultLocalBinResolver, env = {}) {
     this.resolve = resolve2;
@@ -11257,7 +11363,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile6(reportPath, "utf8");
+      raw = await readFile7(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -11309,7 +11415,7 @@ var DefaultCoverageReader = class {
     const file = path3.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
-      raw = await readFile6(file, "utf8");
+      raw = await readFile7(file, "utf8");
     } catch {
       return { state: "absent" };
     }
@@ -11456,7 +11562,8 @@ function defaultGateTools(gateEnv = {}) {
     semgrep: new DefaultSemgrepTool(gateEnv),
     stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
     coverage: new DefaultCoverageReader(),
-    fs: new DefaultFsProbe()
+    fs: new DefaultFsProbe(),
+    command: new DefaultCommandRunner(gateEnv)
   };
 }
 
@@ -11969,8 +12076,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir6, readFile as readFile7 } from "node:fs/promises";
-import { dirname as dirname5, join as join10 } from "node:path";
+import { mkdir as mkdir6, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname5, join as join11 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -12001,7 +12108,7 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path5 = this.path(runId, record.task_id);
@@ -12010,12 +12117,12 @@ var FsHoldoutStore = class {
   }
   async get(runId, taskId) {
     const path5 = this.path(runId, taskId);
-    const raw = await readFile7(path5, "utf8");
+    const raw = await readFile8(path5, "utf8");
     return parseHoldoutRecord(parseJson(raw, path5), path5);
   }
   async has(runId, taskId) {
     try {
-      await readFile7(this.path(runId, taskId), "utf8");
+      await readFile8(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -12024,8 +12131,8 @@ var FsHoldoutStore = class {
 };
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir7, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname6, join as join11 } from "node:path";
+import { mkdir as mkdir7, readFile as readFile9 } from "node:fs/promises";
+import { dirname as dirname6, join as join12 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -12038,7 +12145,7 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path5 = this.path(runId, taskId);
@@ -12047,12 +12154,12 @@ var FsHoldoutVerdictStore = class {
   }
   async get(runId, taskId) {
     const path5 = this.path(runId, taskId);
-    const raw = await readFile8(path5, "utf8");
+    const raw = await readFile9(path5, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path5));
   }
   async has(runId, taskId) {
     try {
-      await readFile8(this.path(runId, taskId), "utf8");
+      await readFile9(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -12627,11 +12734,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/orchestrator/paths.ts
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(worktreesRoot(dataDir), runId, taskId);
+  return join13(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -12643,7 +12750,7 @@ function taskExemptReader(deps, worktree) {
 }
 
 // src/orchestrator/handlers.ts
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 var PREFLIGHT_GIT_LOCK_TUNING = {
   ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
@@ -12741,8 +12848,8 @@ function makePhaseHandlers(deps) {
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
         {
-          dir: join13(deps.dataDir, "locks"),
-          lockfile: join13(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          dir: join14(deps.dataDir, "locks"),
+          lockfile: join14(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
           label: `preflight git '${staging}'`,
           dirPolicy: "create",
           tuning: PREFLIGHT_GIT_LOCK_TUNING
@@ -12932,8 +13039,8 @@ function shipBody(runId, specTask) {
 }
 
 // src/orchestrator/artifacts.ts
-import { mkdir as mkdir8, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7, join as join14 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile10 } from "node:fs/promises";
+import { dirname as dirname7, join as join15 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -12942,7 +13049,7 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join14(runDir(this.dataDir, runId), ref);
+    return join15(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
@@ -12953,18 +13060,18 @@ var FsArtifactStore = class {
   }
   async getProducerContext(runId, promptRef) {
     const path5 = this.absPath(runId, promptRef);
-    const raw = await readFile9(path5, "utf8");
+    const raw = await readFile10(path5, "utf8");
     return parseJson(raw, path5);
   }
 };
 
 // src/orchestrator/docs-applicable.ts
-import { readFile as readFile10, stat } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { readFile as readFile11, stat } from "node:fs/promises";
+import { join as join16 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
-    raw = await readFile10(file, "utf8");
+    raw = await readFile11(file, "utf8");
   } catch {
     return null;
   }
@@ -12980,17 +13087,17 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join15(repoRoot, "docs"));
+    const s = await stat(join16(repoRoot, "docs"));
     if (!s.isDirectory()) return false;
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join16(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
-import { readFile as readFile11 } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { readFile as readFile12 } from "node:fs/promises";
+import { join as join17 } from "node:path";
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -12998,7 +13105,7 @@ async function persistStepCursor(deps, runId, taskId, step) {
   }
 }
 async function readJsonInput(path5) {
-  const raw = await readFile11(path5, "utf8");
+  const raw = await readFile12(path5, "utf8");
   return parseJson(raw, path5);
 }
 function producerPhaseInfo(phase) {
@@ -13060,7 +13167,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile11(join16(worktree, file), "utf8");
+      const text = await readFile12(join17(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -13589,12 +13696,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".docs");
+  return join18(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -13814,7 +13921,7 @@ async function nextTask(deps, runId) {
 
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute, join as join18 } from "node:path";
+import { dirname as dirname8, isAbsolute, join as join19 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
@@ -13862,19 +13969,19 @@ var E2eResultsSchema = external_exports.object({
   verdicts: external_exports.array(E2eAdjudicationVerdictSchema).optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-author");
+  return join19(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-run");
+  return join19(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join19(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join19(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join19(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -14307,7 +14414,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   }
   try {
     for (const entry of critical) {
-      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
+      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -14404,7 +14511,7 @@ async function markFailed(deps, runId, reason, attempts) {
   log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
-  return join18(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join19(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -14609,13 +14716,13 @@ async function runSuiteAndDecide(deps, runId) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 var log28 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "opus";
 var ASSESSOR_MAX_TURNS = 60;
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-assess");
+  return join20(dataDir, "worktrees", runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -14848,8 +14955,8 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
-import { access as access4, readFile as readFile12 } from "node:fs/promises";
-import { join as join20 } from "node:path";
+import { access as access4, readFile as readFile13 } from "node:fs/promises";
+import { join as join21 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -15154,7 +15261,7 @@ async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile12(join20(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile13(join21(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -15168,7 +15275,7 @@ async function assertE2ePrereqs(cwd) {
     if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
-    await access4(join20(cwd, "playwright.config.ts"));
+    await access4(join21(cwd, "playwright.config.ts"));
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -15892,10 +15999,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join21(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join22(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join21(dataDir, "debug", runId, `pass-${pass}`);
+  return join22(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -15971,8 +16078,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join21(passDir, "findings.json");
-  const reportPath = join21(passDir, "findings.md");
+  const findingsPath = join22(passDir, "findings.json");
+  const reportPath = join22(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -16268,16 +16375,16 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir11, readFile as readFile14, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir11, readFile as readFile15, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join23, relative } from "node:path";
+import { dirname as dirname9, join as join24, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir10, readFile as readFile13 } from "node:fs/promises";
+import { mkdir as mkdir10, readFile as readFile14 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -16346,12 +16453,12 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join22(opts.targetRoot, ".claude");
-  const path5 = join22(dir, "settings.json");
+  const dir = join23(opts.targetRoot, ".claude");
+  const path5 = join23(dir, "settings.json");
   const created = !existsSync7(path5);
   let existing = {};
   if (!created) {
-    const raw = await readFile13(path5, "utf8");
+    const raw = await readFile14(path5, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
@@ -16418,8 +16525,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname9(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join23(dir, "templates");
-    if (existsSync8(join23(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join24(dir, "templates");
+    if (existsSync8(join24(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname9(dir);
@@ -16443,14 +16550,14 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join23(templatesDir, ...segs);
-  const dest = join23(targetRoot, ...segs);
+  const src = join24(templatesDir, ...segs);
+  const dest = join24(targetRoot, ...segs);
   if (!existsSync8(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
-    const text = await readFile14(src, "utf8");
+    const text = await readFile15(src, "utf8");
     return transform ? transform(text) : text;
   };
   if (!existsSync8(dest)) {
@@ -16463,7 +16570,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile14(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile15(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
@@ -16472,14 +16579,14 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join23(root, ".gitignore");
+  const path5 = join24(root, ".gitignore");
   const rel = relative(root, path5);
   if (!existsSync8(path5)) {
     await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile14(path5, "utf8");
+  const current = await readFile15(path5, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
@@ -16500,7 +16607,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync8(join23(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync8(join24(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
@@ -16946,8 +17053,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { readFile as readFile15 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { readFile as readFile16 } from "node:fs/promises";
+import { join as join25 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -16985,7 +17092,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join24(dataDir, "merged-settings.json");
+  return join25(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -17061,10 +17168,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join24(pluginRoot, ".claude-plugin", "plugin.json");
+  const path5 = join25(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile15(path5, "utf8"));
+    const parsed = JSON.parse(await readFile16(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -17074,20 +17181,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join24(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join25(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile15(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile16(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join24(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile15(templatePath, "utf8");
+  const templatePath = join25(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile16(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -17149,7 +17256,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absen
 async function readOnDiskVersion(path5) {
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile15(path5, "utf8"));
+    const parsed = JSON.parse(await readFile16(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }

@@ -8,6 +8,7 @@
  * LOUD on truncated output (never judge a clipped run), else report observed =
  * `exit 0` with a `<label> exit=<code>` detail.
  */
+import { contractCommand } from "../gate-contract.js";
 import type { GateId } from "../gate-id.js";
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
 import { ran } from "../strategy.js";
@@ -52,7 +53,19 @@ export function procStrategy(
   return {
     id,
     async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
-      return procOutcome(id, label, await invoke(ctx.tools, { cwd: ctx.worktree }));
+      const opts = { cwd: ctx.worktree };
+      // Gate contract (S7, Decision 46): a contracted `command` override replaces
+      // the built-in tool — `deno check .` instead of tsc, `deno task build`
+      // instead of npm run build.
+      const command = contractCommand(ctx.contract, id);
+      if (command !== undefined) {
+        return procOutcome(
+          id,
+          `contract:${command.join(" ")}`,
+          await ctx.tools.command.run(command, opts),
+        );
+      }
+      return procOutcome(id, label, await invoke(ctx.tools, opts));
     },
   };
 }

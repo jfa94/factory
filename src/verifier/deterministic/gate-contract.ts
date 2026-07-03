@@ -190,3 +190,22 @@ export type SkipClass = "scope" | "tooling";
 export function classifySkip(reason: string): SkipClass {
   return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
 }
+
+/**
+ * Resolve gate `id`'s contracted command override as a validated argv, or
+ * undefined when there is no contract / no override. Throws on an invalid
+ * command — the loader's schema already rejects those, so reaching one here
+ * means a contract bypassed validation (structural, loud).
+ */
+export function contractCommand(
+  contract: GateContract | undefined,
+  id: GateId,
+): readonly string[] | undefined {
+  const entry = contract?.gates[id];
+  if (entry === undefined || !entry.contracted || entry.command === undefined) return undefined;
+  const v = validateGateCommand(entry.command);
+  if (!v.ok) {
+    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
+  }
+  return v.argv;
+}

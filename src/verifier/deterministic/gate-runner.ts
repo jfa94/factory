@@ -16,11 +16,18 @@ import { assertNever, deriveAllGatesVerdict } from "../../types/index.js";
 import type { Config } from "../../config/schema.js";
 import type { GateEvidence, GateVerdict } from "../../types/index.js";
 import { createLogger } from "../../shared/index.js";
+import {
+  classifySkip,
+  loadGateContract,
+  type GateContract,
+  type GateContractLoad,
+} from "./gate-contract.js";
 import type { ExemptReader } from "./tdd-exempt.js";
 import { GateMemo } from "./memo.js";
 import type { GateTools } from "./tools.js";
 import {
   GATE_IDS,
+  ran,
   type GateId,
   type GateOutcome,
   type GateStrategy,
@@ -83,6 +90,11 @@ export interface GateContext {
   readonly exemptReader?: ExemptReader;
   /** Memo for tip/tree-SHA caching (Δ N/O). Defaults to a fresh per-call memo. */
   readonly memo?: GateMemo;
+  /**
+   * Gate-contract loader (S7, Decision 46). Defaults to the real
+   * {@link loadGateContract} over `ctx.worktree`; injectable for unit tests.
+   */
+  readonly loadContract?: (rootAbs: string) => Promise<GateContractLoad>;
 }
 
 /** A per-gate record in the runner's report. */
@@ -130,7 +142,37 @@ export class GateRunner {
     // re-derived by deriveAllGatesVerdict, so a hit never bypasses re-derivation.
     const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
 
+    // Gate contract (S7, Decision 46): loaded from the worktree — the contract is
+    // COMMITTED, so the tree SHA already keys any contract change. A committed-but-
+    // invalid contract is structural: fail LOUD, never degrade to legacy semantics.
+    const load = await (ctx.loadContract ?? loadGateContract)(ctx.worktree);
+    if (load.state === "invalid") {
+      throw new Error(
+        `gate contract: .factory/gates.json is INVALID (${load.error}) — fix or re-run \`factory scaffold\``,
+      );
+    }
+    const contract: GateContract | undefined = load.state === "ok" ? load.contract : undefined;
+    if (contract === undefined) {
+      // TODO(remove after one release): legacy pre-contract fallback — runs created
+      // before S7 have no committed contract in their worktrees; keep today's skip
+      // semantics but never silently (finalize surfaces the same warning in report.md).
+      log.warn(
+        `run ${ctx.runId} task ${ctx.taskId}: no .factory/gates.json in worktree — ` +
+          "legacy skip semantics (contracted-but-unrunnable enforcement OFF)",
+      );
+    }
+
     for (const id of gates) {
+      // An UNCONTRACTED gate is excluded by committed agreement — the strategy is
+      // not even invoked (its tooling probes are moot); the reason is the audit trail.
+      const entry = contract?.gates[id];
+      if (entry !== undefined && !entry.contracted) {
+        const reason = `uncontracted: ${entry.reason}`;
+        report.push({ gate: id, outcome: { kind: "skip", gate: id, reason } });
+        skipped.push({ gate: id, reason });
+        log.debug(`gate ${id} skipped: ${reason}`);
+        continue;
+      }
       const cached = memo.getEvidence(id, treeSha);
       if (cached !== undefined) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
@@ -148,12 +190,30 @@ export class GateRunner {
         tools: ctx.tools,
         exemptReader: ctx.exemptReader,
         memo,
+        contract,
       };
-      const outcome = await strategy.run(sctx);
+      let outcome = await strategy.run(sctx);
+      // Skip-taxonomy split (Decision 46): a TOOLING skip on a CONTRACTED gate means
+      // the repo promised this gate but it cannot run (missing binary/config/data) —
+      // that is a loud FAIL, never an exclusion. SCOPE skips (nothing in the diff for
+      // this gate) stay excluded — they are task properties, not broken tooling.
+      if (
+        outcome.kind === "skip" &&
+        entry?.contracted === true &&
+        classifySkip(outcome.reason) === "tooling"
+      ) {
+        outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`);
+        log.warn(`gate ${id} contracted but unrunnable — failing loud`);
+      }
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
-        memo.putEvidence(id, treeSha, outcome.evidence);
+        // A contracted-but-unrunnable conversion is NOT memoized: installing the
+        // missing tool changes node_modules, not the git tree — a tree-SHA-keyed
+        // failure would outlive its own fix.
+        if (!outcome.evidence.detail?.startsWith("contracted-but-unrunnable")) {
+          memo.putEvidence(id, treeSha, outcome.evidence);
+        }
       } else {
         // Skips are not memoized: they carry no evidence, are excluded from the
         // conjunction, and are cheap to re-evaluate (a not-applicable probe).
