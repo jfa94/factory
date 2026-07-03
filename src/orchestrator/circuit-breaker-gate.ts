@@ -6,10 +6,12 @@
  * or null to proceed. Never writes state — turning a trip into failures is the CALLER's
  * job (`nextTask`), exactly as the quota gate leaves recovery to its caller.
  *
- * A tripped verdict is a HARD run abort, DISTINCT from the recoverable quota pause:
- * the caller fails every remaining non-terminal task (loud, classified) and falls
+ * A tripped verdict carries which ARM fired; the caller (`nextTask`) maps severity:
+ * the runtime arm is a recoverable BUDGET stop (suspend, resumable after raising
+ * `maxRuntimeMinutes` — D7), while the failures / fail-closed arms are HARD aborts —
+ * every remaining non-terminal task is failed (loud, classified) and the run falls
  * through to `all-terminal` → finalize → `failed`, reusing the proven Decision-34
- * wedge-fail path (so no new envelope kind / orchestrator change is needed).
+ * wedge-fail path.
  *
  * This gate supplies the pure breaker the two signals it cannot derive itself, each
  * derived honestly from run state (derive-don't-store — no breaker counter persisted):

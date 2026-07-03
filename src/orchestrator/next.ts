@@ -84,7 +84,12 @@ export type NextTask =
     })
   | (NextContext & {
       readonly kind: "pause";
-      readonly scope: QuotaStop["scope"];
+      /**
+       * Quota scopes plus "runtime-budget": the runtime circuit-breaker arm — a
+       * recoverable budget stop (suspend), NOT a quota event, so it is widened here
+       * on the envelope rather than on QuotaStop (which the quota gate never emits it as).
+       */
+      readonly scope: QuotaStop["scope"] | "runtime-budget";
       readonly reason: string;
       readonly resets_at_epoch?: number;
     });
@@ -271,18 +276,35 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
 
-  // 6b. Run-level circuit breaker (WS4) — a HARD run-abort guard, distinct from both
-  //     the recoverable quota pause and the Decision-34 wedge-fail below. Trips on
-  //     genuine repeated capability failures (BOTH modes) or — workflow only — the
-  //     runtime ceiling (see circuit-breaker-gate.ts for why session disarms runtime).
-  //     Placed AFTER the terminal checks (never abort an already-finished run; never
-  //     write on a terminal run) and AFTER the quota gate (a paused run early-returns
-  //     above, so quota waiting never trips the breaker). On a trip, fail every
-  //     remaining non-terminal task LOUD (capability-budget, breaker reason carried)
-  //     and fall through to all-terminal → finalize → `failed`, reusing the wedge-fail
-  //     path — so no new envelope kind or orchestrator change is needed.
+  // 6b. Run-level circuit breaker (WS4) — distinct from both the recoverable quota
+  //     pause and the Decision-34 wedge-fail below. Trips on genuine repeated
+  //     capability failures (BOTH modes) or — workflow only — the runtime ceiling
+  //     (see circuit-breaker-gate.ts for why session disarms runtime). Placed AFTER
+  //     the terminal checks (never abort an already-finished run; never write on a
+  //     terminal run) and AFTER the quota gate (a paused run early-returns above, so
+  //     quota waiting never trips the breaker). The two arms differ in severity:
+  //     - runtime arm (D7): a BUDGET stop, not a pathology — suspend the run
+  //       (resumable after raising maxRuntimeMinutes) instead of destroying 28
+  //       healthy tasks the way the old cascade-fail did. Step 4 above clears the
+  //       suspend on the next drive, so an un-raised cap just re-suspends here.
+  //     - failures / fail-closed arms: HARD abort — fail every remaining
+  //       non-terminal task LOUD (capability-budget, breaker reason carried) and
+  //       fall through to all-terminal → finalize → `failed`, reusing the
+  //       wedge-fail path.
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
+    if (breaker.arm === "runtime") {
+      run = await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
+      return {
+        ...ctx(),
+        kind: "pause",
+        scope: "runtime-budget",
+        reason:
+          `circuit breaker: ${breaker.reason} — the run's ACTIVE runtime budget is spent ` +
+          `(idle time is already excluded). Raise maxRuntimeMinutes in config.json, then ` +
+          `factory resume / relaunch; resuming without raising the cap re-suspends here.`,
+      };
+    }
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
       await failTask(
         deps,

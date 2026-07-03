@@ -54,6 +54,19 @@ describe("Circuit breaker — runtime trip with paused-minutes deduction", () =>
   });
 });
 
+describe("Circuit breaker — the arm discriminator (severity mapping for the caller)", () => {
+  it("labels each trip with its arm: runtime / failures / fail-closed", () => {
+    const runtime = evaluate(input(), CONFIG, START_EPOCH + 480 * 60);
+    expect(runtime).toMatchObject({ tripped: true, arm: "runtime" });
+
+    const failures = evaluate(input({ cumulativeFailures: 3 }), CONFIG, START_EPOCH);
+    expect(failures).toMatchObject({ tripped: true, arm: "failures" });
+
+    const failClosed = evaluate(input({ pausedMinutes: NaN }), CONFIG, START_EPOCH);
+    expect(failClosed).toMatchObject({ tripped: true, arm: "fail-closed" });
+  });
+});
+
 describe("Circuit breaker — fail-closed on malformed inputs (treated as tripped)", () => {
   it("non-finite cumulativeFailures trips", () => {
     expect(evaluate(input({ cumulativeFailures: NaN }), CONFIG, START_EPOCH).tripped).toBe(true);

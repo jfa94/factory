@@ -102,6 +102,19 @@ describe("Δ F resume from checkpoint — still-over reading stays blocked (fail
       expect(plan.decision.kind).toBe("unavailable-halt");
     }
   });
+
+  it("a suspended WORKFLOW run resumes even on an unavailable reading (Decision 24: the pacer has no say)", () => {
+    // A workflow suspend is non-quota by construction (runtime breaker, e2e/docs);
+    // fail-closing on the pacer would strand a run that is defined to ignore quota.
+    const run = parseRunState({ ...suspendedRun(), mode: "workflow" });
+    const plan = planResume(
+      run,
+      { kind: "unavailable", reason: "usage-cache-missing" },
+      CONFIG,
+      NOW,
+    );
+    expect(plan.kind).toBe("resume");
+  });
 });
 
 describe("Δ F resume — ignore_quota short-circuits the live pacer check", () => {

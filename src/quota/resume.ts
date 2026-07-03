@@ -55,6 +55,14 @@ export function planResume(
     return { kind: "not-resumable", status: run.status };
   }
 
+  // Workflow mode never quota-pauses (Decision 24) — its suspends are non-quota
+  // (runtime breaker, e2e/docs phase), so the pacer has no say: consulting it here
+  // would fail-closed block a resume on an unobservable reading for a run that is
+  // DEFINED to ignore quota. Clear unconditionally, like --ignore-quota.
+  if (run.mode === "workflow") {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+
   // --ignore-quota: skip the live pacer check and force a clear unconditionally.
   if (run.ignore_quota) {
     return { kind: "resume", clear: clearCheckpoint() };

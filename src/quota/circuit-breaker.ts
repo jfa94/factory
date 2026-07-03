@@ -40,8 +40,16 @@ export interface CircuitBreakerInput {
   pausedMinutes: number;
 }
 
-/** The breaker verdict — a closed union; `tripped: true` carries the human reason. */
-export type CircuitBreakerResult = { tripped: false } | { tripped: true; reason: string };
+/**
+ * The breaker verdict — a closed union; `tripped: true` carries the human reason
+ * plus which arm fired, because the arms have different SEVERITIES for the caller:
+ * `runtime` is a recoverable budget stop (suspend, resumable after raising the cap),
+ * while `failures` (genuine capability exhaustion) and `fail-closed` (corrupt input)
+ * are pathologies that hard-abort the run.
+ */
+export type CircuitBreakerResult =
+  | { tripped: false }
+  | { tripped: true; arm: "runtime" | "failures" | "fail-closed"; reason: string };
 
 function isNonNegativeFinite(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
@@ -61,12 +69,14 @@ export function evaluate(
   if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`,
     };
   }
   if (!isNonNegativeFinite(pausedMinutes)) {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`,
     };
   }
@@ -76,6 +86,7 @@ export function evaluate(
   if (cumulativeFailures >= maxConsecutiveFailures) {
     return {
       tripped: true,
+      arm: "failures",
       reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`,
     };
   }
@@ -86,6 +97,7 @@ export function evaluate(
   } catch {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`,
     };
   }
@@ -95,6 +107,7 @@ export function evaluate(
   if (runtimeMinutes >= maxRuntimeMinutes) {
     return {
       tripped: true,
+      arm: "runtime",
       reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`,
     };
   }

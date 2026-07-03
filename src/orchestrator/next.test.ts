@@ -11,9 +11,13 @@
  * deps.state.update / deps.state.updateTask directly in the test body.
  */
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 
 import { nextTask } from "./next.js";
-import { makeOrchestratorDeps, PAUSE_5H } from "./orchestrator-fixtures.js";
+import { makeOrchestratorDeps, NOW, PAUSE_5H } from "./orchestrator-fixtures.js";
+import { runStatePath } from "../core/state/paths.js";
+import { atomicWriteFile } from "../shared/atomic-write.js";
+import { epochToIso } from "../shared/time.js";
 import type { UsageReading } from "../quota/usage-source.js";
 
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
@@ -391,6 +395,46 @@ describe("nextTask", () => {
       expect(run.tasks["T4"]?.status).toBe("failed");
       expect(run.tasks["T4"]?.failure_class).toBe("capability-budget");
       expect(run.tasks["T4"]?.failure_reason).toMatch(/circuit breaker tripped/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // D7: the RUNTIME arm is a recoverable budget stop — the run suspends (pause
+  // envelope, resumable after raising maxRuntimeMinutes) instead of cascade-failing
+  // every healthy task the way the failures arm does.
+  it("circuit breaker runtime arm: workflow run over the runtime cap SUSPENDS — no task failed", async () => {
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
+      modeOverride: "workflow",
+      tasks: [
+        { task_id: "T1", acceptance_criteria: ["only one"] },
+        { task_id: "T2", acceptance_criteria: ["only one"] },
+      ],
+    });
+    try {
+      // Genuinely ACTIVE for 480min: recent write (sub-grace pending gap), started
+      // at the cap. Raw on-disk write — StateManager.update() would re-stamp
+      // updated_at and bank the gap itself.
+      const path = runStatePath(dataDir, runId);
+      const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+      await atomicWriteFile(
+        path,
+        JSON.stringify({
+          ...onDisk,
+          started_at: epochToIso(NOW - 480 * 60),
+          updated_at: epochToIso(NOW - 5 * 60),
+        }),
+      );
+
+      const env = await nextTask(deps, runId);
+      expect(env).toMatchObject({ kind: "pause", scope: "runtime-budget" });
+      if (env.kind === "pause") expect(env.reason).toMatch(/maxRuntimeMinutes/);
+
+      const run = await deps.state.read(runId);
+      expect(run.status).toBe("suspended");
+      // The healthy tasks are untouched — this is the whole point vs the old cascade-fail.
+      expect(run.tasks["T1"]?.status).toBe("pending");
+      expect(run.tasks["T2"]?.status).toBe("pending");
     } finally {
       await cleanup();
     }
