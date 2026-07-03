@@ -11026,6 +11026,77 @@ var GateRunner = class {
   }
 };
 
+// src/verifier/deterministic/gate-contract.ts
+var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
+var COMMAND_GATES = ["test", "type", "build", "lint"];
+function isAllowedGateRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  switch (runner) {
+    case "deno":
+      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
+    case "go":
+      return a1 === "test";
+    case "cargo":
+      return a1 === "test" || a1 === "check" || a1 === "build";
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return a1 === "run" && argv[2] !== void 0;
+    case "vitest":
+    case "tsc":
+    case "eslint":
+    case "jest":
+    case "mocha":
+    case "pytest":
+      return true;
+    default:
+      return false;
+  }
+}
+function validateGateCommand(command) {
+  return validateCommand(command, isAllowedGateRunner);
+}
+var ContractedSchema = external_exports.object({
+  contracted: external_exports.literal(true),
+  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+  command: external_exports.string().optional()
+}).strict();
+var UncontractedSchema = external_exports.object({
+  contracted: external_exports.literal(false),
+  /** Why this gate is waived — required; the committed audit trail. */
+  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
+}).strict();
+var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var GateContractSchema = external_exports.object({
+  version: external_exports.literal(1),
+  stack: external_exports.enum(GATE_CONTRACT_STACKS),
+  gates: external_exports.object(
+    Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))
+  ).strict()
+}).strict().superRefine((contract, issues) => {
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (!entry.contracted || entry.command === void 0) continue;
+    if (!COMMAND_GATES.includes(id)) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
+      });
+      continue;
+    }
+    const v = validateGateCommand(entry.command);
+    if (!v.ok) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `${v.reason}: ${v.detail}`
+      });
+    }
+  }
+});
+
 // src/verifier/deterministic/tdd-exempt.ts
 import { readFile as readFile5 } from "node:fs/promises";
 import path2 from "node:path";

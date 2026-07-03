@@ -31,6 +31,23 @@ export {
   type GateReportEntry,
 } from "./gate-runner.js";
 
+// the gate contract (S7, Decision 46)
+export {
+  GATE_CONTRACT_REL,
+  GATE_CONTRACT_STACKS,
+  COMMAND_GATES,
+  GateContractSchema,
+  loadGateContract,
+  validateGateCommand,
+  isAllowedGateRunner,
+  classifySkip,
+  type GateContract,
+  type GateContractEntry,
+  type GateContractLoad,
+  type GateContractStack,
+  type SkipClass,
+} from "./gate-contract.js";
+
 // per-gate strategies
 export { testStrategy } from "./strategies/test.js";
 export { tddStrategy } from "./strategies/tdd.js";
