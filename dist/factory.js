@@ -10794,23 +10794,37 @@ var mutationStrategy = {
   }
 };
 
-// src/verifier/deterministic/strategies/sast.ts
+// src/shared/command-allowlist.ts
 var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
-function validateSecurityCommand(command) {
+function runnerName(argv) {
+  const bin = argv[0] ?? "";
+  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+}
+function validateCommand(command, isAllowedRunner) {
   const tokens = command.split(/\s+/).filter((t) => t.length > 0);
   for (const t of tokens) {
     if (!SAFE_TOKEN.test(t)) {
       return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
     }
   }
-  const bin = tokens[0];
-  if (bin === void 0) {
+  if (tokens[0] === void 0) {
     return { ok: false, reason: "unsafe_command", detail: "empty command" };
   }
-  const runner = bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-  const a1 = tokens[1];
-  const a2 = tokens[2];
-  let allowed = false;
+  if (!isAllowedRunner(tokens)) {
+    return {
+      ok: false,
+      reason: "unallowed_runner",
+      detail: `runner '${runnerName(tokens)}' not allowlisted`
+    };
+  }
+  return { ok: true, argv: tokens };
+}
+
+// src/verifier/deterministic/strategies/sast.ts
+function isAllowedSecurityRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  const a2 = argv[2];
   switch (runner) {
     case "semgrep":
     case "pytest":
@@ -10819,23 +10833,19 @@ function validateSecurityCommand(command) {
     case "mocha":
     case "phpunit":
     case "rspec":
-      allowed = true;
-      break;
+      return true;
     case "go":
     case "cargo":
     case "deno":
-      allowed = a1 === "test";
-      break;
+      return a1 === "test";
     case "bundle":
-      allowed = a1 === "exec" && a2 === "rspec";
-      break;
+      return a1 === "exec" && a2 === "rspec";
     default:
-      allowed = false;
+      return false;
   }
-  if (!allowed) {
-    return { ok: false, reason: "unallowed_runner", detail: `runner '${runner}' not allowlisted` };
-  }
-  return { ok: true, argv: tokens };
+}
+function validateSecurityCommand(command) {
+  return validateCommand(command, isAllowedSecurityRunner);
 }
 var sastStrategy = {
   id: "sast",
