@@ -168,7 +168,7 @@ config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md))
 
 ### Quota pacer (`quota.*`)
 
-`sleepCapSec` (540), `maxWaitCycles` (60), `maxStaleCycles` (6), `wallBudgetMin` (75),
+`sleepCapSec` (540), `maxWaitCycles` (60), `wallBudgetMin` (75),
 `hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([20,40,60,80,95,95,95]), and the
 producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by risk tier).
 
@@ -185,12 +185,12 @@ producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by ri
 ### Other roots
 
 `testWriter.maxTurns` (30), `codex.model` (—), `maxConsecutiveFailures` (3),
-`maxRuntimeMinutes` (480).
+`maxParallelTasks` (3 — max tasks the runner drives in flight; emitted as
+`max_parallel` on the work envelope).
 
 > Retired (locked decision 5 — human gates removed): `humanReviewLevel`,
-> `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`,
-> `maxParallelTasks`, the `safety.*` block, `execution.*`. These keys no longer exist; do
-> not write them.
+> `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`, the
+> `safety.*` block, `execution.*`. These keys no longer exist; do not write them.
 
 ## Interactive
 

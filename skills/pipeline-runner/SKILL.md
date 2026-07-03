@@ -105,38 +105,96 @@ session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the determinist
 start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
 instruction (Phase 0 step 2); never retry blindly.
 
-## Phase 3 — THE LOOP
+## Phase 3 — THE LOOP (parallel event loop)
 
 The ship mode is persisted on the run (Phase 2's `run create`); `next-task`, `next-action`, and `finalize` all
 read it from state — never re-pass it and never choose it yourself.
 
-```
-loop:
-  env = factory next-task --run <run_id>
-  case env.kind:
-    "done"  → go to Phase 4 (report)
-    "finalize"  → factory run finalize --run <run_id>; go to Phase 4
-    "e2e"    → run the E2E STAGE (below); on done/failed/reopen, loop; on suspend,
-                      report the reason + STOP (run is suspended — /factory:resume retries)
-    "e2e-assessment" → run the E2E-ASSESSMENT STAGE (below); on done/failed, loop
-                      (failed sweeps every task — next-task routes to finalize)
-    "document"    → run the DOCS STAGE (below); on done, loop; on suspend,
-                      report the reason + STOP (run is suspended — /factory:resume retries)
-    "pause" → report scope/reason/resets_at_epoch; tell the user to re-run
-                      `/factory:resume` after the window resets; STOP.
-    "work"   → step env.ready[0] (sequential runner: ONE task at a time), then loop
+**You are the multiplexer.** Background subagents cannot spawn agents, so the main
+session drives everything: ALL `factory` CLI calls run FOREGROUND in this session,
+one at a time (never a background Bash) — that yields one-driver-per-task by
+construction. ONLY `Agent()` spawns run in the background (`run_in_background: true`).
 
-step(task):
-  results_file = (none)
-  loop:
-    tenv = factory next-action --run <run_id> --task <task> [--results <results_file>]
+**The in-flight table.** Track `task_id → { result_key, wave, agent task-ids }` for
+every task you are currently driving. It is a rebuildable cache held in conversation
+context ONLY — the state file is truth. Never persist it anywhere (not to disk, not
+to results files).
+
+```
+REFILL (run at loop entry and after every completion):
+  env = factory next-task --run <run_id>                       # foreground
+  case env.kind:
+    "done"      → go to Phase 4 (report)
+    "finalize"  → factory run finalize --run <run_id>; go to Phase 4
+    "e2e"       → run the E2E STAGE (below); on done/failed/reopen, REFILL; on suspend,
+                  report the reason + STOP (run is suspended — /factory:resume retries)
+    "e2e-assessment" → run the E2E-ASSESSMENT STAGE (below); on done/failed, REFILL
+                  (failed sweeps every task — next-task routes to finalize)
+    "document"  → run the DOCS STAGE (below); on done, REFILL; on suspend,
+                  report the reason + STOP (run is suspended — /factory:resume retries)
+    "pause"     → PAUSE CONVERGENCE (below)
+    "work"      → for each task in env.ready (order preserved — in-flight tasks are
+                  listed first) that is NOT already in the table, while the table has
+                  fewer than env.max_parallel tasks:
+                    tenv = factory next-action --run <run_id> --task <task>   # foreground
+                    case tenv.kind:
+                      "spawn" → spawn EVERY entry in tenv.manifest.agents IN THE
+                                BACKGROUND (count-agnostic — spawn however many the
+                                manifest names, never assume a panel size), per the
+                                collection contract + spawn matrix below; add the task
+                                to the table with tenv.result_key + the agent ids
+                      "done"  → report tenv.outcome (a drop is loud + classified);
+                                REFILL again (a terminal task may unblock dependents)
+                      "pause" → PAUSE CONVERGENCE
+                  then WAIT: end the turn. Background agent completions re-invoke
+                  you — never poll, never sleep.
+
+ON AGENT COMPLETION (a background agent finishes):
+  Collect its output (TaskOutput) and mark it in the table.
+  Reviews wave only: when ALL sidecar+panel agents are in, spawn the finding-verifiers
+    (background, one per blocking+citable finding — the verify-then-fix contract below)
+    as the same wave's second stage; wait for those too.
+  When ALL results of the task's current wave are in:
+    write the results file (per the collection contract), then
+    tenv = factory next-action --run <run_id> --task <task> --results <file>   # foreground
     case tenv.kind:
-      "done"      → report tenv.outcome (a drop is loud + classified); return
-      "pause" → as above; STOP
-      "spawn"         → collect (below) into a fresh results file; loop with --results
+      "spawn" → next wave: spawn every manifest agent in the background; update the
+                table with the new result_key + agent ids
+      "done"  → remove the task from the table; report tenv.outcome
+      "pause" → PAUSE CONVERGENCE
+    then REFILL (a finished task may unblock dependents or free a slot).
+
+PAUSE CONVERGENCE (any kind:"pause", whether from next-task or next-action):
+  Hard stop. Spawn NOTHING new. TaskStop every in-flight agent in the table (safe:
+  the quota gate precedes recordResults, and the spawn_in_flight reset makes abandoned
+  spawns resume-clean). Then:
+    scope "unavailable" → run `factory resume` ONCE (this turn's own traffic refreshes
+        the usage cache): "resumed" → clear the table and REFILL; anything else →
+        report + STOP.
+    any other scope → report scope/reason/resets_at_epoch; tell the user to re-run
+        `/factory:resume` after the window resets; STOP.
 ```
 
 If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
+
+**Never "help" with merges.** Parallel tasks racing into the same staging branch is
+the engine's problem, already bounded engine-side (MergeSerializer + the BEHIND
+refusal + `MERGE_RESYNC_CAP`). Never resolve a conflict, rebase a task branch, or
+retry a merge yourself — a merge failure surfaces through the envelopes like any
+other outcome.
+
+**Run-level stages never overlap tasks.** `finalize`/`e2e`/`e2e-assessment`/`document`/`done`
+only emit when the table is empty (the engine emits them only with no drivable task
+work). Drive them foreground exactly as written in their stage blocks. If one ever
+arrives while the table is non-empty, that is an engine defect — STOP LOUD (Iron Law 3).
+
+**Compaction / context-loss recovery.** Never guess. The table is a cache — rebuild
+it: `next-task` re-derives the ready set (in-flight tasks listed first); for each
+in-flight task, `next-action` WITHOUT `--results` idempotently re-emits the current
+manifest. Before re-spawning, check `TaskList` for still-running agents this session
+owns and re-attach them to the table (never double-spawn a producer into a task
+worktree); any manifest agent you cannot account for → re-spawn it per the manifest
+(abandoned spawns are resume-clean).
 
 ```
 e2e stage:
@@ -229,12 +287,13 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `STATUS: NEEDS_CONTEXT`).
 4. Results file: `{ "result_key": <tenv.result_key verbatim>, "producer": { "status": "<line>" } }`.
 
-**`expects: "reviews"`** (stage verify — the 6-reviewer panel, plus sidecar):
+**`expects: "reviews"`** (stage verify — the review panel, plus sidecar):
 
-1. **Sidecar first (if `tenv.sidecar` present):** spawn `general-purpose`, isolation
+1. **Sidecar (if `tenv.sidecar` present):** spawn `general-purpose`, isolation
    `"worktree"`, model mapped from `sidecar.model`, `maxTurns = sidecar.max_turns`,
-   prompt = `sidecar.prompt` VERBATIM. Keep its raw output.
-2. **Panel:** spawn all six `manifest.agents` (each isolation `"worktree"`, model mapped from each agent's `model`, `max_turns` from the manifest). Construct each prompt per
+   prompt = `sidecar.prompt` VERBATIM — in the background, alongside the panel.
+   Keep its raw output.
+2. **Panel:** spawn EVERY entry in `manifest.agents` (count-agnostic; each isolation `"worktree"`, model mapped from each agent's `model`, `max_turns` from the manifest). Construct each prompt per
    `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff <tenv.base_ref>`,
    emit ONE RawReview JSON:
    `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","description" } ] }`
@@ -263,7 +322,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 | ------------------------------------ | ---------------------------------- | ------------------------------------------ |
 | test-writer                          | `test-writer`                      | **none** (omit) — works IN `tenv.worktree` |
 | implementer                          | `implementer`                      | **none** (omit) — works IN `tenv.worktree` |
-| 6 panel reviewers                    | the manifest `role`                | `"worktree"`                               |
+| panel reviewers                      | the manifest `role`                | `"worktree"`                               |
 | holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                               |
 | spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |
 | e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree` |

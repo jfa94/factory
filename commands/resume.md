@@ -30,8 +30,9 @@ Skill(pipeline-runner)   # then: factory resume [--run <id>] [--ignore-quota]
 
 `factory resume [--run <id>]` emits one envelope:
 
-- `{ kind: "resumed", run }` → the quota window is open (or already running): continue the
-  skill's Phase 3 THE LOOP and Phase 4. Resume itself takes **no** ship flag
+- `{ kind: "resumed", run }` → the quota window is open (or already running): re-enter the
+  skill's Phase 3 event loop (up to `maxParallelTasks` tasks in flight) and Phase 4.
+  Resume itself takes **no** ship flag
   (`factory resume --no-ship` is rejected loud — a run keeps the `ship_mode` it was
   created with).
 - `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
