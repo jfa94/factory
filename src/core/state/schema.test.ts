@@ -486,6 +486,28 @@ describe("e2e phase marker + author manifest", () => {
     expect(run.e2e_phase?.reopen_counts).toEqual({});
   });
 
+  it("manifest entry `title` is optional and round-trips (Decision 40 D12 — pre-D12 manifests lack it)", () => {
+    const run = parseRunState(
+      minimalRun({
+        e2e_phase: {
+          status: "done",
+          manifest: [
+            {
+              task_ids: ["t1"],
+              spec_path: "e2e/checkout.spec.ts",
+              kind: "critical",
+              title: "Buy an item and reach order confirmation",
+            },
+            { task_ids: ["t2"], spec_path: "throwaway/t2.spec.ts", kind: "throwaway" },
+          ],
+          ended_at: NOW,
+        },
+      }),
+    );
+    expect(run.e2e_phase?.manifest[0]?.title).toBe("Buy an item and reach order confirmation");
+    expect(run.e2e_phase?.manifest[1]?.title).toBeUndefined();
+  });
+
   it("rejects an unknown e2e phase status", () => {
     expect(() =>
       parseRunState(minimalRun({ e2e_phase: { status: "weird", ended_at: NOW } })),

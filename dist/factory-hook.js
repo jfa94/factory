@@ -6581,9 +6581,9 @@ var E2eConfigSchema = external_exports.object({
    * Repo-relative directory the COMMITTED critical suite lives in. Persistence
    * in this directory IS the criticality signal (Decision 39) — no `@critical`
    * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
-   * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
-   * custom value here would silently diverge from what the template/CI actually
-   * run, rather than genuinely relocating the suite (see the superRefine below).
+   * hardcodes `e2e/` — a custom value here would silently diverge from what the
+   * template actually runs, rather than genuinely relocating the suite (see the
+   * superRefine below).
    */
   testDir: external_exports.string().min(1).default("e2e"),
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -6599,7 +6599,7 @@ var E2eConfigSchema = external_exports.object({
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["testDir"],
-      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts and quality-gate.yml both hardcode that path, so a custom value here would silently diverge from what actually runs`
+      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts hardcodes that path, so a custom value here would silently diverge from what actually runs`
     });
   }
 }).default({});
@@ -7545,7 +7545,13 @@ var E2eManifestEntrySchema = external_exports.object({
   task_ids: external_exports.array(external_exports.string().min(1)).min(1),
   /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
   spec_path: external_exports.string().min(1),
-  kind: E2eSpecKindEnum
+  kind: E2eSpecKindEnum,
+  /**
+   * Human-readable journey name (Decision 40 D12) — surfaces in the run report's
+   * "journeys covered" section so a zero-e2e-knowledge operator can read what was
+   * proven. Optional: pre-D12 manifests lack it (renderer falls back to spec_path).
+   */
+  title: external_exports.string().min(1).optional()
 });
 var E2ePhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]).optional(),

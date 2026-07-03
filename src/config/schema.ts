@@ -275,9 +275,9 @@ export const E2eConfigSchema = z
      * Repo-relative directory the COMMITTED critical suite lives in. Persistence
      * in this directory IS the criticality signal (Decision 39) — no `@critical`
      * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
-     * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
-     * custom value here would silently diverge from what the template/CI actually
-     * run, rather than genuinely relocating the suite (see the superRefine below).
+     * hardcodes `e2e/` — a custom value here would silently diverge from what the
+     * template actually runs, rather than genuinely relocating the suite (see the
+     * superRefine below).
      */
     testDir: z.string().min(1).default("e2e"),
     /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -295,9 +295,9 @@ export const E2eConfigSchema = z
         code: z.ZodIssueCode.custom,
         path: ["testDir"],
         message:
-          `e2e.testDir must be the default 'e2e' — the scaffolded playwright.config.ts and ` +
-          `quality-gate.yml both hardcode that path, so a custom value here would silently ` +
-          "diverge from what actually runs",
+          `e2e.testDir must be the default 'e2e' — the scaffolded playwright.config.ts ` +
+          `hardcodes that path, so a custom value here would silently diverge from what ` +
+          "actually runs",
       });
     }
   })

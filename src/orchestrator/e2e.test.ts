@@ -92,6 +92,8 @@ interface ScriptedSpec {
   file: string;
   title: string;
   status: E2eSpecStatus;
+  /** Optional Playwright error message attached to the failing attempt (D8). */
+  error?: string;
 }
 
 /** A PlaywrightTool fake that answers via a caller-supplied plan, keyed off the run's `opts`. */
@@ -107,7 +109,12 @@ class ScriptedPlaywrightTool implements PlaywrightTool {
           specs: specs.map((s) => ({
             title: s.title,
             file: s.file,
-            tests: [{ status: pwStatus(s.status) }],
+            tests: [
+              {
+                status: pwStatus(s.status),
+                ...(s.error !== undefined ? { results: [{ error: { message: s.error } }] } : {}),
+              },
+            ],
           })),
         },
       ],
@@ -198,7 +205,7 @@ describe("runE2eEmit", () => {
     expect(env.base_ref).toBe("origin/develop");
     expect(env.worktree).toContain(RUN_ID);
     expect(env.throwaway_dir).toContain(RUN_ID);
-    expect(env.model).toBe("sonnet");
+    expect(env.model).toBe("opus"); // apex-pinned (Decision 40 D4)
     expect(
       git.calls.some((c) => c.startsWith("worktree add") && c.includes(`-B e2e-${RUN_ID} `)),
     ).toBe(true);
@@ -723,6 +730,57 @@ describe("author branch merge is path-guarded against out-of-testDir changes (W5
     expect(env.kind).toBe("done");
     expect(git.mergesInto[`staging-${RUN_ID}`]).toContain(`e2e-${RUN_ID}`);
   });
+
+  it("rejects a committed spec under testDir/ that is MISSING from the manifest (D6 converse check)", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    // An undeclared committed spec would merge with no spec→task join — its later
+    // failure could never reopen anything (a permanent unmappable failure).
+    git.branchFiles.set(`e2e-${RUN_ID}`, ["e2e/checkout.spec.ts", "e2e/orphan.spec.ts"]);
+    const manifest = [
+      { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+    ];
+    const env = await runE2eRecord(deps(), RUN_ID, { status: "STATUS: DONE", manifest });
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("e2e/orphan.spec.ts");
+    expect(env.reason).toContain("missing from the manifest");
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
+  });
+
+  it("converse check carve-out: support/** and auth.setup.ts may be committed undeclared", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID);
+    git.branchFiles.set(`e2e-${RUN_ID}`, [
+      "e2e/checkout.spec.ts",
+      "e2e/support/seed.ts",
+      "e2e/auth.setup.ts",
+    ]);
+    const tool = new ScriptedPlaywrightTool((opts) => [
+      {
+        file: "e2e/checkout.spec.ts",
+        title: `${CONTROL_TITLE_PREFIX} app boots`,
+        status: "passed",
+      },
+      {
+        file: "e2e/checkout.spec.ts",
+        title: "user can check out",
+        status: opts.cwd === baseWt ? "failed" : "passed",
+      },
+    ]);
+    const manifest = [
+      { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+    ];
+    const env = await runE2eRecord(
+      deps({ playwright: tool, files: new FakeE2eFileOps() }),
+      RUN_ID,
+      {
+        status: "STATUS: DONE",
+        manifest,
+      },
+    );
+    expect(env.kind).toBe("done");
+    expect(git.mergesInto[`staging-${RUN_ID}`]).toContain(`e2e-${RUN_ID}`);
+  });
 });
 
 describe("runSuiteAndDecide (via runE2eEmit re-entry)", () => {
@@ -787,6 +845,35 @@ describe("runSuiteAndDecide (via runE2eEmit re-entry)", () => {
     expect(run.e2e_phase?.reopen_counts["task-a"]).toBe(1);
     expect(run.e2e_phase?.attempts).toBe(1);
     expect(run.e2e_phase?.manifest).toHaveLength(1); // manifest persists across the reopen
+  });
+
+  it("reopen feedback carries the Playwright error detail (Decision 40 D8) — the producer must not start blind", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: { "task-a": taskRow({ task_id: "task-a", status: "done" }) },
+      e2e_phase: {
+        manifest: [
+          { task_ids: ["task-a"], spec_path: "checkout.spec.ts", kind: "critical" as const },
+        ],
+        reopen_counts: {},
+      },
+    }));
+    const tool = new ScriptedPlaywrightTool(() => [
+      {
+        file: "checkout.spec.ts",
+        title: "user can check out",
+        status: "failed",
+        error:
+          'expect(locator).toBeVisible() failed\nLocator: getByRole("button", { name: "Pay" })',
+      },
+    ]);
+    const env = await runE2eEmit(deps({ playwright: tool }), RUN_ID);
+    expect(env.kind).toBe("reopen");
+    if (env.kind !== "reopen") throw new Error("expected reopen");
+    expect(env.reason).toContain("toBeVisible() failed");
+    const task = (await state.read(RUN_ID)).tasks["task-a"]!;
+    expect(task.e2e_feedback).toContain("toBeVisible() failed");
+    expect(task.e2e_feedback).toContain('getByRole("button", { name: "Pay" })');
   });
 
   it("an unmappable critical failure (no manifest entry names it) fails the run", async () => {

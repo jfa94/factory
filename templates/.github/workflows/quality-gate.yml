@@ -222,51 +222,14 @@ jobs:
           fi
           echo "All mutation jobs succeeded."
 
-  # The durable net for the committed critical e2e suite (Decision 39) — the
-  # run-level e2e phase is the fast in-run feedback loop; this job is what
-  # actually gates every future PR once specs land in e2e/. Gracefully no-ops
-  # when e2e/ has no spec files (e.g. before the project has added any), so a
-  # fresh scaffold's seeded example.spec.ts is the only thing exercised until
-  # real journeys are authored — configure `playwright.config.ts`'s
-  # `webServer.command` (TODO placeholder) before relying on this job.
-  e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: quality
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Check for e2e specs
-        id: check
-        run: |
-          if find e2e -type f \( -name '*.spec.ts' -o -name '*.spec.js' \) 2>/dev/null | grep -q .; then
-            echo "has_specs=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_specs=false" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        if: steps.check.outputs.has_specs == 'true'
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        if: steps.check.outputs.has_specs == 'true'
-        with:
-          node-version: 20
-          cache: pnpm
-      - name: Install dependencies
-        if: steps.check.outputs.has_specs == 'true'
-        run: pnpm install --frozen-lockfile
-      - name: Install Playwright browsers
-        if: steps.check.outputs.has_specs == 'true'
-        run: pnpm exec playwright install --with-deps chromium
-      - name: Run e2e suite
-        if: steps.check.outputs.has_specs == 'true'
-        run: pnpm exec playwright test
-      - name: No e2e specs found
-        if: steps.check.outputs.has_specs != 'true'
-        run: echo "No e2e specs under e2e/; skipping."
+  # No e2e job here by design (Decision 40): CI cannot boot the app (no seed DB,
+  # no auth, no live services), so a gating e2e job would brick auto-merge on
+  # infrastructure CI can't provide. The run-level e2e phase is the e2e gate.
 
   auto-merge:
     name: Auto Merge
     runs-on: ubuntu-latest
-    needs: [quality, mutation-testing, security, e2e]
+    needs: [quality, mutation-testing, security]
     if: github.actor != 'dependabot[bot]'
     permissions:
       contents: write

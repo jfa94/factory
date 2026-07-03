@@ -113,7 +113,9 @@ export type E2eAction =
     }
   | { readonly kind: "suspend"; readonly run_id: string; readonly reason: string };
 
-const E2E_AUTHOR_MODEL = "sonnet"; // Haiku→Sonnet policy — no plugin agent runs Haiku.
+// Apex-pinned (Decision 40): the author runs once per run, no human reviews its
+// assertions, and they gate the run — same rationale as the spec-generator pin (Decision 21).
+const E2E_AUTHOR_MODEL = "opus";
 // ponytail: 90 (docs' 60 + a 50% margin) — live MCP exploration burns more turns
 // than a diff read; bump if the author routinely hits the ceiling.
 const E2E_AUTHOR_MAX_TURNS = 90;
@@ -225,8 +227,12 @@ function buildAuthorPrompt(args: {
     "6. Self-validate: every spec you authored must be green against the live (staging) app before you finish.",
     "7. Do NOT push (the engine merges the critical specs on record). Do NOT edit non-e2e files.",
     'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} — the ' +
-      "manifest is an array of {task_ids, spec_path, kind} rows, one per spec you authored " +
-      "(critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative). " +
+      "manifest is an array of {task_ids, spec_path, kind, title} rows, one per spec you authored " +
+      "(critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative; " +
+      '`title` is a plain-language journey name a non-technical reader understands, e.g. "Sign up and ' +
+      'reach the dashboard"). EVERY file you commit under the test dir must appear as a critical ' +
+      "manifest row (support helpers under support/ and auth.setup.ts excepted) — an undeclared " +
+      "committed spec is rejected at record. " +
       "Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.",
   ].join("\n");
 }
@@ -417,6 +423,26 @@ export async function runE2eRecord(
       const reason =
         `e2e-author: branch touches path(s) outside '${testDirPrefix}' — refusing to merge ` +
         `unreviewed changes: ${stray.join(", ")}`;
+      return failWithCleanup(deps, runId, worktree, reason);
+    }
+
+    // Converse check (D6, Decision 40): every changed file under testDir/ must be a
+    // DECLARED critical manifest entry — an undeclared spec would merge with no
+    // spec→task join, so its later failure could never reopen anything (a permanent
+    // unmappable failure). Carve-out: shared machinery (support helpers, auth setup)
+    // is legitimately not a spec and never joins to a task.
+    const declared = new Set(critical.map((e) => e.spec_path));
+    const undeclared = changed.filter(
+      (f) =>
+        !declared.has(f) &&
+        !f.startsWith(`${testDirPrefix}support/`) &&
+        f !== `${testDirPrefix}auth.setup.ts`,
+    );
+    if (undeclared.length > 0) {
+      const reason =
+        `e2e-author: committed file(s) under '${testDirPrefix}' missing from the manifest — ` +
+        `an undeclared spec can never be joined back to a task, refusing to merge: ` +
+        undeclared.join(", ");
       return failWithCleanup(deps, runId, worktree, reason);
     }
 
@@ -829,10 +855,13 @@ async function runSuiteAndDecide(
   const feedback =
     "The e2e phase found these journeys still failing:\n" +
     mappable
-      .map(
-        (m) =>
-          `- ${m.entry.spec_path} — "${m.spec ? m.spec.title : "did not run (missing from results)"}"`,
-      )
+      .map((m) => {
+        const title = m.spec ? m.spec.title : "did not run (missing from results)";
+        // D8 (Decision 40): the failing assertion/step, already ANSI-stripped +
+        // byte-capped by the runner — without it a reopened producer starts blind.
+        const detail = m.spec?.error ? `\n  ${m.spec.error.replace(/\n/g, "\n  ")}` : "";
+        return `- ${m.entry.spec_path} — "${title}"${detail}`;
+      })
       .join("\n");
   for (const id of taskIds) reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
 

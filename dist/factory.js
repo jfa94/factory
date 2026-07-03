@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile15;
-      function readFile15(path5, options, cb) {
+      fs2.readFile = readFile16;
+      function readFile16(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path5, options, cb);
@@ -5952,9 +5952,9 @@ var E2eConfigSchema = external_exports.object({
    * Repo-relative directory the COMMITTED critical suite lives in. Persistence
    * in this directory IS the criticality signal (Decision 39) — no `@critical`
    * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
-   * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
-   * custom value here would silently diverge from what the template/CI actually
-   * run, rather than genuinely relocating the suite (see the superRefine below).
+   * hardcodes `e2e/` — a custom value here would silently diverge from what the
+   * template actually runs, rather than genuinely relocating the suite (see the
+   * superRefine below).
    */
   testDir: external_exports.string().min(1).default("e2e"),
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -5970,7 +5970,7 @@ var E2eConfigSchema = external_exports.object({
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["testDir"],
-      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts and quality-gate.yml both hardcode that path, so a custom value here would silently diverge from what actually runs`
+      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts hardcodes that path, so a custom value here would silently diverge from what actually runs`
     });
   }
 }).default({});
@@ -6456,7 +6456,13 @@ var E2eManifestEntrySchema = external_exports.object({
   task_ids: external_exports.array(external_exports.string().min(1)).min(1),
   /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
   spec_path: external_exports.string().min(1),
-  kind: E2eSpecKindEnum
+  kind: E2eSpecKindEnum,
+  /**
+   * Human-readable journey name (Decision 40 D12) — surfaces in the run report's
+   * "journeys covered" section so a zero-e2e-knowledge operator can read what was
+   * proven. Optional: pre-D12 manifests lack it (renderer falls back to spec_path).
+   */
+  title: external_exports.string().min(1).optional()
 });
 var E2ePhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]).optional(),
@@ -7817,7 +7823,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -11719,6 +11725,7 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passR
 // src/verifier/e2e/runner.ts
 import path4 from "node:path";
 import { access as access3 } from "node:fs/promises";
+var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 async function pathExists2(p) {
   try {
     await access3(p);
@@ -11788,6 +11795,17 @@ function specStatus(spec) {
   if (statuses.length > 0 && statuses.every((s) => s === "skipped")) return "skipped";
   return "passed";
 }
+var ANSI_RE = /\x1b\[[0-9;]*m/g;
+function truncateBytes(s, max) {
+  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  const clipped = Buffer.from(s, "utf8").subarray(0, max).toString("utf8");
+  return clipped.replace(/�+$/, "") + "\n\u2026 [error detail truncated]";
+}
+function specError(spec) {
+  const messages = spec.tests.flatMap((t) => t.results ?? []).flatMap((r) => r.errors?.length ? r.errors : r.error ? [r.error] : []).map((e) => e.message).filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.replace(ANSI_RE, "").trim());
+  if (messages.length === 0) return void 0;
+  return truncateBytes([...new Set(messages)].join("\n---\n"), E2E_ERROR_DETAIL_MAX_BYTES);
+}
 function parseE2eReport(json, code = 0) {
   let report;
   try {
@@ -11797,11 +11815,11 @@ function parseE2eReport(json, code = 0) {
       `e2e runner: could not parse Playwright JSON reporter output: ${err.message}`
     );
   }
-  const specs = collectSpecs(report.suites).map((s) => ({
-    file: s.file,
-    title: s.title,
-    status: specStatus(s)
-  }));
+  const specs = collectSpecs(report.suites).map((s) => {
+    const status = specStatus(s);
+    const error = status === "failed" ? specError(s) : void 0;
+    return { file: s.file, title: s.title, status, ...error !== void 0 && { error } };
+  });
   const counts = {
     passed: specs.filter((s) => s.status === "passed").length,
     failed: specs.filter((s) => s.status === "failed").length,
@@ -13416,7 +13434,7 @@ var DefaultE2eFileOps = class {
     await writeFile(path5, contents);
   }
 };
-var E2E_AUTHOR_MODEL = "sonnet";
+var E2E_AUTHOR_MODEL = "opus";
 var E2E_AUTHOR_MAX_TURNS = 90;
 var CONTROL_TITLE_PREFIX = "control:";
 var E2eResultsSchema = external_exports.object({
@@ -13475,7 +13493,7 @@ function buildAuthorPrompt(args) {
     `5. Author a small number of CRITICAL, money-path JOURNEY specs (thin \u2014 the load-bearing net, not per-task coverage) into ${args.worktree}/${args.testDir}/ and COMMIT them in this worktree. Each critical spec MUST include one assertion titled with the "${CONTROL_TITLE_PREFIX}" prefix that passes on ANY boot of the app (e.g. the page loads) \u2014 the fail-first proof uses it to tell 'the app didn't boot' apart from 'the feature doesn't exist yet.'`,
     "6. Self-validate: every spec you authored must be green against the live (staging) app before you finish.",
     "7. Do NOT push (the engine merges the critical specs on record). Do NOT edit non-e2e files.",
-    'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} \u2014 the manifest is an array of {task_ids, spec_path, kind} rows, one per spec you authored (critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative). Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.'
+    'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} \u2014 the manifest is an array of {task_ids, spec_path, kind, title} rows, one per spec you authored (critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative; `title` is a plain-language journey name a non-technical reader understands, e.g. "Sign up and reach the dashboard"). EVERY file you commit under the test dir must appear as a critical manifest row (support helpers under support/ and auth.setup.ts excepted) \u2014 an undeclared committed spec is rejected at record. Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.'
   ].join("\n");
 }
 async function runE2eEmit(deps, runId) {
@@ -13585,6 +13603,14 @@ async function runE2eRecord(deps, runId, results) {
     const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
     if (stray.length > 0) {
       const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
+      return failWithCleanup(deps, runId, worktree, reason);
+    }
+    const declared = new Set(critical.map((e) => e.spec_path));
+    const undeclared = changed.filter(
+      (f) => !declared.has(f) && !f.startsWith(`${testDirPrefix}support/`) && f !== `${testDirPrefix}auth.setup.ts`
+    );
+    if (undeclared.length > 0) {
+      const reason = `e2e-author: committed file(s) under '${testDirPrefix}' missing from the manifest \u2014 an undeclared spec can never be joined back to a task, refusing to merge: ` + undeclared.join(", ");
       return failWithCleanup(deps, runId, worktree, reason);
     }
     const proof = await proveCriticals(deps, runId, critical, worktree);
@@ -13846,9 +13872,12 @@ async function runSuiteAndDecide(deps, runId) {
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map(
-    (m) => `- ${m.entry.spec_path} \u2014 "${m.spec ? m.spec.title : "did not run (missing from results)"}"`
-  ).join("\n");
+  const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map((m) => {
+    const title = m.spec ? m.spec.title : "did not run (missing from results)";
+    const detail = m.spec?.error ? `
+  ${m.spec.error.replace(/\n/g, "\n  ")}` : "";
+    return `- ${m.entry.spec_path} \u2014 "${title}"${detail}`;
+  }).join("\n");
   for (const id of taskIds) reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
   await deps.state.update(runId, (s) => ({
     ...s,
@@ -13918,6 +13947,10 @@ async function loadCliDeps(opts) {
     run: run10
   };
 }
+
+// src/cli/subcommands/run.ts
+import { access as access4, readFile as readFile12 } from "node:fs/promises";
+import { join as join18 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -14231,6 +14264,34 @@ function parseIssue(raw) {
 function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
+async function assertE2ePrereqs(cwd) {
+  const missing = [];
+  let pkgRaw;
+  try {
+    pkgRaw = await readFile12(join18(cwd, "package.json"), "utf8");
+  } catch {
+    missing.push("package.json");
+  }
+  if (pkgRaw !== void 0) {
+    let hasDep = false;
+    try {
+      const pkg = JSON.parse(pkgRaw);
+      hasDep = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
+    } catch {
+    }
+    if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
+  }
+  try {
+    await access4(join18(cwd, "playwright.config.ts"));
+  } catch {
+    missing.push("playwright.config.ts");
+  }
+  if (missing.length > 0) {
+    throw new UsageError(
+      `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. Run \`factory scaffold\` to seed playwright.config.ts + e2e/, and install @playwright/test.`
+    );
+  }
+}
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
     booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
@@ -14287,6 +14348,7 @@ async function runCreate(argv, overrides = {}) {
   const intent = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
+  if (e2e) await assertE2ePrereqs(cwd);
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
@@ -14920,10 +14982,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join18(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join19(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join18(dataDir, "debug", runId, `pass-${pass}`);
+  return join19(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -14997,8 +15059,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join18(passDir, "findings.json");
-  const reportPath = join18(passDir, "findings.md");
+  const findingsPath = join19(passDir, "findings.json");
+  const reportPath = join19(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -15294,16 +15356,16 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir11, readFile as readFile13, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir11, readFile as readFile14, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join20, relative } from "node:path";
+import { dirname as dirname9, join as join21, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir10, readFile as readFile12 } from "node:fs/promises";
+import { mkdir as mkdir10, readFile as readFile13 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -15372,12 +15434,12 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join19(opts.targetRoot, ".claude");
-  const path5 = join19(dir, "settings.json");
+  const dir = join20(opts.targetRoot, ".claude");
+  const path5 = join20(dir, "settings.json");
   const created = !existsSync7(path5);
   let existing = {};
   if (!created) {
-    const raw = await readFile12(path5, "utf8");
+    const raw = await readFile13(path5, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
@@ -15444,8 +15506,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname9(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join20(dir, "templates");
-    if (existsSync8(join20(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join21(dir, "templates");
+    if (existsSync8(join21(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname9(dir);
@@ -15469,14 +15531,14 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join20(templatesDir, ...segs);
-  const dest = join20(targetRoot, ...segs);
+  const src = join21(templatesDir, ...segs);
+  const dest = join21(targetRoot, ...segs);
   if (!existsSync8(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
-    const text = await readFile13(src, "utf8");
+    const text = await readFile14(src, "utf8");
     return transform ? transform(text) : text;
   };
   if (!existsSync8(dest)) {
@@ -15489,7 +15551,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile13(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile14(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
@@ -15498,14 +15560,14 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join20(root, ".gitignore");
+  const path5 = join21(root, ".gitignore");
   const rel = relative(root, path5);
   if (!existsSync8(path5)) {
     await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile13(path5, "utf8");
+  const current = await readFile14(path5, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
@@ -15526,7 +15588,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync8(join20(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync8(join21(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
@@ -15986,8 +16048,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { readFile as readFile14 } from "node:fs/promises";
-import { join as join21 } from "node:path";
+import { readFile as readFile15 } from "node:fs/promises";
+import { join as join22 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -16025,7 +16087,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join21(dataDir, "merged-settings.json");
+  return join22(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -16101,10 +16163,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join21(pluginRoot, ".claude-plugin", "plugin.json");
+  const path5 = join22(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile14(path5, "utf8"));
+    const parsed = JSON.parse(await readFile15(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -16114,20 +16176,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join21(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join22(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile14(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile15(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join21(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile14(templatePath, "utf8");
+  const templatePath = join22(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile15(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -16189,7 +16251,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absen
 async function readOnDiskVersion(path5) {
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile14(path5, "utf8"));
+    const parsed = JSON.parse(await readFile15(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }

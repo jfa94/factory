@@ -10,7 +10,7 @@
  *      against a real StateManager + SpecStore temp dir, with an injected reading.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +63,17 @@ afterEach(() => {
   if (priorSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
   else process.env.CLAUDE_CODE_SESSION_ID = priorSessionId;
 });
+
+/** Temp cwd carrying the three static `--e2e` prerequisites (Decision 40 D2). */
+async function playwrightReadyCwd(): Promise<string> {
+  const cwd = await mkdtemp(join(tmpdir(), "factory-e2e-cwd-"));
+  await writeFile(
+    join(cwd, "package.json"),
+    JSON.stringify({ name: "t", devDependencies: { "@playwright/test": "^1.0.0" } }),
+  );
+  await writeFile(join(cwd, "playwright.config.ts"), "export default {};\n");
+  return cwd;
+}
 
 /** Build one durable spec task with overridable fields. */
 function task(
@@ -1010,14 +1021,63 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
-    const code = await runCreate(["--issue", "42", "--run-id", "run-e2e", "--e2e", "--workflow"], {
-      gitClient: git,
-      ghClient: gh,
-      cwd: "/x",
-      dataDir,
-    });
-    expect(code).toBe(EXIT.OK);
-    expect((await state.read("run-e2e")).e2e).toBe(true);
+    const cwd = await playwrightReadyCwd();
+    try {
+      const code = await runCreate(
+        ["--issue", "42", "--run-id", "run-e2e", "--e2e", "--workflow"],
+        { gitClient: git, ghClient: gh, cwd, dataDir },
+      );
+      expect(code).toBe(EXIT.OK);
+      expect((await state.read("run-e2e")).e2e).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("runCreate: --e2e in a repo WITHOUT the Playwright prerequisites → UsageError naming factory scaffold (Decision 40 D2 eager check)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const bare = await mkdtemp(join(tmpdir(), "factory-e2e-bare-"));
+    try {
+      await expect(
+        runCreate(["--issue", "42", "--run-id", "run-e2e-bare", "--e2e", "--workflow"], {
+          gitClient: git,
+          ghClient: gh,
+          cwd: bare,
+          dataDir,
+        }),
+      ).rejects.toMatchObject({
+        isUsageError: true,
+        message: expect.stringMatching(/factory scaffold/),
+      });
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("runCreate: --e2e with playwright.config.ts but no @playwright/test dependency → UsageError naming the missing dep", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const cwd = await mkdtemp(join(tmpdir(), "factory-e2e-nodep-"));
+    try {
+      await writeFile(join(cwd, "package.json"), JSON.stringify({ name: "t" }));
+      await writeFile(join(cwd, "playwright.config.ts"), "export default {};\n");
+      await expect(
+        runCreate(["--issue", "42", "--run-id", "run-e2e-nodep", "--e2e", "--workflow"], {
+          gitClient: git,
+          ghClient: gh,
+          cwd,
+          dataDir,
+        }),
+      ).rejects.toMatchObject({
+        isUsageError: true,
+        message: expect.stringMatching(/@playwright\/test/),
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("runCreate: no --e2e → run defaults to e2e:false", async () => {

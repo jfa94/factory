@@ -22,6 +22,8 @@
  * self, cyclic, and duplicate dependency edges are caught LOUDLY at seed time rather
  * than surfacing later as a orchestrator deadlock.
  */
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, UsageError, optionalString, parseResultsFlag } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
@@ -652,6 +654,48 @@ export interface RunCreateOverrides {
   readonly dataDir?: string;
 }
 
+/**
+ * Create-time eager check (Decision 40 D2): `--e2e` fails create unless the repo
+ * already carries the three STATIC Playwright prerequisites. Deep validation (boot,
+ * auth, coverage) belongs to the e2e-assessment phase — this only catches "e2e was
+ * never set up here" before a run is born, when the fix is still one command.
+ */
+async function assertE2ePrereqs(cwd: string): Promise<void> {
+  const missing: string[] = [];
+  let pkgRaw: string | undefined;
+  try {
+    pkgRaw = await readFile(join(cwd, "package.json"), "utf8");
+  } catch {
+    missing.push("package.json");
+  }
+  if (pkgRaw !== undefined) {
+    let hasDep = false;
+    try {
+      const pkg = JSON.parse(pkgRaw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      hasDep =
+        pkg.dependencies?.["@playwright/test"] !== undefined ||
+        pkg.devDependencies?.["@playwright/test"] !== undefined;
+    } catch {
+      // Unparseable package.json reads as "dependency not declared" — same remedy.
+    }
+    if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
+  }
+  try {
+    await access(join(cwd, "playwright.config.ts"));
+  } catch {
+    missing.push("playwright.config.ts");
+  }
+  if (missing.length > 0) {
+    throw new UsageError(
+      `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. ` +
+        "Run `factory scaffold` to seed playwright.config.ts + e2e/, and install @playwright/test.",
+    );
+  }
+}
+
 export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
@@ -744,6 +788,7 @@ export async function runCreate(
   const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
+  if (e2e) await assertE2ePrereqs(cwd);
   const hasDataDirOverride = overrides.dataDir !== undefined;
 
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});

@@ -517,6 +517,12 @@ export const E2eManifestEntrySchema = z.object({
   /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
   spec_path: z.string().min(1),
   kind: E2eSpecKindEnum,
+  /**
+   * Human-readable journey name (Decision 40 D12) — surfaces in the run report's
+   * "journeys covered" section so a zero-e2e-knowledge operator can read what was
+   * proven. Optional: pre-D12 manifests lack it (renderer falls back to spec_path).
+   */
+  title: z.string().min(1).optional(),
 });
 export type E2eManifestEntry = z.infer<typeof E2eManifestEntrySchema>;
 

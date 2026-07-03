@@ -21,6 +21,7 @@ vi.mock("../../shared/index.js", async (importOriginal) => {
 import { exec, type ExecResult } from "../../shared/index.js";
 import {
   DefaultPlaywrightTool,
+  E2E_ERROR_DETAIL_MAX_BYTES,
   parseE2eReport,
   resolveLocalPlaywrightBin,
   runE2e,
@@ -136,6 +137,75 @@ describe("parseE2eReport", () => {
       { specs: [{ title: "a", file: "e2e/a.spec.ts", tests: [{ status: "expected" }] }] },
     ]);
     expect(parseE2eReport(report).ok).toBe(true);
+  });
+
+  it("extracts, dedupes, and ANSI-strips a failed spec's error detail (Decision 40 D8)", () => {
+    const ansiMessage =
+      "\u001b[31mexpect(\u001b[39mlocator\u001b[31m).toBeVisible() failed\u001b[39m\nLocator: getByRole('button')";
+    const report = pwJson([
+      {
+        specs: [
+          {
+            title: "login works",
+            file: "e2e/login.spec.ts",
+            tests: [
+              {
+                status: "unexpected",
+                // Two attempts (retry) repeating the same assertion + one distinct
+                // errors[]-style entry — dedupe keeps each unique message once.
+                results: [
+                  { error: { message: ansiMessage } },
+                  { errors: [{ message: ansiMessage }, { message: "step timeout" }] },
+                ],
+              },
+            ],
+          },
+          {
+            title: "checkout works",
+            file: "e2e/checkout.spec.ts",
+            tests: [{ status: "expected" }],
+          },
+        ],
+      },
+    ]);
+    const result = parseE2eReport(report);
+    const failed = result.specs.find((s) => s.status === "failed")!;
+    expect(failed.error).toBe(
+      "expect(locator).toBeVisible() failed\nLocator: getByRole('button')\n---\nstep timeout",
+    );
+    // Non-failed specs never carry error detail.
+    expect(result.specs.find((s) => s.status === "passed")!.error).toBeUndefined();
+  });
+
+  it("error detail absent when a failed test carries no results/error payload", () => {
+    const report = pwJson([
+      {
+        specs: [
+          { title: "login works", file: "e2e/login.spec.ts", tests: [{ status: "unexpected" }] },
+        ],
+      },
+    ]);
+    expect(parseE2eReport(report).specs[0]!.error).toBeUndefined();
+  });
+
+  it("caps error detail at E2E_ERROR_DETAIL_MAX_BYTES with a truncation marker", () => {
+    const huge = "x".repeat(10_000);
+    const report = pwJson([
+      {
+        specs: [
+          {
+            title: "login works",
+            file: "e2e/login.spec.ts",
+            tests: [{ status: "unexpected", results: [{ error: { message: huge } }] }],
+          },
+        ],
+      },
+    ]);
+    const error = parseE2eReport(report).specs[0]!.error!;
+    expect(Buffer.byteLength(error, "utf8")).toBeLessThanOrEqual(
+      E2E_ERROR_DETAIL_MAX_BYTES + "\n… [error detail truncated]".length + 4,
+    );
+    expect(error).toContain("[error detail truncated]");
   });
 
   it("ok is false when the reporter's top-level errors[] is non-empty, even with zero failed specs", () => {

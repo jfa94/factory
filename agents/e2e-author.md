@@ -2,7 +2,7 @@
 name: e2e-author
 description: Explores the live staging app via the Playwright MCP tools and authors Playwright end-to-end journey specs — one throwaway spec per user-facing task (ephemeral, never committed) plus a small critical money-path suite (committed, load-bearing). Spawned once by the run-level e2e phase (Decision 39); self-validates every spec green, then returns a spec→task manifest via --results.
 tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_playwright_playwright__browser_navigate, mcp__plugin_playwright_playwright__browser_snapshot, mcp__plugin_playwright_playwright__browser_click, mcp__plugin_playwright_playwright__browser_type, mcp__plugin_playwright_playwright__browser_fill_form, mcp__plugin_playwright_playwright__browser_select_option, mcp__plugin_playwright_playwright__browser_press_key, mcp__plugin_playwright_playwright__browser_hover, mcp__plugin_playwright_playwright__browser_wait_for, mcp__plugin_playwright_playwright__browser_evaluate, mcp__plugin_playwright_playwright__browser_console_messages, mcp__plugin_playwright_playwright__browser_network_requests, mcp__plugin_playwright_playwright__browser_take_screenshot, mcp__plugin_playwright_playwright__browser_close
-model: sonnet
+model: opus
 maxTurns: 90
 ---
 
@@ -99,7 +99,12 @@ You have `task_id` + full `acceptance_criteria` for every task in this PRD. Retu
 manifest row per spec you authored:
 
 ```json
-{ "task_ids": ["task-07"], "spec_path": "e2e/checkout.spec.ts", "kind": "critical" }
+{
+  "task_ids": ["task-07"],
+  "spec_path": "e2e/checkout.spec.ts",
+  "kind": "critical",
+  "title": "Buy an item and reach order confirmation"
+}
 ```
 
 - `task_ids`: every task this spec's journey covers (usually one; a cross-cutting journey
@@ -107,10 +112,18 @@ manifest row per spec you authored:
 - `spec_path`: **worktree-relative** for a critical spec (e.g. `e2e/checkout.spec.ts`),
   **throwaway_dir-relative** for a throwaway spec (e.g. `task-07.spec.ts`).
 - `kind`: `"critical"` or `"throwaway"`.
+- `title`: a **plain-language journey name** a non-technical reader understands — it is
+  what the run report shows as "journeys covered." Name the user outcome ("Sign up and
+  reach the dashboard"), not the mechanics ("auth flow spec").
 
 This is the ONLY spec→task link the engine has — there is no tag, no git provenance, no
 source-file mapping. A spec you don't list in the manifest can never be joined back to
 the task it covers if it later fails.
+
+**Declare everything you commit.** Every file you commit under `<testDir>/` must appear
+as a `critical` manifest row — the engine rejects the whole phase at record if it finds
+an undeclared committed file (an orphan spec could never reopen a task when it fails).
+Only shared machinery is exempt: `<testDir>/support/**` and `<testDir>/auth.setup.ts`.
 
 ## Final output (REQUIRED)
 

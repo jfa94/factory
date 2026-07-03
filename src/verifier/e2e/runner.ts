@@ -61,7 +61,17 @@ export interface E2eSpecResult {
   readonly file: string;
   readonly title: string;
   readonly status: E2eSpecStatus;
+  /**
+   * Playwright's per-test error message(s) for a `failed` spec (Decision 40 D8) —
+   * the failing assertion/step, ANSI-stripped, capped at
+   * {@link E2E_ERROR_DETAIL_MAX_BYTES}. Absent on non-failed specs.
+   */
+  readonly error?: string;
 }
+
+/** Cap on per-spec error detail carried into reopen feedback/prompts — enough for
+ * the failing assertion + step, not a full trace dump. */
+export const E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 
 /** Parsed result of one {@link runE2e} invocation. */
 export interface E2eResults {
@@ -172,9 +182,20 @@ export class DefaultPlaywrightTool implements PlaywrightTool {
 // Playwright JSON-reporter shape (minimal subset consumed) + parsing.
 // ---------------------------------------------------------------------------
 
+interface PwJsonError {
+  readonly message?: string;
+}
+
+/** One attempt of one test — carries the error detail the status roll-up drops. */
+interface PwJsonTestResult {
+  readonly error?: PwJsonError;
+  readonly errors?: readonly PwJsonError[];
+}
+
 interface PwJsonTest {
   /** Already reconciled against retries by Playwright — this IS the flaky signal. */
   readonly status: "skipped" | "expected" | "unexpected" | "flaky";
+  readonly results?: readonly PwJsonTestResult[];
 }
 
 interface PwJsonSpec {
@@ -218,6 +239,31 @@ function specStatus(spec: PwJsonSpec): E2eSpecStatus {
   return "passed";
 }
 
+// eslint-disable-next-line no-control-regex -- ANSI escapes ARE control chars; stripping them is the point
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+function truncateBytes(s: string, max: number): string {
+  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  const clipped = Buffer.from(s, "utf8").subarray(0, max).toString("utf8");
+  // A multi-byte char split at the boundary decodes to U+FFFD — drop it.
+  return clipped.replace(/�+$/, "") + "\n… [error detail truncated]";
+}
+
+/**
+ * Collect a failed spec's error messages across every test attempt (Decision 40 D8)
+ * — deduped (retries repeat the same assertion), ANSI-stripped, byte-capped.
+ */
+function specError(spec: PwJsonSpec): string | undefined {
+  const messages = spec.tests
+    .flatMap((t) => t.results ?? [])
+    .flatMap((r) => (r.errors?.length ? r.errors : r.error ? [r.error] : []))
+    .map((e) => e.message)
+    .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
+    .map((m) => m.replace(ANSI_RE, "").trim());
+  if (messages.length === 0) return undefined;
+  return truncateBytes([...new Set(messages)].join("\n---\n"), E2E_ERROR_DETAIL_MAX_BYTES);
+}
+
 /**
  * Parse a Playwright `--reporter=json` payload into {@link E2eResults}. Flattens the
  * (possibly-nested, describe-block) suite tree; counts are derived from the SAME
@@ -240,11 +286,11 @@ export function parseE2eReport(json: string, code: number | null = 0): E2eResult
       `e2e runner: could not parse Playwright JSON reporter output: ${(err as Error).message}`,
     );
   }
-  const specs = collectSpecs(report.suites).map((s) => ({
-    file: s.file,
-    title: s.title,
-    status: specStatus(s),
-  }));
+  const specs = collectSpecs(report.suites).map((s) => {
+    const status = specStatus(s);
+    const error = status === "failed" ? specError(s) : undefined;
+    return { file: s.file, title: s.title, status, ...(error !== undefined && { error }) };
+  });
   const counts = {
     passed: specs.filter((s) => s.status === "passed").length,
     failed: specs.filter((s) => s.status === "failed").length,

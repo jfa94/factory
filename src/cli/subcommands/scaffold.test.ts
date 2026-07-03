@@ -89,6 +89,12 @@ describe("runScaffold", () => {
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toMatch(/\.claude-plugin-data\//);
 
+    // Decision 40 D11: no e2e job in CI — it would gate auto-merge on infra CI
+    // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
+    const gate = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
+    expect(gate).not.toContain("E2E Tests");
+    expect(gate).toContain("needs: [quality, mutation-testing, security]");
+
     // E1: a target-repo .claude/settings.json is emitted with the factory
     // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
     // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
