@@ -1174,6 +1174,59 @@ CI — its gate is the factory run itself.
 
 ---
 
+## Decision 41 — Runtime Circuit-Breaker: Idle Never Counts, and a Runtime Trip Suspends
+
+**Date:** 2026-07-03
+
+**Context:** The workflow-mode runtime circuit breaker (`src/quota/circuit-breaker.ts`)
+trips on effective runtime `(wall − paused) >= maxRuntimeMinutes` (default 480). Its
+`paused` term relied on `paused_minutes` being banked at scattered sites — resume and
+rescue-reopen — which only fire when someone drives the loop. A workflow run that a human
+simply walked away from for three days accrued **zero** paused credit: the pause was
+counted as runtime, tripped the breaker (`max runtime reached (4211min >= 480min)`), and
+the trip's HARD-abort behavior cascade-failed 28 otherwise-healthy tasks. Two defects
+compounded: idle time was mis-credited, and even a correct runtime trip was treated as a
+pathology rather than a recoverable budget stop.
+
+**Decision:**
+
+- **`StateManager.update()` is the SOLE writer of `paused_minutes`** (`src/core/state/manager.ts`).
+  Every state write banks `max(0, gap_since_last_write − ACTIVE_GAP_CAP_MINUTES)` as idle,
+  where the cap is 60 minutes (exported `ACTIVE_GAP_CAP_MINUTES` + pure `idleGapCredit()`).
+  A legitimate workflow step (spawn write → agent stage → results write) stays under the
+  cap; a human pause writes nothing for hours-to-days, so its whole gap-minus-cap is banked
+  the moment the next write lands. **Counted runtime is therefore Σ min(gap, 60)** —
+  activity time, not wall-clock. The two old scattered crediting sites (rescue-reopen in
+  `src/rescue/apply.ts`, resume in `src/cli/subcommands/run.ts`) were **deleted** — one
+  writer, no double-count.
+- **Read-side pending-gap term.** `nextTask` evaluates the breaker _before_ any post-pause
+  write lands, so the breaker gate (`src/orchestrator/circuit-breaker-gate.ts`) adds the
+  same `idleGapCredit(run.updated_at, now)` for the still-pending gap since the last write.
+  The persisted credit plus this read-side term give an exact idle deduction at evaluation
+  time.
+- **Arm-tagged verdicts with different severities.** `CircuitBreakerResult`'s tripped
+  variant now carries `arm: "runtime" | "failures" | "fail-closed"`. `nextTask`
+  (`src/orchestrator/next.ts`) maps severity:
+  - **`runtime`** → the run is **suspended** (not failed) and returns a `kind:"pause"`
+    envelope with the new scope `"runtime-budget"`; the reason tells the operator to raise
+    `maxRuntimeMinutes` in `config.json` and resume. Resuming without raising the cap simply
+    re-suspends here. This preserves the 28 healthy tasks the old cascade-fail destroyed.
+  - **`failures` / `fail-closed`** → unchanged HARD abort: every remaining non-terminal task
+    is failed `capability-budget` (loud, classified) and the run falls through to
+    all-terminal → finalize → `failed`, reusing the Decision-34 wedge-fail path.
+- **Resume clears unconditionally in workflow mode.** A `runtime-budget` suspend is
+  non-quota by construction — workflow mode never quota-pauses (Decision 24) — so
+  `planResume` (`src/quota/resume.ts`) force-clears the checkpoint without consulting the
+  usage pacer, exactly like `--ignore-quota`.
+
+**Consequences:** A parked workflow run no longer self-destructs: idle is excluded from the
+runtime ceiling by construction (single-writer + read-side term), and a genuine runtime
+exhaustion is a resumable budget stop the operator clears by raising the cap, not a
+28-task cascade failure. Following derive-don't-store, no breaker counter is persisted —
+`paused_minutes` is the only new durable field and it is written in exactly one place.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

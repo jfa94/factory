@@ -169,8 +169,13 @@ A run that hits a quota window does **not** finalize — it has unfinished work.
 
 - `paused` (5h window) — self-heals; waits out the curve in-session.
 - `suspended` (7d window) — state is persisted and the process exits cleanly.
+- `suspended` (`scope:"runtime-budget"`, workflow mode) — the runtime circuit-breaker's
+  effective runtime (`wall − idle`) hit `maxRuntimeMinutes` (Decision 41). Idle time is
+  already excluded, so this is a real activity budget. Raise `maxRuntimeMinutes` in
+  `config.json`, then resume — resuming without raising the cap re-suspends here.
 
-Re-enter it once the window resets:
+Re-enter it once the window resets (or, for a runtime-budget suspend, once the cap is
+raised):
 
 ```
 /factory:resume [--run <id>] [--ignore-quota]

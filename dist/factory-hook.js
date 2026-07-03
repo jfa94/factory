@@ -7711,10 +7711,13 @@ var RunStateSchema = external_exports.object({
    */
   debug: external_exports.boolean().default(false),
   /**
-   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
-   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
-   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
-   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   * Cumulative idle minutes, deducted from wall-time by the runtime circuit-breaker
+   * so a long real-world pause never falsely trips it (D7). SOLE writer:
+   * `StateManager.update()`, which on every write banks the gap since the previous
+   * write beyond ACTIVE_GAP_CAP_MINUTES — crediting at the one place the idle anchor
+   * (`updated_at`) is erased, so no write path can outrun it. Session-mode runs
+   * accumulate it too, but cosmetically (their runtime arm is disarmed). Default 0 —
+   * absent on legacy runs → treated as 0 (no regression).
    */
   paused_minutes: external_exports.number().nonnegative().default(0),
   /** Lifecycle timestamps (ISO-8601). */
@@ -7862,6 +7865,13 @@ function specDir(dataDir, repo, specId) {
 
 // src/core/state/manager.ts
 var log6 = createLogger("state");
+var ACTIVE_GAP_CAP_MINUTES = 60;
+function idleGapCredit(prevUpdatedAt, nowMs = Date.now()) {
+  const prevMs = Date.parse(prevUpdatedAt);
+  if (Number.isNaN(prevMs)) return 0;
+  const gapMinutes = Math.floor((nowMs - prevMs) / 6e4);
+  return Math.max(0, gapMinutes - ACTIVE_GAP_CAP_MINUTES);
+}
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class _StateManager {
   dataDir;
@@ -8126,6 +8136,12 @@ var StateManager = class _StateManager {
    * and returns the next state; the result is re-validated through the schema
    * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
    * stamped. This is the ONLY write path for an existing run.
+   *
+   * Idle crediting (D7): because this is also the only place `updated_at` is
+   * re-stamped — i.e. the only place the idle anchor is erased — it is the ONE
+   * sanctioned writer of `paused_minutes`: any gap since the previous write
+   * beyond {@link ACTIVE_GAP_CAP_MINUTES} is banked as idle in the same write,
+   * so no later write path can erase a pause before it is credited.
    */
   async update(runId, mutator) {
     return this.withLock(runId, async () => {
@@ -8141,7 +8157,11 @@ var StateManager = class _StateManager {
           `state: update mutator changed the spec pointer for run '${runId}' \u2014 identity is immutable`
         );
       }
-      const validated = parseRunState({ ...next, updated_at: nowIso() });
+      const validated = parseRunState({
+        ...next,
+        paused_minutes: next.paused_minutes + idleGapCredit(current.updated_at),
+        updated_at: nowIso()
+      });
       await atomicWriteFile(this.statePath(runId), stringifyJson(validated));
       return validated;
     });

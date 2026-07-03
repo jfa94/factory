@@ -59,9 +59,13 @@ signal it actually bounds; the public config key keeps its historical name
 `maxConsecutiveFailures` for back-compat (the threshold is unchanged, only its
 documentation was corrected to say "cumulative"). The runner wires it into the run orchestrator through
 `src/orchestrator/circuit-breaker-gate.ts` (evaluated in `nextTask`, mirroring the
-`applyQuotaGate` seam); on a trip every remaining non-terminal task is failed
-`capability-budget` and the run finalizes `failed`. Following derive-don't-store, **no
-breaker counter is persisted** — the gate derives both signals from run state:
+`applyQuotaGate` seam). A tripped verdict carries which **arm** fired, and `nextTask` maps
+severity (Decision 41): the **runtime** arm is a recoverable budget stop — the run
+**suspends** and returns a `kind:"pause"` envelope with scope `"runtime-budget"`
+(resumable after raising `maxRuntimeMinutes`), preserving otherwise-healthy tasks; the
+**failures** and **fail-closed** arms are hard aborts — every remaining non-terminal task is
+failed `capability-budget` and the run finalizes `failed`. Following derive-don't-store,
+**no breaker counter is persisted** — the gate derives both signals from run state:
 
 - **Failure-count arm (both modes)** — the count of `capability-budget` fails, i.e.
   tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
@@ -70,12 +74,17 @@ breaker counter is persisted** — the gate derives both signals from run state:
   that cascades to two dependents can never masquerade as three counted failures
   and abort still-runnable work.
 - **Runtime arm (workflow mode only)** — effective runtime `(wall − paused)` since
-  `run.started_at`, where `wall` is the elapsed time and `paused` is the run's
-  accumulated `paused_minutes`. It is exact only in workflow mode, which never pauses on
-  quota (Decision 24). `run.paused_minutes` accumulates the idle gap on each resume /
-  rescue-reopen and is **deducted** (`pausedMinutes: run.paused_minutes ?? 0`) so a
-  rescued workflow run does not falsely trip on the time it spent waiting for the
-  rescue. Session mode pauses and suspends and `started_at` is never reset, so the gate
+  `run.started_at`, where `wall` is the elapsed time and `paused` is idle time deducted so
+  the ceiling bounds **activity, not wall-clock**. It is exact only in workflow mode, which
+  never pauses on quota (Decision 24). Idle crediting is single-writer (Decision 41):
+  `StateManager.update()` is the **sole** writer of `run.paused_minutes` — every write banks
+  `max(0, gap_since_last_write − 60min)` (the `ACTIVE_GAP_CAP_MINUTES` cap), so a normal
+  step (spawn → agent stage → results write) stays under the cap while a human pause banks
+  its full gap. The gate **deducts** the persisted `paused_minutes` **plus** the still-pending
+  gap since the last write (`idleGapCredit(run.updated_at, now)`) — the read-side term is
+  required because `nextTask` evaluates the breaker before any post-pause write lands.
+  Counted runtime is thus `Σ min(gap, 60)`: a multi-day park costs one cap, not its
+  wall-clock. Session mode pauses and suspends and `started_at` is never reset, so the gate
   **disarms** the runtime ceiling there (it feeds `now` as the start → 0 wall minutes →
   cannot trip) and lets the usage pacer own session time/quota. Either way, a quota
   pause can **never** trip the breaker.

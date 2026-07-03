@@ -34,7 +34,8 @@ the runner what to do, not what state something is in.
 
 **`NextTask` kinds:** `work` (drive this ready task) · `document` (run the docs
 phase) · `finalize` (everything terminal — roll up) · `done` (run already terminal)
-· `pause` (quota-blocked; wait).
+· `pause` (blocked; wait — `scope` distinguishes a quota window from the workflow
+runtime-budget suspend, Decision 41).
 
 **`NextAction` kinds:** `spawn` (spawn these agents, resume after) · `done` (task
 terminal) · `pause` (quota-blocked; wait).

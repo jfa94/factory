@@ -109,7 +109,12 @@ truth**. Its ground truth _is the PRD_ — it certifies that the spec is a
 **faithful, complete, testable translation** of the PRD via:
 
 - **bidirectional traceability** (every PRD requirement → ≥1 criterion; every
-  criterion → traceable to PRD intent, no invented scope),
+  criterion → traceable to PRD intent, no invented scope). Requirement extraction
+  (`extractPrdRequirements`, `src/spec/gates.ts`) skips content under exclusion headings
+  (`Out of Scope` / `Non-Goals` / `Not doing` / `Won't do`, case- and
+  punctuation-insensitive and heading-level-aware: a same-or-higher-level heading resets
+  the skip, nested subsections stay skipped) so the gate never demands the spec cover an
+  explicitly out-of-scope bullet,
 - **per-criterion testability** (a vague criterion is a defect — it makes the
   downstream verifier's job impossible),
 - **independence + diverse max-effort judgment** for the irreducibly subjective

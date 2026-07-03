@@ -6622,10 +6622,13 @@ var RunStateSchema = external_exports.object({
    */
   debug: external_exports.boolean().default(false),
   /**
-   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
-   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
-   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
-   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   * Cumulative idle minutes, deducted from wall-time by the runtime circuit-breaker
+   * so a long real-world pause never falsely trips it (D7). SOLE writer:
+   * `StateManager.update()`, which on every write banks the gap since the previous
+   * write beyond ACTIVE_GAP_CAP_MINUTES — crediting at the one place the idle anchor
+   * (`updated_at`) is erased, so no write path can outrun it. Session-mode runs
+   * accumulate it too, but cosmetically (their runtime arm is disarmed). Default 0 —
+   * absent on legacy runs → treated as 0 (no regression).
    */
   paused_minutes: external_exports.number().nonnegative().default(0),
   /** Lifecycle timestamps (ISO-8601). */
@@ -6978,6 +6981,13 @@ function specBuildDir(dataDir, repo, issueNumber) {
 
 // src/core/state/manager.ts
 var log4 = createLogger("state");
+var ACTIVE_GAP_CAP_MINUTES = 60;
+function idleGapCredit(prevUpdatedAt, nowMs = Date.now()) {
+  const prevMs = Date.parse(prevUpdatedAt);
+  if (Number.isNaN(prevMs)) return 0;
+  const gapMinutes = Math.floor((nowMs - prevMs) / 6e4);
+  return Math.max(0, gapMinutes - ACTIVE_GAP_CAP_MINUTES);
+}
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class _StateManager {
   dataDir;
@@ -7242,6 +7252,12 @@ var StateManager = class _StateManager {
    * and returns the next state; the result is re-validated through the schema
    * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
    * stamped. This is the ONLY write path for an existing run.
+   *
+   * Idle crediting (D7): because this is also the only place `updated_at` is
+   * re-stamped — i.e. the only place the idle anchor is erased — it is the ONE
+   * sanctioned writer of `paused_minutes`: any gap since the previous write
+   * beyond {@link ACTIVE_GAP_CAP_MINUTES} is banked as idle in the same write,
+   * so no later write path can erase a pause before it is credited.
    */
   async update(runId, mutator) {
     return this.withLock(runId, async () => {
@@ -7257,7 +7273,11 @@ var StateManager = class _StateManager {
           `state: update mutator changed the spec pointer for run '${runId}' \u2014 identity is immutable`
         );
       }
-      const validated = parseRunState({ ...next, updated_at: nowIso() });
+      const validated = parseRunState({
+        ...next,
+        paused_minutes: next.paused_minutes + idleGapCredit(current.updated_at),
+        updated_at: nowIso()
+      });
       await atomicWriteFile(this.statePath(runId), stringifyJson(validated));
       return validated;
     });
@@ -9552,12 +9572,14 @@ function evaluate2(input, config, nowEpoch2) {
   if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
     };
   }
   if (!isNonNegativeFinite(pausedMinutes)) {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`
     };
   }
@@ -9565,6 +9587,7 @@ function evaluate2(input, config, nowEpoch2) {
   if (cumulativeFailures >= maxConsecutiveFailures) {
     return {
       tripped: true,
+      arm: "failures",
       reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
     };
   }
@@ -9574,6 +9597,7 @@ function evaluate2(input, config, nowEpoch2) {
   } catch {
     return {
       tripped: true,
+      arm: "fail-closed",
       reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`
     };
   }
@@ -9582,6 +9606,7 @@ function evaluate2(input, config, nowEpoch2) {
   if (runtimeMinutes >= maxRuntimeMinutes) {
     return {
       tripped: true,
+      arm: "runtime",
       reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`
     };
   }
@@ -9607,6 +9632,9 @@ function selectProducerModel(riskTier, config) {
 function planResume(run10, reading, config, nowEpoch2) {
   if (run10.status !== "paused" && run10.status !== "suspended") {
     return { kind: "not-resumable", status: run10.status };
+  }
+  if (run10.mode === "workflow") {
+    return { kind: "resume", clear: clearCheckpoint() };
   }
   if (run10.ignore_quota) {
     return { kind: "resume", clear: clearCheckpoint() };
@@ -10078,12 +10106,22 @@ function testabilityGate(tasks) {
   }
   return { passed: blockers.length === 0, blockers };
 }
+var EXCLUDED_SECTION_HEADING = /^(out[ -]of[ -]scope|non[- ]?goals?|not doing|won'?t do)\b/i;
 function extractPrdRequirements(body) {
   const lines = body.split(/\r?\n/);
   const reqs = [];
+  let skipLevel = null;
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      if (skipLevel !== null && level <= skipLevel) skipLevel = null;
+      if (EXCLUDED_SECTION_HEADING.test(heading[2].trim())) skipLevel = level;
+      continue;
+    }
+    if (skipLevel !== null) continue;
     const bullet = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (bullet && bullet[1] && bullet[1].trim().length > 0) {
       reqs.push(bullet[1].trim());
@@ -12143,7 +12181,6 @@ function selectTargets(run10, opts) {
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  const now = nowEpoch();
   const updated = await state.update(runId, (run10) => {
     const { targets, skipped } = selectTargets(run10, opts);
     const wasTerminal = isTerminalRunStatus(run10.status);
@@ -12174,12 +12211,9 @@ async function applyRescue(state, runId, opts = {}) {
       ...assessReset ? { e2e_assessment: void 0 } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
-      // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
-      ...reopen ? {
-        status: "running",
-        ended_at: null,
-        paused_minutes: (run10.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run10.updated_at)) / 60))
-      } : {}
+      // Idle time is banked by StateManager.update() itself (the sole
+      // paused_minutes writer, D7) — no crediting here.
+      ...reopen ? { status: "running", ended_at: null } : {}
     };
   });
   return { ...result, run_status: updated.status };
@@ -13411,7 +13445,9 @@ async function applyCircuitBreaker(deps, runId) {
     {
       startedAtIso,
       cumulativeFailures: capabilityFailures,
-      pausedMinutes: run10.paused_minutes ?? 0
+      // Persisted idle plus the still-pending gap since the last write — the first
+      // next-task after a pause evaluates BEFORE any write banks that gap (D7).
+      pausedMinutes: (run10.paused_minutes ?? 0) + idleGapCredit(run10.updated_at, now * 1e3)
     },
     deps.config,
     now
@@ -13514,6 +13550,15 @@ async function nextTask(deps, runId) {
   }
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
+    if (breaker.arm === "runtime") {
+      run10 = await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
+      return {
+        ...ctx(),
+        kind: "pause",
+        scope: "runtime-budget",
+        reason: `circuit breaker: ${breaker.reason} \u2014 the run's ACTIVE runtime budget is spent (idle time is already excluded). Raise maxRuntimeMinutes in config.json, then factory resume / relaunch; resuming without raising the cap re-suspends here.`
+      };
+    }
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
       await failTask(
         deps,
@@ -14851,7 +14896,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
     };
   });
 }
-async function applyResume(state, runId, reading, config, nowEpochSec, priorUpdatedAt) {
+async function applyResume(state, runId, reading, config, nowEpochSec) {
   const run10 = await state.read(runId);
   if (isTerminalRunStatus(run10.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run10.status}); nothing to resume`);
@@ -14864,15 +14909,10 @@ async function applyResume(state, runId, reading, config, nowEpochSec, priorUpda
     case "not-resumable":
       return { kind: "resumed", run: run10 };
     case "resume": {
-      const idleMinutes = Math.max(
-        0,
-        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run10.updated_at)) / 60)
-      );
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
-        quota: plan.clear.quota,
-        paused_minutes: (s.paused_minutes ?? 0) + idleMinutes
+        quota: plan.clear.quota
       }));
       return { kind: "resumed", run: updated };
     }
@@ -15068,12 +15108,11 @@ async function runResume(argv) {
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
-  const { updated_at: priorUpdatedAt } = await state.read(runId);
   if (args.flag("ignore-quota") === true) {
     await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
   }
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  const envelope = await applyResume(state, runId, reading, config, nowEpoch(), priorUpdatedAt);
+  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
   emitJson(envelope);
   return EXIT.OK;
 }
