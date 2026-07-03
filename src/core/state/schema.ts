@@ -559,6 +559,55 @@ export const E2ePhaseSchema = z.object({
 });
 export type E2ePhase = z.infer<typeof E2ePhaseSchema>;
 
+/**
+ * One coverage-forecast row from the e2e ASSESSMENT (Decision 40 D3a): an EXISTING
+ * committed spec this run's tasks may touch. `expectation` pre-routes a later suite
+ * failure: `needs-update` (the tasks intentionally change what the spec asserts —
+ * an author-update, not a regression) vs `should-still-pass` (a failure IS a
+ * regression, reopen the named task(s)).
+ */
+export const E2eAffectedSpecSchema = z.object({
+  /** Repo-relative path of the existing committed spec. */
+  spec_path: z.string().min(1),
+  /** Task id(s) in THIS run whose work touches the spec's journey. */
+  task_ids: z.array(z.string().min(1)).min(1),
+  expectation: z.enum(["needs-update", "should-still-pass"]),
+});
+export type E2eAffectedSpec = z.infer<typeof E2eAffectedSpecSchema>;
+
+/**
+ * Run-start e2e ASSESSMENT record (Decision 40 D3) — written once per `--e2e` run
+ * BEFORE any task executes. Persists the assessor's coverage forecast
+ * (`affected_specs`), the boot config it resolved and wrote into the repo's
+ * `playwright.config.ts` (`resolved` — the run-state copy feeds the author prompt
+ * + suite env), and any degraded-coverage warning (auth-only gap, D3c).
+ *   - `status` absent  — assessment not yet concluded (never spawned, or a crashed
+ *                        attempt awaiting its one retry; `attempts` tracks those).
+ *   - `status` "done"  — machinery validated (or steady-state) — tasks may proceed.
+ *   - `status` "failed"— boot/machinery impossible: the run FAILS LOUD (every
+ *                        non-terminal task swept `blocked-environmental`).
+ */
+export const E2eAssessmentSchema = z.object({
+  status: z.enum(["done", "failed"]).optional(),
+  /** Plain-language failure verdict (set IFF failed — T3 below). */
+  reason: z.string().optional(),
+  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+  warning: z.string().optional(),
+  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+  resolved: z
+    .object({
+      start_command: z.string().min(1).optional(),
+      base_url: z.string().min(1).optional(),
+    })
+    .optional(),
+  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+  affected_specs: z.array(E2eAffectedSpecSchema).default([]),
+  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
+  attempts: z.number().int().nonnegative().optional(),
+  ended_at: z.string().optional(),
+});
+export type E2eAssessment = z.infer<typeof E2eAssessmentSchema>;
+
 // ---------------------------------------------------------------------------
 // RunState
 // ---------------------------------------------------------------------------
@@ -670,6 +719,9 @@ export const RunStateSchema = z.object({
 
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
+
+  /** Run-start e2e assessment record (Decision 40 D3); absent until it first spawns. */
+  e2e_assessment: E2eAssessmentSchema.optional(),
 
   /**
    * The `completed` run's staging→develop rollup outcome, persisted at finalize
@@ -809,6 +861,18 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
         message: `run '${run.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`,
       });
     }
+  }
+
+  // T3: E2eAssessment "reason set IFF failed" — mirrors T2 (status may be absent
+  // while a crashed attempt awaits its retry; the check only fires once concluded).
+  if (run.e2e_assessment !== undefined && run.e2e_assessment.status !== undefined) {
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["e2e_assessment", "reason"],
+      label: "e2e assessment",
+      status: run.e2e_assessment.status,
+      reason: run.e2e_assessment.reason,
+    });
   }
 
   // F2: tasks map key must equal the row's task_id so DAG traversal and keyed lookups

@@ -537,6 +537,62 @@ describe("e2e phase marker + author manifest", () => {
     expect(run.e2e_phase?.reason).toBe("reopen cap exhausted for t1");
   });
 
+  it("e2e_assessment round-trips with resolved config + forecast (Decision 40)", () => {
+    const run = parseRunState(
+      minimalRun({
+        e2e_assessment: {
+          status: "done",
+          warning: "no login coverage",
+          resolved: { start_command: "npm start", base_url: "http://localhost:3000" },
+          affected_specs: [
+            { spec_path: "e2e/x.spec.ts", task_ids: ["t1"], expectation: "needs-update" },
+          ],
+          attempts: 1,
+          ended_at: NOW,
+        },
+      }),
+    );
+    expect(run.e2e_assessment?.status).toBe("done");
+    expect(run.e2e_assessment?.affected_specs[0]?.expectation).toBe("needs-update");
+    // affected_specs defaults on an in-flight (status-absent) record.
+    const inflight = parseRunState(minimalRun({ e2e_assessment: { attempts: 1 } }));
+    expect(inflight.e2e_assessment?.affected_specs).toEqual([]);
+  });
+
+  it("e2e_assessment reason set IFF failed (T3)", () => {
+    expect(() => parseRunState(minimalRun({ e2e_assessment: { status: "failed" } }))).toThrow(); // failed with no reason
+    expect(() =>
+      parseRunState(minimalRun({ e2e_assessment: { status: "done", reason: "why" } })),
+    ).toThrow(); // done with a reason
+    const run = parseRunState(
+      minimalRun({ e2e_assessment: { status: "failed", reason: "the app cannot boot" } }),
+    );
+    expect(run.e2e_assessment?.reason).toBe("the app cannot boot");
+  });
+
+  it("rejects a bad expectation and an empty task_ids row", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          e2e_assessment: {
+            affected_specs: [{ spec_path: "e2e/x.spec.ts", task_ids: ["t1"], expectation: "??" }],
+          },
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          e2e_assessment: {
+            affected_specs: [
+              { spec_path: "e2e/x.spec.ts", task_ids: [], expectation: "needs-update" },
+            ],
+          },
+        }),
+      ),
+    ).toThrow();
+  });
+
   it("advisory absent when failed (the done-side counterpart of reason)", () => {
     expect(() =>
       parseRunState(

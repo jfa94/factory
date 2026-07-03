@@ -51,6 +51,7 @@ const NEXT_KIND_MIRROR: Record<NextTask["kind"], true> = {
   finalize: true,
   document: true,
   e2e: true,
+  "e2e-assessment": true,
   done: true,
   pause: true,
 };

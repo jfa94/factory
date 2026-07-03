@@ -6482,6 +6482,30 @@ var E2ePhaseSchema = external_exports.object({
   reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
   ended_at: external_exports.string().optional()
 });
+var E2eAffectedSpecSchema = external_exports.object({
+  /** Repo-relative path of the existing committed spec. */
+  spec_path: external_exports.string().min(1),
+  /** Task id(s) in THIS run whose work touches the spec's journey. */
+  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
+  expectation: external_exports.enum(["needs-update", "should-still-pass"])
+});
+var E2eAssessmentSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]).optional(),
+  /** Plain-language failure verdict (set IFF failed — T3 below). */
+  reason: external_exports.string().optional(),
+  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+  warning: external_exports.string().optional(),
+  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+  resolved: external_exports.object({
+    start_command: external_exports.string().min(1).optional(),
+    base_url: external_exports.string().min(1).optional()
+  }).optional(),
+  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([]),
+  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  ended_at: external_exports.string().optional()
+});
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -6541,6 +6565,8 @@ var RunStateSchema = external_exports.object({
   e2e: external_exports.boolean().default(false),
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
+  /** Run-start e2e assessment record (Decision 40 D3); absent until it first spawns. */
+  e2e_assessment: E2eAssessmentSchema.optional(),
   /**
    * The `completed` run's staging→develop rollup outcome, persisted at finalize
    * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
@@ -6637,6 +6663,15 @@ function refineRunCrossFields(run10, ctx) {
         message: `run '${run10.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
+  }
+  if (run10.e2e_assessment !== void 0 && run10.e2e_assessment.status !== void 0) {
+    reasonIffFailed(ctx, {
+      runId: run10.run_id,
+      path: ["e2e_assessment", "reason"],
+      label: "e2e assessment",
+      status: run10.e2e_assessment.status,
+      reason: run10.e2e_assessment.reason
+    });
   }
   for (const [k, value] of Object.entries(run10.tasks)) {
     if (k !== value.task_id) {
@@ -7823,7 +7858,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -11173,14 +11208,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log33 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log33.code !== 0) {
+    const log34 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log34.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log34.code ?? "null"}): ${log34.stderr.trim()}`
       );
     }
-    assertNotTruncated(log33, "git log (tdd classification)");
-    const shas = splitLines(log33.stdout).reverse();
+    assertNotTruncated(log34, "git log (tdd classification)");
+    const shas = splitLines(log34.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -11885,8 +11920,9 @@ function scanRun(run10) {
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run10.e2e_phase?.status === "failed";
+  const e2e_assessment_failed = run10.e2e_assessment?.status === "failed";
   const rollup_pending = run10.rollup?.merged === false;
-  const needs_rescue = resettable.length > 0 || e2e_failed || rollup_pending;
+  const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || rollup_pending;
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -11902,6 +11938,7 @@ function scanRun(run10) {
     dead_ends,
     needs_rescue,
     e2e_failed,
+    e2e_assessment_failed,
     rollup_pending,
     would_deadlock,
     summary: summarize(
@@ -11910,24 +11947,26 @@ function scanRun(run10) {
       dead_ends.length,
       would_deadlock,
       e2e_failed,
+      e2e_assessment_failed,
       rollup_pending
     ),
     tasks
   };
 }
-function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, rollupPending) {
+function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAssessmentFailed, rollupPending) {
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
+  const assessTail = e2eAssessmentFailed ? " (e2e assessment failed \u2014 needs a fix + --reset-e2e)" : "";
   const rollupTail = rollupPending ? " (rollup armed, not landed \u2014 re-run finalize once merged via --recheck-rollup)" : "";
   if (resettable === 0) {
     const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
-    if (e2eFailed || rollupPending) {
-      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${rollupTail}`;
+    if (e2eFailed || e2eAssessmentFailed || rollupPending) {
+      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${assessTail}${rollupTail}`;
     }
     return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${rollupTail}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${assessTail}${rollupTail}`;
 }
 
 // src/rescue/assess.ts
@@ -12033,8 +12072,9 @@ async function applyRescue(state, runId, opts = {}) {
     const { targets, skipped } = selectTargets(run10, opts);
     const wasTerminal = isTerminalRunStatus(run10.status);
     const e2eReset = opts.resetE2e === true && run10.e2e_phase?.status === "failed";
+    const assessReset = opts.resetE2e === true && run10.e2e_assessment?.status === "failed";
     const rollupRecheck = opts.recheckRollup === true && run10.rollup?.merged === false;
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset || rollupRecheck);
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
     result = {
       run_id: runId,
       run_status: reopen ? "running" : run10.status,
@@ -12042,7 +12082,7 @@ async function applyRescue(state, runId, opts = {}) {
       reopened: reopen,
       skipped
     };
-    if (targets.length === 0 && !reopen && !e2eReset && !rollupRecheck) {
+    if (targets.length === 0 && !reopen && !e2eReset && !assessReset && !rollupRecheck) {
       return run10;
     }
     const nextTasks = { ...run10.tasks };
@@ -12053,6 +12093,9 @@ async function applyRescue(state, runId, opts = {}) {
       ...run10,
       tasks: nextTasks,
       ...e2eReset ? { e2e_phase: reopenE2ePhase(run10.e2e_phase) } : {},
+      // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
+      // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
+      ...assessReset ? { e2e_assessment: void 0 } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
@@ -12099,7 +12142,7 @@ async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
-  const terminal = run10.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
+  const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" ? "failed" : taskTerminal;
   const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
@@ -13212,7 +13255,7 @@ var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "docs-worktree");
+  return join16(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -13312,13 +13355,20 @@ async function wantsDocs(deps, run10) {
   if (run10.docs?.status === "done") return false;
   if ((run10.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
   if (run10.e2e_phase?.status === "failed") return false;
+  if (run10.e2e_assessment?.status === "failed") return false;
   if (decideFinalize(run10).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
 function wantsE2e(run10) {
   if (!run10.e2e) return false;
   if (run10.e2e_phase?.status !== void 0) return false;
+  if (run10.e2e_assessment?.status === "failed") return false;
   return decideFinalize(run10).run_status === "completed";
+}
+function wantsE2eAssessment(run10, allTerminal, needsE2e) {
+  if (!run10.e2e) return false;
+  if (run10.e2e_assessment?.status !== void 0) return false;
+  return !allTerminal || needsE2e;
 }
 async function nextTask(deps, runId) {
   let run10 = await deps.state.read(runId);
@@ -13328,6 +13378,7 @@ async function nextTask(deps, runId) {
   }
   const allTerminal = Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run10);
+  const needsAssessment = wantsE2eAssessment(run10, allTerminal, needsE2e);
   const needsDocs = allTerminal && !needsE2e && await wantsDocs(deps, run10);
   if (allTerminal && !needsE2e && !needsDocs) {
     if (run10.status === "paused" || run10.status === "suspended") {
@@ -13347,6 +13398,9 @@ async function nextTask(deps, runId) {
       status: patch.status,
       quota: patch.quota
     }));
+  }
+  if (needsAssessment) {
+    return { ...ctx(), kind: "e2e-assessment" };
   }
   if (needsE2e) {
     return { ...ctx(), kind: "e2e" };
@@ -13451,16 +13505,16 @@ var E2eResultsSchema = external_exports.object({
   no_ui_surface: external_exports.boolean().optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join17(dataDir, "runs", runId, "e2e-worktree");
+  return join17(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join17(dataDir, "runs", runId, "e2e-run-worktree");
+  return join17(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join17(dataDir, "runs", runId, "e2e-base-proof-worktree");
+  return join17(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join17(dataDir, "runs", runId, "e2e-throwaway");
+  return join17(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -13901,6 +13955,198 @@ async function runSuiteAndDecide(deps, runId) {
   return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
 }
 
+// src/orchestrator/assessment.ts
+import { join as join18 } from "node:path";
+var log28 = createLogger("e2e-assess");
+var ASSESSOR_MODEL = "opus";
+var ASSESSOR_MAX_TURNS = 60;
+var MAX_ASSESS_ATTEMPTS = 2;
+function assessmentWorktreePath(dataDir, runId) {
+  return join18(dataDir, "worktrees", runId, ".e2e-assess");
+}
+function assessBranchName(runId) {
+  return `e2e-assess-${runId}`;
+}
+var AssessmentResultsSchema = external_exports.object({
+  status: external_exports.enum(["ok", "degraded", "boot-impossible", "machinery-impossible", "error"]),
+  /** Plain-language explanation — REQUIRED in practice for every non-`ok` status. */
+  reason: external_exports.string().optional(),
+  /** Degraded-coverage note (auth-only gap) — surfaces in the author prompt + report. */
+  warning: external_exports.string().optional(),
+  /** Boot config the assessor resolved + wrote into `playwright.config.ts`. */
+  resolved: external_exports.object({
+    start_command: external_exports.string().min(1).optional(),
+    base_url: external_exports.string().min(1).optional()
+  }).optional(),
+  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
+}).strict();
+function buildAssessorPrompt(args) {
+  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  const overrides = args.cfg.startCommand || args.cfg.baseURL ? `Operator config overrides exist \u2014 treat them as authoritative: startCommand=${args.cfg.startCommand ?? "(unset)"}, baseURL=${args.cfg.baseURL ?? "(unset)"}.` : "No operator overrides \u2014 resolve the boot config yourself.";
+  return [
+    "You are the factory e2e-assessor running the pipeline's run-start assessment phase (Decision 40).",
+    `1. cd into your worktree: ${args.worktree} (checked out on the assessment branch off the staging tip).`,
+    `2. MACHINERY CHECK \u2014 inspect playwright.config.ts and ${args.testDir}/ (support/, auth.setup.ts).`,
+    `   ${overrides}`,
+    "   - If playwright.config.ts still carries scaffold TODO/fallback values, determine the app's REAL start command + base URL (package.json scripts, framework defaults) and write them in.",
+    `   - If exercising the app needs seed data or a login, author the machinery: ${args.testDir}/support/seed.ts and/or ${args.testDir}/auth.setup.ts.`,
+    "   - VALIDATE: boot the app with the resolved start command and, if auth machinery exists or was authored, prove a login works via the Playwright MCP tools.",
+    "   - STEADY STATE: if config + machinery are already real (no TODOs) from a prior run, change NOTHING and skip the boot \u2014 this pass is read-only.",
+    "3. COVERAGE FORECAST \u2014 this run will deliver these tasks:",
+    taskLines,
+    `   For each COMMITTED spec under ${args.testDir}/ whose asserted behavior a task above will touch, emit an affected_specs row {"spec_path", "task_ids", "expectation"}: "needs-update" when the task INTENTIONALLY changes what the spec asserts, "should-still-pass" when the spec must survive the change. Leave untouched specs out.`,
+    `4. COMMIT anything you changed IN this worktree. Only files under ${args.testDir}/ plus playwright.config.ts are accepted \u2014 anything else is rejected at record. Do NOT push.`,
+    "5. Return your verdict as structured output {status, reason?, warning?, resolved?, affected_specs}:",
+    '   - "ok" \u2014 machinery ready (validated or steady-state).',
+    '   - "degraded" \u2014 the app boots but auth/seed coverage cannot be made to work; set `warning` naming exactly what coverage is lost, in plain language.',
+    '   - "boot-impossible" \u2014 the app cannot be booted here (missing services, no seedable DB, ...); set `reason` in plain language a non-technical reader understands: what you tried, why it cannot work, and what the user could do about it.',
+    '   - "machinery-impossible" \u2014 the app boots but no meaningful e2e coverage is achievable; plain-language `reason` as above.',
+    "   Always set resolved {start_command, base_url} when you booted the app.",
+    "Per agents/e2e-assessor.md for the full discipline."
+  ].join("\n");
+}
+async function runAssessmentEmit(deps, runId) {
+  const run10 = await deps.state.read(runId);
+  if (run10.e2e_assessment?.status === "done") {
+    const warning = run10.e2e_assessment.warning;
+    return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
+  }
+  if (run10.e2e_assessment?.status === "failed") {
+    return {
+      kind: "failed",
+      run_id: runId,
+      reason: run10.e2e_assessment.reason ?? "e2e assessment failed"
+    };
+  }
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const branch = assessBranchName(runId);
+  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  await deps.git.fetch("origin", staging);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
+    await (deps.provision ?? provisionWorktree)({
+      path: worktree,
+      setupCommand: deps.config.quality.setupCommand
+    });
+  } else if ((run10.e2e_assessment?.attempts ?? 0) >= 1) {
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
+  }
+  return {
+    kind: "spawn",
+    run_id: runId,
+    worktree,
+    staging_branch: staging,
+    assess_branch: branch,
+    model: ASSESSOR_MODEL,
+    max_turns: ASSESSOR_MAX_TURNS,
+    prompt: buildAssessorPrompt({
+      worktree,
+      testDir: deps.config.e2e.testDir,
+      spec: deps.spec,
+      cfg: deps.config.e2e
+    })
+  };
+}
+function defaultAssessment() {
+  return { affected_specs: [] };
+}
+async function failAssessment(deps, runId, reason, attempts) {
+  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  const run10 = await deps.state.read(runId);
+  const open2 = Object.values(run10.tasks).filter((t) => !isTerminalTaskStatus(t.status));
+  for (const t of open2) {
+    await failTask(
+      { state: deps.state },
+      runId,
+      t.task_id,
+      "blocked-environmental",
+      `e2e assessment failed: ${reason}`
+    );
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_assessment: {
+      ...s.e2e_assessment ?? defaultAssessment(),
+      status: "failed",
+      reason,
+      warning: void 0,
+      attempts,
+      ended_at: nowIso()
+    }
+  }));
+  log28.warn(`run '${runId}': e2e assessment failed \u2014 ${reason}`);
+  return { kind: "failed", run_id: runId, reason };
+}
+async function retryOrFail(deps, runId, reason, attempts) {
+  if (attempts >= MAX_ASSESS_ATTEMPTS) {
+    return failAssessment(deps, runId, `${reason} (after ${attempts} attempts)`, attempts);
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_assessment: { ...s.e2e_assessment ?? defaultAssessment(), attempts }
+  }));
+  log28.warn(`run '${runId}': e2e assessment attempt ${attempts} failed (${reason}) \u2014 retrying`);
+  return runAssessmentEmit(deps, runId);
+}
+async function runAssessmentRecord(deps, runId, results) {
+  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  const run10 = await deps.state.read(runId);
+  const attempts = (run10.e2e_assessment?.attempts ?? 0) + 1;
+  if (results.status === "boot-impossible" || results.status === "machinery-impossible") {
+    const reason = results.reason ?? (results.status === "boot-impossible" ? "the app cannot be booted for e2e testing (assessor gave no detail)" : "no meaningful e2e coverage is achievable in this repo (assessor gave no detail)");
+    return failAssessment(deps, runId, reason, attempts);
+  }
+  if (results.status === "error") {
+    return retryOrFail(deps, runId, results.reason ?? "assessor crashed or was skipped", attempts);
+  }
+  const unknownTaskIds = [...new Set(results.affected_specs.flatMap((e) => e.task_ids))].filter(
+    (id) => !(id in run10.tasks)
+  );
+  if (unknownTaskIds.length > 0) {
+    return retryOrFail(
+      deps,
+      runId,
+      `assessor forecast references unknown task_id(s): ${unknownTaskIds.join(", ")}`,
+      attempts
+    );
+  }
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const testDirPrefix = `${deps.config.e2e.testDir}/`;
+  const changed = await deps.git.diffNames(staging, assessBranchName(runId), { cwd: worktree });
+  const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && f !== "playwright.config.ts");
+  if (stray.length > 0) {
+    return retryOrFail(
+      deps,
+      runId,
+      `assessor branch touches path(s) outside '${testDirPrefix}' + playwright.config.ts \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`,
+      attempts
+    );
+  }
+  if (changed.length > 0) {
+    await deps.git.mergeFfOrCommit(staging, assessBranchName(runId));
+    await deps.git.push("origin", staging);
+  }
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  const warning = results.status === "degraded" ? results.warning ?? results.reason : void 0;
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_assessment: {
+      status: "done",
+      reason: void 0,
+      warning,
+      resolved: results.resolved,
+      affected_specs: results.affected_specs,
+      attempts,
+      ended_at: nowIso()
+    }
+  }));
+  log28.info(
+    `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} affected spec(s)${warning !== void 0 ? `, warning: ${warning}` : ""})`
+  );
+  return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
+}
+
 // src/cli/wiring.ts
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
@@ -13950,7 +14196,7 @@ async function loadCliDeps(opts) {
 
 // src/cli/subcommands/run.ts
 import { access as access4, readFile as readFile12 } from "node:fs/promises";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -14005,7 +14251,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log28 = createLogger("run");
+var log29 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -14014,6 +14260,7 @@ Usage:
   factory run finalize [--run <id>] [--no-ship]
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
+  factory run e2e-assess [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -14022,6 +14269,7 @@ Actions:
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
+  e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
@@ -14129,7 +14377,7 @@ async function resolveSpec2(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log28.warn(
+    log29.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -14268,7 +14516,7 @@ async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile12(join18(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile12(join19(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -14282,7 +14530,7 @@ async function assertE2ePrereqs(cwd) {
     if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
-    await access4(join18(cwd, "playwright.config.ts"));
+    await access4(join19(cwd, "playwright.config.ts"));
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -14519,6 +14767,21 @@ var runE2ePhase = phaseCommand({
   record: runE2eRecord,
   emit: runE2eEmit
 });
+var E2E_ASSESS_HELP = `factory run e2e-assess [--run <id>] [--results <path>]
+
+Emit the run-start e2e-assessment spawn request (Decision 40), or (with --results)
+record the assessor's verdict: merge validated machinery (e2e/** +
+playwright.config.ts only) and persist the coverage forecast, retry a crashed
+assessor once, or fail the run LOUD on a boot/machinery-impossible verdict
+(every non-terminal task swept blocked-environmental). The CLI never spawns the
+assessor \u2014 a orchestrator does.`;
+var runE2eAssess = phaseCommand({
+  help: E2E_ASSESS_HELP,
+  phase: "e2e-assess",
+  parse: (raw) => AssessmentResultsSchema.parse(raw),
+  record: runAssessmentRecord,
+  emit: runAssessmentEmit
+});
 async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) return explicit;
@@ -14605,11 +14868,13 @@ async function run2(argv) {
       return runDocs(rest);
     case "e2e":
       return runE2ePhase(rest);
+    case "e2e-assess":
+      return runE2eAssess(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | cancel)`
+        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | e2e-assess | cancel)`
       );
   }
 }
@@ -14982,10 +15247,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join19(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join20(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join19(dataDir, "debug", runId, `pass-${pass}`);
+  return join20(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -15059,8 +15324,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join19(passDir, "findings.json");
-  const reportPath = join19(passDir, "findings.md");
+  const findingsPath = join20(passDir, "findings.json");
+  const reportPath = join20(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -15359,14 +15624,14 @@ var stateCommand = {
 import { mkdir as mkdir11, readFile as readFile14, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join21, relative } from "node:path";
+import { dirname as dirname9, join as join22, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir10, readFile as readFile13 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
-import { join as join20 } from "node:path";
-var log29 = createLogger("cli:target-settings");
+import { join as join21 } from "node:path";
+var log30 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -15434,8 +15699,8 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join20(opts.targetRoot, ".claude");
-  const path5 = join20(dir, "settings.json");
+  const dir = join21(opts.targetRoot, ".claude");
+  const path5 = join21(dir, "settings.json");
   const created = !existsSync7(path5);
   let existing = {};
   if (!created) {
@@ -15444,7 +15709,7 @@ async function ensureTargetSettings(opts) {
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log29.warn(
+      log30.warn(
         `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
@@ -15458,7 +15723,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log30 = createLogger("scaffold");
+var log31 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -15506,8 +15771,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname9(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join21(dir, "templates");
-    if (existsSync8(join21(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join22(dir, "templates");
+    if (existsSync8(join22(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname9(dir);
@@ -15531,10 +15796,10 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join21(templatesDir, ...segs);
-  const dest = join21(targetRoot, ...segs);
+  const src = join22(templatesDir, ...segs);
+  const dest = join22(targetRoot, ...segs);
   if (!existsSync8(src)) {
-    log30.warn(`template missing, skipping: ${src}`);
+    log31.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
@@ -15560,7 +15825,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join21(root, ".gitignore");
+  const path5 = join22(root, ".gitignore");
   const rel = relative(root, path5);
   if (!existsSync8(path5)) {
     await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
@@ -15581,21 +15846,21 @@ async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
   const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
   if (gateEnv.written.length > 0) {
-    log30.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
+    log31.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
   }
   if (gateEnv.warnings.length > 0) {
-    log30.warn(
+    log31.warn(
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync8(join21(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync8(join22(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
-    log30.info(
+    log31.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
@@ -15717,10 +15982,12 @@ Usage:
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
   --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
-                       and re-derives on the next pass. Use only once the underlying
-                       cause (flaky infra, an app bug, a since-fixed reopen-cap
-                       exhaustion) no longer applies. Alone sufficient to reopen a
-                       terminal run even when no task itself is resettable.
+                       and re-derives on the next pass; ALSO drops a failed run-start
+                       e2e assessment (Decision 40) so it re-fires fresh. Use only
+                       once the underlying cause (flaky infra, an app bug, a
+                       since-fixed reopen-cap exhaustion) no longer applies. Alone
+                       sufficient to reopen a terminal run even when no task itself
+                       is resettable.
   --recheck-rollup     Reopen a 'completed' run whose rollup ARMED but never landed
                        (e.g. the "auto-armed" branch-policy fallback) so a re-drive
                        re-enters finalize and picks up the (by-then) merged PR. Use
@@ -15966,7 +16233,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log31 = createLogger("cli:statusline");
+var log32 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -15991,7 +16258,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log31.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log32.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
@@ -16000,7 +16267,7 @@ async function writeCache(rateLimits, deps) {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
     return null;
   } catch (err) {
-    log31.warn(`failed to write usage-cache.json: ${err.message}`);
+    log32.warn(`failed to write usage-cache.json: ${err.message}`);
     return `usage-cache unwritable: ${err.message}`;
   }
 }
@@ -16012,12 +16279,12 @@ async function passthrough(payload, deps) {
     const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log31.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log32.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log31.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log32.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -16049,9 +16316,9 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile15 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log32 = createLogger("autonomy");
+var log33 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -16087,7 +16354,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join22(dataDir, "merged-settings.json");
+  return join23(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -16163,7 +16430,7 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join22(pluginRoot, ".claude-plugin", "plugin.json");
+  const path5 = join23(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync9(path5)) return void 0;
   try {
     const parsed = JSON.parse(await readFile15(path5, "utf8"));
@@ -16176,19 +16443,19 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join22(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join23(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile15(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log33.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log33.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join22(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join23(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile15(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({

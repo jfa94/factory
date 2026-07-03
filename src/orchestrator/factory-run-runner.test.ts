@@ -92,7 +92,8 @@ const SLICES = {
   recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
   agentTypeMap: () => sliceFn("const AGENT_TYPE = {", "\nfunction parseEnvelope("),
   runDocs: () => sliceFn("async function runDocs(", "\n\n// Mirrors runDocs()"),
-  runE2e: () => sliceFn("async function runE2e(", '\nphase("Drive");'),
+  runE2e: () => sliceFn("async function runE2e(", "\n\n// Run-start e2e assessment"),
+  runAssessment: () => sliceFn("async function runAssessment(", '\nphase("Drive");'),
 };
 
 describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
@@ -106,6 +107,7 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
       "recordResults",
       "runDocs",
       "runE2e",
+      "runAssessment",
     ];
     for (const [name, slice] of Object.entries(SLICES)) {
       expect(() => slice(), `slice failed for ${name}`).not.toThrow();
@@ -522,6 +524,74 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         throw new Error("parse must not run");
       })();
       expect(out).toEqual({ kind: "reopen", task_id: "T1" });
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  // ── runAssessment (Decision 40) ───────────────────────────────────────────
+  describe("runAssessment", () => {
+    type RunAssessment = () => Promise<unknown>;
+
+    const build = (agent: unknown, cli: unknown, parseEnvelope: unknown) =>
+      buildFn<RunAssessment>(SLICES.runAssessment(), {
+        agent,
+        cli,
+        parseEnvelope,
+        runId: "run-1",
+        dataDir: "/data",
+        fileSeq: 0,
+        modelAlias,
+        copyVerbatimInstruction: "copy",
+        ASSESSOR_OUT: {},
+        RAW_OUT: {},
+        EXEC_AGENT_MODEL: "sonnet",
+        ASSESS_KINDS: new Set(["spawn", "done", "failed"]),
+      });
+
+    it('a dead assessor (out===null) records status "error" — the RETRYABLE status, never an -impossible verdict (R2)', async () => {
+      const { agent, calls } = makeAgent([null, { raw: "envelope-bytes" }]);
+      const cli = async () => ({ kind: "spawn", prompt: "assess e2e", model: "opus" });
+      const parseEnvelope = () => ({ kind: "failed", reason: "assessor died twice" });
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "failed", reason: "assessor died twice" });
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.prompt).toContain('"status":"error"');
+      expect(calls[1]?.prompt).toContain("e2e-assessor agent skipped or died");
+      // Never synthesized as a deliberate final verdict.
+      expect(calls[1]?.prompt).not.toContain("impossible");
+    });
+
+    it("loops while the record leg re-emits spawn (the one-crash-retry contract)", async () => {
+      // assessor #1 (dead) → record #1 → SPAWN again → assessor #2 (verdict) → record #2 → done
+      const { agent, calls } = makeAgent([
+        null,
+        { raw: "record-1" },
+        { status: "ok", affected_specs: [] },
+        { raw: "record-2" },
+      ]);
+      const cli = async () => ({ kind: "spawn", prompt: "assess e2e", model: "opus" });
+      let parses = 0;
+      const parseEnvelope = () =>
+        ++parses === 1
+          ? { kind: "spawn", prompt: "assess e2e (retry)", model: "opus" }
+          : { kind: "done", run_id: "run-1" };
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "done", run_id: "run-1" });
+      expect(calls).toHaveLength(4);
+      // Second assessor spawn used the RE-EMITTED prompt, not the stale first one.
+      expect(calls[2]?.prompt).toBe("assess e2e (retry)");
+      // Distinct results files per attempt (fileSeq advances — no overwrite).
+      expect(calls[1]?.prompt).toContain("wf-e2e-assess-1.json");
+      expect(calls[3]?.prompt).toContain("wf-e2e-assess-2.json");
+    });
+
+    it("a non-spawn emit short-circuits (idempotent re-entry / already concluded)", async () => {
+      const { agent, calls } = makeAgent([]);
+      const cli = async () => ({ kind: "done", run_id: "run-1" });
+      const out = await build(agent, cli, () => {
+        throw new Error("parse must not run");
+      })();
+      expect(out).toEqual({ kind: "done", run_id: "run-1" });
       expect(calls).toHaveLength(0);
     });
   });

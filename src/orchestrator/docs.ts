@@ -37,9 +37,14 @@ const DOCS_MAX_TURNS = 60;
 // ponytail: 2 is enough; a third retry rarely fixes a structural failure
 export const MAX_DOCS_ATTEMPTS = 2;
 
-/** The docs-phase worktree path for a run (under the run store). */
+/**
+ * The docs-phase worktree path for a run. Lives under `worktrees/<runId>/`, NOT
+ * `runs/<runId>/` — the TCB `data-runs` rule denies agent writes under `runs/**`,
+ * and the scribe must write here. The `.docs` dot prefix cannot collide with a
+ * task id (`validateId` allows only `[a-zA-Z0-9_-]`).
+ */
 export function docsWorktreePath(dataDir: string, runId: string): string {
-  return join(dataDir, "runs", runId, "docs-worktree");
+  return join(dataDir, "worktrees", runId, ".docs");
 }
 
 /** Build the scribe prompt for the docs phase. @internal */

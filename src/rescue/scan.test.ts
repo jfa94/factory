@@ -45,6 +45,7 @@ function mkRun(
   status: RunStatus = "running",
   e2ePhase?: RunState["e2e_phase"],
   rollup?: RunState["rollup"],
+  assessment?: RunState["e2e_assessment"],
 ): RunState {
   return parseRunState({
     run_id: "run-scan-1",
@@ -56,6 +57,7 @@ function mkRun(
     ...(isTerminalRunStatus(status) ? { ended_at: "2026-06-08T01:00:00.000Z" } : {}),
     ...(e2ePhase !== undefined ? { e2e_phase: e2ePhase } : {}),
     ...(rollup !== undefined ? { rollup } : {}),
+    ...(assessment !== undefined ? { e2e_assessment: assessment } : {}),
   });
 }
 
@@ -144,6 +146,49 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
     expect(scan.needs_rescue).toBe(true); // the e2e failure alone is enough
     expect(scan.summary).toMatch(/e2e/i);
     expect(scan.summary).toMatch(/reset-e2e/);
+  });
+
+  it("e2e_assessment_failed is true when the run-start assessment failed (Decision 40); swept tasks scan recoverable", () => {
+    const scan = scanRun(
+      mkRun(
+        [
+          { task_id: "a", status: "failed", failure_class: "blocked-environmental" },
+          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
+        ],
+        "failed",
+        undefined,
+        undefined,
+        { status: "failed", reason: "the app cannot boot", affected_specs: [] },
+      ),
+    );
+    expect(scan.e2e_assessment_failed).toBe(true);
+    expect(scan.needs_rescue).toBe(true);
+    // The record leg's sweep used blocked-environmental — the default reset set.
+    expect(scan.resettable).toEqual(["a", "b"]);
+    expect(scan.summary).toMatch(/assessment/i);
+    expect(scan.summary).toMatch(/reset-e2e/);
+  });
+
+  it("e2e_assessment_failed is false when the assessment is unset, in-flight, or done", () => {
+    expect(
+      scanRun(mkRun([{ task_id: "a", status: "done" }], "completed")).e2e_assessment_failed,
+    ).toBe(false);
+    expect(
+      scanRun(
+        mkRun([{ task_id: "a", status: "done" }], "completed", undefined, undefined, {
+          status: "done",
+          affected_specs: [],
+        }),
+      ).e2e_assessment_failed,
+    ).toBe(false);
+    expect(
+      scanRun(
+        mkRun([{ task_id: "a", status: "pending" }], "running", undefined, undefined, {
+          attempts: 1,
+          affected_specs: [],
+        }),
+      ).e2e_assessment_failed,
+    ).toBe(false);
   });
 
   it("e2e_failed is false when the e2e phase is unset or done", () => {

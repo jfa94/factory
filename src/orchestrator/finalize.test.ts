@@ -199,6 +199,32 @@ describe("finalizeRun", () => {
     expect((await state.read(RUN_ID)).status).toBe("failed");
   });
 
+  it("assessment-failed override (Decision 40): all tasks done on resume but a failed assessment vetoes → failed, no rollup", async () => {
+    // The resumed edge: every task terminal-done (finished BEFORE the assessment
+    // gate landed), so the sweep found nothing to fail — only the override pins it.
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_assessment: {
+        status: "failed" as const,
+        reason: "the app cannot be booted here — it needs a live payment gateway",
+        affected_specs: [],
+        ended_at: NOW,
+      },
+    }));
+
+    const result = await finalizeRun(makeDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    expect(result.run.status).toBe("failed");
+    expect(result.report.run_status).toBe("failed");
+    // No rollup: develop must never receive a run whose e2e setup was condemned.
+    expect(result.rollup).toBeUndefined();
+    expect(gh.merges).toHaveLength(0);
+    expect((await state.read(RUN_ID)).status).toBe("failed");
+  });
+
   it("completed + no-merge: opens the rollup PR but never merges it", async () => {
     const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
     await seed(tasks);

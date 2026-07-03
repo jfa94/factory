@@ -7571,6 +7571,30 @@ var E2ePhaseSchema = external_exports.object({
   reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
   ended_at: external_exports.string().optional()
 });
+var E2eAffectedSpecSchema = external_exports.object({
+  /** Repo-relative path of the existing committed spec. */
+  spec_path: external_exports.string().min(1),
+  /** Task id(s) in THIS run whose work touches the spec's journey. */
+  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
+  expectation: external_exports.enum(["needs-update", "should-still-pass"])
+});
+var E2eAssessmentSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]).optional(),
+  /** Plain-language failure verdict (set IFF failed — T3 below). */
+  reason: external_exports.string().optional(),
+  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+  warning: external_exports.string().optional(),
+  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+  resolved: external_exports.object({
+    start_command: external_exports.string().min(1).optional(),
+    base_url: external_exports.string().min(1).optional()
+  }).optional(),
+  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([]),
+  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  ended_at: external_exports.string().optional()
+});
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -7630,6 +7654,8 @@ var RunStateSchema = external_exports.object({
   e2e: external_exports.boolean().default(false),
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
+  /** Run-start e2e assessment record (Decision 40 D3); absent until it first spawns. */
+  e2e_assessment: E2eAssessmentSchema.optional(),
   /**
    * The `completed` run's staging→develop rollup outcome, persisted at finalize
    * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
@@ -7726,6 +7752,15 @@ function refineRunCrossFields(run, ctx) {
         message: `run '${run.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
+  }
+  if (run.e2e_assessment !== void 0 && run.e2e_assessment.status !== void 0) {
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["e2e_assessment", "reason"],
+      label: "e2e assessment",
+      status: run.e2e_assessment.status,
+      reason: run.e2e_assessment.reason
+    });
   }
   for (const [k, value] of Object.entries(run.tasks)) {
     if (k !== value.task_id) {

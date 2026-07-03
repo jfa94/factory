@@ -90,6 +90,11 @@ export interface RescueApplyOptions {
    * a reopen-cap exhaustion worth retrying) no longer applies — default `false`
    * (don't silently auto-retry a failed verdict). Alone sufficient to reopen a
    * terminal run even when no task itself is resettable.
+   *
+   * ALSO drops a `failed` e2e_assessment (Decision 40) — the WHOLE object, so
+   * `wantsE2eAssessment` re-fires a fresh assessor on the next drive (unlike the
+   * phase, there is no authored manifest worth preserving; the swept tasks are the
+   * scan's `recoverable` set and reset via the normal default path).
    */
   resetE2e?: boolean;
   /**
@@ -239,10 +244,11 @@ export async function applyRescue(
     // e2e (every task otherwise `done`, so `targets` is empty) and would otherwise
     // never have anything for a plain rescue apply to reset.
     const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === "failed";
+    const assessReset = opts.resetE2e === true && run.e2e_assessment?.status === "failed";
     const rollupRecheck = opts.recheckRollup === true && run.rollup?.merged === false;
     // Only reopen a terminal run when there is actually work to pick back up —
     // reopening with nothing to do would just re-finalize to the same status.
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset || rollupRecheck);
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
 
     result = {
       run_id: runId,
@@ -257,7 +263,7 @@ export async function applyRescue(
     // asserted --reset-e2e repair must still clear the failed verdict — otherwise the
     // documented recovery silently no-ops and requires the non-obvious two-step of
     // finalizing first, then rescuing again.
-    if (targets.length === 0 && !reopen && !e2eReset && !rollupRecheck) {
+    if (targets.length === 0 && !reopen && !e2eReset && !assessReset && !rollupRecheck) {
       return run; // pure no-op (update still stamps updated_at — harmless)
     }
 
@@ -269,6 +275,9 @@ export async function applyRescue(
       ...run,
       tasks: nextTasks,
       ...(e2eReset ? { e2e_phase: reopenE2ePhase(run.e2e_phase!) } : {}),
+      // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
+      // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
+      ...(assessReset ? { e2e_assessment: undefined } : {}),
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.

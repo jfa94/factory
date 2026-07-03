@@ -48,6 +48,8 @@ export {
   E2eSpecKindEnum,
   E2eManifestEntrySchema,
   E2ePhaseSchema,
+  E2eAffectedSpecSchema,
+  E2eAssessmentSchema,
   parseRunState,
   parseTaskState,
   TERMINAL_RUN_STATUSES,
@@ -80,6 +82,8 @@ export type {
   E2eSpecKind,
   E2eManifestEntry,
   E2ePhase,
+  E2eAffectedSpec,
+  E2eAssessment,
 } from "../core/state/index.js";
 
 // WS2 — phase-machine seam. A COMPLETE mirror of src/core/phase-machine: the PURE

@@ -97,3 +97,15 @@ export {
   type E2eAction,
   type E2eAuthorResults,
 } from "./e2e.js";
+
+// -- e2e assessment emit + record orchestrators (factory run e2e-assess seam, Decision 40) ------
+export {
+  runAssessmentEmit,
+  runAssessmentRecord,
+  assessmentWorktreePath,
+  MAX_ASSESS_ATTEMPTS,
+  AssessmentResultsSchema,
+  type AssessmentRunDeps,
+  type AssessmentAction,
+  type AssessmentResults,
+} from "./assessment.js";

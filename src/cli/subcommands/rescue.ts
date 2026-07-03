@@ -53,10 +53,12 @@ Usage:
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
   --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
-                       and re-derives on the next pass. Use only once the underlying
-                       cause (flaky infra, an app bug, a since-fixed reopen-cap
-                       exhaustion) no longer applies. Alone sufficient to reopen a
-                       terminal run even when no task itself is resettable.
+                       and re-derives on the next pass; ALSO drops a failed run-start
+                       e2e assessment (Decision 40) so it re-fires fresh. Use only
+                       once the underlying cause (flaky infra, an app bug, a
+                       since-fixed reopen-cap exhaustion) no longer applies. Alone
+                       sufficient to reopen a terminal run even when no task itself
+                       is resettable.
   --recheck-rollup     Reopen a 'completed' run whose rollup ARMED but never landed
                        (e.g. the "auto-armed" branch-policy fallback) so a re-drive
                        re-enters finalize and picks up the (by-then) merged PR. Use

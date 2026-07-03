@@ -43,6 +43,9 @@ import {
   runE2eEmit,
   runE2eRecord,
   E2eResultsSchema,
+  runAssessmentEmit,
+  runAssessmentRecord,
+  AssessmentResultsSchema,
   readJsonInput,
 } from "../../orchestrator/index.js";
 import { loadCliDeps, type CliDeps } from "../wiring.js";
@@ -73,6 +76,7 @@ Usage:
   factory run finalize [--run <id>] [--no-ship]
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
+  factory run e2e-assess [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -81,6 +85,7 @@ Actions:
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
+  e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
@@ -1021,6 +1026,23 @@ const runE2ePhase = phaseCommand({
   emit: runE2eEmit,
 });
 
+const E2E_ASSESS_HELP = `factory run e2e-assess [--run <id>] [--results <path>]
+
+Emit the run-start e2e-assessment spawn request (Decision 40), or (with --results)
+record the assessor's verdict: merge validated machinery (e2e/** +
+playwright.config.ts only) and persist the coverage forecast, retry a crashed
+assessor once, or fail the run LOUD on a boot/machinery-impossible verdict
+(every non-terminal task swept blocked-environmental). The CLI never spawns the
+assessor — a orchestrator does.`;
+
+const runE2eAssess = phaseCommand({
+  help: E2E_ASSESS_HELP,
+  phase: "e2e-assess",
+  parse: (raw) => AssessmentResultsSchema.parse(raw),
+  record: runAssessmentRecord,
+  emit: runAssessmentEmit,
+});
+
 /**
  * Test seam for {@link runCancel}: inject the gh client (the `--cleanup` teardown),
  * the git client + cwd (current-run repo resolution), and the data dir. Production
@@ -1180,11 +1202,13 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runDocs(rest);
     case "e2e":
       return runE2ePhase(rest);
+    case "e2e-assess":
+      return runE2eAssess(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | cancel)`,
+        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | e2e-assess | cancel)`,
       );
   }
 }

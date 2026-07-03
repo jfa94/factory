@@ -142,24 +142,32 @@ export const E2eResultsSchema = z
 // reachable via the same `./deps.js` barrel) — this is the author's `--results` envelope.
 export type E2eAuthorResults = z.infer<typeof E2eResultsSchema>;
 
+// All four e2e dirs live under `<dataDir>/worktrees/<runId>/` — the agent-WRITABLE
+// sibling of the TCB-write-denied `runs/` tree (core/state/paths.ts). They originally
+// lived under `runs/<runId>/…`, where the `data-runs` deny rule blocked the e2e-author's
+// own Write calls into its worktree (verified live, Decision 40). The DOT prefix makes
+// collision with a task worktree `<runId>/<taskId>` impossible (task ids are
+// validateId-constrained to [a-zA-Z0-9_-], never a leading dot), and the pipeline-guards
+// write-scope arm resolves run `<runId>` (exists) / task `.e2e-…` (unknown → no scope).
+
 /** The e2e-phase author worktree path (torn down once its specs are merged/rejected). */
 export function e2eWorktreePath(dataDir: string, runId: string): string {
-  return join(dataDir, "runs", runId, "e2e-worktree");
+  return join(dataDir, "worktrees", runId, ".e2e-author");
 }
 
 /** The persistent "run the suite against current staging" worktree — reused every pass. */
 export function e2eRunWorktreePath(dataDir: string, runId: string): string {
-  return join(dataDir, "runs", runId, "e2e-run-worktree");
+  return join(dataDir, "worktrees", runId, ".e2e-run");
 }
 
 /** Scratch worktree used ONLY for the fail-first base-side proof (removed after use). */
 export function e2eBaseProofWorktreePath(dataDir: string, runId: string): string {
-  return join(dataDir, "runs", runId, "e2e-base-proof-worktree");
+  return join(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 
 /** The run's ephemeral, out-of-repo throwaway-spec directory — never committed, discarded at run end. */
 export function e2eThrowawayDir(dataDir: string, runId: string): string {
-  return join(dataDir, "runs", runId, "e2e-throwaway");
+  return join(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 
 function e2eBranchName(runId: string): string {

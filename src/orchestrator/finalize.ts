@@ -177,8 +177,14 @@ export async function finalizeRun(
   // task-status) has no visibility into the e2e phase (residual critical red, an
   // unmappable critical regression, or a cap-exhausted critical), so the override
   // lives here, the run's finalize coordinator.
+  // Decision 40: a `failed` ASSESSMENT likewise condemns the run — normally the
+  // record leg's task sweep already makes taskTerminal `failed`, but a resumed run
+  // whose tasks were ALL done before the assessment fired has nothing to sweep.
   const taskTerminal = decideFinalize(run).run_status;
-  const terminal = run.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
+  const terminal =
+    run.e2e_phase?.status === "failed" || run.e2e_assessment?.status === "failed"
+      ? "failed"
+      : taskTerminal;
 
   // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
   const report = buildPartialReport({ ...run, status: terminal }, deps.spec, { now });

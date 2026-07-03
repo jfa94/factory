@@ -131,6 +131,8 @@ loop:
     "finalize"  → factory run finalize --run <run_id>; go to Phase 4
     "e2e"    → run the E2E STAGE (below); on done/failed/reopen, loop; on suspend,
                       report the reason + STOP (run is suspended — /factory:resume retries)
+    "e2e-assessment" → run the E2E-ASSESSMENT STAGE (below); on done/failed, loop
+                      (failed sweeps every task — next-task routes to finalize)
     "document"    → run the DOCS STAGE (below); on done, loop; on suspend,
                       report the reason + STOP (run is suspended — /factory:resume retries)
     "pause" → report scope/reason/resets_at_epoch; tell the user to re-run
@@ -175,6 +177,21 @@ e2e stage:
                 under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
                 eenv2 = factory run e2e --run <run_id> --results <file>
                 case eenv2.kind: "done"|"failed"|"reopen" → loop; "suspend" → report + STOP
+
+e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
+  aenv = factory run e2e-assess --run <run_id>
+  loop while aenv.kind == "spawn":
+    spawn the e2e assessor (subagent_type `e2e-assessor`, model per aenv.model,
+    isolation OMITTED — it works IN aenv.worktree), prompt = aenv.prompt VERBATIM.
+    It checks/authors the repo's e2e machinery (boot config in playwright.config.ts,
+    seed/auth support), validates by booting, and forecasts which committed specs
+    this run's tasks touch. Write its structured verdict {"status":"ok|degraded|
+    boot-impossible|machinery-impossible","reason":?,"warning":?,"resolved":?,
+    "affected_specs":[...]} to a results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+    (If the assessor died/was skipped, write {"status":"error","reason":"..."} — the
+    engine spends its one retry on it.)
+    aenv = factory run e2e-assess --run <run_id> --results <file>   # may re-spawn once
+  case aenv.kind: "done"|"failed" → loop  # failed = run condemned; next-task → finalize
 
 docs stage:
   denv = factory run docs --run <run_id>
@@ -249,6 +266,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 | holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                               |
 | spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |
 | e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree` |
+| e2e-assessor                         | `e2e-assessor`                     | **none** (omit) — works IN `aenv.worktree` |
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the

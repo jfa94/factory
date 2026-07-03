@@ -75,6 +75,10 @@ export type NextTask =
       readonly kind: "e2e";
     })
   | (NextContext & {
+      /** The run-start e2e assessment (Decision 40 D3) — ordered BEFORE any task. */
+      readonly kind: "e2e-assessment";
+    })
+  | (NextContext & {
       readonly kind: "done";
       readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
     })
@@ -109,6 +113,8 @@ async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean
   if (run.docs?.status === "done") return false;
   if ((run.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false; // cap: treat docs as done
   if (run.e2e_phase?.status === "failed") return false;
+  // A failed assessment (Decision 40) also condemns the run — same rationale.
+  if (run.e2e_assessment?.status === "failed") return false;
   if (decideFinalize(run).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
@@ -128,7 +134,26 @@ async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean
 function wantsE2e(run: RunState): boolean {
   if (!run.e2e) return false;
   if (run.e2e_phase?.status !== undefined) return false; // "done" or "failed" — concluded
+  // A failed assessment condemns the run to finalize→failed (Decision 40) — spawning
+  // the author against a repo the assessor just proved un-bootable is pointless.
+  if (run.e2e_assessment?.status === "failed") return false;
   return decideFinalize(run).run_status === "completed";
+}
+
+/**
+ * True iff the run still owes its run-start e2e ASSESSMENT (Decision 40 D3): opted
+ * into `--e2e` and the assessment hasn't CONCLUDED (`status` absent covers both
+ * never-spawned and a crashed attempt awaiting its retry; `failed` never re-fires —
+ * the record leg already swept the tasks and the run is headed to finalize).
+ *
+ * Fires while tasks are still pending (assessment runs BEFORE any task) AND on an
+ * all-terminal run that still wants its e2e phase (a pre-assessment in-flight run
+ * resumed mid-flight, R11) — but NOT on a run already condemned to finalize.
+ */
+function wantsE2eAssessment(run: RunState, allTerminal: boolean, needsE2e: boolean): boolean {
+  if (!run.e2e) return false;
+  if (run.e2e_assessment?.status !== undefined) return false;
+  return !allTerminal || needsE2e;
 }
 
 export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<NextTask> {
@@ -155,6 +180,7 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
   //    is never even computed while e2e still has work to do.
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run);
+  const needsAssessment = wantsE2eAssessment(run, allTerminal, needsE2e);
   const needsDocs = allTerminal && !needsE2e && (await wantsDocs(deps, run));
   if (allTerminal && !needsE2e && !needsDocs) {
     // Clear quota checkpoint before finalizing: a paused run whose tasks all complete
@@ -185,6 +211,13 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
       status: patch.status,
       quota: patch.quota,
     }));
+  }
+
+  // E2E ASSESSMENT gate (Decision 40 D3): checked BEFORE everything else the run
+  // can do — before the ready-task set (assessment runs before ANY task) and before
+  // the e2e phase (the author needs the assessment's machinery + resolved config).
+  if (needsAssessment) {
+    return { ...ctx(), kind: "e2e-assessment" };
   }
 
   // E2E gate (Decision 39): a completed run that opted into `--e2e` and hasn't

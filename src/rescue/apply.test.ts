@@ -225,6 +225,91 @@ describe("applyRescue", () => {
     expect(run.e2e_phase).toBeUndefined();
   });
 
+  it("resetE2e:true drops a FAILED e2e_assessment entirely (Decision 40) so the assessor re-fires fresh; swept tasks reset by the default path", async () => {
+    // The assessment condemned the run: swept tasks blocked-environmental, then failed.
+    await seed(
+      [{ task_id: "a", status: "failed", failure_class: "blocked-environmental" }],
+      "failed",
+    );
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_assessment: {
+        status: "failed" as const,
+        reason: "the app cannot boot",
+        affected_specs: [],
+        attempts: 2,
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+    expect(result.reset).toEqual(["a"]); // the swept task is recoverable by default
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    // WHOLE object dropped — wantsE2eAssessment's `status !== undefined` gate must
+    // see it as never-run (unlike e2e_phase, there is no manifest worth keeping).
+    expect(run.e2e_assessment).toBeUndefined();
+    expect(run.tasks["a"]?.status).toBe("pending");
+  });
+
+  it("resetE2e:true reopens on a failed assessment ALONE (every task done — the resumed pre-M2 edge)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_assessment: {
+        status: "failed" as const,
+        reason: "the app cannot boot",
+        affected_specs: [],
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+    expect(result.reset).toEqual([]);
+    expect((await state.read(RUN_ID)).e2e_assessment).toBeUndefined();
+  });
+
+  it("without resetE2e, a failed e2e_assessment is left untouched (no silent auto-retry)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_assessment: {
+        status: "failed" as const,
+        reason: "the app cannot boot",
+        affected_specs: [],
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID);
+    expect(result.reopened).toBe(false);
+    expect((await state.read(RUN_ID)).e2e_assessment?.status).toBe("failed");
+  });
+
+  it("resetE2e:true leaves a DONE assessment alone (only failed is droppable)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_assessment: { status: "done" as const, affected_specs: [] },
+      e2e_phase: {
+        status: "failed" as const,
+        reason: "e2e reopen cap (2) exhausted for task(s): a",
+        manifest: [{ task_ids: ["a"], spec_path: "checkout.spec.ts", kind: "critical" as const }],
+        reopen_counts: { a: 2 },
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true); // via the failed e2e_phase
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_assessment?.status).toBe("done"); // forecast + machinery preserved
+    expect(run.e2e_phase?.status).toBeUndefined();
+  });
+
   it("recheckRollup:true reopens a completed run whose rollup armed but never landed, even with NO resettable tasks (finding #5 repair path)", async () => {
     // Every task shipped `done` — scanRun sees nothing wrong with the tasks
     // themselves, so a plain rescue apply would find zero resettable targets and

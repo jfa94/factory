@@ -38,6 +38,8 @@ export {
   E2eSpecKindEnum,
   E2eManifestEntrySchema,
   E2ePhaseSchema,
+  E2eAffectedSpecSchema,
+  E2eAssessmentSchema,
   // parsers
   parseRunState,
   parseTaskState,
@@ -62,6 +64,8 @@ export type {
   E2eSpecKind,
   E2eManifestEntry,
   E2ePhase,
+  E2eAffectedSpec,
+  E2eAssessment,
 } from "./schema.js";
 
 // --- Seed-time DAG integrity (run create first batch + debug pass-N append) ---

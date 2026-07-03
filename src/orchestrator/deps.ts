@@ -40,6 +40,7 @@ export {
   StateManager,
   E2eSpecKindEnum,
   E2eManifestEntrySchema,
+  E2eAffectedSpecSchema,
 } from "../types/index.js";
 export type {
   Config,
@@ -64,6 +65,8 @@ export type {
   E2eSpecKind,
   E2eManifestEntry,
   E2ePhase,
+  E2eAffectedSpec,
+  E2eAssessment,
 } from "../types/index.js";
 
 // --- git / PR I/O (src/git) -------------------------------------------------

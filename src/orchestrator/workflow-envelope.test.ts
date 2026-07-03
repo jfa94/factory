@@ -12,7 +12,15 @@ describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
   // The sets themselves are derived from a `Record<Union["kind"], true>` mirror,
   // so omitting a kind is a compile error; this test pins the runtime values to
   // the same authoritative lists (catching an accidental EXTRA kind in the mirror).
-  const NEXT_AUTHORITATIVE = ["work", "finalize", "document", "e2e", "done", "pause"];
+  const NEXT_AUTHORITATIVE = [
+    "work",
+    "finalize",
+    "document",
+    "e2e",
+    "e2e-assessment",
+    "done",
+    "pause",
+  ];
   const DRIVE_AUTHORITATIVE = ["spawn", "done", "pause"];
 
   it("NEXT_KINDS is exactly the NextTask discriminants", () => {
@@ -277,6 +285,11 @@ describe("inline workflow-orchestrator mirror stays in lockstep (drift guard)", 
       set: "next",
     },
     { name: "valid run-terminal", raw: JSON.stringify({ kind: "done" }), set: "next" },
+    {
+      name: "valid e2e-assessment (Decision 40)",
+      raw: JSON.stringify({ kind: "e2e-assessment", run_id: "r" }),
+      set: "next",
+    },
     { name: "valid spawn", raw: JSON.stringify({ kind: "spawn", task_id: "T1" }), set: "drive" },
     { name: "valid terminal", raw: JSON.stringify({ kind: "done" }), set: "drive" },
     {

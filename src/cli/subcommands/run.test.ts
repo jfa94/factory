@@ -187,6 +187,9 @@ describe("run arg/usage edges", () => {
   it("an unknown action is a usage error", async () => {
     expect(await runCommand.run(["frobnicate"])).toBe(EXIT.USAGE);
   });
+  it("e2e-assess: --help prints help and exits OK (dispatcher wired, Decision 40)", async () => {
+    expect(await runCommand.run(["e2e-assess", "--help"])).toBe(EXIT.OK);
+  });
 
   it("create: neither --issue nor --spec-id is a usage error", async () => {
     expect(await runCommand.run(["create", "--repo", REPO])).toBe(EXIT.USAGE);

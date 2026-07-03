@@ -514,6 +514,9 @@ describe("docs-ready gate", () => {
 
 describe("e2e-ready gate (Decision 39)", () => {
   const DONE_AT = "2026-01-01T00:00:00.000Z";
+  // Decision 40: an --e2e run passes the run-start assessment gate before any
+  // e2e (or work) dispatch — these cases pin the PHASE gate, so mark it done.
+  const ASSESSED = { status: "done" as const, affected_specs: [] };
 
   it("completed + e2e opted-in + phase not yet run → e2e-ready", async () => {
     const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
@@ -521,7 +524,7 @@ describe("e2e-ready gate (Decision 39)", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      await state.update(runId, (s) => ({ ...s, e2e: true, e2e_assessment: ASSESSED }));
       expect((await nextTask(deps, runId)).kind).toBe("e2e");
     } finally {
       await cleanup();
@@ -587,7 +590,7 @@ describe("e2e-ready gate (Decision 39)", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      await state.update(runId, (s) => ({ ...s, e2e: true, e2e_assessment: ASSESSED }));
       expect((await nextTask(deps, runId)).kind).toBe("e2e");
     } finally {
       await cleanup();
@@ -628,6 +631,7 @@ describe("e2e-ready gate (Decision 39)", () => {
       await state.update(runId, (s) => ({
         ...s,
         e2e: true,
+        e2e_assessment: ASSESSED,
         status: "suspended",
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
         e2e_phase: {
@@ -639,6 +643,89 @@ describe("e2e-ready gate (Decision 39)", () => {
       const resumed = await state.read(runId);
       expect(resumed.status).toBe("running");
       expect(resumed.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("e2e-assessment gate (Decision 40)", () => {
+  const DONE_AT = "2026-01-01T00:00:00.000Z";
+
+  it("an --e2e run with tasks still pending gets e2e-assessment BEFORE any work", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e-assessment");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a non-e2e run never sees the assessment gate", async () => {
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({ tasks: [{ task_id: "T1" }] });
+    try {
+      expect((await nextTask(deps, runId)).kind).toBe("work");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("assessment done → work proceeds normally", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_assessment: { status: "done" as const, affected_specs: [] },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("work");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("all-terminal + e2e phase pending + assessment missing (R11 resume) → e2e-assessment before e2e", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e-assessment");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a FAILED assessment skips e2e AND docs — straight to finalize", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      // The record leg swept T1 blocked-environmental; the run heads to finalize.
+      await state.updateTask(runId, "T1", (t) => ({
+        ...t,
+        status: "failed",
+        failure_class: "blocked-environmental",
+        failure_reason: "e2e assessment failed: the app cannot boot",
+        ended_at: DONE_AT,
+      }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_assessment: {
+          status: "failed" as const,
+          reason: "the app cannot boot",
+          affected_specs: [],
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
     }
