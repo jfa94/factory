@@ -109,6 +109,7 @@ export {
   renderPartialReportMarkdown,
   renderFailureComment,
   failureCommentMarker,
+  selfHealCommentMarker,
   recordRunFinalized,
 } from "../scoring/index.js";
 export type { PartialRunReport, FailureLine } from "../scoring/index.js";
@@ -215,5 +216,5 @@ export type {
 } from "../verifier/e2e/index.js";
 
 // --- rescue reset primitive (src/rescue) — reused by the e2e reopen loop ----
-export { resetTaskRow } from "../rescue/index.js";
+export { resetTaskRow, scanRun, effectiveAutoResets } from "../rescue/index.js";
 export type { ResetTaskRowOpts } from "../rescue/index.js";

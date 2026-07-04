@@ -9,6 +9,7 @@ export {
   renderPartialReportMarkdown,
   renderFailureComment,
   failureCommentMarker,
+  selfHealCommentMarker,
 } from "./partial-report.js";
 export type {
   PartialRunReport,
