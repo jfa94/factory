@@ -1465,7 +1465,9 @@ stack, gates}` with ALL 8 gate ids as REQUIRED keys — each `{contracted: true}
 - **Floor + waiver.** Scaffold refuses to write a below-floor contract (npm floor:
   vitest dep + tsconfig.json + scripts.build; deno's `deno check` is
   build-equivalent when no build task exists). Mutation on npm requires stryker or
-  an explicit `--waive mutation`; coverage is waived until S8 wires measurement.
+  an explicit `--waive mutation`; coverage on npm requires a vitest coverage
+  provider (`@vitest/coverage-v8`/`-istanbul`) or an explicit `--waive coverage`
+  (S8 flipped the interim "not wired yet" waiver).
   Seed semantics: absent → write; valid → untouched; invalid → refuse.
 - **`run create` precondition.** A run is only born when the contract is present,
   valid, AND git-tracked (an uncommitted contract never reaches task worktrees).
@@ -1482,6 +1484,20 @@ every non-run is either a committed, reasoned waiver or a loud failure naming th
 broken tooling. Non-npm stacks get first-class gates instead of a skip cascade.
 The contract is repo-owned, reviewed in PRs, and protected from the producers it
 judges.
+
+**S8 addendum (executable shift, same date):** the coverage gate now EXECUTES
+under the contract. Coverage joined COMMAND_GATES (a `gates.coverage.command`
+override must itself write `coverage/coverage-summary.json`); the dead
+reader path (`CoverageReader`, `no-coverage-data`) is deleted. The gate measures
+head in the task worktree and base via an ephemeral detached worktree, both
+persisted per tree SHA in `runs/<run-id>/coverage/` (perf cache only —
+measure-on-miss, verdict re-derived every sweep). Every non-measured answer
+fails closed naming the side; the sole remaining skip is `no-gate-contract`
+(legacy pre-contract worktrees, TODO remove after one release). Scaffold
+contracts coverage on npm behind the provider check above; deno stays
+waived-by-stack (lcov, no json-summary) with the command override as the escape
+hatch. Scaffold also emits a one-line fast-check advisory (npm, not a dep) so
+the test-writer can write property tests — advisory only, never installs.
 
 ---
 

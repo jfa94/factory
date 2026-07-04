@@ -97,11 +97,12 @@ literal>")` against a source/migration file). If the artifact under test is **no
    - Error paths — invalid inputs that must throw or return an error state.
    - State transitions — verify before/after when the behavior changes state.
    - Time-dependent behavior — freeze the clock (e.g. vitest `vi.setSystemTime(NOW)` / jest fake timers) so "expires in 1h" style assertions are deterministic, not racing wall-clock.
-4. **Property / invariant tests when the project supports them** (a property runner is
-   present, or via a simple deterministic input loop): round-trip (`decode(encode(x))===x`),
-   idempotency (`f(f(x))===f(x)`), invariant preservation, monotonicity, totality. Do NOT
-   introduce a new test dependency the project doesn't already have — use plain example-based
-   loops if no property library is available.
+4. **Property / invariant tests when the project supports them.** When `fast-check` is
+   already a dependency and the input domain fits (parsers, serializers, normalizers, pure
+   math — anything with a broad input space), PREFER fast-check properties over enumerated
+   examples: round-trip (`decode(encode(x))===x`), idempotency (`f(f(x))===f(x)`), invariant
+   preservation, monotonicity, totality. Do NOT introduce a new test dependency the project
+   doesn't already have — use plain example-based loops if no property library is available.
 5. **Confirm RED.** Run the test command and confirm every new test FAILS for the right
    reason (missing implementation), not from a typo or import error. A test that passes now
    tests nothing — rewrite it.

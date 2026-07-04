@@ -98,29 +98,63 @@ it writes, so the local gate and the repo's GitHub CI build with identical env. 
 
 ## The gates
 
-| Gate       | Checks                                                                                                                                                                                            | Fail-closed when                                                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`     | The vitest-runnable changed test files pass (diff-scoped). Pure non-JS/non-runnable test sets (pgTAP, Go, `.d.ts`…) are **skipped** (not applicable — execution-only gate, `tdd` owns existence). | Runnable tests fail or cannot run.                                                                                                        |
-| `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                                                                                                    | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                             |
-| `coverage` | No metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`.                                                                       | Exactly one of the before/after summaries is missing, or either is invalid. **Both absent → _skipped_, not failed** (opt-in — see below). |
-| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.                                                                             | Score below target, or no score is derivable from a present report (non-empty scope).                                                     |
-| `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                                                                                                 | Findings present (unless `quality.securityAllowFailures`).                                                                                |
-| `type`     | The project type-check passes.                                                                                                                                                                    | Type errors.                                                                                                                              |
-| `lint`     | The linter passes.                                                                                                                                                                                | Lint errors.                                                                                                                              |
-| `build`    | The project builds.                                                                                                                                                                               | Build fails.                                                                                                                              |
+| Gate       | Checks                                                                                                                                                                                                                                         | Fail-closed when                                                                                                                                                                |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`     | The vitest-runnable changed test files pass (diff-scoped). Pure non-JS/non-runnable test sets (pgTAP, Go, `.d.ts`…) are **skipped** (not applicable — execution-only gate, `tdd` owns existence).                                              | Runnable tests fail or cannot run.                                                                                                                                              |
+| `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                                                                                                                                                 | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                                                                   |
+| `coverage` | Measures head (task worktree) and base (ephemeral detached worktree) with vitest's json-summary coverage reporter; no metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Either measurement fails (command error, summary missing/invalid), the base ref is unresolvable, or no coverage command is derivable from a non-vitest test command. See below. |
+| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.                                                                                                                          | Score below target, or no score is derivable from a present report (non-empty scope).                                                                                           |
+| `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                                                                                                                                              | Findings present (unless `quality.securityAllowFailures`).                                                                                                                      |
+| `type`     | The project type-check passes.                                                                                                                                                                                                                 | Type errors.                                                                                                                                                                    |
+| `lint`     | The linter passes.                                                                                                                                                                                                                             | Lint errors.                                                                                                                                                                    |
+| `build`    | The project builds.                                                                                                                                                                                                                            | Build fails.                                                                                                                                                                    |
 
-## The coverage gate is opt-in
+## The coverage gate in detail
 
-The `coverage` gate compares a **before** and **after** coverage summary
-(coverage-v8 totals) that the gate reads from the target repo's worktree. The
-factory does **not** itself produce these summaries — a repo opts in by having its
-test/CI step write them where the gate's `coverage` tool reads them. When **both**
-summaries are absent the gate is **not applicable** and is _skipped_
-(`no-coverage-data`), excluded from the conjunction — it never fail-closes a repo
-that never opted in. So on a repo that captures no coverage, this gate is inert by
-design; coverage-regression protection switches on only once the repo emits the
-summaries. (An asymmetric reading — exactly one present — or a corrupt summary is a
-real capture anomaly and _does_ fail closed: "half a measurement" is never a pass.)
+The factory MEASURES coverage itself (S8) — nothing in the repo has to produce
+summaries. On each contracted sweep the gate runs a coverage command twice and
+compares the totals: **head** in the task worktree, **base** in an ephemeral
+detached git worktree at the base commit (sharing head's `node_modules` via
+symlink, removed afterwards).
+
+**The command** derives from the gate contract, in precedence order:
+
+1. `gates.coverage.command` — runs as-is; it MUST write
+   `coverage/coverage-summary.json` (istanbul json-summary shape). This is the
+   escape hatch for non-vitest runners (deno, Go, monorepos, vitest
+   `coverage.thresholds` — see caveat below).
+2. A contracted vitest **test** command — its argument tail is reused with the
+   json-summary coverage flags appended (`run` is forced; never watch mode).
+   A contracted **non-vitest** test command with no coverage override fails the
+   gate loud: contract `gates.coverage.command` or waive coverage.
+3. Neither — the built-in `vitest run` + coverage flags.
+
+**Measurements persist per tree SHA** at `runs/<run-id>/coverage/<treeSha>.json`
+(a perf cache only — never a correctness fallback; verdicts are re-derived every
+sweep). Because keys are content-addressed, the post-squash staging tree equals
+the shipped head tree, so later tasks in the run are served from the store instead
+of re-running the suite.
+
+**Fail-closed rules:** any non-measured answer — command failed, summary missing,
+summary invalid — FAILS the gate naming which side broke (`head` or `base <sha>`)
+with a stderr excerpt. An unresolvable base ref fails too. The only skips are an
+explicitly uncontracted entry (`uncontracted: <reason>`, the committed waiver) and
+`no-gate-contract` on legacy pre-contract worktrees.
+
+**Scaffold contracts it on npm** when a vitest coverage provider
+(`@vitest/coverage-v8` or `@vitest/coverage-istanbul`) is installed; otherwise
+scaffold REFUSES — install a provider or pass `--waive coverage` to record the
+waiver. Deno stays waived-by-stack (deno coverage emits lcov, not json-summary);
+contract a `gates.coverage.command` that writes the summary to opt in. Contracts
+written **before** S8 carry the old "not wired yet" waiver — delete
+`.factory/gates.json` and re-run `factory scaffold` to pick up the flip (seed
+semantics: an existing valid contract is never touched).
+
+**Caveat — vitest `coverage.thresholds`:** if the repo's vitest config enforces
+coverage thresholds, a below-threshold run exits non-zero and the measurement
+counts as command-failed even when the base-vs-head delta is fine. Remedy:
+contract a `gates.coverage.command` that disables thresholds for the measurement
+run.
 
 ## The TDD gate in detail
 
