@@ -7,12 +7,14 @@
  * coverage delta tolerance, TDD commit classification, SAST allowlist) are
  * reproduced exactly with zero real CLI invocation.
  */
+import type { CoverageStore } from "./coverage-store.js";
 import type {
   CommandRunner,
   CommitInfo,
-  CoverageRead,
-  CoverageReader,
+  CoverageCommand,
+  CoverageMeasurement,
   CoverageSummary,
+  CoverageTool,
   EslintTool,
   BuildTool,
   FsProbe,
@@ -131,27 +133,43 @@ export function strykerResult(opts: {
   return { proc: proc(opts.code, "", "", opts.truncated ?? false), report };
 }
 
-/** A coverage read in the OK state (file present + valid). */
-export function covOk(summary: CoverageSummary): CoverageRead {
-  return { state: "ok", summary };
+/** A coverage measurement in the MEASURED state. */
+export function measured(summary: CoverageSummary): CoverageMeasurement {
+  return { kind: "measured", summary };
 }
 
-/** A coverage read in the ABSENT state (summary file never produced). */
-export const COV_ABSENT: CoverageRead = { state: "absent" };
-
-/** A coverage read in the INVALID state (summary present but corrupt). */
-export const COV_INVALID: CoverageRead = { state: "invalid" };
-
-/** Scripted CoverageReader: returns the seeded before/after reads. */
-export class FakeCoverageReader implements CoverageReader {
+/** Scripted CoverageTool: seeded head/base measurements; records every call. */
+export class FakeCoverageTool implements CoverageTool {
+  readonly measureCalls: Array<{ cwd: string; cmd: CoverageCommand }> = [];
+  readonly baseCalls: Array<{ baseSha: string; cmd: CoverageCommand }> = [];
   constructor(
-    private readonly reads: {
-      before: CoverageRead;
-      after: CoverageRead;
+    private readonly results: {
+      head: CoverageMeasurement;
+      base: CoverageMeasurement;
     },
   ) {}
-  async read(label: "before" | "after", _opts: ToolRunOpts): Promise<CoverageRead> {
-    return this.reads[label];
+  async measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
+    this.measureCalls.push({ cwd: opts.cwd, cmd });
+    return this.results.head;
+  }
+  async measureAtBase(
+    baseSha: string,
+    cmd: CoverageCommand,
+    _opts: ToolRunOpts,
+  ): Promise<CoverageMeasurement> {
+    this.baseCalls.push({ baseSha, cmd });
+    return this.results.base;
+  }
+}
+
+/** In-memory {@link CoverageStore}; `entries` exposed for assertions. */
+export class MemoryCoverageStore implements CoverageStore {
+  readonly entries = new Map<string, CoverageSummary>();
+  async get(treeSha: string): Promise<CoverageSummary | null> {
+    return this.entries.get(treeSha) ?? null;
+  }
+  async put(treeSha: string, summary: CoverageSummary): Promise<void> {
+    this.entries.set(treeSha, summary);
   }
 }
 
@@ -260,7 +278,7 @@ export interface FakeToolsOptions {
   build?: BuildTool;
   semgrep?: SemgrepTool;
   stryker?: StrykerTool;
-  coverage?: CoverageReader;
+  coverage?: CoverageTool;
   fs?: FsProbe;
   command?: CommandRunner;
 }
@@ -277,9 +295,9 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
     stryker: opts.stryker ?? new FakeStryker(strykerResult({ code: 0, score: 100 })),
     coverage:
       opts.coverage ??
-      new FakeCoverageReader({
-        before: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
-        after: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
+      new FakeCoverageTool({
+        head: measured({ lines: 100, branches: 100, functions: 100, statements: 100 }),
+        base: measured({ lines: 100, branches: 100, functions: 100, statements: 100 }),
       }),
     fs: opts.fs ?? new FakeFs(),
     command: opts.command ?? new FakeCommandRunner(proc(0)),

@@ -33,9 +33,10 @@ import {
 } from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
 import { taskExemptReader } from "./exempt.js";
+import { runCoverageDir } from "../core/state/index.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
 import { nextPhase, phaseToInFlightStatus } from "../types/index.js";
-import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
+import { GateRunner, FsCoverageStore, type GateContext } from "../verifier/deterministic/index.js";
 import {
   runPanel,
   parseRawReview,
@@ -436,6 +437,7 @@ export async function applyRecordReviews(
     config: deps.config,
     tools: deps.tools,
     exemptReader: taskExemptReader(deps, worktree),
+    coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
   };
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence: GateEvidence[] = [...gate.evidence];

@@ -43,7 +43,11 @@ export function isSquashedHistory(commitFiles: readonly (readonly string[])[]): 
   return hasTest && hasImpl;
 }
 
-async function resolveBase(
+/**
+ * Resolve the base ref: prefer `origin/<base>`, fall back to a local `<base>`
+ * (mirrors bin/pipeline-tdd-gate:30-37). Shared with the coverage strategy.
+ */
+export async function resolveBase(
   tools: GateTools,
   baseRef: string,
   opts: ToolRunOpts,

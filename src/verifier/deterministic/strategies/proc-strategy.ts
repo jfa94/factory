@@ -18,7 +18,7 @@ import type { GateTools, ProcResult, ToolRunOpts } from "../tools.js";
 const EXCERPT_MAX_CHARS = 1000;
 
 /** Trim + cap raw process output for inclusion in a gate's detail (fix-forward channel). */
-function excerpt(text: string): string {
+export function excerpt(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
   return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`;

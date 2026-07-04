@@ -60,7 +60,14 @@ export { lintStrategy } from "./strategies/lint.js";
 export { buildStrategy } from "./strategies/build.js";
 
 // strategy math (pure, exported for reuse + parity vectors)
-export { round2, coverageDelta, regressions } from "./strategies/coverage.js";
+export {
+  round2,
+  coverageDelta,
+  regressions,
+  resolveCoverageCommand,
+  COVERAGE_FLAGS,
+  type CoverageCommandResolution,
+} from "./strategies/coverage.js";
 export { scorePasses } from "./strategies/mutation.js";
 export { validateSecurityCommand, type CommandValidation } from "./strategies/sast.js";
 export { isSquashedHistory } from "./strategies/tdd.js";
@@ -105,14 +112,16 @@ export {
   DefaultBuildTool,
   DefaultSemgrepTool,
   DefaultStrykerTool,
-  DefaultCoverageReader,
+  DefaultCoverageTool,
   DefaultFsProbe,
   DefaultCommandRunner,
   parseCoverageSummary,
   extractMutationScore,
   type GateTools,
   type FsProbe,
-  type CoverageRead,
+  type CoverageCommand,
+  type CoverageMeasurement,
+  type CoverageTool,
   type GitProbe,
   type CommitInfo,
   type ToolRunOpts,
@@ -126,9 +135,11 @@ export {
   type StrykerTool,
   type StrykerResult,
   type StrykerReport,
-  type CoverageReader,
   type CoverageSummary,
 } from "./tools.js";
+
+// the per-tree-SHA coverage summary store (S8)
+export { FsCoverageStore, type CoverageStore } from "./coverage-store.js";
 
 // exported fakes for downstream unit tests
 export {
@@ -136,9 +147,8 @@ export {
   strykerResult,
   commit,
   makeFakeTools,
-  covOk,
-  COV_ABSENT,
-  COV_INVALID,
+  measured,
+  MemoryCoverageStore,
   FakeVitest,
   FakeTsc,
   FakeEslint,
@@ -146,7 +156,7 @@ export {
   FakeSemgrep,
   FakeCommandRunner,
   FakeStryker,
-  FakeCoverageReader,
+  FakeCoverageTool,
   FakeFs,
   FakeGitProbe,
   type FakeGitProbeOptions,

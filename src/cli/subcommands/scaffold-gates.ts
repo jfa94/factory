@@ -84,6 +84,8 @@ export interface ResolveGatesOptions {
   readonly securityCommand?: string;
   /** `--waive mutation`: record mutation as deliberately waived instead of refusing. */
   readonly waiveMutation: boolean;
+  /** `--waive coverage`: record coverage as deliberately waived instead of refusing. */
+  readonly waiveCoverage: boolean;
 }
 
 const yes: GateContractEntry = { contracted: true };
@@ -120,6 +122,21 @@ async function resolveNpm(opts: ResolveGatesOptions): Promise<GateContract> {
         "or pass --waive mutation to record the waiver",
     );
   }
+  // Coverage (S8): the gate MEASURES via vitest's json-summary reporter, which
+  // needs a coverage provider installed. Mirror mutation's loud-provision.
+  const coverageProvider =
+    hasDep(pkg, "@vitest/coverage-v8") || hasDep(pkg, "@vitest/coverage-istanbul");
+  let coverage: GateContractEntry;
+  if (coverageProvider) {
+    coverage = yes;
+  } else if (opts.waiveCoverage) {
+    coverage = no("waived via --waive coverage");
+  } else {
+    throw new Error(
+      "scaffold: coverage gate: no vitest coverage provider — install @vitest/coverage-v8 " +
+        "(or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver",
+    );
+  }
   const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync(join(opts.targetRoot, c)));
   let lint: GateContractEntry;
   if (!eslintConfig) {
@@ -140,9 +157,7 @@ async function resolveNpm(opts: ResolveGatesOptions): Promise<GateContract> {
     gates: {
       test: yes,
       tdd: yes,
-      coverage: no(
-        "coverage measurement not wired yet — re-scaffold after the coverage tool lands",
-      ),
+      coverage,
       mutation,
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: yes,
@@ -162,7 +177,10 @@ async function resolveDeno(opts: ResolveGatesOptions): Promise<GateContract> {
     gates: {
       test: { contracted: true, command: "deno test" },
       tdd: yes,
-      coverage: no("waived-by-stack: coverage measurement not wired for deno"),
+      coverage: no(
+        "waived-by-stack: deno coverage emits lcov, no json-summary — contract a coverage " +
+          "command that writes coverage/coverage-summary.json or keep waived",
+      ),
       mutation: no("waived-by-stack: stryker does not support deno"),
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: { contracted: true, command: "deno check ." },
@@ -189,6 +207,16 @@ export async function resolveGateContract(opts: ResolveGatesOptions): Promise<Ga
   const contract = stack === "npm" ? await resolveNpm(opts) : await resolveDeno(opts);
   // Structural self-check: scaffold must never emit a contract the loader rejects.
   return GateContractSchema.parse(contract);
+}
+
+/**
+ * Should scaffold recommend installing fast-check? Advisory only (S8 PBT
+ * guidance): npm stack without a fast-check dep — the test-writer prefers
+ * property tests when the library is ALREADY present, and never injects deps.
+ */
+export async function recommendFastCheck(targetRoot: string): Promise<boolean> {
+  if (detectStack(targetRoot) !== "npm") return false;
+  return !hasDep(await readPackageJson(targetRoot), "fast-check");
 }
 
 /** Outcome of {@link ensureGateContract} for the scaffold report. */

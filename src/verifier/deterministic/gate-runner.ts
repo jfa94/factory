@@ -16,6 +16,7 @@ import { assertNever, deriveAllGatesVerdict } from "../../types/index.js";
 import type { Config } from "../../config/schema.js";
 import type { GateEvidence, GateVerdict } from "../../types/index.js";
 import { createLogger } from "../../shared/index.js";
+import type { CoverageStore } from "./coverage-store.js";
 import {
   classifySkip,
   loadGateContract,
@@ -95,6 +96,11 @@ export interface GateContext {
    * {@link loadGateContract} over `ctx.worktree`; injectable for unit tests.
    */
   readonly loadContract?: (rootAbs: string) => Promise<GateContractLoad>;
+  /**
+   * Per-tree-SHA coverage summary store (S8). A perf cache only — absent means
+   * the coverage strategy measures uncached.
+   */
+  readonly coverageStore?: CoverageStore;
 }
 
 /** A per-gate record in the runner's report. */
@@ -191,6 +197,7 @@ export class GateRunner {
         exemptReader: ctx.exemptReader,
         memo,
         contract,
+        coverageStore: ctx.coverageStore,
       };
       let outcome = await strategy.run(sctx);
       // Skip-taxonomy split (Decision 46): a TOOLING skip on a CONTRACTED gate means

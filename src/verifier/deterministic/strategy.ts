@@ -95,6 +95,11 @@ export interface StrategyContext<TTools> {
    * legacy pre-contract repo — built-in behavior.
    */
   readonly contract?: import("./gate-contract.js").GateContract;
+  /**
+   * Per-tree-SHA coverage summary store (S8). A perf cache only: absent means
+   * the coverage strategy measures uncached — never a correctness fallback.
+   */
+  readonly coverageStore?: import("./coverage-store.js").CoverageStore;
 }
 
 /**

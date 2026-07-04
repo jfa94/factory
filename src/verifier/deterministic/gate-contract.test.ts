@@ -49,6 +49,15 @@ describe("GateContractSchema", () => {
     expect(GateContractSchema.safeParse(raw).success).toBe(true);
   });
 
+  it("accepts a command override on coverage (S8 — the escape hatch for exotic runners)", () => {
+    const raw = validContract();
+    (raw.gates as Record<string, unknown>).coverage = {
+      contracted: true,
+      command: "npm run coverage:summary",
+    };
+    expect(GateContractSchema.safeParse(raw).success).toBe(true);
+  });
+
   it.each(GATE_IDS)("rejects a contract missing gate '%s'", (id) => {
     const raw = validContract();
     delete (raw.gates as Record<string, unknown>)[id];
@@ -187,7 +196,6 @@ describe("classifySkip", () => {
   );
 
   it.each([
-    "no-coverage-data",
     "no-mutation-binary",
     "no-mutation-config",
     "no-eslint-binary",
@@ -208,6 +216,16 @@ describe("contractCommand", () => {
     (raw.gates as Record<string, unknown>).test = { contracted: true, command: "deno test" };
     const contract = GateContractSchema.parse(raw);
     expect(contractCommand(contract, "test")).toEqual(["deno", "test"]);
+  });
+
+  it("returns the validated argv for a contracted coverage override (S8)", () => {
+    const raw = validContract();
+    (raw.gates as Record<string, unknown>).coverage = {
+      contracted: true,
+      command: "npm run coverage:summary",
+    };
+    const contract = GateContractSchema.parse(raw);
+    expect(contractCommand(contract, "coverage")).toEqual(["npm", "run", "coverage:summary"]);
   });
 
   it("undefined when there is no contract, no override, or the gate is uncontracted", () => {

@@ -89,14 +89,14 @@ var require_polyfills = __commonJS({
       fs.fstatSync = statFixSync(fs.fstatSync);
       fs.lstatSync = statFixSync(fs.lstatSync);
       if (fs.chmod && !fs.lchmod) {
-        fs.lchmod = function(path5, mode, cb) {
+        fs.lchmod = function(path6, mode, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchmodSync = function() {
         };
       }
       if (fs.chown && !fs.lchown) {
-        fs.lchown = function(path5, uid, gid, cb) {
+        fs.lchown = function(path6, uid, gid, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchownSync = function() {
@@ -104,7 +104,7 @@ var require_polyfills = __commonJS({
       }
       if (platform === "win32") {
         fs.rename = typeof fs.rename !== "function" ? fs.rename : (function(fs$rename) {
-          function rename3(from, to, cb) {
+          function rename4(from, to, cb) {
             var start = Date.now();
             var backoff = 0;
             fs$rename(from, to, function CB(er) {
@@ -124,8 +124,8 @@ var require_polyfills = __commonJS({
               if (cb) cb(er);
             });
           }
-          if (Object.setPrototypeOf) Object.setPrototypeOf(rename3, fs$rename);
-          return rename3;
+          if (Object.setPrototypeOf) Object.setPrototypeOf(rename4, fs$rename);
+          return rename4;
         })(fs.rename);
       }
       fs.read = typeof fs.read !== "function" ? fs.read : (function(fs$read) {
@@ -163,9 +163,9 @@ var require_polyfills = __commonJS({
         };
       })(fs.readSync);
       function patchLchmod(fs2) {
-        fs2.lchmod = function(path5, mode, callback) {
+        fs2.lchmod = function(path6, mode, callback) {
           fs2.open(
-            path5,
+            path6,
             constants.O_WRONLY | constants.O_SYMLINK,
             mode,
             function(err, fd) {
@@ -181,8 +181,8 @@ var require_polyfills = __commonJS({
             }
           );
         };
-        fs2.lchmodSync = function(path5, mode) {
-          var fd = fs2.openSync(path5, constants.O_WRONLY | constants.O_SYMLINK, mode);
+        fs2.lchmodSync = function(path6, mode) {
+          var fd = fs2.openSync(path6, constants.O_WRONLY | constants.O_SYMLINK, mode);
           var threw = true;
           var ret;
           try {
@@ -203,8 +203,8 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path5, at, mt, cb) {
-            fs2.open(path5, constants.O_SYMLINK, function(er, fd) {
+          fs2.lutimes = function(path6, at, mt, cb) {
+            fs2.open(path6, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
@@ -216,8 +216,8 @@ var require_polyfills = __commonJS({
               });
             });
           };
-          fs2.lutimesSync = function(path5, at, mt) {
-            var fd = fs2.openSync(path5, constants.O_SYMLINK);
+          fs2.lutimesSync = function(path6, at, mt) {
+            var fd = fs2.openSync(path6, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
@@ -335,11 +335,11 @@ var require_legacy_streams = __commonJS({
         ReadStream,
         WriteStream
       };
-      function ReadStream(path5, options) {
-        if (!(this instanceof ReadStream)) return new ReadStream(path5, options);
+      function ReadStream(path6, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path6, options);
         Stream.call(this);
         var self = this;
-        this.path = path5;
+        this.path = path6;
         this.fd = null;
         this.readable = true;
         this.paused = false;
@@ -384,10 +384,10 @@ var require_legacy_streams = __commonJS({
           self._read();
         });
       }
-      function WriteStream(path5, options) {
-        if (!(this instanceof WriteStream)) return new WriteStream(path5, options);
+      function WriteStream(path6, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path6, options);
         Stream.call(this);
-        this.path = path5;
+        this.path = path6;
         this.fd = null;
         this.writable = true;
         this.flags = "w";
@@ -529,15 +529,15 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile18;
-      function readFile18(path5, options, cb) {
+      fs2.readFile = readFile19;
+      function readFile19(path6, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$readFile(path5, options, cb);
-        function go$readFile(path6, options2, cb2, startTime) {
-          return fs$readFile(path6, options2, function(err) {
+        return go$readFile(path6, options, cb);
+        function go$readFile(path7, options2, cb2, startTime) {
+          return fs$readFile(path7, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$readFile, [path6, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$readFile, [path7, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -546,15 +546,15 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$writeFile = fs2.writeFile;
-      fs2.writeFile = writeFile4;
-      function writeFile4(path5, data, options, cb) {
+      fs2.writeFile = writeFile5;
+      function writeFile5(path6, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$writeFile(path5, data, options, cb);
-        function go$writeFile(path6, data2, options2, cb2, startTime) {
-          return fs$writeFile(path6, data2, options2, function(err) {
+        return go$writeFile(path6, data, options, cb);
+        function go$writeFile(path7, data2, options2, cb2, startTime) {
+          return fs$writeFile(path7, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$writeFile, [path6, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$writeFile, [path7, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -565,14 +565,14 @@ var require_graceful_fs = __commonJS({
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
         fs2.appendFile = appendFile2;
-      function appendFile2(path5, data, options, cb) {
+      function appendFile2(path6, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$appendFile(path5, data, options, cb);
-        function go$appendFile(path6, data2, options2, cb2, startTime) {
-          return fs$appendFile(path6, data2, options2, function(err) {
+        return go$appendFile(path6, data, options, cb);
+        function go$appendFile(path7, data2, options2, cb2, startTime) {
+          return fs$appendFile(path7, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$appendFile, [path6, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$appendFile, [path7, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -603,31 +603,31 @@ var require_graceful_fs = __commonJS({
       var fs$readdir = fs2.readdir;
       fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path5, options, cb) {
+      function readdir3(path6, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path6, options2, cb2, startTime) {
-          return fs$readdir(path6, fs$readdirCallback(
-            path6,
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path7, options2, cb2, startTime) {
+          return fs$readdir(path7, fs$readdirCallback(
+            path7,
             options2,
             cb2,
             startTime
           ));
-        } : function go$readdir2(path6, options2, cb2, startTime) {
-          return fs$readdir(path6, options2, fs$readdirCallback(
-            path6,
+        } : function go$readdir2(path7, options2, cb2, startTime) {
+          return fs$readdir(path7, options2, fs$readdirCallback(
+            path7,
             options2,
             cb2,
             startTime
           ));
         };
-        return go$readdir(path5, options, cb);
-        function fs$readdirCallback(path6, options2, cb2, startTime) {
+        return go$readdir(path6, options, cb);
+        function fs$readdirCallback(path7, options2, cb2, startTime) {
           return function(err, files) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
               enqueue([
                 go$readdir,
-                [path6, options2, cb2],
+                [path7, options2, cb2],
                 err,
                 startTime || Date.now(),
                 Date.now()
@@ -698,7 +698,7 @@ var require_graceful_fs = __commonJS({
         enumerable: true,
         configurable: true
       });
-      function ReadStream(path5, options) {
+      function ReadStream(path6, options) {
         if (this instanceof ReadStream)
           return fs$ReadStream.apply(this, arguments), this;
         else
@@ -718,7 +718,7 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function WriteStream(path5, options) {
+      function WriteStream(path6, options) {
         if (this instanceof WriteStream)
           return fs$WriteStream.apply(this, arguments), this;
         else
@@ -736,22 +736,22 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function createReadStream(path5, options) {
-        return new fs2.ReadStream(path5, options);
+      function createReadStream(path6, options) {
+        return new fs2.ReadStream(path6, options);
       }
-      function createWriteStream(path5, options) {
-        return new fs2.WriteStream(path5, options);
+      function createWriteStream(path6, options) {
+        return new fs2.WriteStream(path6, options);
       }
       var fs$open = fs2.open;
       fs2.open = open2;
-      function open2(path5, flags, mode, cb) {
+      function open2(path6, flags, mode, cb) {
         if (typeof mode === "function")
           cb = mode, mode = null;
-        return go$open(path5, flags, mode, cb);
-        function go$open(path6, flags2, mode2, cb2, startTime) {
-          return fs$open(path6, flags2, mode2, function(err, fd) {
+        return go$open(path6, flags, mode, cb);
+        function go$open(path7, flags2, mode2, cb2, startTime) {
+          return fs$open(path7, flags2, mode2, function(err, fd) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$open, [path6, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$open, [path7, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -1280,7 +1280,7 @@ var require_mtime_precision = __commonJS({
 var require_lockfile = __commonJS({
   "node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
     "use strict";
-    var path5 = __require("path");
+    var path6 = __require("path");
     var fs = require_graceful_fs();
     var retry = require_retry2();
     var onExit = require_signal_exit();
@@ -1291,7 +1291,7 @@ var require_lockfile = __commonJS({
     }
     function resolveCanonicalPath(file, options, callback) {
       if (!options.realpath) {
-        return callback(null, path5.resolve(file));
+        return callback(null, path6.resolve(file));
       }
       options.fs.realpath(file, callback);
     }
@@ -1727,10 +1727,10 @@ async function bestEffortUnlink(p) {
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path5, cause) {
+  constructor(message, path6, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path5;
+    this.path = path6;
     this.cause = cause;
   }
 };
@@ -1746,14 +1746,14 @@ function parseJson(text, sourcePath) {
     );
   }
 }
-async function readJsonFile(path5) {
-  return parseJson(await readFile(path5, "utf8"), path5);
+async function readJsonFile(path6) {
+  return parseJson(await readFile(path6, "utf8"), path6);
 }
 function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
-async function writeJsonFile(path5, value) {
-  await atomicWriteFile(path5, stringifyJson(value));
+async function writeJsonFile(path6, value) {
+  await atomicWriteFile(path6, stringifyJson(value));
 }
 
 // node_modules/zod/v3/external.js
@@ -2234,8 +2234,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path5, errorMaps, issueData } = params;
-  const fullPath = [...path5, ...issueData.path || []];
+  const { data, path: path6, errorMaps, issueData } = params;
+  const fullPath = [...path6, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -2351,11 +2351,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path5, key) {
+  constructor(parent, value, path6, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path5;
+    this._path = path6;
     this._key = key;
   }
   get path() {
@@ -6115,9 +6115,9 @@ function parseSetToken(token) {
   if (eq <= 0) {
     throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
   }
-  const path5 = splitPath(token.slice(0, eq));
+  const path6 = splitPath(token.slice(0, eq));
   const rawValue = token.slice(eq + 1);
-  return { path: path5, value: coerceValue(rawValue) };
+  return { path: path6, value: coerceValue(rawValue) };
 }
 function coerceValue(raw) {
   try {
@@ -6127,32 +6127,32 @@ function coerceValue(raw) {
   }
 }
 function splitPath(dotted) {
-  const path5 = dotted.split(".");
-  if (path5.length === 0 || path5.some((s) => s.length === 0)) {
+  const path6 = dotted.split(".");
+  if (path6.length === 0 || path6.some((s) => s.length === 0)) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
-  return path5;
+  return path6;
 }
-function setAtPath(obj, path5, value) {
+function setAtPath(obj, path6, value) {
   const next = structuredClone(obj);
   let cursor = next;
-  for (let i = 0; i < path5.length - 1; i++) {
-    const key = path5[i];
+  for (let i = 0; i < path6.length - 1; i++) {
+    const key = path6[i];
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[path5[path5.length - 1]] = value;
+  cursor[path6[path6.length - 1]] = value;
   return next;
 }
-function unsetAtPath(obj, path5) {
+function unsetAtPath(obj, path6) {
   const next = structuredClone(obj);
   const parents = [];
   let cursor = next;
-  for (let i = 0; i < path5.length - 1; i++) {
-    const key = path5[i];
+  for (let i = 0; i < path6.length - 1; i++) {
+    const key = path6[i];
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6160,7 +6160,7 @@ function unsetAtPath(obj, path5) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  delete cursor[path5[path5.length - 1]];
+  delete cursor[path6[path6.length - 1]];
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = parents[i];
     const child = container[key];
@@ -6172,14 +6172,14 @@ function unsetAtPath(obj, path5) {
   }
   return next;
 }
-function getAtPath(config, path5) {
+function getAtPath(config, path6) {
   let cursor = config;
-  for (const key of path5) {
+  for (const key of path6) {
     if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-      throw new Error(`configure: '${path5.join(".")}' has no value (not an object at '${key}')`);
+      throw new Error(`configure: '${path6.join(".")}' has no value (not an object at '${key}')`);
     }
     if (!(key in cursor)) {
-      throw new Error(`configure: unknown config key '${path5.join(".")}'`);
+      throw new Error(`configure: unknown config key '${path6.join(".")}'`);
     }
     cursor = cursor[key];
   }
@@ -6937,6 +6937,9 @@ function runMetricsPath(dataDir, runId) {
 function runReportPath(dataDir, runId) {
   return join3(runDir(dataDir, runId), REPORT_FILE);
 }
+function runCoverageDir(dataDir, runId) {
+  return join3(runDir(dataDir, runId), "coverage");
+}
 function currentLinkPath(dataDir) {
   return join3(runsRoot(dataDir), CURRENT_LINK);
 }
@@ -7095,9 +7098,9 @@ var StateManager = class _StateManager {
    * schema/JSON violation (never a silent partial).
    */
   async read(runId) {
-    const path5 = this.statePath(runId);
-    const raw = await readFile2(path5, "utf8");
-    return _StateManager.guardedParse(parseJson(raw, path5), path5);
+    const path6 = this.statePath(runId);
+    const raw = await readFile2(path6, "utf8");
+    return _StateManager.guardedParse(parseJson(raw, path6), path6);
   }
   /**
    * True iff a RunState exists on disk for this run id. Synchronous,
@@ -7419,17 +7422,17 @@ function optionalString(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 async function parseResultsFlag(args, parse) {
-  const path5 = args.flag("results");
-  if (typeof path5 === "string" && path5.length > 0) {
+  const path6 = args.flag("results");
+  if (typeof path6 === "string" && path6.length > 0) {
     try {
-      return await parse(path5);
+      return await parse(path6);
     } catch (err) {
       throw new UsageError(
-        `--results ${path5}: ${err instanceof Error ? err.message : String(err)}`
+        `--results ${path6}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
-  if (path5 !== void 0) throw new UsageError("--results requires a file path");
+  if (path6 !== void 0) throw new UsageError("--results requires a file path");
   return void 0;
 }
 
@@ -7865,8 +7868,8 @@ async function run(argv) {
   }
   let raw = readRawConfig();
   for (const token of sets) {
-    const { path: path5, value } = parseSetToken(token);
-    raw = setAtPath(raw, path5, value);
+    const { path: path6, value } = parseSetToken(token);
+    raw = setAtPath(raw, path6, value);
   }
   for (const token of unsets) {
     raw = unsetAtPath(raw, splitPath(token));
@@ -8162,9 +8165,9 @@ ${result.stderr.trim()}`
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir5, readFile as readFile3 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
-async function appendJsonl(path5, record) {
-  await mkdir5(dirname4(path5), { recursive: true });
-  await appendFile(path5, JSON.stringify(record) + "\n", "utf8");
+async function appendJsonl(path6, record) {
+  await mkdir5(dirname4(path6), { recursive: true });
+  await appendFile(path6, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/paths.ts
@@ -8272,9 +8275,9 @@ var DefaultGitClient = class {
   async worktreeAdd(args, opts) {
     await this.execOrThrow(["worktree", "add", ...args], opts);
   }
-  async worktreeExists(path5, opts) {
+  async worktreeExists(path6, opts) {
     const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
-    return r.stdout.split("\n").some((line) => line === `worktree ${path5}`);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path6}`);
   }
   async worktreeRemove(args, opts) {
     const r = await this.exec(["worktree", "remove", ...args], opts);
@@ -8306,20 +8309,20 @@ var DefaultGitClient = class {
 function parseRemoteUrl(url) {
   const trimmed = url.trim();
   if (trimmed.length === 0) return null;
-  let path5;
+  let path6;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
-    path5 = scp[1];
+    path6 = scp[1];
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
       const afterScheme = withScheme[1];
       const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path5 = afterScheme.slice(firstSlash + 1);
+      if (firstSlash >= 0) path6 = afterScheme.slice(firstSlash + 1);
     }
   }
-  if (path5 === void 0) return null;
-  let p = path5.replace(/\/+$/, "");
+  if (path6 === void 0) return null;
+  let p = path6.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
   if (segments.length < 2) return null;
@@ -8487,11 +8490,11 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
-    const path5 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
-    const r = await this.runner(["api", "--method", "DELETE", path5], this.execOpts(opts));
+    const path6 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path6], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
       throw new Error(
-        `gh api DELETE ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+        `gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
       );
     }
   }
@@ -8536,8 +8539,8 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
-    const path5 = `repos/${owner}/${repo}/branches/${branch}/protection`;
-    const r = await this.runner(["api", path5], this.execOpts(opts));
+    const path6 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path6], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
         return {
@@ -8547,14 +8550,14 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw new Error(`gh api ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
       throw new Error(
-        `gh api ${path5}: output truncated \u2014 refusing to parse clipped protection JSON`
+        `gh api ${path6}: output truncated \u2014 refusing to parse clipped protection JSON`
       );
     }
-    const raw = parseJson(r.stdout, path5);
+    const raw = parseJson(r.stdout, path6);
     const rsc = raw.required_status_checks ?? null;
     let mq = false;
     try {
@@ -8571,7 +8574,7 @@ var DefaultGhClient = class {
     };
   }
   async putProtection(owner, repo, branch, body, opts) {
-    const path5 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const path6 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const payload = JSON.stringify({
       required_status_checks: {
         strict: body.strict,
@@ -8582,22 +8585,22 @@ var DefaultGhClient = class {
       restrictions: null
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
-    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path5, "--input", "-"], {
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path6, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
     });
   }
   async mergeQueueProbe(owner, repo, branch, opts) {
-    const path5 = `repos/${owner}/${repo}/rules/branches/${branch}`;
-    const r = await this.runner(["api", path5], this.execOpts(opts));
+    const path6 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path6], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found/i.test(r.stderr)) return false;
-      throw new Error(`gh api ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
-      throw new Error(`gh api ${path5}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
+      throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
     }
-    const rules = parseJson(r.stdout, path5);
+    const rules = parseJson(r.stdout, path6);
     return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
   }
 };
@@ -10517,7 +10520,13 @@ function validateCommand(command, isAllowedRunner) {
 // src/verifier/deterministic/gate-contract.ts
 var GATE_CONTRACT_REL = ".factory/gates.json";
 var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint"];
+var COMMAND_GATES = [
+  "test",
+  "type",
+  "build",
+  "lint",
+  "coverage"
+];
 function isAllowedGateRunner(argv) {
   const runner = runnerName(argv);
   const a1 = argv[1];
@@ -10884,25 +10893,86 @@ function regressions(delta, tolerance) {
   const threshold = -1 * tolerance;
   return METRICS.filter((m) => delta[m] < threshold);
 }
+var COVERAGE_FLAGS = [
+  "--coverage.enabled=true",
+  "--coverage.reporter=json-summary",
+  "--coverage.reportsDirectory=coverage"
+];
+function resolveCoverageCommand(contract) {
+  const override = contractCommand(contract, "coverage");
+  if (override !== void 0) return { ok: true, cmd: { kind: "argv", argv: override } };
+  const test = contractCommand(contract, "test");
+  if (test === void 0) {
+    return { ok: true, cmd: { kind: "vitest", args: ["run", ...COVERAGE_FLAGS] } };
+  }
+  if (test[0] !== "vitest") {
+    return {
+      ok: false,
+      reason: `cannot derive a coverage command from contracted test command '${test.join(" ")}' \u2014 contract gates.coverage.command (it must write coverage/coverage-summary.json) or waive the coverage gate`
+    };
+  }
+  const tail = test.slice(1);
+  const args = tail[0] === "run" ? tail : ["run", ...tail];
+  return { ok: true, cmd: { kind: "vitest", args: [...args, ...COVERAGE_FLAGS] } };
+}
+function measurementFailure(which, m) {
+  switch (m.kind) {
+    case "command-failed": {
+      const out = excerpt(m.proc.stderr || m.proc.stdout);
+      return `coverage measurement (${which}): command failed exit=${m.proc.code ?? "null"}` + (out ? `: ${out}` : "");
+    }
+    case "summary-missing":
+      return `coverage measurement (${which}): command exited 0 but wrote no coverage/coverage-summary.json`;
+    case "summary-invalid":
+      return `coverage measurement (${which}): coverage/coverage-summary.json invalid (corrupt or missing a metric)`;
+  }
+}
+async function summaryFor(ctx, which, treeSha, measure) {
+  const cached = await ctx.coverageStore?.get(treeSha);
+  if (cached != null) return cached;
+  const m = await measure();
+  if (m.kind !== "measured") return { failed: measurementFailure(which, m) };
+  await ctx.coverageStore?.put(treeSha, m.summary);
+  return m.summary;
+}
 var coverageStrategy = {
   id: "coverage",
   async run(ctx) {
-    const tolerance = ctx.config.quality.coverageRegressionTolerancePct;
     const opts = { cwd: ctx.worktree };
-    const before = await ctx.tools.coverage.read("before", opts);
-    const after = await ctx.tools.coverage.read("after", opts);
-    if (before.state === "absent" && after.state === "absent") {
-      return skip("coverage", "no-coverage-data");
+    if (ctx.contract === void 0) {
+      return skip("coverage", "no-gate-contract");
     }
-    if (before.state === "invalid" || after.state === "invalid") {
-      const which = before.state === "invalid" ? "before" : "after";
-      return ran("coverage", false, `coverage parse error: ${which} summary invalid`);
+    const resolution = resolveCoverageCommand(ctx.contract);
+    if (!resolution.ok) return ran("coverage", false, resolution.reason);
+    const base = await resolveBase(ctx.tools, ctx.baseRef, opts);
+    if (base === null) {
+      return ran("coverage", false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`);
     }
-    if (before.state === "absent" || after.state === "absent") {
-      const which = before.state === "absent" ? "before" : "after";
-      return ran("coverage", false, `coverage parse error: ${which} summary missing`);
+    const headTree = await ctx.tools.git.treeSha(opts);
+    const baseSha = await ctx.tools.git.revParse(base, opts);
+    const baseTree = await ctx.tools.git.revParse(`${base}^{tree}`, opts);
+    const head = await summaryFor(
+      ctx,
+      "head",
+      headTree,
+      () => ctx.tools.coverage.measure(resolution.cmd, opts)
+    );
+    if ("failed" in head) return ran("coverage", false, head.failed);
+    const before = await summaryFor(
+      ctx,
+      `base ${baseSha}`,
+      baseTree,
+      () => ctx.tools.coverage.measureAtBase(baseSha, resolution.cmd, opts)
+    );
+    if ("failed" in before) {
+      return ran(
+        "coverage",
+        false,
+        `${before.failed} \u2014 base is measured under head's node_modules; if this task changed deps, contract gates.coverage.command or waive coverage`
+      );
     }
-    const delta = coverageDelta(before.summary, after.summary);
+    const tolerance = ctx.config.quality.coverageRegressionTolerancePct;
+    const delta = coverageDelta(before, head);
     const failed = regressions(delta, tolerance);
     if (failed.length > 0) {
       const named = failed.map((m) => `${m} (${delta[m]}%)`).join(", ");
@@ -11175,7 +11245,8 @@ var GateRunner = class {
         tools: ctx.tools,
         exemptReader: ctx.exemptReader,
         memo,
-        contract
+        contract,
+        coverageStore: ctx.coverageStore
       };
       let outcome = await strategy.run(sctx);
       if (outcome.kind === "skip" && entry?.contracted === true && classifySkip(outcome.reason) === "tooling") {
@@ -11250,7 +11321,8 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, readFile as readFile7 } from "node:fs/promises";
+import { access as access2, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -11417,23 +11489,68 @@ function computeMutationScore(report) {
   }
   return valid > 0 ? detected / valid * 100 : null;
 }
-var DefaultCoverageReader = class {
-  async read(label, opts) {
-    const file = path3.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
+var DefaultCoverageTool = class _DefaultCoverageTool {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve2;
+    this.env = env;
+  }
+  /** Where every measurement must land, relative to the measured tree's root. */
+  static SUMMARY_PATH = path3.join("coverage", "coverage-summary.json");
+  async measure(cmd, opts) {
+    const summaryPath = path3.join(opts.cwd, _DefaultCoverageTool.SUMMARY_PATH);
+    await rm3(summaryPath, { force: true });
+    let result;
+    if (cmd.kind === "vitest") {
+      result = await runTool(this.resolve, "vitest", cmd.args, opts, this.env);
+    } else {
+      const [bin, ...rest] = cmd.argv;
+      if (bin === void 0) {
+        throw new Error("DefaultCoverageTool: empty command");
+      }
+      result = await exec(bin, rest, { cwd: opts.cwd, env: this.env });
+    }
+    if (result.code !== 0) return { kind: "command-failed", proc: toProc(result) };
     let raw;
     try {
-      raw = await readFile7(file, "utf8");
+      raw = await readFile7(summaryPath, "utf8");
     } catch {
-      return { state: "absent" };
+      return { kind: "summary-missing" };
     }
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return { state: "invalid" };
+      return { kind: "summary-invalid" };
     }
     const summary = parseCoverageSummary(parsed);
-    return summary === null ? { state: "invalid" } : { state: "ok", summary };
+    return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
+  }
+  async measureAtBase(baseSha, cmd, opts) {
+    const scratch = await mkdtemp(path3.join(tmpdir(), "factory-cov-base-"));
+    const wt = path3.join(scratch, "wt");
+    try {
+      const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
+        cwd: opts.cwd
+      });
+      if (add.code !== 0) {
+        throw new Error(
+          `coverage base measurement: git worktree add --detach ${baseSha} failed (code=${add.code ?? "null"}): ${add.stderr.trim()}`
+        );
+      }
+      if (await pathExists(path3.join(opts.cwd, "node_modules"))) {
+        await symlink2(path3.join(opts.cwd, "node_modules"), path3.join(wt, "node_modules"), "dir");
+      }
+      return await this.measure(cmd, { cwd: wt });
+    } finally {
+      await exec("git", ["-C", opts.cwd, "worktree", "remove", "--force", wt], {
+        cwd: opts.cwd
+      }).catch(() => {
+      });
+      await rm3(scratch, { recursive: true, force: true }).catch(() => {
+      });
+      await exec("git", ["-C", opts.cwd, "worktree", "prune"], { cwd: opts.cwd }).catch(() => {
+      });
+    }
   }
 };
 var DefaultFsProbe = class {
@@ -11568,11 +11685,63 @@ function defaultGateTools(gateEnv = {}) {
     build: new DefaultBuildTool(gateEnv),
     semgrep: new DefaultSemgrepTool(gateEnv),
     stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
-    coverage: new DefaultCoverageReader(),
+    coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
     fs: new DefaultFsProbe(),
     command: new DefaultCommandRunner(gateEnv)
   };
 }
+
+// src/verifier/deterministic/coverage-store.ts
+import { mkdir as mkdir6, readFile as readFile8, rename as rename3, writeFile } from "node:fs/promises";
+import path4 from "node:path";
+var TREE_SHA_RE = /^[0-9a-f]{40,64}$/;
+function isSummary(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v;
+  return ["lines", "branches", "functions", "statements"].every(
+    (k) => typeof o[k] === "number" && Number.isFinite(o[k])
+  );
+}
+var FsCoverageStore = class {
+  constructor(dir) {
+    this.dir = dir;
+  }
+  /** Distinguishes same-process concurrent puts' tmp files (pid covers cross-process). */
+  seq = 0;
+  file(treeSha) {
+    if (!TREE_SHA_RE.test(treeSha)) {
+      throw new Error(`coverage store: invalid tree sha key '${treeSha}'`);
+    }
+    return path4.join(this.dir, `${treeSha}.json`);
+  }
+  async get(treeSha) {
+    const file = this.file(treeSha);
+    let raw;
+    try {
+      raw = await readFile8(file, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw err;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+    if (!isSummary(parsed)) {
+      throw new Error(`coverage store: corrupt entry ${file} \u2014 delete it and re-run`);
+    }
+    return parsed;
+  }
+  async put(treeSha, summary) {
+    const target = this.file(treeSha);
+    await mkdir6(this.dir, { recursive: true });
+    const tmp = path4.join(this.dir, `.tmp-${treeSha}-${process.pid}-${this.seq++}`);
+    await writeFile(tmp, JSON.stringify(summary), "utf8");
+    await rename3(tmp, target);
+  }
+};
 
 // src/verifier/judgment/config.ts
 var FALLBACK_REVIEW_MODEL = "opus";
@@ -12083,7 +12252,7 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir6, readFile as readFile8 } from "node:fs/promises";
+import { mkdir as mkdir7, readFile as readFile9 } from "node:fs/promises";
 import { dirname as dirname5, join as join11 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -12118,18 +12287,18 @@ var FsHoldoutStore = class {
     return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
-    const path5 = this.path(runId, record.task_id);
-    await mkdir6(dirname5(path5), { recursive: true });
-    await atomicWriteFile(path5, stringifyJson(record));
+    const path6 = this.path(runId, record.task_id);
+    await mkdir7(dirname5(path6), { recursive: true });
+    await atomicWriteFile(path6, stringifyJson(record));
   }
   async get(runId, taskId) {
-    const path5 = this.path(runId, taskId);
-    const raw = await readFile8(path5, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path5), path5);
+    const path6 = this.path(runId, taskId);
+    const raw = await readFile9(path6, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path6), path6);
   }
   async has(runId, taskId) {
     try {
-      await readFile8(this.path(runId, taskId), "utf8");
+      await readFile9(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -12138,7 +12307,7 @@ var FsHoldoutStore = class {
 };
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir7, readFile as readFile9 } from "node:fs/promises";
+import { mkdir as mkdir8, readFile as readFile10 } from "node:fs/promises";
 import { dirname as dirname6, join as join12 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
@@ -12155,18 +12324,18 @@ var FsHoldoutVerdictStore = class {
     return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
-    const path5 = this.path(runId, taskId);
-    await mkdir7(dirname6(path5), { recursive: true });
-    await atomicWriteFile(path5, stringifyJson([...verdicts]));
+    const path6 = this.path(runId, taskId);
+    await mkdir8(dirname6(path6), { recursive: true });
+    await atomicWriteFile(path6, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
-    const path5 = this.path(runId, taskId);
-    const raw = await readFile9(path5, "utf8");
-    return HoldoutVerdictsSchema.parse(parseJson(raw, path5));
+    const path6 = this.path(runId, taskId);
+    const raw = await readFile10(path6, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path6));
   }
   async has(runId, taskId) {
     try {
-      await readFile9(this.path(runId, taskId), "utf8");
+      await readFile10(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -12183,7 +12352,7 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passR
 }
 
 // src/verifier/e2e/runner.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { access as access3 } from "node:fs/promises";
 var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 async function pathExists2(p) {
@@ -12195,11 +12364,11 @@ async function pathExists2(p) {
   }
 }
 async function resolveLocalPlaywrightBin(cwd, exists = pathExists2) {
-  let dir = path4.resolve(cwd);
+  let dir = path5.resolve(cwd);
   for (; ; ) {
-    const candidate = path4.join(dir, "node_modules", ".bin", "playwright");
+    const candidate = path5.join(dir, "node_modules", ".bin", "playwright");
     if (await exists(candidate)) return candidate;
-    const parent = path4.dirname(dir);
+    const parent = path5.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -12946,7 +13115,8 @@ function makePhaseHandlers(deps) {
         baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
         config: deps.config,
         tools: deps.tools,
-        exemptReader: taskExemptReader(deps, worktree)
+        exemptReader: taskExemptReader(deps, worktree),
+        coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id))
       };
       const gate = await new GateRunner().run(gateCtx);
       const panelSpawn = async () => {
@@ -13050,7 +13220,7 @@ function shipBody(runId, specTask) {
 }
 
 // src/orchestrator/artifacts.ts
-import { mkdir as mkdir8, readFile as readFile10 } from "node:fs/promises";
+import { mkdir as mkdir9, readFile as readFile11 } from "node:fs/promises";
 import { dirname as dirname7, join as join15 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
@@ -13064,25 +13234,25 @@ var FsArtifactStore = class {
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
-    const path5 = this.absPath(runId, ref);
-    await mkdir8(dirname7(path5), { recursive: true });
-    await atomicWriteFile(path5, stringifyJson(context));
+    const path6 = this.absPath(runId, ref);
+    await mkdir9(dirname7(path6), { recursive: true });
+    await atomicWriteFile(path6, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
-    const path5 = this.absPath(runId, promptRef);
-    const raw = await readFile10(path5, "utf8");
-    return parseJson(raw, path5);
+    const path6 = this.absPath(runId, promptRef);
+    const raw = await readFile11(path6, "utf8");
+    return parseJson(raw, path6);
   }
 };
 
 // src/orchestrator/docs-applicable.ts
-import { readFile as readFile11, stat } from "node:fs/promises";
+import { readFile as readFile12, stat } from "node:fs/promises";
 import { join as join16 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
-    raw = await readFile11(file, "utf8");
+    raw = await readFile12(file, "utf8");
   } catch {
     return null;
   }
@@ -13107,7 +13277,7 @@ async function isDocsApplicable(repoRoot) {
 }
 
 // src/orchestrator/record.ts
-import { readFile as readFile12 } from "node:fs/promises";
+import { readFile as readFile13 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
@@ -13115,9 +13285,9 @@ async function persistStepCursor(deps, runId, taskId, step) {
     await markInFlight(deps, runId, taskId, step.phase);
   }
 }
-async function readJsonInput(path5) {
-  const raw = await readFile12(path5, "utf8");
-  return parseJson(raw, path5);
+async function readJsonInput(path6) {
+  const raw = await readFile13(path6, "utf8");
+  return parseJson(raw, path6);
 }
 function producerPhaseInfo(phase) {
   if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
@@ -13178,7 +13348,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile12(join17(worktree, file), "utf8");
+      const text = await readFile13(join17(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -13262,7 +13432,8 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     baseRef: resolveStagingBranch(runId, run10.staging_branch),
     config: deps.config,
     tools: deps.tools,
-    exemptReader: taskExemptReader(deps, worktree)
+    exemptReader: taskExemptReader(deps, worktree),
+    coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
   };
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence = [...gate.evidence];
@@ -13931,17 +14102,17 @@ async function nextTask(deps, runId) {
 }
 
 // src/orchestrator/e2e.ts
-import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
+import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
 import { dirname as dirname8, isAbsolute, join as join19 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
-    await mkdir9(dirname8(to), { recursive: true });
+    await mkdir10(dirname8(to), { recursive: true });
     await copyFile(from, to);
   }
-  async writeConfig(path5, contents) {
-    await mkdir9(dirname8(path5), { recursive: true });
-    await writeFile(path5, contents);
+  async writeConfig(path6, contents) {
+    await mkdir10(dirname8(path6), { recursive: true });
+    await writeFile2(path6, contents);
   }
 };
 var E2E_AUTHOR_MODEL = "opus";
@@ -14966,7 +15137,7 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
-import { access as access4, readFile as readFile13 } from "node:fs/promises";
+import { access as access4, readFile as readFile14 } from "node:fs/promises";
 import { join as join21 } from "node:path";
 
 // src/cli/current.ts
@@ -15272,7 +15443,7 @@ async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile13(join21(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile14(join21(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -15510,7 +15681,7 @@ function phaseCommand(opts) {
     const deps = await loadCliDeps({ dataDir, runId });
     const results = await parseResultsFlag(
       args,
-      async (path5) => opts.parse(await readJsonInput(path5))
+      async (path6) => opts.parse(await readJsonInput(path6))
     );
     emitJson(
       results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId)
@@ -16405,14 +16576,14 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
+import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync9 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname10, join as join25, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir10, readFile as readFile14 } from "node:fs/promises";
+import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
 import { join as join23 } from "node:path";
 var log29 = createLogger("cli:target-settings");
@@ -16484,31 +16655,31 @@ function mergeTargetSettings(existing, dataDirRules) {
 }
 async function ensureTargetSettings(opts) {
   const dir = join23(opts.targetRoot, ".claude");
-  const path5 = join23(dir, "settings.json");
-  const created = !existsSync7(path5);
+  const path6 = join23(dir, "settings.json");
+  const created = !existsSync7(path6);
   let existing = {};
   if (!created) {
-    const raw = await readFile14(path5, "utf8");
+    const raw = await readFile15(path6, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
     } else {
       log29.warn(
-        `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+        `${path6} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
   }
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   if (created || changed) {
-    await mkdir10(dir, { recursive: true });
-    await atomicWriteFile(path5, stringifyJson(settings));
+    await mkdir11(dir, { recursive: true });
+    await atomicWriteFile(path6, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path5 };
+  return { settings, changed, created, path: path6 };
 }
 
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync8 } from "node:fs";
-import { mkdir as mkdir11, readFile as readFile15, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname9, join as join24 } from "node:path";
 function detectStack(targetRoot) {
   if (existsSync8(join24(targetRoot, "deno.json")) || existsSync8(join24(targetRoot, "deno.jsonc"))) {
@@ -16518,7 +16689,7 @@ function detectStack(targetRoot) {
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile15(join24(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join24(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -16534,7 +16705,7 @@ function stripJsoncComments(text) {
 async function denoHasBuildTask(targetRoot) {
   const jsonc = existsSync8(join24(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile15(join24(targetRoot, file), "utf8");
+  const raw = await readFile16(join24(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -16573,6 +16744,17 @@ async function resolveNpm(opts) {
       "scaffold: mutation gate: stryker not installed \u2014 install @stryker-mutator/core or pass --waive mutation to record the waiver"
     );
   }
+  const coverageProvider = hasDep(pkg, "@vitest/coverage-v8") || hasDep(pkg, "@vitest/coverage-istanbul");
+  let coverage;
+  if (coverageProvider) {
+    coverage = yes;
+  } else if (opts.waiveCoverage) {
+    coverage = no("waived via --waive coverage");
+  } else {
+    throw new Error(
+      "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
+    );
+  }
   const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join24(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
@@ -16588,9 +16770,7 @@ async function resolveNpm(opts) {
     gates: {
       test: yes,
       tdd: yes,
-      coverage: no(
-        "coverage measurement not wired yet \u2014 re-scaffold after the coverage tool lands"
-      ),
+      coverage,
       mutation,
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: yes,
@@ -16607,7 +16787,9 @@ async function resolveDeno(opts) {
     gates: {
       test: { contracted: true, command: "deno test" },
       tdd: yes,
-      coverage: no("waived-by-stack: coverage measurement not wired for deno"),
+      coverage: no(
+        "waived-by-stack: deno coverage emits lcov, no json-summary \u2014 contract a coverage command that writes coverage/coverage-summary.json or keep waived"
+      ),
       mutation: no("waived-by-stack: stryker does not support deno"),
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: { contracted: true, command: "deno check ." },
@@ -16626,6 +16808,10 @@ async function resolveGateContract(opts) {
   const contract = stack === "npm" ? await resolveNpm(opts) : await resolveDeno(opts);
   return GateContractSchema.parse(contract);
 }
+async function recommendFastCheck(targetRoot) {
+  if (detectStack(targetRoot) !== "npm") return false;
+  return !hasDep(await readPackageJson(targetRoot), "fast-check");
+}
 async function ensureGateContract(opts) {
   const load = await loadGateContract(opts.targetRoot);
   if (load.state === "invalid") {
@@ -16638,8 +16824,8 @@ async function ensureGateContract(opts) {
   }
   const contract = await resolveGateContract(opts);
   const dest = join24(opts.targetRoot, GATE_CONTRACT_REL);
-  await mkdir11(dirname9(dest), { recursive: true });
-  await writeFile2(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
+  await mkdir12(dirname9(dest), { recursive: true });
+  await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack };
 }
 
@@ -16648,7 +16834,7 @@ var log30 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation]
+  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage]
 
 Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
@@ -16665,11 +16851,15 @@ Options:
   --provision           Write branch protection if missing (default: refuse)
   --waive mutation      Record the mutation gate as deliberately waived in the gate
                         contract instead of refusing when stryker is not installed
+  --waive coverage      Record the coverage gate as deliberately waived instead of
+                        refusing when no vitest coverage provider is installed
 
 Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
 committed per-gate applicability agreement. Refuses below the floor (test + type +
 build equivalents must be contractable). COMMIT the file \u2014 'factory run' requires
-it tracked.`;
+it tracked. The contract is seed-like: an existing valid gates.json is never
+touched \u2014 delete it and re-scaffold to pick up new resolution rules (e.g. the
+S8 coverage flip).`;
 var GITIGNORE_ENTRIES = [
   "# Claude Code local state (factory scaffold guarantee)",
   ".claude/worktrees/",
@@ -16731,12 +16921,12 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     return;
   }
   const render = async () => {
-    const text = await readFile16(src, "utf8");
+    const text = await readFile17(src, "utf8");
     return transform ? transform(text) : text;
   };
   if (!existsSync9(dest)) {
-    await mkdir12(dirname10(dest), { recursive: true });
-    await writeFile3(dest, await render(), "utf8");
+    await mkdir13(dirname10(dest), { recursive: true });
+    await writeFile4(dest, await render(), "utf8");
     lists.created.push(entry.rel);
     return;
   }
@@ -16744,30 +16934,30 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile16(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile17(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  await writeFile3(dest, rendered, "utf8");
+  await writeFile4(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join25(root, ".gitignore");
-  const rel = relative(root, path5);
-  if (!existsSync9(path5)) {
-    await writeFile3(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  const path6 = join25(root, ".gitignore");
+  const rel = relative(root, path6);
+  if (!existsSync9(path6)) {
+    await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile16(path5, "utf8");
+  const current = await readFile17(path6, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile3(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
+  await writeFile4(path6, current + sep2 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -16795,7 +16985,8 @@ async function runScaffold(opts) {
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
     securityCommand: opts.config.quality.securityCommand,
-    waiveMutation: opts.waiveMutation === true
+    waiveMutation: opts.waiveMutation === true,
+    waiveCoverage: opts.waiveCoverage === true
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
@@ -16804,6 +16995,11 @@ async function runScaffold(opts) {
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
+  }
+  if (await recommendFastCheck(opts.targetRoot)) {
+    log30.info(
+      "property-based testing: fast-check not installed \u2014 consider 'npm i -D fast-check' so the test-writer can write property tests (advisory only)"
+    );
   }
   await ensureGitignore(opts.targetRoot, lists);
   const settings = await ensureTargetSettings({
@@ -16872,8 +17068,8 @@ async function run5(argv) {
   }
   const waived = args.all("waive").map(String);
   for (const w of waived) {
-    if (w !== "mutation") {
-      throw new UsageError(`--waive accepts only 'mutation' (got '${w}')`);
+    if (w !== "mutation" && w !== "coverage") {
+      throw new UsageError(`--waive accepts only 'mutation' or 'coverage' (got '${w}')`);
     }
   }
   const { owner, repo } = await resolveScaffoldRepo(args);
@@ -16890,7 +17086,8 @@ async function run5(argv) {
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
     dataDir,
     provision: args.flag("provision") === true,
-    waiveMutation: waived.includes("mutation")
+    waiveMutation: waived.includes("mutation"),
+    waiveCoverage: waived.includes("coverage")
   });
   emitJson(report);
   return EXIT.OK;
@@ -17087,7 +17284,7 @@ async function run7(argv) {
   const shipMode = parseShipMode(args.flag("ship-mode"));
   const results = await parseResultsFlag(
     args,
-    async (path5) => parseDriveResults(await readJsonInput(path5))
+    async (path6) => parseDriveResults(await readJsonInput(path6))
   );
   const deps = await loadOrchestratorDeps({
     runId,
@@ -17249,7 +17446,7 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync10 } from "node:fs";
-import { readFile as readFile17 } from "node:fs/promises";
+import { readFile as readFile18 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
@@ -17364,10 +17561,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join26(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync10(path5)) return void 0;
+  const path6 = join26(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile17(path5, "utf8"));
+    const parsed = JSON.parse(await readFile18(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -17382,7 +17579,7 @@ async function runAutonomyEnsure(opts = {}) {
   let userSettings = {};
   if (existsSync10(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile17(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile18(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
@@ -17390,7 +17587,7 @@ async function runAutonomyEnsure(opts = {}) {
     }
   }
   const templatePath = join26(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile17(templatePath, "utf8");
+  const template = await readFile18(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -17400,11 +17597,11 @@ async function runAutonomyEnsure(opts = {}) {
     home,
     version
   });
-  const path5 = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path5, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path5}`;
+  const path6 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path6, stringifyJson(merged));
+  const relaunchCommand = `claude --worktree --settings ${path6}`;
   write(
-    `Wrote autonomous settings \u2192 ${path5}
+    `Wrote autonomous settings \u2192 ${path6}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
@@ -17412,47 +17609,47 @@ Relaunch the session in autonomous mode with:
 (the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
-  return { path: path5, relaunchCommand };
+  return { path: path6, relaunchCommand };
 }
 async function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
-  let path5 = "";
+  let path6 = "";
   try {
     const dataDir = opts.dataDir ?? resolveDataDir();
-    path5 = mergedSettingsPath(dataDir);
+    path6 = mergedSettingsPath(dataDir);
   } catch {
   }
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path5.length > 0 && existsSync10(path5),
-    mergedSettingsPath: path5
+    mergedSettingsPresent: path6.length > 0 && existsSync10(path6),
+    mergedSettingsPath: path6
   };
   if (opts.json === true) {
     write(stringifyJson(status) + "\n");
   } else if (status.autonomous) {
     write(
       `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
-merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path5.length > 0 ? ` at ${path5}` : ""}
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path6.length > 0 ? ` at ${path6}` : ""}
 `
     );
   } else {
     write(
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
-merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absent"}
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path5}
+  claude --worktree --settings ${path6}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
   }
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
-async function readOnDiskVersion(path5) {
-  if (!existsSync10(path5)) return void 0;
+async function readOnDiskVersion(path6) {
+  if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile17(path5, "utf8"));
+    const parsed = JSON.parse(await readFile18(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -17492,10 +17689,10 @@ async function runAutonomyPreflight(opts = {}) {
     pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   } catch {
   }
-  const path5 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path5.length > 0 && existsSync10(path5);
+  const path6 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path6.length > 0 && existsSync10(path6);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path5) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path6) : void 0;
   const decision = decideAutonomyPreflight({
     autonomous: isAutonomous(env),
     mergedSettingsPresent,
