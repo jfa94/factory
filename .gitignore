@@ -34,8 +34,8 @@ docs/superpowers/plans/
 # Temporary files
 .temp/
 
-# Reports (mutation testing, coverage)
-reports/
+# Reports (mutation testing, coverage) — root-anchored so docs/reports/ stays tracked
+/reports/
 
 # Comprehensive code review output (session scratch)
 .comprehensive-code-review/
