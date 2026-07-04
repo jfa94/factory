@@ -67,7 +67,10 @@ The schema deliberately has **no field** holding a gate pass/fail boolean. Every
 gate / panel / merge gate verdict is re-derived from ground truth at the moment it is
 needed (`derive.ts`), so there is structurally nothing in state to forge. The one
 stored judgment is each reviewer's panel verdict (the reviewer's opinion is itself
-ground truth); the _merge gate_ (unanimity) is derived from those. See
+ground truth); the _merge gate_ (unanimity) is derived from those. The only other
+sanctioned deviations are stored **events** (not verdicts) that no re-derivation can
+recover — the `self_heal` and `human_touches` ledgers (see
+[below](#self_heal--human_touches--the-stored-event-exceptions)). See
 [../explanation/derive-dont-store.md](../explanation/derive-dont-store.md).
 
 ## `RunState`
@@ -95,6 +98,8 @@ a mismatch is a loud parse error.
 | `tasks`                     | record<task_id, TaskState>   | Per-task state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `ignore_quota`              | boolean                      | When `true`, the quota gate is skipped unconditionally for this run — both orchestrators + the runner read it from state (no per-call threading). Set at create from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`. Default `false`; a legacy run without the field reads as `false`.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `quota`                     | QuotaCheckpoint?             | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `self_heal`                 | `{attempts, last_at}`?       | Bounded auto-rescue ledger ([Decision 48](../explanation/decisions.md#decision-48--factory-recover--bounded-auto-rescue-self-heal)); absent until `factory recover --auto` runs. A **sanctioned stored-event exception** — see [`self_heal` & `human_touches`](#self_heal--human_touches--the-stored-event-exceptions).                                                                                                                                                                                                                                                                                                                                                                                      |
+| `human_touches`             | `{kind, at}[]`?              | Append-only human-intervention ledger ([S11, Decision 49](../explanation/decisions.md#decision-49--observability-touch-metric--statusline-progress--score---fleet)); absent on legacy runs. The **second** sanctioned stored-event exception. See [`self_heal` & `human_touches`](#self_heal--human_touches--the-stored-event-exceptions).                                                                                                                                                                                                                                                                                                                                                                   |
 | `docs`                      | DocsPhase?                   | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `traceability`              | TraceabilityPhase?           | PRD-traceability audit marker ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)); absent until the phase runs, only on a non-debug run. One recorded auditor verdict per numbered PRD requirement. See [`TraceabilityPhase`](#traceabilityphase).                                                                                                                                                                                                                                                                                                                                                                               |
 | `e2e`                       | boolean (default false)      | Whether this run opted into the e2e phase (the `--e2e` flag). Set once at create, immutable across resume. Default `false`: a run without the flag never schedules the e2e stage ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)).                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -231,6 +236,45 @@ rung)` before any results were recorded, the orchestrator resets the worktree to
 `{ resets_at_epoch?, binding_window?: "5h"|"7d" }` — the minimal state a resumable
 run persists. Present _iff_ the run is `paused` or `suspended`; resume must clear
 it before returning to `running`.
+
+## `self_heal` & `human_touches` — the stored-event exceptions
+
+Derive-don't-store forbids storing anything re-derivable from ground truth. These
+two fields are its **only sanctioned exceptions**: each records _history that no
+state or git re-derivation can recover_ — an EVENT, not a verdict. (The precedent
+is `TaskState.reviewers` and `cross_vendor_absent`, which are event records for the
+same reason.) Both are optional and absent on legacy runs, and neither ever holds a
+gate pass/fail boolean.
+
+### `self_heal`
+
+`{ attempts, last_at }?` — the bounded auto-rescue ledger
+([Decision 48](../explanation/decisions.md#decision-48--factory-recover--bounded-auto-rescue-self-heal)).
+Stamped **inside the same locked `applyRescue` mutation** that performs an `--auto`
+reset (`src/rescue/apply.ts`). `factory recover --auto` requires `attempts === 0`,
+so the self-heal loop is bounded to **ONE cycle per run** — "how many self-heal
+cycles already ran" cannot be recovered from state or git once the reset lands, so
+it must be stored.
+
+### `human_touches`
+
+`{ kind, at }[]?` — the append-only human-intervention ledger
+([S11, Decision 49](../explanation/decisions.md#decision-49--observability-touch-metric--statusline-progress--score---fleet)).
+One entry per human action on the run:
+
+| `kind`     | Appended when                                                                               |
+| ---------- | ------------------------------------------------------------------------------------------- |
+| `launch`   | `run create` — the run's first (and, on a clean lights-out run, only) touch.                |
+| `conflict` | a `--supersede` resolution — stamped on the **new** run alongside its `launch`.             |
+| `resume`   | a human `factory resume` / `recover` that actually **cleared a park** (not a no-op resume). |
+| `recover`  | a manual `factory rescue apply` / `recover` reset that did work.                            |
+
+`--auto` self-heal **never** appends — it is not a human. Every append is mirrored
+to `runs/<run-id>/metrics.jsonl` as a `human_touch` event (observability only). The
+touch METRIC stays derived, never stored: `(completed ? 1 : 0) / touches.length`,
+reported by [`factory score`](./cli.md#score) (`touches` + `touch_metric` fields)
+and the run report's "Human touches" line. Absent ledger → metric reads `null`/n/a,
+never a fabricated `0`.
 
 ## `DocsPhase`
 

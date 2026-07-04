@@ -57,7 +57,8 @@ where the threshold is **proportional to the task-graph size** (Decision 45):
 `max(maxConsecutiveFailures, ceil(0.15 × totalTasks))` — the config key is the
 floor (default 3; ≤20 tasks behave as the old flat cap, 30 tasks → 5, 40 → 6), and
 the 0.15 ratio is a module constant, not config. The breaker is **failures-only**
-since Decision 42 deleted the runtime arm along with workflow mode. The predicate's
+since Decision 42 deleted the runtime arm (along with the long-retired
+workflow-mode runner). The predicate's
 failure input is named `cumulativeFailures` to match the signal it actually bounds;
 the public config key keeps its historical name `maxConsecutiveFailures` for
 back-compat. The runner wires it into the run orchestrator through

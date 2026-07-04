@@ -1629,6 +1629,54 @@ repair commands.
 
 ---
 
+## Decision 49 — Observability: Touch Metric + Statusline Progress + `score --fleet`
+
+**Date:** 2026-07-04
+
+**Context:** Redesign session S11 (close-out). The factory's objective is
+lights-out delivery, but nothing measured it: no per-run record of how many
+times a human had to intervene, and no ambient signal of run progress without
+polling `factory state`.
+
+**Decision:**
+
+- **`human_touches` stored-event ledger** — the SECOND sanctioned exception to
+  derive-don't-store (after `self_heal`, Decision 48): an append-only
+  `{kind, at}` array on RunState. Engine write-sites append exactly ONE touch
+  per human action: `launch` (run create), `conflict` (the supersede-created
+  fresh run, on top of its launch), `resume` (a human resume that actually
+  cleared a park — the idempotent already-running re-entry appends nothing),
+  `recover` (a manual rescue apply that did work). `recover` route 4
+  (rescue + resume tail) is ONE action → ONE `recover` touch; the resume tail
+  runs with `{touch:false}`. `--auto` self-heal NEVER appends — it is not a
+  human. Each append is mirrored to `metrics.jsonl` (`human_touch` event) at
+  the CLI layer for offline analysis.
+- **The touch metric is DERIVED, never stored:** per run,
+  `(completed ? 1 : 0) / human_touches.length`. `launch` counts, so a clean
+  lights-out run scores exactly **1.0** — the acceptance bar S12 smokes
+  against. Legacy runs without the ledger report `null`/n/a, never a
+  fabricated value. Surfaced in `RunSummary` + report.md.
+- **`factory score --fleet`** — the store-wide roll-up: per-run
+  `{run_id, status, touches, metric}` plus
+  `aggregate = sum(completed) / sum(touches)` over runs carrying the ledger
+  (`null` when none do). Rides the tolerant `listRuns` (malformed run dirs
+  warn + skip).
+- **Statusline run-progress suffix** — ` [factory <done>/<total> <phase>
+<run_id> <status>]` appended to the passthrough line. Raw `JSON.parse` of
+  `state.json` through the GLOBAL `runs/current` pointer — deliberately NOT
+  `parseRunState`: a torn/partial read degrades to NO suffix; the statusline
+  never throws (always EXIT.OK). Terminal runs linger ≤30 min past `ended_at`;
+  `FACTORY_STATUSLINE_PROGRESS=0` disables. Accepted limit: the global pointer
+  shows the most-recent-writer under two concurrent repo runs.
+
+**Consequences:** every run now answers "how autonomous was it?" with one
+number whose perfect score is exactly 1.0; the fleet aggregate makes regressions
+across runs visible; and run progress is ambient in the statusline without a
+single state-poll — all without breaking derive-don't-store, because the ledger
+records EVENTS (irrecoverable history), never derivable state.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

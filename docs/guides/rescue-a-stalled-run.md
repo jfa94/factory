@@ -1,5 +1,14 @@
 # How to Rescue a Stalled Run
 
+**Start with `factory recover`** (S10, Decision 48) — the self-routing repair
+verb. It scans the run and does whatever it needs: resumes a clean park, resets
+stuck/recoverable work + reopens a terminal run, or pages you when only
+dead-ends remain. `recover --dry-run` shows the scan + chosen route without
+writing. Everything below is the **manual escape hatch** underneath it — reach
+for `rescue scan`/`apply` when you need to name exact tasks, include dead-ends,
+reset e2e, or recheck a rollup. See
+[reference/cli.md § recover](../reference/cli.md#recover).
+
 Use rescue when `factory resume` cannot recover a run. Resume only re-checks the
 quota gate — it never touches task state. When a crashed or suspended session left
 tasks **stuck mid-phase** (so a re-drive would deadlock), or a terminal `failed`
