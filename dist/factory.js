@@ -16744,6 +16744,17 @@ async function resolveNpm(opts) {
       "scaffold: mutation gate: stryker not installed \u2014 install @stryker-mutator/core or pass --waive mutation to record the waiver"
     );
   }
+  const coverageProvider = hasDep(pkg, "@vitest/coverage-v8") || hasDep(pkg, "@vitest/coverage-istanbul");
+  let coverage;
+  if (coverageProvider) {
+    coverage = yes;
+  } else if (opts.waiveCoverage) {
+    coverage = no("waived via --waive coverage");
+  } else {
+    throw new Error(
+      "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
+    );
+  }
   const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join24(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
@@ -16759,9 +16770,7 @@ async function resolveNpm(opts) {
     gates: {
       test: yes,
       tdd: yes,
-      coverage: no(
-        "coverage measurement not wired yet \u2014 re-scaffold after the coverage tool lands"
-      ),
+      coverage,
       mutation,
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: yes,
@@ -16778,7 +16787,9 @@ async function resolveDeno(opts) {
     gates: {
       test: { contracted: true, command: "deno test" },
       tdd: yes,
-      coverage: no("waived-by-stack: coverage measurement not wired for deno"),
+      coverage: no(
+        "waived-by-stack: deno coverage emits lcov, no json-summary \u2014 contract a coverage command that writes coverage/coverage-summary.json or keep waived"
+      ),
       mutation: no("waived-by-stack: stryker does not support deno"),
       sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
       type: { contracted: true, command: "deno check ." },
@@ -16796,6 +16807,10 @@ async function resolveGateContract(opts) {
   }
   const contract = stack === "npm" ? await resolveNpm(opts) : await resolveDeno(opts);
   return GateContractSchema.parse(contract);
+}
+async function recommendFastCheck(targetRoot) {
+  if (detectStack(targetRoot) !== "npm") return false;
+  return !hasDep(await readPackageJson(targetRoot), "fast-check");
 }
 async function ensureGateContract(opts) {
   const load = await loadGateContract(opts.targetRoot);
@@ -16819,7 +16834,7 @@ var log30 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation]
+  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage]
 
 Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
@@ -16836,11 +16851,15 @@ Options:
   --provision           Write branch protection if missing (default: refuse)
   --waive mutation      Record the mutation gate as deliberately waived in the gate
                         contract instead of refusing when stryker is not installed
+  --waive coverage      Record the coverage gate as deliberately waived instead of
+                        refusing when no vitest coverage provider is installed
 
 Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
 committed per-gate applicability agreement. Refuses below the floor (test + type +
 build equivalents must be contractable). COMMIT the file \u2014 'factory run' requires
-it tracked.`;
+it tracked. The contract is seed-like: an existing valid gates.json is never
+touched \u2014 delete it and re-scaffold to pick up new resolution rules (e.g. the
+S8 coverage flip).`;
 var GITIGNORE_ENTRIES = [
   "# Claude Code local state (factory scaffold guarantee)",
   ".claude/worktrees/",
@@ -16966,7 +16985,8 @@ async function runScaffold(opts) {
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
     securityCommand: opts.config.quality.securityCommand,
-    waiveMutation: opts.waiveMutation === true
+    waiveMutation: opts.waiveMutation === true,
+    waiveCoverage: opts.waiveCoverage === true
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
@@ -16975,6 +16995,11 @@ async function runScaffold(opts) {
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
+  }
+  if (await recommendFastCheck(opts.targetRoot)) {
+    log30.info(
+      "property-based testing: fast-check not installed \u2014 consider 'npm i -D fast-check' so the test-writer can write property tests (advisory only)"
+    );
   }
   await ensureGitignore(opts.targetRoot, lists);
   const settings = await ensureTargetSettings({
@@ -17043,8 +17068,8 @@ async function run5(argv) {
   }
   const waived = args.all("waive").map(String);
   for (const w of waived) {
-    if (w !== "mutation") {
-      throw new UsageError(`--waive accepts only 'mutation' (got '${w}')`);
+    if (w !== "mutation" && w !== "coverage") {
+      throw new UsageError(`--waive accepts only 'mutation' or 'coverage' (got '${w}')`);
     }
   }
   const { owner, repo } = await resolveScaffoldRepo(args);
@@ -17061,7 +17086,8 @@ async function run5(argv) {
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
     dataDir,
     provision: args.flag("provision") === true,
-    waiveMutation: waived.includes("mutation")
+    waiveMutation: waived.includes("mutation"),
+    waiveCoverage: waived.includes("coverage")
   });
   emitJson(report);
   return EXIT.OK;

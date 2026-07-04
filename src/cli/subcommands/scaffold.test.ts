@@ -55,7 +55,11 @@ async function seedNpmFixture(dir: string): Promise<void> {
     JSON.stringify({
       name: "fixture",
       scripts: { build: "tsc -p ." },
-      devDependencies: { vitest: "^2.0.0", "@stryker-mutator/core": "^8.0.0" },
+      devDependencies: {
+        vitest: "^2.0.0",
+        "@stryker-mutator/core": "^8.0.0",
+        "@vitest/coverage-v8": "^2.0.0",
+      },
     }) + "\n",
     "utf8",
   );
@@ -507,8 +511,7 @@ describe("runScaffold", () => {
       expect(contract.gates.build).toEqual({ contracted: true });
       expect(contract.gates.tdd).toEqual({ contracted: true });
       expect(contract.gates.mutation).toEqual({ contracted: true }); // stryker devDep in fixture
-      expect(contract.gates.coverage.contracted).toBe(false);
-      expect(contract.gates.coverage.reason).toMatch(/not wired yet/);
+      expect(contract.gates.coverage).toEqual({ contracted: true }); // coverage-v8 devDep (S8)
       expect(contract.gates.sast.contracted).toBe(false); // no securityCommand configured
       // eslint.config.mjs was seeded this run but eslint itself is not a dep.
       expect(contract.gates.lint.contracted).toBe(false);
@@ -541,7 +544,7 @@ describe("runScaffold", () => {
         JSON.stringify({
           name: "x",
           scripts: { build: "b" },
-          devDependencies: { vitest: "^2.0.0" },
+          devDependencies: { vitest: "^2.0.0", "@vitest/coverage-v8": "^2.0.0" },
         }),
         "utf8",
       );
@@ -555,6 +558,56 @@ describe("runScaffold", () => {
         contracted: false,
         reason: "waived via --waive mutation",
       });
+    });
+
+    it("npm without a coverage provider REFUSES; --waive coverage records the waiver (S8)", async () => {
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "x",
+          scripts: { build: "b" },
+          devDependencies: { vitest: "^2.0.0", "@stryker-mutator/core": "^8.0.0" },
+        }),
+        "utf8",
+      );
+      await expect(runScaffold(baseArgs())).rejects.toThrow(
+        /@vitest\/coverage-v8.*--waive coverage/s,
+      );
+      expect(existsSync(gatesPath())).toBe(false);
+
+      const report = await runScaffold({ ...baseArgs(), waiveCoverage: true });
+      expect(report.gates_contract).toBe("created");
+      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
+      expect(contract.gates.coverage).toEqual({
+        contracted: false,
+        reason: "waived via --waive coverage",
+      });
+    });
+
+    it("advises fast-check on npm when not a dep; silent when present (S8 PBT)", async () => {
+      const err: string[] = [];
+      const spy = (c: unknown): boolean => (err.push(String(c)), true);
+      const orig = process.stderr.write;
+      (process.stderr as unknown as { write: typeof spy }).write = spy;
+      try {
+        await runScaffold(baseArgs()); // fixture has no fast-check
+      } finally {
+        process.stderr.write = orig;
+      }
+      expect(err.join("")).toMatch(/fast-check not installed/);
+
+      const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+      pkg.devDependencies["fast-check"] = "^3.0.0";
+      await writeFile(join(root, "package.json"), JSON.stringify(pkg), "utf8");
+      const err2: string[] = [];
+      const spy2 = (c: unknown): boolean => (err2.push(String(c)), true);
+      (process.stderr as unknown as { write: typeof spy2 }).write = spy2;
+      try {
+        await runScaffold(baseArgs());
+      } finally {
+        process.stderr.write = orig;
+      }
+      expect(err2.join("")).not.toMatch(/fast-check/);
     });
 
     it("deno target: command overrides, build waived-by-stack, nodeOnly seeds skipped", async () => {
@@ -614,17 +667,32 @@ describe("scaffoldCommand.run", () => {
     expect(out.join("")).toMatch(/factory scaffold/);
   });
 
-  it("--waive with anything but 'mutation' is a USAGE error", async () => {
+  it("--waive with anything but 'mutation'/'coverage' is a USAGE error", async () => {
     const err: string[] = [];
     const spy = (c: unknown): boolean => (err.push(String(c)), true);
     const orig = process.stderr.write;
     (process.stderr as unknown as { write: typeof spy }).write = spy;
     try {
-      expect(await scaffoldCommand.run(["--waive", "coverage"])).toBe(EXIT.USAGE);
+      expect(await scaffoldCommand.run(["--waive", "lint"])).toBe(EXIT.USAGE);
     } finally {
       process.stderr.write = orig;
     }
-    expect(err.join("")).toMatch(/--waive accepts only 'mutation'/);
+    expect(err.join("")).toMatch(/--waive accepts only 'mutation' or 'coverage'/);
+  });
+
+  it("--waive coverage passes the allowlist (fails later on the malformed --repo, not on --waive)", async () => {
+    const err: string[] = [];
+    const spy = (c: unknown): boolean => (err.push(String(c)), true);
+    const orig = process.stderr.write;
+    (process.stderr as unknown as { write: typeof spy }).write = spy;
+    try {
+      expect(await scaffoldCommand.run(["--waive", "coverage", "--repo", "no-slash"])).toBe(
+        EXIT.USAGE,
+      );
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(err.join("")).not.toMatch(/--waive accepts only/);
   });
 
   it("a malformed --repo is a USAGE error", async () => {

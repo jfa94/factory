@@ -51,7 +51,7 @@ import {
   buildTargetDataDirRules,
   type TargetDataDirRules,
 } from "./target-settings.js";
-import { ensureGateContract } from "./scaffold-gates.js";
+import { ensureGateContract, recommendFastCheck } from "./scaffold-gates.js";
 import { GATE_CONTRACT_REL } from "../../verifier/deterministic/gate-contract.js";
 import type { GateContractStack } from "../../verifier/deterministic/gate-contract.js";
 import { UsageError } from "../../shared/usage-error.js";
@@ -62,7 +62,7 @@ const log = createLogger("scaffold");
 const HELP = `factory scaffold — prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation]
+  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage]
 
 Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
@@ -79,11 +79,15 @@ Options:
   --provision           Write branch protection if missing (default: refuse)
   --waive mutation      Record the mutation gate as deliberately waived in the gate
                         contract instead of refusing when stryker is not installed
+  --waive coverage      Record the coverage gate as deliberately waived instead of
+                        refusing when no vitest coverage provider is installed
 
 Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
 committed per-gate applicability agreement. Refuses below the floor (test + type +
 build equivalents must be contractable). COMMIT the file — 'factory run' requires
-it tracked.`;
+it tracked. The contract is seed-like: an existing valid gates.json is never
+touched — delete it and re-scaffold to pick up new resolution rules (e.g. the
+S8 coverage flip).`;
 
 /**
  * The `.gitignore` lines scaffold guarantees. Two invariants drive the list:
@@ -158,6 +162,8 @@ export interface ScaffoldOptions {
   readonly provision: boolean;
   /** --waive mutation: record the mutation gate as waived instead of refusing. */
   readonly waiveMutation?: boolean;
+  /** --waive coverage: record the coverage gate as waived instead of refusing. */
+  readonly waiveCoverage?: boolean;
 }
 
 /** Machine-readable scaffold report (emitted as JSON). */
@@ -411,6 +417,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     targetRoot: opts.targetRoot,
     securityCommand: opts.config.quality.securityCommand,
     waiveMutation: opts.waiveMutation === true,
+    waiveCoverage: opts.waiveCoverage === true,
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
@@ -419,6 +426,14 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
+  }
+  // S8 PBT advisory (never blocks, never installs): fast-check unlocks the
+  // test-writer's property-based tests.
+  if (await recommendFastCheck(opts.targetRoot)) {
+    log.info(
+      "property-based testing: fast-check not installed — consider 'npm i -D fast-check' " +
+        "so the test-writer can write property tests (advisory only)",
+    );
   }
 
   // 3. .gitignore guard (factory state must never be committed).
@@ -528,11 +543,11 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK;
   }
 
-  // --waive takes exactly the value "mutation" (the only waivable gate at scaffold).
+  // --waive takes exactly "mutation" or "coverage" (the scaffold-waivable gates).
   const waived = args.all("waive").map(String);
   for (const w of waived) {
-    if (w !== "mutation") {
-      throw new UsageError(`--waive accepts only 'mutation' (got '${w}')`);
+    if (w !== "mutation" && w !== "coverage") {
+      throw new UsageError(`--waive accepts only 'mutation' or 'coverage' (got '${w}')`);
     }
   }
 
@@ -554,6 +569,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     dataDir,
     provision: args.flag("provision") === true,
     waiveMutation: waived.includes("mutation"),
+    waiveCoverage: waived.includes("coverage"),
   });
   emitJson(report);
   return EXIT.OK;
