@@ -211,6 +211,18 @@ export class FakeGitClient implements GitClient {
 
   async worktreeAdd(args: readonly string[], _opts?: GitOpts): Promise<void> {
     this.calls.push(`worktree add ${args.join(" ")}`);
+    // Detached shape: `--detach <path> <startPoint>` (the traceability auditor's
+    // no-branch checkout, S9). Registers the path so worktreeExists models resume.
+    if (args[0] === "--detach") {
+      const path = args[1];
+      if (path !== undefined) {
+        if (this.worktrees.has(path)) {
+          throw new Error(`fatal: '${path}' already exists (worktree add)`);
+        }
+        this.worktrees.set(path, "(detached)");
+      }
+      return;
+    }
     // Parse `-b|-B <branch> <path> <startPoint>` shape we emit from worktree.ts.
     const bIdx = args.findIndex((a) => a === "-b" || a === "-B");
     const force = args[bIdx] === "-B";

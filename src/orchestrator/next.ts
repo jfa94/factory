@@ -39,6 +39,7 @@ import {
 } from "./deps.js";
 import { failTask } from "./transitions.js";
 import { MAX_DOCS_ATTEMPTS } from "./docs.js";
+import { MAX_TRACE_ATTEMPTS } from "./traceability.js";
 import { applyQuotaGate, quotaStopFields, type QuotaStop } from "./quota-gate.js";
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import type { OrchestratorDeps } from "./orchestrator.js";
@@ -69,6 +70,10 @@ export type NextTask =
     })
   | (NextContext & {
       readonly kind: "document";
+    })
+  | (NextContext & {
+      /** The PRD-traceability phase (S9, Decision 47) — ordered AFTER e2e, BEFORE `document`. */
+      readonly kind: "traceability";
     })
   | (NextContext & {
       /** The e2e phase (Decision 39) — ordered BEFORE `document`. */
@@ -115,8 +120,37 @@ async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean
   if (run.e2e_phase?.status === "failed") return false;
   // A failed assessment (Decision 40) also condemns the run — same rationale.
   if (run.e2e_assessment?.status === "failed") return false;
+  // A failed traceability audit (S9) condemns the run too — never pay the docs
+  // Opus on a run finalize is about to override to `failed`.
+  if (run.traceability?.status === "failed") return false;
   if (decideFinalize(run).run_status !== "completed") return false;
   return deps.docsApplicable();
+}
+
+/**
+ * True iff a fully-terminal run still owes its PRD-traceability audit (S9,
+ * Decision 47): prospectively `completed`, not a debug run (`/factory:debug`'s
+ * review⇄fix loop IS its traceability), not already condemned by e2e/assessment,
+ * and the phase has not CONCLUDED. Ordered AFTER e2e (audit the diff the e2e
+ * loop settled) and BEFORE docs (a condemned run never pays the docs Opus, and
+ * docs commits never pollute the audited diff).
+ *
+ * Concluded-vs-crash on a `failed` marker is DERIVED, never stored (the
+ * verdicts-presence discriminant): verdicts non-empty = a parsed audit landed an
+ * `unmet` verdict (judgment — never re-fired); verdicts empty + attempts at the
+ * cap = concluded crash; otherwise a crash still awaiting its retry → re-fire.
+ */
+function wantsTraceability(run: RunState): boolean {
+  if (run.debug) return false;
+  if (run.traceability?.status === "done") return false;
+  if (run.traceability?.status === "failed") {
+    if (run.traceability.verdicts.length > 0) return false; // concluded: unmet verdict
+    if ((run.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) return false; // concluded: crash cap
+    // else: crash below the cap — re-fire the audit.
+  }
+  if (run.e2e_phase?.status === "failed") return false;
+  if (run.e2e_assessment?.status === "failed") return false;
+  return decideFinalize(run).run_status === "completed";
 }
 
 /**
@@ -181,8 +215,9 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run);
   const needsAssessment = wantsE2eAssessment(run, allTerminal, needsE2e);
-  const needsDocs = allTerminal && !needsE2e && (await wantsDocs(deps, run));
-  if (allTerminal && !needsE2e && !needsDocs) {
+  const needsTrace = allTerminal && !needsE2e && wantsTraceability(run);
+  const needsDocs = allTerminal && !needsE2e && !needsTrace && (await wantsDocs(deps, run));
+  if (allTerminal && !needsE2e && !needsTrace && !needsDocs) {
     // Clear quota checkpoint before finalizing: a paused run whose tasks all complete
     // bypasses the step-4 clear below. Without this, a stop between this return and
     // factory-run-finalize strands the run as paused (stop-gate returns ALLOW for
@@ -226,6 +261,14 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
   // may still send back for rework.
   if (needsE2e) {
     return { ...ctx(), kind: "e2e" };
+  }
+
+  // Traceability gate (S9, Decision 47): a prospectively-completed run that has
+  // not concluded its PRD audit. AFTER e2e (audit the settled diff), BEFORE docs
+  // (a condemned run never pays the docs Opus; docs commits stay out of the
+  // audited diff). Reached AFTER the checkpoint clear, like docs below.
+  if (needsTrace) {
+    return { ...ctx(), kind: "traceability" };
   }
 
   // Docs gate: a completed run with a pending, applicable docs phase. Reached only

@@ -140,7 +140,14 @@ async function commentFailuresOnPrd(
 ): Promise<boolean> {
   // Decision 39: a `failed` run with zero task failures (an e2e-only veto — every
   // task shipped) still needs the PRD comment, or "never ship silently" is broken.
-  if (report.failures.length === 0 && report.e2e_failure === undefined) return false;
+  // S9 (Decision 47): same for a traceability-only veto.
+  if (
+    report.failures.length === 0 &&
+    report.e2e_failure === undefined &&
+    report.traceability_failure === undefined
+  ) {
+    return false;
+  }
 
   const marker = failureCommentMarker(report.run_id);
   const existing = await deps.gh.listIssueComments({
@@ -181,9 +188,13 @@ export async function finalizeRun(
   // Decision 40: a `failed` ASSESSMENT likewise condemns the run — normally the
   // record leg's task sweep already makes taskTerminal `failed`, but a resumed run
   // whose tasks were ALL done before the assessment fired has nothing to sweep.
+  // S9 (Decision 47): a `failed` PRD-traceability audit condemns the run the same
+  // way — unmet PRD intent (or an auditor crash at cap) blocks the rollup.
   const taskTerminal = decideFinalize(run).run_status;
   const terminal =
-    run.e2e_phase?.status === "failed" || run.e2e_assessment?.status === "failed"
+    run.e2e_phase?.status === "failed" ||
+    run.e2e_assessment?.status === "failed" ||
+    run.traceability?.status === "failed"
       ? "failed"
       : taskTerminal;
 

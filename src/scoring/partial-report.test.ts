@@ -213,6 +213,65 @@ describe("buildPartialReport", () => {
 
     expect(buildPartialReport(run, spec, { now: NOW }).e2e_failure).toBeUndefined();
   });
+
+  it("surfaces traceability_failure + non-met gaps when the PRD audit condemned the run (S9, Decision 47)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      traceability: {
+        status: "failed",
+        reason: 'PRD requirements unmet: "returns 201"',
+        verdicts: [
+          { requirement: "checkout must work", verdict: "met", evidence: "checkout.ts:1" },
+          { requirement: "returns 201", verdict: "unmet", evidence: "no 201 in the diff" },
+        ],
+        ended_at: NOW,
+      },
+    });
+
+    const report = buildPartialReport(run, spec, { now: NOW });
+    expect(report.failures).toEqual([]);
+    expect(report.traceability_failure).toBe('PRD requirements unmet: "returns 201"');
+    // Gaps carry ONLY the non-met rows — met rows are noise in a failure surface.
+    expect(report.traceability_gaps).toEqual([
+      { requirement: "returns 201", verdict: "unmet", evidence: "no 201 in the diff" },
+    ]);
+  });
+
+  it("surfaces traceability_gaps for partial rows even on a DONE audit; omits both when clean or absent", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const partialDone = makeRun([doneTask("t1", 1)], {
+      status: "completed",
+      traceability: {
+        status: "done",
+        verdicts: [
+          { requirement: "checkout must work", verdict: "met", evidence: "checkout.ts:1" },
+          { requirement: "returns 201", verdict: "partial", evidence: "happy path only" },
+        ],
+        ended_at: NOW,
+      },
+    });
+    const partialReport = buildPartialReport(partialDone, spec, { now: NOW });
+    expect(partialReport.traceability_failure).toBeUndefined();
+    expect(partialReport.traceability_gaps).toEqual([
+      { requirement: "returns 201", verdict: "partial", evidence: "happy path only" },
+    ]);
+
+    const allMet = makeRun([doneTask("t1", 1)], {
+      status: "completed",
+      traceability: {
+        status: "done",
+        verdicts: [{ requirement: "checkout must work", verdict: "met", evidence: "ok" }],
+        ended_at: NOW,
+      },
+    });
+    expect(buildPartialReport(allMet, spec, { now: NOW }).traceability_gaps).toBeUndefined();
+
+    const absent = makeRun([doneTask("t1", 1)], { status: "completed" });
+    const absentReport = buildPartialReport(absent, spec, { now: NOW });
+    expect(absentReport.traceability_failure).toBeUndefined();
+    expect(absentReport.traceability_gaps).toBeUndefined();
+  });
 });
 
 describe("renderPartialReportMarkdown", () => {
@@ -272,6 +331,29 @@ describe("renderPartialReportMarkdown", () => {
 
     expect(md).toContain("## End-to-end verification failed");
     expect(md).toContain("checkout: cap-exhausted critical");
+    expect(md).not.toContain("## Failed");
+  });
+
+  it("renders the PRD traceability sections — veto reason + gap rows (S9, Decision 47)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      traceability: {
+        status: "failed",
+        reason: 'PRD requirements unmet: "returns 201"',
+        verdicts: [
+          { requirement: "checkout must work", verdict: "met", evidence: "checkout.ts:1" },
+          { requirement: "returns 201", verdict: "unmet", evidence: "no 201 in the diff" },
+        ],
+        ended_at: NOW,
+      },
+    });
+    const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
+
+    expect(md).toContain("## PRD traceability failed");
+    expect(md).toContain('PRD requirements unmet: "returns 201"');
+    expect(md).toContain("## PRD requirement gaps");
+    expect(md).toContain("- **returns 201** (`unmet`): no 201 in the diff");
     expect(md).not.toContain("## Failed");
   });
 });
@@ -520,5 +602,29 @@ describe("renderFailureComment", () => {
 
     expect(body).toContain("### End-to-end verification failed");
     expect(body).toContain("checkout: cap-exhausted critical");
+  });
+
+  it("surfaces the Unmet PRD requirements block on a traceability veto (S9, Decision 47)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      traceability: {
+        status: "failed",
+        reason: 'PRD requirements unmet: "returns 201"',
+        verdicts: [
+          { requirement: "checkout must work", verdict: "met", evidence: "checkout.ts:1" },
+          { requirement: "returns 201", verdict: "unmet", evidence: "no 201 in the diff" },
+        ],
+        ended_at: NOW,
+      },
+    });
+    const report = buildPartialReport(run, spec, { now: NOW });
+    const body = renderFailureComment(report);
+
+    expect(body).toContain("### Unmet PRD requirements");
+    expect(body).toContain('PRD requirements unmet: "returns 201"');
+    // Only the non-met rows, with the auditor's evidence.
+    expect(body).toContain("- **returns 201** (`unmet`): no 201 in the diff");
+    expect(body).not.toContain("checkout must work");
   });
 });

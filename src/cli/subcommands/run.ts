@@ -46,6 +46,9 @@ import {
   runAssessmentEmit,
   runAssessmentRecord,
   AssessmentResultsSchema,
+  runTraceabilityEmit,
+  runTraceabilityRecord,
+  TraceabilityResultsSchema,
   readJsonInput,
 } from "../../orchestrator/index.js";
 import { loadCliDeps, type CliDeps } from "../wiring.js";
@@ -72,6 +75,7 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
   factory run e2e-assess [--run <id>] [--results <path>]
@@ -81,6 +85,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
+  traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
@@ -1003,6 +1008,22 @@ const runDocs = phaseCommand({
   emit: runDocsEmit,
 });
 
+const TRACE_HELP = `factory run traceability [--run <id>] [--results <path>]
+
+Emit the PRD-traceability audit spawn request (S9, Decision 47), or (with
+--results) record the auditor's per-requirement verdicts: all met/partial →
+phase done; any unmet → run condemned (finalize blocks the rollup); a crashed
+auditor retries once, then fails the run. The CLI never spawns the auditor — a
+orchestrator does.`;
+
+const runTraceability = phaseCommand({
+  help: TRACE_HELP,
+  phase: "traceability",
+  parse: (raw) => TraceabilityResultsSchema.parse(raw),
+  record: runTraceabilityRecord,
+  emit: runTraceabilityEmit,
+});
+
 const E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
 
 Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
@@ -1191,6 +1212,8 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "traceability":
+      return runTraceability(rest);
     case "docs":
       return runDocs(rest);
     case "e2e":
@@ -1201,7 +1224,7 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | e2e-assess | cancel)`,
+        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`,
       );
   }
 }

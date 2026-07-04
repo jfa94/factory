@@ -256,6 +256,9 @@ describe("run arg/usage edges", () => {
   it("docs: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["docs", "--help"])).toBe(EXIT.OK);
   });
+  it("traceability: --help prints help and exits OK (S9, Decision 47)", async () => {
+    expect(await runCommand.run(["traceability", "--help"])).toBe(EXIT.OK);
+  });
   it("e2e: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["e2e", "--help"])).toBe(EXIT.OK);
   });

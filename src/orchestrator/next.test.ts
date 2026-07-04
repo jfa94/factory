@@ -18,6 +18,14 @@ import type { UsageReading } from "../quota/usage-source.js";
 
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
 
+// S9: the traceability stage fires on EVERY prospectively-completed non-debug run.
+// Tests pinning the docs/finalize legs seed it done so their pin stays on-target.
+const TRACED = {
+  status: "done" as const,
+  verdicts: [],
+  ended_at: "2026-01-01T00:00:00.000Z",
+};
+
 describe("nextTask", () => {
   it("terminal run → run-terminal", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps({
@@ -251,8 +259,10 @@ describe("nextTask", () => {
       usage: PAUSE_5H,
     });
     try {
-      // Seed T1 as done so the run is effectively finished
+      // Seed T1 as done so the run is effectively finished (traceability already
+      // concluded — S9's pending phase would legitimately engage the quota gate).
       await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
+      await deps.state.update(runId, (s) => ({ ...s, traceability: TRACED }));
 
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
@@ -314,8 +324,9 @@ describe("nextTask", () => {
   it("empty run (no tasks) → all-terminal with cascade_failed []", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
-      // Clear the default T1 so the run has zero tasks
-      await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
+      // Clear the default T1 so the run has zero tasks (traceability concluded —
+      // a vacuously-completed run would otherwise owe the S9 audit first).
+      await deps.state.update(runId, (s) => ({ ...s, tasks: {}, traceability: TRACED }));
 
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
@@ -330,7 +341,7 @@ describe("nextTask", () => {
   it("empty run + quota-breach → all-terminal with no checkpoint written", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: PAUSE_5H });
     try {
-      await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
+      await deps.state.update(runId, (s) => ({ ...s, tasks: {}, traceability: TRACED }));
 
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
@@ -441,6 +452,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, traceability: TRACED }));
       expect((await nextTask(deps, runId)).kind).toBe("document");
     } finally {
       await cleanup();
@@ -454,6 +466,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, traceability: TRACED }));
       expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
@@ -467,7 +480,11 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
+      await state.update(runId, (s) => ({
+        ...s,
+        traceability: TRACED,
+        docs: { status: "done", ended_at: DONE_AT },
+      }));
       expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
@@ -506,6 +523,7 @@ describe("docs-ready gate", () => {
         ...s,
         status: "suspended",
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
+        traceability: TRACED,
         docs: { status: "failed", reason: "prior", ended_at: DONE_AT },
       }));
       expect((await nextTask(deps, runId)).kind).toBe("document");
@@ -544,6 +562,7 @@ describe("e2e-ready gate (Decision 39)", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, traceability: TRACED }));
       expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
@@ -559,6 +578,7 @@ describe("e2e-ready gate (Decision 39)", () => {
       await state.update(runId, (s) => ({
         ...s,
         e2e: true,
+        traceability: TRACED,
         e2e_phase: { status: "done", manifest: [], reopen_counts: {}, ended_at: DONE_AT },
       }));
       expect((await nextTask(deps, runId)).kind).toBe("finalize");
@@ -647,6 +667,185 @@ describe("e2e-ready gate (Decision 39)", () => {
         },
       }));
       expect((await nextTask(deps, runId)).kind).toBe("e2e");
+      const resumed = await state.read(runId);
+      expect(resumed.status).toBe("running");
+      expect(resumed.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("traceability gate (S9, Decision 47)", () => {
+  const DONE_AT = "2026-01-01T00:00:00.000Z";
+
+  it("completed run → traceability fires before docs and finalize (universal, no opt-in)", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      expect((await nextTask(deps, runId)).kind).toBe("traceability");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("Δ debug run skips traceability — its review⇄fix loop IS the audit (user-confirmed)", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, debug: true }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("traceability done → proceeds to docs", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, traceability: TRACED }));
+      expect((await nextTask(deps, runId)).kind).toBe("document");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("CONCLUDED failed (unmet verdicts) → finalize, docs skipped even when applicable", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        traceability: {
+          status: "failed" as const,
+          reason: 'PRD requirements unmet: "returns 201"',
+          verdicts: [{ requirement: "returns 201", verdict: "unmet" as const, evidence: "none" }],
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // The verdicts-presence discriminant (derive-don't-store): failed + empty verdicts +
+  // attempts below cap = a CRASH awaiting its retry, not a concluded verdict.
+  it("crash-failed below cap → re-fires traceability", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        traceability: {
+          status: "failed" as const,
+          reason: "auditor died",
+          attempts: 1,
+          verdicts: [],
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("traceability");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("crash-failed AT cap → finalize (concluded — the anti-docs delta)", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        traceability: {
+          status: "failed" as const,
+          reason: "auditor died twice",
+          attempts: 2,
+          verdicts: [],
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("e2e pending precedes traceability", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_assessment: { status: "done" as const, affected_specs: [] },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a failed e2e phase skips traceability — the run is already condemned", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_phase: {
+          status: "failed" as const,
+          reason: "cap-exhausted critical",
+          manifest: [],
+          reopen_counts: {},
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("trace-suspended run (A2: no quota field) resumes through the gate back to traceability", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      // The crash-suspend leg parks the run suspended WITHOUT a quota checkpoint (A2).
+      await state.update(runId, (s) => ({
+        ...s,
+        status: "suspended" as const,
+        traceability: {
+          status: "failed" as const,
+          reason: "auditor died",
+          attempts: 1,
+          verdicts: [],
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("traceability");
       const resumed = await state.read(runId);
       expect(resumed.status).toBe("running");
       expect(resumed.quota).toBeUndefined();
@@ -749,6 +948,7 @@ describe("docs ordering invariant", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, traceability: TRACED }));
 
       // Before docs: the gate withholds all-terminal.
       expect((await nextTask(deps, runId)).kind).toBe("document");

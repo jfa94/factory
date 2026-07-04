@@ -20,6 +20,7 @@
  * the runtime never recorded.
  */
 import type { RunState, RunStatus, FailureClass } from "../types/index.js";
+import type { TraceabilityVerdictRow } from "../core/state/schema.js";
 import type { SpecManifest, SpecTask } from "../spec/schema.js";
 import { nowIso } from "../shared/index.js";
 
@@ -103,6 +104,19 @@ export interface PartialRunReport {
   e2e_warnings?: string[];
   /** The run-start e2e assessment's failure reason (Decision 40 D3c), IFF it failed. */
   e2e_assessment_failure?: string;
+  /**
+   * The PRD traceability audit's veto reason (S9, Decision 47), present IFF
+   * `run.traceability.status === "failed"`. Like {@link e2e_failure}, this lets a
+   * `failed` run_status coexist with an empty `failures` list — every task shipped,
+   * but the audit found the PRD's intent unmet (or the auditor crashed out at cap).
+   */
+  traceability_failure?: string;
+  /**
+   * Every non-`met` verdict row from the PRD audit (S9, Decision 47) — surfaced even
+   * on a `done` audit (`partial` passes the gate but is a visible gap, not a secret).
+   * Present IFF non-empty.
+   */
+  traceability_gaps?: TraceabilityVerdictRow[];
   /**
    * Δ U/S5 — tasks whose ADVANCING verify pass ran WITHOUT an independent
    * cross-vendor reviewer (task.cross_vendor_absent), in spec order. Present IFF
@@ -208,6 +222,7 @@ export function buildPartialReport(
       ? { e2e_advisory: run.e2e_phase.advisory }
       : {}),
     ...buildE2eNarrative(run),
+    ...buildTraceability(run),
     ...buildCrossVendorAbsences(run, bySpecOrder),
     ...(opts.warnings !== undefined && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}),
   };
@@ -223,6 +238,17 @@ function buildCrossVendorAbsences(
     .map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent!.reason }))
     .sort(bySpecOrder);
   return absences.length > 0 ? { cross_vendor_absences: absences } : {};
+}
+
+/** The S9 PRD-traceability fields (Decision 47): veto reason + non-met gap rows. */
+function buildTraceability(run: RunState): Partial<PartialRunReport> {
+  const gaps = (run.traceability?.verdicts ?? []).filter((v) => v.verdict !== "met");
+  return {
+    ...(run.traceability?.status === "failed"
+      ? { traceability_failure: run.traceability.reason ?? "PRD traceability audit failed" }
+      : {}),
+    ...(gaps.length > 0 ? { traceability_gaps: gaps } : {}),
+  };
 }
 
 /** The D12 plain-language e2e fields (journeys/reopens/warnings/assessment failure). */
@@ -287,6 +313,12 @@ export function renderFailureComment(report: PartialRunReport): string {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     lines.push("", "### End-to-end setup failed before any task ran", plain);
     if (detail !== undefined) lines.push("```", detail, "```");
+  }
+  if (report.traceability_failure !== undefined) {
+    lines.push("", "### Unmet PRD requirements", report.traceability_failure);
+    for (const g of report.traceability_gaps ?? []) {
+      lines.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+    }
   }
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` — ${failure.title}`);
@@ -397,6 +429,20 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
   if (report.e2e_advisory !== undefined) {
     out.push("## End-to-end verification — advisory");
     out.push(report.e2e_advisory);
+    out.push("");
+  }
+
+  if (report.traceability_failure !== undefined) {
+    out.push("## PRD traceability failed");
+    out.push(report.traceability_failure);
+    out.push("");
+  }
+
+  if (report.traceability_gaps !== undefined) {
+    out.push("## PRD requirement gaps");
+    for (const g of report.traceability_gaps) {
+      out.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+    }
     out.push("");
   }
 
