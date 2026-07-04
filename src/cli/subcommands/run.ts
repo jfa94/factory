@@ -548,7 +548,7 @@ export type ResumeResult =
  *     → `resumed` with the unchanged state;
  *   - a recovered window clears the checkpoint (status→running, quota→undefined) and
  *     returns the updated state;
- *   - an over-curve / unobservable window is `still-blocked` (fail-closed) and
+ *   - an over-curve / unobservable window is `pause` (fail-closed) and
  *     leaves state exactly as persisted.
  */
 export async function applyResume(
@@ -586,9 +586,9 @@ export async function applyResume(
     case "pause": {
       const d = plan.decision;
       // NB: two distinct `.kind` unions are in play here — the OUTER `plan.kind`
-      // (ResumePlan: not-resumable | resume | still-blocked, switched above) and this
+      // (ResumePlan: not-resumable | resume | pause, switched above) and this
       // INNER `d.kind` (QuotaDecision: proceed | pause-5h | suspend-7d | unavailable-halt).
-      // planResume only ever pairs `still-blocked` with a NON-proceed QuotaDecision, so
+      // planResume only ever pairs `pause` with a NON-proceed QuotaDecision, so
       // `proceed` is not expected here — but this is a DEFENSIVE TYPE NARROW, not dead
       // code: without it the compiler cannot prove `d.reason` (below) exists, since the
       // `proceed` arm of QuotaDecision carries no `reason`. The guard discharges that.

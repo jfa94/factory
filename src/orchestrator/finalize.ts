@@ -41,6 +41,8 @@ import {
   failureCommentMarker,
   recordRunFinalized,
   resolveStagingBranch,
+  scanRun,
+  effectiveAutoResets,
   type Config,
   type GhClient,
   type GitClient,
@@ -136,6 +138,7 @@ function rollupTitle(report: PartialRunReport): string {
  */
 async function commentFailuresOnPrd(
   deps: FinalizeRunDeps,
+  run: RunState,
   report: PartialRunReport,
 ): Promise<boolean> {
   // Decision 39: a `failed` run with zero task failures (an e2e-only veto — every
@@ -159,10 +162,16 @@ async function commentFailuresOnPrd(
     return false;
   }
 
+  // S10 (Decision 48): tell the PRD reader whether the runner's ONE bounded
+  // self-heal cycle (`factory recover --auto`) fires next — eligible iff it has
+  // not already run and the auto-safe reset set is non-empty.
+  const selfHealEligible =
+    (run.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run, scanRun(run)).length > 0;
+
   await deps.gh.issueComment({
     repo: report.repo,
     number: report.issue_number,
-    body: renderFailureComment(report),
+    body: renderFailureComment(report, selfHealEligible),
   });
   return true;
 }
@@ -223,7 +232,7 @@ export async function finalizeRun(
   // Decision 39 (debug driver, forward decl): a debug run isn't a whole-PRD delivery —
   // it loops review⇄fix passes on the debug session's OWN staging branch/PR, so the PRD
   // issue is never touched from finalize (the debug driver owns any PRD-facing comms).
-  const failureCommentPosted = run.debug ? false : await commentFailuresOnPrd(deps, report);
+  const failureCommentPosted = run.debug ? false : await commentFailuresOnPrd(deps, run, report);
 
   // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
   //    On failed, develop is untouched (the PRD failure comment is already posted above).

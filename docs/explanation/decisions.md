@@ -1574,6 +1574,61 @@ spec before the pipeline spends anything. Cost: +1 Opus audit per completed run.
 
 ---
 
+## Decision 48 — `factory recover` + Bounded Auto-Rescue (Self-Heal)
+
+**Date:** 2026-07-04
+
+**Context:** Redesign session S10. Repairing a stalled run demanded the operator
+know WHICH of three verbs applied (`resume` for parks, `rescue` for stuck/failed
+tasks, neither for dead-ends) — triage knowledge the engine already has. And a
+transient failure (a flaky environment) that failed a run stayed failed until a
+human typed the rescue incantation, even when the engine knew the reset was safe.
+
+**Decision:**
+
+- **`factory recover` — ONE self-routing repair verb.** Pure ROUTING over the
+  existing seams (`scanRun`, `assessWork`, `applyRescue`, `applyResume`) — zero
+  new pipeline logic. Routes in order: no run → `{kind:"nothing"}`;
+  completed/superseded → nothing (+ `--recheck-rollup` hint when a rollup is
+  armed); paused/suspended + clean scan → resume, the envelope naming the
+  DERIVED awaiting cause (`quota|e2e|traceability|docs|spec-approval` via pure
+  `deriveAwaiting` — never a stored reason field); resettable work → rescue
+  apply + clear any surviving park, with `reconcile:true` when the git probe
+  flags drift (recorded branch gone / staging base unresolvable — the COMMAND
+  doc then spawns rescue-reconciler; the CLI never spawns agents); dead-ends/e2e
+  only → `{kind:"page"}` with exact `rescue apply` hint commands. Every envelope
+  is EXIT.OK — a page is a routed outcome, not a CLI failure. `--dry-run` emits
+  scan + route, writing nothing; `factory rescue scan` is now an alias of it.
+  `resume`/`rescue` stay registered as the flag-rich escape hatches.
+- **`--auto` — ONE bounded self-heal cycle per run.** Fired by the runner ONCE
+  after a failed finalize. The auto-safe set is `effectiveAutoResets`:
+  `scan.resettable` (stuck ∪ recoverable) filtered to tasks ACTIONABLE
+  POST-RESET — simulate all candidates `pending`, keep a task iff no task in its
+  transitive `depends_on` closure remains failed/missing. A candidate downstream
+  of a dead-end is excluded (its reset would just re-cascade and re-finalize — a
+  pure quota burn). Dead-ends, e2e verdicts, and rollup rechecks are NEVER auto
+  (each needs a human assertion the cause is fixed). Targets + gating are
+  computed INSIDE the locked `applyRescue` mutator; `auto` is mutually exclusive
+  with every manual option (LOUD error).
+- **`self_heal` stored-event exception.** `{attempts, last_at}` on RunState —
+  a sanctioned exception to derive-don't-store (precedent: the retired
+  `paused_minutes`): "how many self-heal cycles already ran" is history no
+  state/git re-derivation can recover. `--auto` requires `attempts === 0`,
+  bounding the loop to ONE cycle; a blocked auto never spends the cycle.
+- **Loud page.** A blocked `--auto` posts ONE comment on the originating PRD
+  (deduped via `selfHealCommentMarker`, same contract as the failure comment) —
+  the runner is unattended, stdout reaches nobody. The finalize failure comment
+  gains a "self-heal runs next" line iff eligible (attempts=0 ∧ non-empty
+  effective set), so the PRD reader knows whether to wait or triage.
+
+**Consequences:** `factory recover` is the only verb an operator needs to
+remember; transient failures clear themselves exactly once with no human in the
+loop; and a run can never ping-pong between finalize and self-heal — the
+attempts ledger caps the cycle at one, after which a human is paged with exact
+repair commands.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

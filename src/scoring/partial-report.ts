@@ -290,6 +290,16 @@ export function failureCommentMarker(runId: string): string {
 }
 
 /**
+ * Marker for the self-heal page comment (`factory recover --auto`, S10 /
+ * Decision 48). Same dedup contract as {@link failureCommentMarker}: the recover
+ * CLI scans the PRD's existing comments for it, so a re-fired blocked
+ * auto-recover never double-posts.
+ */
+export function selfHealCommentMarker(runId: string): string {
+  return `<!-- factory:self-heal:${runId} -->`;
+}
+
+/**
  * Render the failed tasks of a failed run as ONE markdown comment for the
  * originating PRD issue. Replaces the retired one-issue-per-failure behavior: GitHub
  * issues are PRDs, failures are run-internal, and the authoritative per-task status
@@ -298,12 +308,21 @@ export function failureCommentMarker(runId: string): string {
  * because a failure never cleared the merge gate). The leading marker makes a re-finalize
  * idempotent (see {@link failureCommentMarker}).
  */
-export function renderFailureComment(report: PartialRunReport): string {
+export function renderFailureComment(report: PartialRunReport, selfHealEligible = false): string {
   const lines: string[] = [
     failureCommentMarker(report.run_id),
     `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) failed. ` +
       `PRD left open for rescue/resume.`,
   ];
+  // S10 (Decision 48): tell the PRD reader the runner's ONE bounded self-heal
+  // cycle fires next, so a transient failure may clear itself before triage.
+  if (selfHealEligible) {
+    lines.push(
+      "",
+      "_Self-heal: the runner retries the recoverable failure(s) once via " +
+        "`factory recover --auto` before paging a human._",
+    );
+  }
   if (report.e2e_failure !== undefined) {
     const { plain, detail } = splitReason(report.e2e_failure);
     lines.push("", "### End-to-end verification failed", plain);

@@ -95,6 +95,8 @@ describe("rescue scan/apply happy paths", () => {
     expect(scan.resettable).toEqual(["a", "b"]);
     expect(scan.dead_ends).toEqual(["c"]);
     expect(scan.needs_rescue).toBe(true);
+    // S10 alias: scan delegates to `recover --dry-run`, which adds the route.
+    expect(scan.route).toBe("rescue");
     // read-only: state unchanged.
     const run = await new StateManager({ dataDir }).read("run-c");
     expect(run.tasks.a!.status).toBe("executing");

@@ -27,7 +27,7 @@ import { clearCheckpoint, type ClearCheckpointPatch } from "./checkpoint.js";
  *   - `resume`        — the binding window has recovered (usage observable + under
  *                       curve); `clear` is the checkpoint-clearing patch the orchestrator
  *                       applies to return the run to `running`.
- *   - `still-blocked` — usage is still over curve (or unobservable); `decision`
+ *   - `pause`         — usage is still over curve (or unobservable); `decision`
  *                       carries the fresh pacer decision so the caller can report
  *                       why resume did not proceed.
  *   - `not-resumable` — the persisted run is not in a resumable (paused|suspended)
@@ -43,7 +43,7 @@ export type ResumePlan =
  * usage reading, the config curves, and `nowEpoch`. Only `paused`/`suspended`
  * runs are resumable; for those, a fresh `proceed` decision clears the checkpoint
  * and the run returns to `running`, while any non-proceed decision keeps it
- * blocked (fail-closed: an unobservable reading is `still-blocked`, never resumed).
+ * blocked (fail-closed: an unobservable reading is `pause`, never resumed).
  */
 export function planResume(
   run: RunState,

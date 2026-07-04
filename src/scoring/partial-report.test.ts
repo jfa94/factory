@@ -3,6 +3,7 @@ import {
   buildPartialReport,
   renderPartialReportMarkdown,
   renderFailureComment,
+  selfHealCommentMarker,
   failureCommentMarker,
 } from "./partial-report.js";
 import { parseRunState, type RunState, type TaskState } from "../types/index.js";
@@ -568,6 +569,20 @@ describe("renderFailureComment", () => {
     // Full acceptance criteria rendered as unmet checkboxes.
     expect(body).toContain("  - [ ] t1 criterion one");
     expect(body).toContain("  - [ ] t1 criterion two");
+  });
+
+  it("adds the self-heal line iff eligible (S10, Decision 48)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([failedTask("t1", "blocked-environmental", "CI infra down")], {
+      status: "failed",
+    });
+    const report = buildPartialReport(run, spec, { now: NOW });
+    expect(renderFailureComment(report, true)).toContain("factory recover --auto");
+    expect(renderFailureComment(report)).not.toContain("factory recover --auto");
+  });
+
+  it("embeds the self-heal marker with the run id", () => {
+    expect(selfHealCommentMarker("run-1")).toBe("<!-- factory:self-heal:run-1 -->");
   });
 
   it("includes branch + PR pointers when present", () => {
