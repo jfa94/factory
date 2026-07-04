@@ -10536,7 +10536,7 @@ function parseProducerStatus(raw) {
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
     return { status: "needs-context", reason: line };
   }
-  if (/^(?:STATUS\s*:\s*)?DONE\b/.test(upper)) {
+  if (/^(?:STATUS\s*:\s*)?DONE(?:_WITH_CONCERNS)?\b/.test(upper)) {
     return { status: "done" };
   }
   return {
