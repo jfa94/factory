@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile19;
-      function readFile19(path6, options, cb) {
+      fs2.readFile = readFile20;
+      function readFile20(path6, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path6, options, cb);
@@ -6619,6 +6619,22 @@ var RunStateSchema = external_exports.object({
     attempts: external_exports.number().int().nonnegative(),
     last_at: external_exports.string()
   }).optional(),
+  /**
+   * Human-intervention ledger (S11): one entry per human action on the run —
+   * `launch` (run create), `conflict` (a `--supersede` resolution, stamped on the
+   * NEW run alongside its launch), `resume` (a human resume clearing a park),
+   * `recover` (a manual rescue apply / recover). The second sanctioned
+   * stored-EVENT exception (with `self_heal`): which touches happened is history
+   * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
+   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   */
+  human_touches: external_exports.array(
+    external_exports.object({
+      kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
+      at: external_exports.string()
+    })
+  ).optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -9390,6 +9406,8 @@ function buildRunSummary(run11, report, opts = {}) {
     ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
+  const touches = run11.human_touches?.length ?? null;
+  const touchMetric = touches === null || touches === 0 ? null : (run11.status === "completed" ? 1 : 0) / touches;
   return {
     run_id: run11.run_id,
     run_status: run11.status,
@@ -9407,7 +9425,9 @@ function buildRunSummary(run11, report, opts = {}) {
     failures_by_class: failuresByClass,
     effort,
     shipped_prs,
-    tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0
+    tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0,
+    touches,
+    touch_metric: touchMetric
   };
 }
 
@@ -9427,6 +9447,9 @@ async function writeMetric(dataDir, runId, event, data, opts) {
     log14.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
     return { record, written: false };
   }
+}
+async function emitMetric(dataDir, runId, event, data, opts = {}) {
+  return (await writeMetric(dataDir, runId, event, data, opts)).record;
 }
 async function recordRunFinalized(dataDir, report, opts = {}) {
   const now = opts.now ?? nowIso();
@@ -12868,7 +12891,8 @@ async function applyRescue(state, runId, opts = {}) {
           reset: [],
           reopened: false,
           skipped: [],
-          auto_blocked: blocked
+          auto_blocked: blocked,
+          touched: false
         };
         return run11;
       };
@@ -12882,7 +12906,9 @@ async function applyRescue(state, runId, opts = {}) {
         reset: targets2,
         reopened: reopen2,
         skipped: [],
-        self_heal_attempts: attempts + 1
+        self_heal_attempts: attempts + 1,
+        touched: false
+        // self-heal is not a human (S11)
       };
       const nextTasks2 = { ...run11.tasks };
       for (const id of targets2) {
@@ -12901,14 +12927,16 @@ async function applyRescue(state, runId, opts = {}) {
     const assessReset = opts.resetE2e === true && run11.e2e_assessment?.status === "failed";
     const rollupRecheck = opts.recheckRollup === true && run11.rollup?.merged === false;
     const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
+    const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck;
     result = {
       run_id: runId,
       run_status: reopen ? "running" : run11.status,
       reset: targets,
       reopened: reopen,
-      skipped
+      skipped,
+      touched: didWork
     };
-    if (targets.length === 0 && !reopen && !e2eReset && !assessReset && !rollupRecheck) {
+    if (!didWork) {
       return run11;
     }
     const nextTasks = { ...run11.tasks };
@@ -12918,6 +12946,11 @@ async function applyRescue(state, runId, opts = {}) {
     return {
       ...run11,
       tasks: nextTasks,
+      // S11: a manual apply that did work IS a human touch.
+      human_touches: [
+        ...run11.human_touches ?? [],
+        { kind: "recover", at: opts.at ?? nowIso() }
+      ],
       ...e2eReset ? { e2e_phase: reopenE2ePhase(run11.e2e_phase) } : {},
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
@@ -15721,7 +15754,13 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     ...opts.e2e === true ? { e2e: true } : {},
     ...opts.debug === true ? { debug: true } : {}
   });
-  const run11 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run11 = await state.update(opts.runId, (s) => ({
+    ...s,
+    tasks: seeded,
+    // S11: the launch touch — every run costs at least one human action, so a
+    // clean lights-out run scores exactly 1.0 on the derived touch metric.
+    human_touches: [{ kind: "launch", at: s.started_at }]
+  }));
   if (stagingDeps !== void 0) {
     await ensureStaging({
       gitClient: stagingDeps.gitClient,
@@ -15771,11 +15810,15 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         }
         const supersededId = existing.run_id;
         await supersedeRun(state, existing, stagingDeps);
-        return {
-          kind: "superseded",
-          run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
-          supersededId
-        };
+        const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
+        const run11 = await state.update(created.run_id, (s) => ({
+          ...s,
+          human_touches: [
+            ...s.human_touches ?? [],
+            { kind: "conflict", at: s.started_at }
+          ]
+        }));
+        return { kind: "superseded", run: run11, supersededId };
       }
       return { kind: "exists", existing };
     }
@@ -15785,7 +15828,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
     };
   });
 }
-async function applyResume(state, runId, reading, config, nowEpochSec) {
+async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}) {
   const run11 = await state.read(runId);
   if (isTerminalRunStatus(run11.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
@@ -15798,12 +15841,14 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "not-resumable":
       return { kind: "resumed", run: run11 };
     case "resume": {
+      const at = new Date(nowEpochSec * 1e3).toISOString();
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
-        quota: plan.clear.quota
+        quota: plan.clear.quota,
+        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at }] }
       }));
-      return { kind: "resumed", run: updated };
+      return { kind: "resumed", run: updated, cleared: true };
     }
     case "pause": {
       const d = plan.decision;
@@ -16010,11 +16055,13 @@ async function runCreate(argv, overrides = {}) {
       }
     };
   };
+  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "launch" });
   if (result.kind === "created") {
     const out2 = approveSpec ? await park(result.run) : { run: result.run };
     emitJson({ kind: "created", ...out2 });
     return EXIT.OK;
   }
+  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "conflict" });
   const out = approveSpec ? await park(result.run) : { run: result.run };
   emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
   return EXIT.OK;
@@ -16040,6 +16087,9 @@ async function runResume(argv) {
   }
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());
+  if (envelope.kind === "resumed" && envelope.cleared === true) {
+    await emitMetric(dataDir, runId, "human_touch", { kind: "resume" });
+  }
   emitJson(envelope);
   return EXIT.OK;
 }
@@ -17597,9 +17647,9 @@ function pageHints(runId, scan) {
   }
   return hints;
 }
-async function resumeRun(state, runId, dataDir) {
+async function resumeRun(state, runId, dataDir, opts = {}) {
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch());
+  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch(), opts);
 }
 async function run6(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["auto", "dry-run"] });
@@ -17639,14 +17689,20 @@ async function run6(argv, overrides = {}) {
       requireAutonomousMode();
       const awaiting = deriveAwaiting(current);
       const envelope = await resumeRun(state, runId, dataDir);
+      if (envelope.kind === "resumed" && envelope.cleared === true) {
+        await emitMetric(dataDir, runId, "human_touch", { kind: "resume" });
+      }
       emitJson({ ...envelope, awaiting });
       return EXIT.OK;
     }
     case "rescue": {
       requireAutonomousMode();
-      const applied = await applyRescue(state, runId, {});
+      const applied = await applyRescue(state, runId, { at: overrides.now?.() ?? nowIso() });
+      if (applied.touched) {
+        await emitMetric(dataDir, runId, "human_touch", { kind: "recover" });
+      }
       const after = await state.read(runId);
-      const resume = after.status === "paused" || after.status === "suspended" ? await resumeRun(state, runId, dataDir) : void 0;
+      const resume = after.status === "paused" || after.status === "suspended" ? await resumeRun(state, runId, dataDir, { touch: false }) : void 0;
       const work = await assessWork(current, probeFrom(overrides));
       const reconcile = !work.base_resolved || work.tasks.some((t) => !t.branch_exists);
       emitJson({
@@ -17806,7 +17862,8 @@ async function runApply(argv, overrides = {}) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
   }
-  const state = new StateManager();
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
   const runId = await resolveRunId2(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
@@ -17818,6 +17875,9 @@ async function runApply(argv, overrides = {}) {
     resetE2e,
     recheckRollup
   });
+  if (result.touched) {
+    await emitMetric(dataDir, runId, "human_touch", { kind: "recover" });
+  }
   emitJson(result);
   return EXIT.OK;
 }
@@ -17847,19 +17907,44 @@ var HELP4 = `factory score \u2014 report a run's outcome summary (read-only)
 
 Usage:
   factory score [--run <id>]
+  factory score --fleet
 
   --run            The run to score (defaults to runs/current).
+  --fleet          Report the touch metric across EVERY run in the store (S11):
+                   per-run touches + metric, and the fleet aggregate
+                   sum(completed) / sum(touches) over runs carrying the ledger.
 
 Emits ONE JSON document:
-  { kind:"score", summary }`;
+  { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
+function touchMetricOf(run11) {
+  const touches = run11.human_touches?.length;
+  if (touches === void 0 || touches === 0) return null;
+  return (run11.status === "completed" ? 1 : 0) / touches;
+}
+async function runFleet(state) {
+  const all = await state.listRuns();
+  const runs = all.map((r) => ({
+    run_id: r.run_id,
+    status: r.status,
+    touches: r.human_touches?.length ?? null,
+    metric: touchMetricOf(r)
+  }));
+  const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0);
+  const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0);
+  const completed = withLedger.filter((r) => r.status === "completed").length;
+  const aggregate = totalTouches === 0 ? null : completed / totalTouches;
+  emitJson({ kind: "fleet-score", runs, aggregate });
+  return EXIT.OK;
+}
 async function runScore(argv, overrides = {}) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["fleet"] });
   if (args.flag("help") === true) {
     emitLine(HELP4);
     return EXIT.OK;
   }
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
+  if (args.flag("fleet") === true) return runFleet(state);
   const explicitRun = optionalString(args.flag("run"));
   const runState2 = explicitRun !== void 0 ? await state.read(explicitRun) : await readCurrentForCwd(state, overrides);
   if (runState2 === null) {
@@ -17979,6 +18064,10 @@ var nextCommand = {
   run: withUsageGuard("next-task", run9)
 };
 
+// src/cli/subcommands/statusline.ts
+import { readFile as readFile18 } from "node:fs/promises";
+import { join as join27 } from "node:path";
+
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
@@ -18003,6 +18092,33 @@ Usage:
 
 This is a side-effecting passthrough, not a machine subcommand: stdout is the
 displayed statusline text, NOT a JSON envelope.`;
+function progressEnabled(env = process.env) {
+  return env.FACTORY_STATUSLINE_PROGRESS !== "0";
+}
+var TERMINAL_LINGER_SEC = 30 * 60;
+async function renderProgress(deps) {
+  try {
+    if (!progressEnabled(deps.env ?? process.env)) return "";
+    const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
+    const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const run11 = JSON.parse(raw);
+    if (typeof run11.run_id !== "string" || typeof run11.status !== "string") return "";
+    if (run11.status === "completed" || run11.status === "failed" || run11.status === "superseded") {
+      const endedMs = typeof run11.ended_at === "string" ? Date.parse(run11.ended_at) : NaN;
+      const nowSec = (deps.now ?? nowEpoch)();
+      if (!Number.isFinite(endedMs) || nowSec - endedMs / 1e3 > TERMINAL_LINGER_SEC) return "";
+    }
+    const tasks = Object.values(run11.tasks ?? {});
+    const done = tasks.filter((t) => t?.status === "done").length;
+    const inFlight = tasks.find(
+      (t) => t?.status === "executing" || t?.status === "reviewing" || t?.status === "shipping"
+    );
+    const phase = typeof inFlight?.phase === "string" ? `${inFlight.phase} ` : "";
+    return ` [factory ${done}/${tasks.length} ${phase}${run11.run_id} ${run11.status}]`;
+  } catch {
+    return "";
+  }
+}
 function rateLimitsOf(payload) {
   if (typeof payload !== "object" || payload === null) return null;
   const rl = payload.rate_limits;
@@ -18060,8 +18176,10 @@ async function runStatusline(argv = [], deps = {}) {
   const rateLimits = rateLimitsOf(parsed);
   const cacheFailure = rateLimits !== null ? await writeCache(rateLimits, deps) : null;
   const displayed = await passthrough(payload, deps);
+  const progress = await renderProgress(deps);
   const write = deps.writeStdout ?? ((text) => process.stdout.write(text));
-  write(cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`.trimStart());
+  const base = cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`;
+  write(`${base}${progress}`.trimStart());
   return EXIT.OK;
 }
 var statuslineCommand = {
@@ -18071,8 +18189,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync10 } from "node:fs";
-import { readFile as readFile18 } from "node:fs/promises";
-import { join as join27 } from "node:path";
+import { readFile as readFile19 } from "node:fs/promises";
+import { join as join28 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -18110,7 +18228,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join27(dataDir, "merged-settings.json");
+  return join28(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -18186,10 +18304,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path6 = join27(pluginRoot, ".claude-plugin", "plugin.json");
+  const path6 = join28(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile18(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -18199,20 +18317,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join27(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join28(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync10(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile18(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join27(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile18(templatePath, "utf8");
+  const templatePath = join28(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile19(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -18274,7 +18392,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
 async function readOnDiskVersion(path6) {
   if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile18(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }

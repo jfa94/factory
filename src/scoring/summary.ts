@@ -60,6 +60,16 @@ export interface RunSummary {
   shipped_prs: ShippedPr[];
   /** Δ U/S5 — tasks reviewed WITHOUT an independent second-vendor reviewer. */
   tasks_without_cross_vendor: number;
+  /**
+   * S11 — the human-touch ledger count (`run.human_touches`), null on a legacy
+   * run without the field (n/a, never a fabricated 0).
+   */
+  touches: number | null;
+  /**
+   * S11 — the DERIVED objective metric: `(completed ? 1 : 0) / touches`. A clean
+   * lights-out run (launch only) scores exactly 1.0. Null when touches is null/0.
+   */
+  touch_metric: number | null;
 }
 
 /** Options for {@link buildRunSummary}. */
@@ -113,6 +123,11 @@ export function buildRunSummary(
     ...(s.branch !== undefined ? { branch: s.branch } : {}),
   }));
 
+  // S11 touch metric — derived, never stored. Legacy runs (no ledger) → null.
+  const touches = run.human_touches?.length ?? null;
+  const touchMetric =
+    touches === null || touches === 0 ? null : (run.status === "completed" ? 1 : 0) / touches;
+
   return {
     run_id: run.run_id,
     run_status: run.status,
@@ -131,6 +146,8 @@ export function buildRunSummary(
     effort,
     shipped_prs,
     tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0,
+    touches,
+    touch_metric: touchMetric,
   };
 }
 
@@ -176,6 +193,10 @@ export function renderRunSummaryMarkdown(summary: RunSummary): string {
     `**Effort:** ${summary.effort.reviewer_results} reviewer result(s) · ` +
       `max escalation rung ${summary.effort.max_escalation_rung}`,
   );
+  if (summary.touches !== null) {
+    const metric = summary.touch_metric === null ? "n/a" : summary.touch_metric.toFixed(2);
+    out.push(`**Human touches:** ${summary.touches} · touch metric ${metric}`);
+  }
   if (summary.tasks_without_cross_vendor > 0) {
     out.push(
       `**Review independence:** ${summary.tasks_without_cross_vendor} task(s) reviewed ` +

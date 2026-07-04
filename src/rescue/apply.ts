@@ -27,6 +27,7 @@ import { scanRun } from "./scan.js";
 import { effectiveAutoResets } from "./auto.js";
 import type { StateManager } from "../core/state/index.js";
 import { isTerminalRunStatus } from "../types/index.js";
+import { nowIso } from "../shared/time.js";
 import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js";
 
 /**
@@ -125,6 +126,11 @@ export interface RescueApplyOptions {
    * mutation as the resets (the sanctioned stored-event exception).
    */
   auto?: { at: string };
+  /**
+   * ISO stamp for the human_touches `recover` entry a manual (non-auto) apply
+   * that actually does work appends (S11). Defaults to {@link nowIso}; tests pin it.
+   */
+  at?: string;
 }
 
 /** What a `rescue apply` did. */
@@ -146,6 +152,12 @@ export interface RescueApplyResult {
   auto_blocked?: "attempts" | "empty";
   /** `self_heal.attempts` AFTER a successful auto apply; absent otherwise. */
   self_heal_attempts?: number;
+  /**
+   * True iff a manual apply actually did work and appended a human_touches
+   * `recover` entry (S11) — the CLI mirrors the touch to metrics.jsonl on this.
+   * Always false on `auto` (self-heal is not a human) and on pure no-ops.
+   */
+  touched: boolean;
 }
 
 /** Optional overrides applied on top of a plain {@link resetTaskRow} reset. */
@@ -282,6 +294,7 @@ export async function applyRescue(
           reopened: false,
           skipped: [],
           auto_blocked: blocked,
+          touched: false,
         };
         return run;
       };
@@ -297,6 +310,7 @@ export async function applyRescue(
         reopened: reopen,
         skipped: [],
         self_heal_attempts: attempts + 1,
+        touched: false, // self-heal is not a human (S11)
       };
       const nextTasks: Record<string, TaskState> = { ...run.tasks };
       for (const id of targets) {
@@ -322,6 +336,7 @@ export async function applyRescue(
     // Only reopen a terminal run when there is actually work to pick back up —
     // reopening with nothing to do would just re-finalize to the same status.
     const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
+    const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck;
 
     result = {
       run_id: runId,
@@ -329,6 +344,7 @@ export async function applyRescue(
       reset: targets,
       reopened: reopen,
       skipped,
+      touched: didWork,
     };
 
     // Phase repairs are DECOUPLED from run-status reopening: a crash between e2e's
@@ -336,7 +352,7 @@ export async function applyRescue(
     // asserted --reset-e2e repair must still clear the failed verdict — otherwise the
     // documented recovery silently no-ops and requires the non-obvious two-step of
     // finalizing first, then rescuing again.
-    if (targets.length === 0 && !reopen && !e2eReset && !assessReset && !rollupRecheck) {
+    if (!didWork) {
       return run; // pure no-op (update still stamps updated_at — harmless)
     }
 
@@ -347,6 +363,11 @@ export async function applyRescue(
     return {
       ...run,
       tasks: nextTasks,
+      // S11: a manual apply that did work IS a human touch.
+      human_touches: [
+        ...(run.human_touches ?? []),
+        { kind: "recover" as const, at: opts.at ?? nowIso() },
+      ],
       ...(e2eReset ? { e2e_phase: reopenE2ePhase(run.e2e_phase!) } : {}),
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.

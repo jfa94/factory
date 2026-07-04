@@ -14,9 +14,11 @@
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, UsageError } from "../args.js";
 import { emitJson, emitLine } from "../io.js";
+import { resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { applyRescue } from "../../rescue/index.js";
+import { emitMetric } from "../../scoring/index.js";
 import { runRecover } from "./recover.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
@@ -118,7 +120,8 @@ export async function runApply(
     return EXIT.OK;
   }
 
-  const state = new StateManager();
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
@@ -131,6 +134,9 @@ export async function runApply(
     resetE2e,
     recheckRollup,
   });
+  if (result.touched) {
+    await emitMetric(dataDir, runId, "human_touch", { kind: "recover" }); // S11 mirror
+  }
   emitJson(result);
   return EXIT.OK;
 }

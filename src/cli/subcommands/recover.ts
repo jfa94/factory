@@ -39,7 +39,7 @@ import {
 import { DefaultGitClient, DefaultGhClient, type GhClient } from "../../git/index.js";
 import { StatuslineUsageSignal } from "../../quota/index.js";
 import { nowEpoch, nowIso } from "../../shared/time.js";
-import { selfHealCommentMarker } from "../../scoring/index.js";
+import { emitMetric, selfHealCommentMarker } from "../../scoring/index.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { applyResume } from "./run.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
@@ -123,9 +123,10 @@ async function resumeRun(
   state: StateManager,
   runId: string,
   dataDir: string,
+  opts: { touch?: boolean } = {},
 ): Promise<Awaited<ReturnType<typeof applyResume>>> {
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch());
+  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch(), opts);
 }
 
 async function run(argv: string[], overrides: RecoverOverrides = {}): Promise<ExitCode> {
@@ -179,18 +180,25 @@ async function run(argv: string[], overrides: RecoverOverrides = {}): Promise<Ex
       requireAutonomousMode(); // same gate as `factory resume` — this re-activates a run
       const awaiting = deriveAwaiting(current);
       const envelope = await resumeRun(state, runId, dataDir);
+      if (envelope.kind === "resumed" && envelope.cleared === true) {
+        await emitMetric(dataDir, runId, "human_touch", { kind: "resume" }); // S11 mirror
+      }
       emitJson({ ...envelope, awaiting });
       return EXIT.OK;
     }
     case "rescue": {
       requireAutonomousMode();
-      const applied = await applyRescue(state, runId, {});
+      const applied = await applyRescue(state, runId, { at: overrides.now?.() ?? nowIso() });
+      if (applied.touched) {
+        await emitMetric(dataDir, runId, "human_touch", { kind: "recover" }); // S11 mirror
+      }
       // A rescued run can still be parked (paused/suspended, non-terminal) — clear
       // it through the same quota gate resume uses, so ONE verb fully re-activates.
+      // touch:false — the "recover" touch above already covers this ONE human action.
       const after = await state.read(runId);
       const resume =
         after.status === "paused" || after.status === "suspended"
-          ? await resumeRun(state, runId, dataDir)
+          ? await resumeRun(state, runId, dataDir, { touch: false })
           : undefined;
       const work = await assessWork(current, probeFrom(overrides));
       // v1 drift predicate: a recorded task branch whose ref is gone, or the run's

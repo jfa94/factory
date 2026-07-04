@@ -512,7 +512,8 @@ Action (Decision 35 — a top-level verb, distinct from `run`/`rescue`/`debug`).
 Re-checks the live quota window and resumes a paused/suspended run if the binding
 window recovered. Reads nothing else; leaves state untouched when blocked. A terminal
 run is a loud error (nothing to resume). `factory run resume` is a thin alias of this
-command.
+command. Unsure whether the run needs resume or rescue? Use
+[`recover`](#recover) — it routes for you (resume IS its route 3).
 
 ```
 factory resume [--run <id>] [--ignore-quota]
@@ -706,16 +707,58 @@ emits the compact `RunSummary`.
 
 ```
 factory score [--run <id>]
+factory score --fleet
 ```
 
-Emits `{ kind:"score", summary }`.
+Emits `{ kind:"score", summary }`. The summary carries the S11 touch metric:
+`touches` (length of the run's `human_touches` ledger) and `touch_metric`
+(derived, never stored: `(completed ? 1 : 0) / touches` — `launch` counts, so a
+clean lights-out run scores exactly `1.0`). Legacy runs without the ledger report
+both as `null`.
+
+`--fleet` reports the metric across **every** run in the store: emits
+`{ kind:"fleet-score", runs:[{run_id, status, touches, metric}], aggregate }`
+where `aggregate = sum(completed) / sum(touches)` over runs carrying the ledger
+(`null` when none do). Malformed run dirs warn + skip (tolerant `listRuns`).
+
+## `recover`
+
+**The primary repair verb** (S10, Decision 48). Self-routing: scans the run and
+does whatever a stalled run needs — nothing, resume, rescue-apply + reopen, or
+page a human. `resume` and `rescue` remain as the underlying primitives /
+flag-rich escape hatch; start with `recover`.
+
+```
+factory recover [--run <id>] [--auto] [--dry-run]
+```
+
+Routes (resolved in order) and their envelopes — all `EXIT.OK`:
+
+| Route | Condition                | Envelope                                                                                                                                                                                                                                               |
+| ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | no run resolves          | `{kind:"nothing", reason:"no-run"}`                                                                                                                                                                                                                    |
+| 2     | `completed`/`superseded` | `{kind:"nothing", …}` + a `--recheck-rollup` hint when `rollup_pending` (stays human-asserted)                                                                                                                                                         |
+| 3     | parked + clean scan      | resume via the normal quota gate → `{kind:"resumed"}` or `{kind:"pause"}`, each with a **derived** `awaiting` cause (`quota`/`e2e`/`docs`/`traceability`/`spec-approval`/`unknown` — never stored)                                                     |
+| 4     | resettable work          | rescue-apply + reopen (+ the resume gate if a park survives) → `{kind:"rescued", reset, reopened, reconcile, resume?}`; `reconcile:true` when the git probe flags drift — the command doc then spawns `rescue-reconciler`; the CLI never spawns agents |
+| 5     | dead-ends only           | `{kind:"page", dead_ends, hints}` with per-task `rescue apply --task <id> --include-dead-ends` hints                                                                                                                                                   |
+
+`--dry-run` emits the scan + chosen route, writes nothing (subsumes `rescue scan`).
+
+`--auto` is the runner's bounded self-heal (fired ONCE after a failed finalize;
+mutually exclusive with `--dry-run`). It resets only the _effective_ auto-safe set
+(resettable tasks that stay actionable post-reset — never dead-ends, e2e resets,
+rollup rechecks, or git drift) and stamps `self_heal {attempts, last_at}` — the
+sanctioned stored-event exception. It requires `attempts === 0`; a blocked auto
+(`attempts > 0`, empty effective set, or dead-ends only) emits `{kind:"page"}`
+and posts ONE deduped PRD comment. `--auto` never appends a human touch.
 
 ## `rescue <scan|apply>`
 
-Recover a stalled run that `resume` cannot untangle (resume only clears the
-quota gate; it never touches task state). The `/factory:rescue` command pairs these
-subcommands with the `rescue-reconciler` agent (git/GitHub drift repair) before
-handing off to [`resume`](#resume) — see
+The flag-rich **escape hatch** under [`recover`](#recover) — reach for it when
+you need to name exact tasks, include dead-ends, reset e2e, or recheck a rollup.
+`rescue scan` is equivalent to `recover --dry-run`. The `/factory:rescue` command
+pairs these subcommands with the `rescue-reconciler` agent (git/GitHub drift
+repair) before handing off to [`resume`](#resume) — see
 [Rescue a stalled run](../guides/rescue-a-stalled-run.md).
 
 ### `rescue scan`
@@ -892,6 +935,19 @@ unresolvable data dir, a broken/slow original command) is a clean no-op returnin
 exit 0. Diagnostics go to stderr; a cache-write failure is additionally surfaced
 inline in the displayed text (`[factory: usage-cache …]`) so a silently stale
 quota cache is visible.
+
+**Run-progress suffix (S11, [Decision 49](../explanation/decisions.md#decision-49--observability-touch-metric--statusline-progress--score---fleet)).**
+When a current run exists, the displayed text gains a suffix
+` [factory <done>/<total> <phase> <run_id> <status>]` — shipped/total task counts,
+the first in-flight task's phase, the run id, and the run status. It reads the
+global `runs/current` symlink straight through to `state.json` with a plain
+`JSON.parse` (never `parseRunState`): a torn concurrent write, schema mismatch, or
+missing pointer degrades to **no suffix**, never a throw. Terminal runs
+(`completed`/`failed`/`superseded`) linger for **30 minutes** past `ended_at`, then
+the suffix disappears. Set `FACTORY_STATUSLINE_PROGRESS=0` to suppress the suffix
+entirely (the usage-cache write is unaffected). Known limit: under two concurrent
+runs in different repos the global pointer shows the most recent writer (a
+statusline tick has no cwd to key a per-repo pointer from).
 
 ## `debug <start|review|spec|seed|finalize>`
 

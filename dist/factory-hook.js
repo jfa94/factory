@@ -7713,6 +7713,22 @@ var RunStateSchema = external_exports.object({
     attempts: external_exports.number().int().nonnegative(),
     last_at: external_exports.string()
   }).optional(),
+  /**
+   * Human-intervention ledger (S11): one entry per human action on the run —
+   * `launch` (run create), `conflict` (a `--supersede` resolution, stamped on the
+   * NEW run alongside its launch), `resume` (a human resume clearing a park),
+   * `recover` (a manual rescue apply / recover). The second sanctioned
+   * stored-EVENT exception (with `self_heal`): which touches happened is history
+   * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
+   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   */
+  human_touches: external_exports.array(
+    external_exports.object({
+      kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
+      at: external_exports.string()
+    })
+  ).optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */

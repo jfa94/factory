@@ -52,6 +52,7 @@ import {
   readJsonInput,
 } from "../../orchestrator/index.js";
 import { loadCliDeps, type CliDeps } from "../wiring.js";
+import { emitMetric } from "../../scoring/index.js";
 import {
   DefaultGitClient,
   DefaultGhClient,
@@ -344,7 +345,13 @@ async function createRunFromManifest(
     ...(opts.e2e === true ? { e2e: true } : {}),
     ...(opts.debug === true ? { debug: true } : {}),
   });
-  const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run = await state.update(opts.runId, (s) => ({
+    ...s,
+    tasks: seeded,
+    // S11: the launch touch — every run costs at least one human action, so a
+    // clean lights-out run scores exactly 1.0 on the derived touch metric.
+    human_touches: [{ kind: "launch" as const, at: s.started_at }],
+  }));
 
   // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
   if (stagingDeps !== undefined) {
@@ -492,11 +499,16 @@ export async function resolveOrCreateRun(
         }
         const supersededId = existing.run_id;
         await supersedeRun(state, existing, stagingDeps);
-        return {
-          kind: "superseded",
-          run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
-          supersededId,
-        };
+        const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
+        // S11: a supersede is a conflict-resolution touch ON TOP of the launch.
+        const run = await state.update(created.run_id, (s) => ({
+          ...s,
+          human_touches: [
+            ...(s.human_touches ?? []),
+            { kind: "conflict" as const, at: s.started_at },
+          ],
+        }));
+        return { kind: "superseded", run, supersededId };
       }
       // --resume currently reports the live run (kind:"exists"); the full continue-the-run
       // hand-off is the caller's job (Task 4.2). No flag-compatibility assert here — that
@@ -516,7 +528,13 @@ export async function resolveOrCreateRun(
 
 /** The single JSON document `factory run resume` emits — the runner's contract. */
 export type ResumeResult =
-  | { readonly kind: "resumed"; readonly run: RunState }
+  /**
+   * `cleared` (S11): true iff this resume actually cleared a park (a state write
+   * happened — the human_touches "resume" entry was appended); absent on the
+   * idempotent already-running re-entry. The CLI mirrors the touch to
+   * metrics.jsonl only when set.
+   */
+  | { readonly kind: "resumed"; readonly run: RunState; readonly cleared?: true }
   | {
       readonly kind: "pause";
       readonly run_id: string;
@@ -557,6 +575,9 @@ export async function applyResume(
   reading: UsageReading,
   config: Config,
   nowEpochSec: number,
+  // S11: `touch:false` suppresses the human_touches "resume" append — recover's
+  // route-4 tail (rescue already appended "recover" for the SAME human action).
+  opts: { touch?: boolean } = {},
 ): Promise<ResumeResult> {
   const run = await state.read(runId);
   if (isTerminalRunStatus(run.status)) {
@@ -576,12 +597,16 @@ export async function applyResume(
       // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
       return { kind: "resumed", run };
     case "resume": {
+      const at = new Date(nowEpochSec * 1000).toISOString();
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
+        ...(opts.touch === false
+          ? {}
+          : { human_touches: [...(s.human_touches ?? []), { kind: "resume" as const, at }] }),
       }));
-      return { kind: "resumed", run: updated };
+      return { kind: "resumed", run: updated, cleared: true };
     }
     case "pause": {
       const d = plan.decision;
@@ -891,12 +916,16 @@ export async function runCreate(
       },
     };
   };
+  // S11: mirror the human_touches appends to metrics.jsonl (observability only —
+  // the derived metric reads state, never this stream).
+  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "launch" });
   if (result.kind === "created") {
     const out = approveSpec ? await park(result.run) : { run: result.run };
     emitJson({ kind: "created", ...out });
     return EXIT.OK;
   }
   // kind === "superseded"
+  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "conflict" });
   const out = approveSpec ? await park(result.run) : { run: result.run };
   emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
   return EXIT.OK;
@@ -935,6 +964,9 @@ async function runResume(argv: string[]): Promise<ExitCode> {
 
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());
+  if (envelope.kind === "resumed" && envelope.cleared === true) {
+    await emitMetric(dataDir, runId, "human_touch", { kind: "resume" }); // S11 mirror
+  }
   emitJson(envelope);
   return EXIT.OK;
 }

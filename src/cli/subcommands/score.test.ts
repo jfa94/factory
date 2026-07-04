@@ -91,7 +91,11 @@ describe("score happy paths", () => {
       return true;
     });
 
-    await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).write(MANIFEST, "# spec", makePrd());
+    await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).write(
+      MANIFEST,
+      "# spec",
+      makePrd(),
+    );
     const state = new StateManager({ dataDir });
     await state.create({ run_id: "run-s", spec: SPEC });
     await state.update("run-s", (s) => ({
@@ -138,5 +142,114 @@ describe("score happy paths", () => {
     const code = await runScore([], { gitClient: git, cwd: "/x" });
     expect(code).toBe(EXIT.OK);
     expect((out().summary as Record<string, unknown>).run_id).toBe("run-s");
+  });
+
+  it("exposes the derived touch metric on the summary (S11)", async () => {
+    const state = new StateManager({ dataDir });
+    await state.update("run-s", (s) => ({
+      ...s,
+      human_touches: [
+        { kind: "launch" as const, at: "2026-06-01T00:00:00.000Z" },
+        { kind: "recover" as const, at: "2026-06-01T01:00:00.000Z" },
+      ],
+    }));
+    await scoreCommand.run(["--run", "run-s"]);
+    const summary = out().summary as Record<string, unknown>;
+    expect(summary.touches).toBe(2);
+    expect(summary.touch_metric).toBe(0); // failed run → 0/2
+  });
+});
+
+describe("score --fleet (S11 — the store-wide touch-metric roll-up)", () => {
+  let dataDir: string;
+  let prevEnv: string | undefined;
+  let stdout: string[];
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-score-fleet-"));
+    prevEnv = process.env.CLAUDE_PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = dataDir;
+    stdout = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      stdout.push(String(c));
+      return true;
+    });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    if (prevEnv === undefined) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = prevEnv;
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  const out = () => JSON.parse(stdout.join("")) as Record<string, unknown>;
+
+  async function seedRun(
+    runId: string,
+    status: "completed" | "failed",
+    touches: number | null,
+  ): Promise<void> {
+    const state = new StateManager({ dataDir });
+    await state.create({ run_id: runId, spec: SPEC });
+    await state.update(runId, (s) => ({
+      ...s,
+      status,
+      ended_at: "2026-06-01T00:00:00.000Z",
+      ...(touches !== null
+        ? {
+            human_touches: Array.from({ length: touches }, (_, i) => ({
+              kind: i === 0 ? ("launch" as const) : ("resume" as const),
+              at: "2026-06-01T00:00:00.000Z",
+            })),
+          }
+        : {}),
+    }));
+  }
+
+  it("rolls up per-run touches + metric and the fleet aggregate; legacy runs are n/a", async () => {
+    await seedRun("run-a", "completed", 2); // 0.5
+    await seedRun("run-b", "failed", 1); // 0
+    await seedRun("run-c", "completed", null); // legacy — excluded from the aggregate
+
+    const code = await scoreCommand.run(["--fleet"]);
+    expect(code).toBe(EXIT.OK);
+    const env = out();
+    expect(env.kind).toBe("fleet-score");
+    const runs = env.runs as Array<Record<string, unknown>>;
+    expect(runs).toHaveLength(3);
+    expect(runs.find((r) => r.run_id === "run-a")).toEqual({
+      run_id: "run-a",
+      status: "completed",
+      touches: 2,
+      metric: 0.5,
+    });
+    expect(runs.find((r) => r.run_id === "run-c")).toEqual({
+      run_id: "run-c",
+      status: "completed",
+      touches: null,
+      metric: null,
+    });
+    // aggregate = sum(completed with ledger) / sum(touches with ledger) = 1 / 3
+    expect(env.aggregate).toBeCloseTo(1 / 3);
+  });
+
+  it("skips a malformed run dir (listRuns warns) and aggregates the rest", async () => {
+    await seedRun("run-a", "completed", 1);
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(dataDir, "runs", "run-broken"), { recursive: true });
+    await writeFile(join(dataDir, "runs", "run-broken", "state.json"), "{not json");
+
+    const code = await scoreCommand.run(["--fleet"]);
+    expect(code).toBe(EXIT.OK);
+    const env = out();
+    expect((env.runs as unknown[]).length).toBe(1);
+    expect(env.aggregate).toBe(1);
+  });
+
+  it("an empty store aggregates to null (no fabricated 0)", async () => {
+    const code = await scoreCommand.run(["--fleet"]);
+    expect(code).toBe(EXIT.OK);
+    expect(out()).toEqual({ kind: "fleet-score", runs: [], aggregate: null });
   });
 });
