@@ -29,6 +29,57 @@ export function combineGates(...results: GateResult[]): GateResult {
 }
 
 // ---------------------------------------------------------------------------
+// 0. Specifiability gate (S9) — pre-generation, PRD-body-only
+// ---------------------------------------------------------------------------
+
+/** Minimum non-heading, non-blank PRD content (chars) for a specifiable body. */
+const MIN_PRD_BODY_CHARS = 200;
+
+/** Heading text that counts as an acceptance-criteria-shaped section. */
+const AC_SECTION_HEADING =
+  /^(acceptance[ -]criteria|acceptance[ -]tests?|success[ -]criteria|definition[ -]of[ -]done)\b/i;
+
+/**
+ * Deterministic pre-GENERATION refusal (S9, Decision 47): can this PRD body
+ * support spec generation at all? Unlike gates 1–3 (which judge a GENERATED
+ * spec), this runs in `resolveSpec` BEFORE any agent spawn — a refusal costs
+ * zero agent turns. All three checks always run; the blocker list tells the
+ * PRD author exactly what to add.
+ */
+export function specifiabilityGate(body: string): GateResult {
+  const blockers: string[] = [];
+  const lines = body.split(/\r?\n/).map((l) => l.trim());
+
+  const content = lines.filter((l) => l.length > 0 && !/^#{1,6}\s/.test(l)).join("\n");
+  if (content.length < MIN_PRD_BODY_CHARS) {
+    blockers.push(
+      `specifiability: PRD body is trivial (${content.length} chars of content, ` +
+        `minimum ${MIN_PRD_BODY_CHARS}) — describe the problem, the desired behavior, and constraints`,
+    );
+  }
+
+  if (extractPrdRequirements(body).length === 0) {
+    blockers.push(
+      "specifiability: no extractable requirements — add bulleted requirements or " +
+        "normative (must/should) sentences outside Out-of-Scope/Non-Goals sections",
+    );
+  }
+
+  const hasAcSection = lines.some((l) => {
+    const heading = /^#{1,6}\s+(.*)$/.exec(l);
+    return heading !== null && AC_SECTION_HEADING.test(heading[1]!.trim());
+  });
+  if (!hasAcSection) {
+    blockers.push(
+      'specifiability: no acceptance-criteria-shaped section — add an "## Acceptance Criteria" ' +
+        "(or Definition of Done / Success Criteria) section stating verifiable outcomes",
+    );
+  }
+
+  return { passed: blockers.length === 0, blockers };
+}
+
+// ---------------------------------------------------------------------------
 // 1. Vertical-slice gate
 // ---------------------------------------------------------------------------
 

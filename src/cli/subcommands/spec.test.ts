@@ -8,6 +8,7 @@ import {
   storeSpec,
   specCommand,
   resolveSpecRepo,
+  specExitCode,
   type SpecBuildDeps,
 } from "./spec.js";
 import { EXIT } from "../../shared/exit-codes.js";
@@ -27,9 +28,29 @@ import {
 const REPO = "owner/app";
 const ISSUE = 123;
 
-/** A PRD whose single bullet is fully covered by the passing task's criterion. */
-const PRD_BODY =
-  "- Users must be able to log in with email and password and receive a session token";
+/**
+ * A HEALTHY PRD (S9: passes the specifiability gate — ≥200 chars of content,
+ * extractable requirements, an AC-shaped section) whose every extractable
+ * requirement is fully covered by the passing task's criterion.
+ */
+const PRD_BODY = [
+  "## Summary",
+  "",
+  "Shoppers authenticate to the application with their email address and password. " +
+    "A successful login issues a session token the client stores and presents on " +
+    "subsequent requests to the application programming interface.",
+  "",
+  "## Requirements",
+  "",
+  "- Users must be able to log in with email and password and receive a session token",
+  "",
+  "## Acceptance Criteria",
+  "",
+  "- User logs in with valid email and password and receives a session token",
+].join("\n");
+
+/** A body the specifiability gate refuses on all three checks. */
+const TRIVIAL_BODY = "Make login better please.";
 
 const PASS_TASK = {
   task_id: "T1",
@@ -110,6 +131,24 @@ function deps(): SpecBuildDeps {
   };
 }
 
+/** Deps whose gh returns a custom PRD body (specifiability-gate tests). */
+function depsWithBody(body: string): SpecBuildDeps {
+  return {
+    ...deps(),
+    gh: {
+      async fetchPrd(issueNumber: number): Promise<Prd> {
+        return {
+          issue_number: issueNumber,
+          title: "Login",
+          body,
+          labels: [],
+          body_truncated: false,
+        };
+      },
+    },
+  };
+}
+
 /** Write a scratch file into the (repo, issue) build dir. */
 async function writeScratch(name: string, value: unknown): Promise<void> {
   const dir = specBuildDir(dataDir, REPO, ISSUE);
@@ -152,6 +191,42 @@ describe("resolveSpec", () => {
     const prd = JSON.parse(await readFile(env.prd_path, "utf8")) as Prd;
     expect(prd.issue_number).toBe(ISSUE);
     expect(prd.body).toBe(PRD_BODY);
+  });
+});
+
+describe("resolveSpec specifiability refusal (S9 — Δ pre-generation, zero agent cost)", () => {
+  it("Δ an unspecifiable PRD emits the refusal envelope instead of generate", async () => {
+    const env = await resolveSpec(depsWithBody(TRIVIAL_BODY), REPO, ISSUE);
+    expect(env.kind).toBe("unspecifiable");
+    if (env.kind !== "unspecifiable") throw new Error("unreachable");
+
+    expect(env.repo).toBe(REPO);
+    expect(env.issue).toBe(ISSUE);
+    expect(env.blockers.length).toBe(3);
+    expect(env.blockers.every((b) => b.startsWith("specifiability:"))).toBe(true);
+    // No spawn — the refusal is free.
+    expect("spawn" in env).toBe(false);
+
+    // prd.json was still written (inspection aid for the PRD author).
+    const { readFile } = await import("node:fs/promises");
+    const prd = JSON.parse(await readFile(env.prd_path, "utf8")) as Prd;
+    expect(prd.body).toBe(TRIVIAL_BODY);
+  });
+
+  it("Δ the reuse path never runs the gate (an existing spec wins)", async () => {
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+
+    const env = await resolveSpec(depsWithBody(TRIVIAL_BODY), REPO, ISSUE);
+    expect(env.kind).toBe("reuse");
+  });
+
+  it("Δ specExitCode: unspecifiable → EXIT.ERROR, every other envelope → EXIT.OK", async () => {
+    const refused = await resolveSpec(depsWithBody(TRIVIAL_BODY), REPO, ISSUE);
+    expect(specExitCode(refused)).toBe(EXIT.ERROR);
+
+    const generate = await resolveSpec(deps(), "owner/other", ISSUE);
+    expect(specExitCode(generate)).toBe(EXIT.OK);
   });
 });
 

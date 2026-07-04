@@ -10011,6 +10011,33 @@ function combineGates(...results) {
   const blockers = results.flatMap((r) => r.blockers);
   return { passed: blockers.length === 0, blockers };
 }
+var MIN_PRD_BODY_CHARS = 200;
+var AC_SECTION_HEADING = /^(acceptance[ -]criteria|acceptance[ -]tests?|success[ -]criteria|definition[ -]of[ -]done)\b/i;
+function specifiabilityGate(body) {
+  const blockers = [];
+  const lines = body.split(/\r?\n/).map((l) => l.trim());
+  const content = lines.filter((l) => l.length > 0 && !/^#{1,6}\s/.test(l)).join("\n");
+  if (content.length < MIN_PRD_BODY_CHARS) {
+    blockers.push(
+      `specifiability: PRD body is trivial (${content.length} chars of content, minimum ${MIN_PRD_BODY_CHARS}) \u2014 describe the problem, the desired behavior, and constraints`
+    );
+  }
+  if (extractPrdRequirements(body).length === 0) {
+    blockers.push(
+      "specifiability: no extractable requirements \u2014 add bulleted requirements or normative (must/should) sentences outside Out-of-Scope/Non-Goals sections"
+    );
+  }
+  const hasAcSection = lines.some((l) => {
+    const heading = /^#{1,6}\s+(.*)$/.exec(l);
+    return heading !== null && AC_SECTION_HEADING.test(heading[1].trim());
+  });
+  if (!hasAcSection) {
+    blockers.push(
+      'specifiability: no acceptance-criteria-shaped section \u2014 add an "## Acceptance Criteria" (or Definition of Done / Success Criteria) section stating verifiable outcomes'
+    );
+  }
+  return { passed: blockers.length === 0, blockers };
+}
 var HORIZONTAL_MARKERS = [
   "schema",
   "database",
@@ -10275,6 +10302,16 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   const prd = await deps.gh.fetchPrd(issue, { repo });
   const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
+  const specifiability = specifiabilityGate(prd.body);
+  if (!specifiability.passed) {
+    return {
+      kind: "unspecifiable",
+      repo,
+      issue,
+      prd_path: prdPath,
+      blockers: specifiability.blockers
+    };
+  }
   return {
     kind: "generate",
     repo,
@@ -15898,7 +15935,16 @@ async function run3(argv) {
   const deps = wireDeps();
   const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
   emitJson(envelope);
-  return EXIT.OK;
+  if (envelope.kind === "unspecifiable") {
+    emitError(
+      `PRD #${issue} is not specifiable \u2014 fix the PRD and re-run:
+` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
+    );
+  }
+  return specExitCode(envelope);
+}
+function specExitCode(envelope) {
+  return envelope.kind === "unspecifiable" ? EXIT.ERROR : EXIT.OK;
 }
 var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
@@ -16077,6 +16123,13 @@ function renderFindingsBody(confirmedBlockers) {
   }
   return sections.join("\n\n");
 }
+function renderAcceptanceCriteria(confirmedBlockers) {
+  const bullets = confirmedBlockers.map((f) => {
+    const citation = f.file !== void 0 && f.line !== void 0 ? `${f.file}:${f.line}` : "(no citation)";
+    return `- The finding at ${citation} (${f.severity}, ${f.reviewer}) is fixed.`;
+  });
+  return ["## Acceptance Criteria", "", ...bullets].join("\n");
+}
 function buildDebugReport(input) {
   const { confirmedBlockers, passNumber, base } = input;
   const title = `factory debug pass ${passNumber} \u2014 ${confirmedBlockers.length} blocking finding(s)`;
@@ -16091,7 +16144,9 @@ function buildDebugReport(input) {
 
 (no confirmed blockers)` : `${header}
 
-${renderFindingsBody(confirmedBlockers)}`;
+${renderFindingsBody(confirmedBlockers)}
+
+${renderAcceptanceCriteria(confirmedBlockers)}`;
   return { title, body };
 }
 function wireDebugSpecDeps(report, dataDirOverride) {

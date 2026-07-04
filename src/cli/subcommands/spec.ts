@@ -8,7 +8,7 @@
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, UsageError, optionalString } from "../args.js";
-import { emitJson, emitLine } from "../io.js";
+import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import {
   SpecStore,
@@ -126,7 +126,23 @@ async function run(argv: string[]): Promise<ExitCode> {
       ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true })
       : await handler(deps, repo, issue);
   emitJson(envelope);
-  return EXIT.OK;
+  if (envelope.kind === "unspecifiable") {
+    emitError(
+      `PRD #${issue} is not specifiable — fix the PRD and re-run:\n` +
+        envelope.blockers.map((b) => `  - ${b}`).join("\n"),
+    );
+  }
+  return specExitCode(envelope);
+}
+
+/**
+ * Envelope → exit code (S9): `unspecifiable` is the one non-zero spec outcome —
+ * a terminal refusal, not a loop step. The frozen exit enum has no
+ * "needs-human" code (see src/shared/exit-codes.ts); ERROR is correct — the
+ * envelope `kind` on stdout is the machine discriminator.
+ */
+export function specExitCode(envelope: SpecBuildEnvelope): ExitCode {
+  return envelope.kind === "unspecifiable" ? EXIT.ERROR : EXIT.OK;
 }
 
 export const specCommand: Subcommand = {

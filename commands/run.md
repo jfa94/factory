@@ -59,7 +59,11 @@ gate then keeps the autonomous loop alive only here and lets other sessions stop
 LOUD otherwise. When `--supersede` is set, forward it to Phase 1's `factory spec resolve` call
 so the stale durable spec is deleted before the reuse check — Phase 1 will always regenerate
 from the PRD in this case (never reuse). `--supersede` has no effect on the spec when combined
-with `--spec-id` (Phase 1 is skipped):
+with `--spec-id` (Phase 1 is skipped).
+
+If Phase 1's `spec resolve` emits `{kind:"unspecifiable"}` (exit 1), the PRD cannot support
+spec generation — STOP before any agent spawn, relay `blockers` verbatim, and tell the user
+to edit the PRD issue and re-run (zero agent cost; S9, Decision 47):
 
 ```
 Skill(pipeline-runner)

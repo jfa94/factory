@@ -38,7 +38,7 @@ import { stringifyJson, readJsonFile } from "../shared/json.js";
 import { specBuildDir } from "../core/state/paths.js";
 import type { SpecStore } from "./store.js";
 import type { GhClient, Prd } from "./gh.js";
-import { runSpecGates } from "./gates.js";
+import { runSpecGates, specifiabilityGate } from "./gates.js";
 import { decideSpecReview, parseReviewVerdict } from "./review.js";
 import {
   parseGenerateResult,
@@ -66,6 +66,19 @@ export type SpecBuildEnvelope =
       readonly repo: string;
       readonly issue: number;
       readonly pointer: SpecPointer;
+    }
+  | {
+      /**
+       * Deterministic pre-generation refusal (S9, Decision 47) — the PRD cannot
+       * support spec generation. TERMINAL: the runner spawns NOTHING and stops
+       * loud; `blockers` tells the PRD author exactly what to add. Zero agent cost.
+       */
+      readonly kind: "unspecifiable";
+      readonly repo: string;
+      readonly issue: number;
+      /** Scratch prd.json — already written, kept as an inspection aid. */
+      readonly prd_path: string;
+      readonly blockers: readonly string[];
     }
   | {
       /** No spec yet — spawn the generator, then write `generated_path` and call `gate`. */
@@ -168,6 +181,19 @@ export async function resolveSpec(
   const prd = await deps.gh.fetchPrd(issue, { repo });
   const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
+
+  // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
+  // spawn — an unspecifiable PRD never costs an apex generator turn.
+  const specifiability = specifiabilityGate(prd.body);
+  if (!specifiability.passed) {
+    return {
+      kind: "unspecifiable",
+      repo,
+      issue,
+      prd_path: prdPath,
+      blockers: specifiability.blockers,
+    };
+  }
 
   return {
     kind: "generate",

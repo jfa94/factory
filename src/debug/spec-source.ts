@@ -127,6 +127,21 @@ function renderFindingsBody(confirmedBlockers: readonly Finding[]): string {
 }
 
 /**
+ * Render one acceptance criterion per confirmed blocker. S9 (Decision 47): the
+ * specifiability gate is UNIVERSAL — no debug bypass — so the synthetic PRD
+ * carries a real AC section, which also hands the spec pipeline the exactly
+ * right axiom for a debug pass: every confirmed finding is fixed.
+ */
+function renderAcceptanceCriteria(confirmedBlockers: readonly Finding[]): string {
+  const bullets = confirmedBlockers.map((f) => {
+    const citation =
+      f.file !== undefined && f.line !== undefined ? `${f.file}:${f.line}` : "(no citation)";
+    return `- The finding at ${citation} (${f.severity}, ${f.reviewer}) is fixed.`;
+  });
+  return ["## Acceptance Criteria", "", ...bullets].join("\n");
+}
+
+/**
  * Build the synthetic "PRD" a debug pass feeds into the unchanged spec
  * pipeline: `title` names the pass + blocker count, `body` is a markdown
  * write-up of every confirmed blocker (reviewer, severity, file:line, quote,
@@ -155,7 +170,7 @@ export function buildDebugReport(input: BuildDebugReportInput): {
   const body =
     confirmedBlockers.length === 0
       ? `${header}\n\n(no confirmed blockers)`
-      : `${header}\n\n${renderFindingsBody(confirmedBlockers)}`;
+      : `${header}\n\n${renderFindingsBody(confirmedBlockers)}\n\n${renderAcceptanceCriteria(confirmedBlockers)}`;
 
   return { title, body };
 }

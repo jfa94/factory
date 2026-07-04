@@ -10,7 +10,7 @@ import {
   wireDebugSpecDeps,
   type BuildDebugReportInput,
 } from "./spec-source.js";
-import { resolveSpec } from "../spec/index.js";
+import { resolveSpec, specifiabilityGate } from "../spec/index.js";
 import type { Finding } from "../verifier/judgment/finding.js";
 
 const REPO = "owner/app";
@@ -160,6 +160,19 @@ describe("buildDebugReport", () => {
       base: "main",
     });
     expect(body).toContain("(no citation)");
+  });
+
+  it("Δ S9: the synthetic PRD passes the specifiability gate (universal gate, no bypass)", () => {
+    const { body } = buildDebugReport({
+      confirmedBlockers: [finding()],
+      passNumber: 1,
+      base: "origin/main",
+    });
+    expect(body).toContain("## Acceptance Criteria");
+    expect(body).toContain("- The finding at src/widget.ts:42 (error, quality-reviewer) is fixed.");
+    const r = specifiabilityGate(body);
+    expect(r.passed).toBe(true);
+    expect(r.blockers).toEqual([]);
   });
 });
 

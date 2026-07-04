@@ -50,6 +50,8 @@ will delete the stale durable spec so the loop always emits `generate` (never `r
 env = factory spec resolve [--repo <o/n>] --issue <n> [--supersede]
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
+  unspecifiable → STOP LOUD (exit 1; zero agent cost). Surface env.blockers to the
+      user verbatim — the PRD needs editing before the factory can spec it. Spawn NOTHING.
   generate → remember env.max_iterations (the loop bound)
       spawn spec-generator (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path

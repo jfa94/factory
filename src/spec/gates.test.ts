@@ -5,6 +5,7 @@ import {
   traceabilityGate,
   runSpecGates,
   extractPrdRequirements,
+  specifiabilityGate,
 } from "./gates.js";
 import type { SpecTask } from "./schema.js";
 import type { Prd } from "./gh.js";
@@ -233,5 +234,91 @@ describe("runSpecGates — conjunctive", () => {
     const r = runSpecGates(prd("- must do a thing\n"), tasks);
     expect(r.passed).toBe(false);
     expect(r.blockers.length).toBeGreaterThan(1);
+  });
+});
+
+describe("specifiability gate — deterministic pre-generation refusal (S9)", () => {
+  const HEALTHY_BODY = [
+    "## Summary",
+    "",
+    "Shoppers authenticate to the application with their email address and password. " +
+      "A successful login issues a session token the client stores and presents on " +
+      "subsequent requests to the application programming interface.",
+    "",
+    "## Requirements",
+    "",
+    "- Users must be able to log in with email and password and receive a session token",
+    "",
+    "## Acceptance Criteria",
+    "",
+    "- User logs in with valid email and password and receives a session token",
+  ].join("\n");
+
+  /** ≥200 chars of prose, no bullets, no normative verbs — nothing extractable. */
+  const PROSE_NO_REQUIREMENTS =
+    "The team wants the dashboard to feel snappier for shoppers browsing on their phones. " +
+    "Today the landing view takes a long time to draw and people abandon the page before it " +
+    "settles. We want a faster first paint and a calmer layout overall for everyone involved.";
+
+  it("Δ specifiability: a trivial (too-short) body is refused, blocker names the minimum", () => {
+    const r = specifiabilityGate(
+      "## Summary\n\nFix the login bug.\n\n- login must work\n\n## Acceptance Criteria\n\n- login works with a valid password",
+    );
+    expect(r.passed).toBe(false);
+    expect(r.blockers.some((b) => b.includes("trivial") && b.includes("200"))).toBe(true);
+    expect(r.blockers).toHaveLength(1);
+  });
+
+  it("Δ specifiability: a body with no extractable requirement is refused", () => {
+    const body = `${PROSE_NO_REQUIREMENTS}\n\n## Acceptance Criteria\n\nThe page feels pleasant.`;
+    const r = specifiabilityGate(body);
+    expect(r.passed).toBe(false);
+    expect(r.blockers.some((b) => b.includes("no extractable requirements"))).toBe(true);
+    expect(r.blockers).toHaveLength(1);
+  });
+
+  it("Δ specifiability: a body without an acceptance-criteria-shaped section is refused", () => {
+    const body = `${PROSE_NO_REQUIREMENTS}\n\n## Requirements\n\n- the landing view must render its first paint within one second on a phone`;
+    const r = specifiabilityGate(body);
+    expect(r.passed).toBe(false);
+    expect(r.blockers.some((b) => b.includes("acceptance-criteria"))).toBe(true);
+    expect(r.blockers).toHaveLength(1);
+  });
+
+  it("Δ specifiability: a healthy PRD passes", () => {
+    const r = specifiabilityGate(HEALTHY_BODY);
+    expect(r.passed).toBe(true);
+    expect(r.blockers).toEqual([]);
+  });
+
+  it("Δ specifiability: all failing checks are reported together (no early exit)", () => {
+    const r = specifiabilityGate("Make the app better please.");
+    expect(r.passed).toBe(false);
+    expect(r.blockers).toHaveLength(3);
+  });
+
+  it("Δ specifiability: bullets only under Out-of-Scope do not count as requirements", () => {
+    const body = [
+      PROSE_NO_REQUIREMENTS,
+      "",
+      "## Out of Scope",
+      "",
+      "- rewriting the settings page",
+      "- migrating the design system",
+      "",
+      "## Acceptance Criteria",
+      "",
+      "Nothing verifiable here yet.",
+    ].join("\n");
+    const r = specifiabilityGate(body);
+    expect(r.passed).toBe(false);
+    expect(r.blockers.some((b) => b.includes("no extractable requirements"))).toBe(true);
+    expect(r.blockers).toHaveLength(1);
+  });
+
+  it("accepts 'Definition of Done' as the acceptance-criteria-shaped section", () => {
+    const body = `${PROSE_NO_REQUIREMENTS}\n\n- the landing view must render within one second\n\n### Definition of Done\n\n- first paint under one second on a mid-range phone`;
+    const r = specifiabilityGate(body);
+    expect(r.passed).toBe(true);
   });
 });
