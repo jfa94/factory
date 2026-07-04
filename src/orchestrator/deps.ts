@@ -149,7 +149,12 @@ export type {
 } from "../producer/index.js";
 
 // --- deterministic verifier (src/verifier/deterministic) --------------------
-export { GateRunner, GateMemo, loadGateContract } from "../verifier/deterministic/index.js";
+export {
+  GateRunner,
+  GateMemo,
+  loadGateContract,
+  FsCoverageStore,
+} from "../verifier/deterministic/index.js";
 export type {
   GateContext,
   GateRunResult,

@@ -35,6 +35,7 @@ import {
   provisionWorktree,
   resolveStagingBranch,
   GateRunner,
+  FsCoverageStore,
   buildPanelManifest,
   resolveReviewModel,
   dialForRung,
@@ -62,6 +63,7 @@ import {
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
 import { taskExemptReader } from "./exempt.js";
+import { runCoverageDir } from "../core/state/index.js";
 import { FsHoldoutVerdictStore, deriveHoldoutEvidence } from "../verifier/holdout/index.js";
 import { withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning } from "../shared/index.js";
 import { join } from "node:path";
@@ -344,6 +346,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
+        coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id)),
       };
       const gate = await new GateRunner().run(gateCtx);
 

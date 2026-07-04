@@ -13,8 +13,6 @@ import type {
   CommitInfo,
   CoverageCommand,
   CoverageMeasurement,
-  CoverageRead,
-  CoverageReader,
   CoverageSummary,
   CoverageTool,
   EslintTool,
@@ -133,30 +131,6 @@ export function strykerResult(opts: {
     report = { report: "absent" };
   }
   return { proc: proc(opts.code, "", "", opts.truncated ?? false), report };
-}
-
-/** A coverage read in the OK state (file present + valid). */
-export function covOk(summary: CoverageSummary): CoverageRead {
-  return { state: "ok", summary };
-}
-
-/** A coverage read in the ABSENT state (summary file never produced). */
-export const COV_ABSENT: CoverageRead = { state: "absent" };
-
-/** A coverage read in the INVALID state (summary present but corrupt). */
-export const COV_INVALID: CoverageRead = { state: "invalid" };
-
-/** Scripted CoverageReader: returns the seeded before/after reads. */
-export class FakeCoverageReader implements CoverageReader {
-  constructor(
-    private readonly reads: {
-      before: CoverageRead;
-      after: CoverageRead;
-    },
-  ) {}
-  async read(label: "before" | "after", _opts: ToolRunOpts): Promise<CoverageRead> {
-    return this.reads[label];
-  }
 }
 
 /** A coverage measurement in the MEASURED state. */
@@ -304,7 +278,7 @@ export interface FakeToolsOptions {
   build?: BuildTool;
   semgrep?: SemgrepTool;
   stryker?: StrykerTool;
-  coverage?: CoverageReader;
+  coverage?: CoverageTool;
   fs?: FsProbe;
   command?: CommandRunner;
 }
@@ -321,9 +295,9 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
     stryker: opts.stryker ?? new FakeStryker(strykerResult({ code: 0, score: 100 })),
     coverage:
       opts.coverage ??
-      new FakeCoverageReader({
-        before: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
-        after: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
+      new FakeCoverageTool({
+        head: measured({ lines: 100, branches: 100, functions: 100, statements: 100 }),
+        base: measured({ lines: 100, branches: 100, functions: 100, statements: 100 }),
       }),
     fs: opts.fs ?? new FakeFs(),
     command: opts.command ?? new FakeCommandRunner(proc(0)),

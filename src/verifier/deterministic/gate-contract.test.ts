@@ -196,7 +196,6 @@ describe("classifySkip", () => {
   );
 
   it.each([
-    "no-coverage-data",
     "no-mutation-binary",
     "no-mutation-config",
     "no-eslint-binary",

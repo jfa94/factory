@@ -165,28 +165,6 @@ export interface CoverageSummary {
 }
 
 /**
- * The outcome of reading ONE coverage summary, as a discriminated union so the
- * strategy can tell ABSENT (file never produced — the project did not capture
- * coverage) apart from INVALID (file present but corrupt / missing a metric). The
- * distinction is load-bearing: BOTH summaries absent ⇒ the coverage gate is not
- * applicable (skip); a present-but-invalid (or asymmetric one-absent) summary is a
- * real anomaly ⇒ fail-closed. The old conflated `null` forced a fail on a clean
- * repo that never opted into coverage.
- */
-export type CoverageRead =
-  | { readonly state: "absent" }
-  | { readonly state: "invalid" }
-  | { readonly state: "ok"; readonly summary: CoverageSummary };
-
-/**
- * Reads a coverage-v8 JSON summary, distinguishing absent from invalid (see
- * {@link CoverageRead}). Throws only on a truncated read.
- */
-export interface CoverageReader {
-  read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageRead>;
-}
-
-/**
  * How a coverage measurement is invoked (S8):
  *   - `vitest` — the worktree-local `node_modules/.bin/vitest` with these args
  *     (the built-in npm path; falls closed via {@link missingBinResult} when no
@@ -258,7 +236,7 @@ export interface GateTools {
   readonly build: BuildTool;
   readonly semgrep: SemgrepTool;
   readonly stryker: StrykerTool;
-  readonly coverage: CoverageReader;
+  readonly coverage: CoverageTool;
   readonly fs: FsProbe;
   readonly command: CommandRunner;
 }
@@ -561,33 +539,6 @@ function computeMutationScore(report: unknown): number | null {
 }
 
 /**
- * Default CoverageReader: reads a coverage-v8 summary from a conventional path
- * (`coverage/<label>-coverage-summary.json`). Supports both the `{lines:{pct}}`
- * and `{lines: N}` shapes (bin/pipeline-coverage-gate:59-67).
- */
-export class DefaultCoverageReader implements CoverageReader {
-  async read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageRead> {
-    const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
-    let raw: string;
-    try {
-      raw = await readFile(file, "utf8");
-    } catch {
-      // File not produced → ABSENT (the project did not capture this coverage).
-      return { state: "absent" };
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // Present but corrupt JSON → INVALID (a real anomaly, not absence).
-      return { state: "invalid" };
-    }
-    const summary = parseCoverageSummary(parsed);
-    return summary === null ? { state: "invalid" } : { state: "ok", summary };
-  }
-}
-
-/**
  * Default {@link CoverageTool}: run the coverage command, then parse the
  * `coverage/coverage-summary.json` it wrote.
  *
@@ -846,7 +797,7 @@ export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTool
     build: new DefaultBuildTool(gateEnv),
     semgrep: new DefaultSemgrepTool(gateEnv),
     stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
-    coverage: new DefaultCoverageReader(),
+    coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
     fs: new DefaultFsProbe(),
     command: new DefaultCommandRunner(gateEnv),
   };

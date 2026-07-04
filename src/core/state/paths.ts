@@ -122,6 +122,11 @@ export function runReportPath(dataDir: string, runId: string): string {
   return join(runDir(dataDir, runId), REPORT_FILE);
 }
 
+/** `<dataDir>/runs/<run-id>/coverage` — the per-tree-SHA coverage summary store (S8). */
+export function runCoverageDir(dataDir: string, runId: string): string {
+  return join(runDir(dataDir, runId), "coverage");
+}
+
 /** `<dataDir>/runs/current` symlink path — the legacy GLOBAL "most-recent" pointer. */
 export function currentLinkPath(dataDir: string): string {
   return join(runsRoot(dataDir), CURRENT_LINK);

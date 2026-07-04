@@ -102,6 +102,7 @@ export {
   worktreesRoot,
   runDir,
   runStatePath,
+  runCoverageDir,
   currentLinkPath,
   currentRepoRoot,
   currentRepoLinkPath,

@@ -14,14 +14,14 @@ import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../../config/schema.js";
 import { GATE_IDS } from "./strategy.js";
 import {
-  covOk,
-  FakeCoverageReader,
+  FakeCoverageTool,
   FakeEslint,
   FakeFs,
   FakeGitProbe,
   FakeStryker,
   FakeVitest,
   makeFakeTools,
+  measured,
   proc,
   strykerResult,
 } from "./fakes.js";
@@ -39,6 +39,26 @@ function greenGit(extra: Record<string, string> = {}): FakeGitProbe {
     changedFiles: [],
     commits: [],
   });
+}
+
+/** greenGit + the base tree ref the coverage strategy resolves. */
+function covGit(): FakeGitProbe {
+  return greenGit({ "origin/staging^{tree}": "tree-base" });
+}
+
+/** Contract loader: everything waived except test+coverage (command-less). */
+function loadsCoverageContract(
+  overrides: Partial<GateContract["gates"]> = {},
+): () => Promise<GateContractLoad> {
+  const gates = Object.fromEntries(
+    GATE_IDS.map((id) => [id, { contracted: false, reason: "test-waived" }]),
+  ) as GateContract["gates"];
+  const contract: GateContract = {
+    version: 1,
+    stack: "npm",
+    gates: { ...gates, test: { contracted: true }, coverage: { contracted: true }, ...overrides },
+  };
+  return async () => ({ state: "ok", contract });
 }
 
 function baseCtx(tools: GateTools, gates: readonly (typeof GATE_IDS)[number][]): GateContext {
@@ -320,13 +340,13 @@ describe("GateRunner — ONE config drives every gate (Δ V)", () => {
     expect(runLax.verdict.passed).toBe(true);
   });
 
-  it("coverage tolerance from config flips the verdict on identical readings", async () => {
+  it("coverage tolerance from config flips the verdict on identical measurements", async () => {
     const mkTools = (): GateTools =>
       makeFakeTools({
-        git: greenGit(),
-        coverage: new FakeCoverageReader({
-          before: covOk(full),
-          after: covOk({ lines: 97, branches: 100, functions: 100, statements: 100 }), // -3
+        git: covGit(),
+        coverage: new FakeCoverageTool({
+          head: measured({ lines: 97, branches: 100, functions: 100, statements: 100 }), // -3
+          base: measured(full),
         }),
       });
     const strict = defaultConfig();
@@ -342,6 +362,7 @@ describe("GateRunner — ONE config drives every gate (Δ V)", () => {
       config: strict,
       tools: mkTools(),
       gates: ["coverage"],
+      loadContract: loadsCoverageContract(),
     });
     const l = await new GateRunner().run({
       runId: "r",
@@ -351,8 +372,37 @@ describe("GateRunner — ONE config drives every gate (Δ V)", () => {
       config: lax,
       tools: mkTools(),
       gates: ["coverage"],
+      loadContract: loadsCoverageContract(),
     });
     expect(s.verdict.passed).toBe(false);
     expect(l.verdict.passed).toBe(true);
+  });
+});
+
+describe("GateRunner — coverage under the contract (S8)", () => {
+  it("UNCONTRACTED coverage is an explicit waived skip — the tool is never invoked", async () => {
+    const coverage = new FakeCoverageTool({ head: measured(full), base: measured(full) });
+    const res = await new GateRunner().run({
+      ...baseCtx(makeFakeTools({ git: covGit(), coverage }), ["coverage"]),
+      loadContract: loadsCoverageContract({
+        coverage: { contracted: false, reason: "waived via --waive coverage" },
+      }),
+    });
+    expect(res.skipped).toEqual([
+      { gate: "coverage", reason: "uncontracted: waived via --waive coverage" },
+    ]);
+    expect(coverage.measureCalls).toHaveLength(0);
+    expect(coverage.baseCalls).toHaveLength(0);
+    expect(res.evidence).toHaveLength(0);
+  });
+
+  it("ABSENT contract → coverage skips no-gate-contract (legacy pre-contract semantics)", async () => {
+    const coverage = new FakeCoverageTool({ head: measured(full), base: measured(full) });
+    const res = await new GateRunner().run({
+      ...baseCtx(makeFakeTools({ git: covGit(), coverage }), ["coverage"]),
+      loadContract: async () => ({ state: "absent" }),
+    });
+    expect(res.skipped).toEqual([{ gate: "coverage", reason: "no-gate-contract" }]);
+    expect(coverage.measureCalls).toHaveLength(0);
   });
 });
