@@ -58,6 +58,7 @@ export {
   runSpecGates,
   combineGates,
   extractPrdRequirements,
+  specifiabilityGate,
   type GateResult,
 } from "./gates.js";
 

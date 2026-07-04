@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { driveCommand } from "./drive.js";
 import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makeOrchestratorDeps, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
+import { makeOrchestratorDeps, makePrd, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
 
@@ -128,7 +128,7 @@ describe("drive happy path", () => {
 
     // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec", makePrd());
 
     const stdout = captureStream(process.stdout);
 
@@ -164,7 +164,7 @@ describe("drive happy path", () => {
 
     // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec", makePrd());
 
     // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
     const nowSec = Math.floor(Date.now() / 1000);

@@ -116,7 +116,7 @@ sequenceDiagram
   Note over O,CLI: Phase 3 — Advance (run orchestrator picks a task, task orchestrator advances it)
   loop until document or finalize
     O->>CLI: factory next-task
-    CLI-->>O: NextTask (work | document | finalize | pause)
+    CLI-->>O: NextTask (work | traceability | document | finalize | pause)
     loop advance the ready task: preflight→tests→exec→verify→ship
       O->>CLI: factory next-action --task <t> [--results <prev>]
       CLI-->>O: NextAction (spawn request | done | pause)
@@ -163,6 +163,17 @@ preflight → tests → exec → verify → ship
   only `--auto` differs), never a crashed run.
 
 When all tasks are terminal and the PRD would be `completed`, `factory next-task`
+first schedules the run-level **PRD-traceability** phase on every non-debug run,
+before docs (Decision 47). The runner runs `factory run traceability`, which spawns
+the read-only `traceability-auditor` in a detached worktree to deliver one
+met/partial/unmet verdict per numbered PRD requirement — judging only the run's whole
+staging diff, never task statuses or review outcomes. `partial` verdicts pass but
+surface as gaps in the report; any `unmet` condemns the run, so `finalize` blocks the
+rollup and the docs phase never runs. A crashed audit retries once
+(`MAX_TRACE_ATTEMPTS` = 2); a crash at the cap fails the run (unlike docs, it is not
+best-effort). Only after the audit clears does `next-task` proceed to docs.
+
+Then `factory next-task`
 returns `document` instead of `finalize` — provided the repo keeps a `/docs`
 directory and docs are not opted out (`package.json` `factory.docs.enabled !== false`)
 and the run's docs phase isn't already `done`. The runner then runs `factory run docs`,

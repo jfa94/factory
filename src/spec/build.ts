@@ -38,7 +38,7 @@ import { stringifyJson, readJsonFile } from "../shared/json.js";
 import { specBuildDir } from "../core/state/paths.js";
 import type { SpecStore } from "./store.js";
 import type { GhClient, Prd } from "./gh.js";
-import { runSpecGates } from "./gates.js";
+import { runSpecGates, specifiabilityGate } from "./gates.js";
 import { decideSpecReview, parseReviewVerdict } from "./review.js";
 import {
   parseGenerateResult,
@@ -66,6 +66,19 @@ export type SpecBuildEnvelope =
       readonly repo: string;
       readonly issue: number;
       readonly pointer: SpecPointer;
+    }
+  | {
+      /**
+       * Deterministic pre-generation refusal (S9, Decision 47) — the PRD cannot
+       * support spec generation. TERMINAL: the runner spawns NOTHING and stops
+       * loud; `blockers` tells the PRD author exactly what to add. Zero agent cost.
+       */
+      readonly kind: "unspecifiable";
+      readonly repo: string;
+      readonly issue: number;
+      /** Scratch prd.json — already written, kept as an inspection aid. */
+      readonly prd_path: string;
+      readonly blockers: readonly string[];
     }
   | {
       /** No spec yet — spawn the generator, then write `generated_path` and call `gate`. */
@@ -162,12 +175,30 @@ export async function resolveSpec(
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
+    // S9 backfill: a pre-snapshot spec gains its durable prd.json on first
+    // reuse (one fetch; no gate re-run — the spec was already adjudicated).
+    if (!(await deps.store.hasPrd(repo, existing.spec_id))) {
+      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
+    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
 
   const prd = await deps.gh.fetchPrd(issue, { repo });
   const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
+
+  // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
+  // spawn — an unspecifiable PRD never costs an apex generator turn.
+  const specifiability = specifiabilityGate(prd.body);
+  if (!specifiability.passed) {
+    return {
+      kind: "unspecifiable",
+      repo,
+      issue,
+      prd_path: prdPath,
+      blockers: specifiability.blockers,
+    };
+  }
 
   return {
     kind: "generate",
@@ -265,6 +296,9 @@ export async function storeSpec(
   }
 
   const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
+  // S9: snapshot the PRD durably beside the spec — the traceability stage reads
+  // it at finalize time (no gh re-fetch; scratch prd.json is transient).
+  const prd = await readJsonFile<Prd>(prdPath);
+  const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }

@@ -38,7 +38,12 @@ import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools } from "../verifier/deterministic/fakes.js";
 import { type HoldoutStore, InMemoryHoldoutStore } from "../verifier/holdout/index.js";
-import { InMemoryArtifactStore, type ShipMode } from "../orchestrator/index.js";
+import {
+  InMemoryArtifactStore,
+  runTraceabilityEmit,
+  runTraceabilityRecord,
+  type ShipMode,
+} from "../orchestrator/index.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { fakeUsageSignal } from "../quota/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
@@ -53,7 +58,7 @@ import {
   type DriveResults,
 } from "../orchestrator/index.js";
 
-import { greenProbe, makeSpec, NOW } from "../orchestrator/orchestrator-fixtures.js";
+import { greenProbe, makePrd, makeSpec, NOW } from "../orchestrator/orchestrator-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -201,6 +206,23 @@ async function driveToTerminal(
     if (next.kind === "document") throw new Error("unexpected docs-ready in E2E helper");
     if (next.kind === "e2e") throw new Error("unexpected e2e-ready in E2E helper");
     if (next.kind === "e2e-assessment") throw new Error("unexpected e2e-assessment in E2E helper");
+    if (next.kind === "traceability") {
+      // S9 (Decision 47): the PRD audit fires on every prospectively-completed
+      // non-debug run — drive it like the real runner would, with an all-met audit.
+      const env = await runTraceabilityEmit(deps, runId);
+      if (env.kind === "spawn") {
+        const n = (env.prompt.match(/^R\d+\. /gm) ?? []).length;
+        await runTraceabilityRecord(deps, runId, {
+          status: "STATUS: DONE",
+          verdicts: Array.from({ length: n }, (_, i) => ({
+            index: i + 1,
+            verdict: "met" as const,
+            evidence: "golden-path stub evidence",
+          })),
+        });
+      }
+      continue;
+    }
 
     const taskId = next.ready[0]!; // sequential orchestrator: first ready task
     let results: DriveResults | undefined;
@@ -281,7 +303,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("drives a task PRD→shipped (no-merge), holdout holdout recorded, panel all-approve", async () => {
     const request = specManifestSingle();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     const run = await createRun(state, specStore, {
       repo: REPO,
@@ -338,7 +360,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("serial-merges the task PR in live ship mode (same chain)", async () => {
     const request = specManifestSingle();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     await createRun(state, specStore, {
       repo: REPO,
@@ -369,7 +391,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("fails a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
     const request = specManifestTwo();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     await createRun(state, specStore, {
       repo: REPO,

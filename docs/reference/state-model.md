@@ -10,6 +10,7 @@ cannot live in-repo. Defined in `src/core/state/`.
 ```
 $CLAUDE_PLUGIN_DATA/
 ├── specs/<repo-key>/<spec-id>/        # DURABLE spec store — reused across runs
+│   └── {spec.md,tasks.json,prd.json,spec.meta.json}
 ├── spec-build/<repo-key>/<issue>/     # TRANSIENT spec-build scratch
 │   └── {prd,generated,verdict}.json
 ├── current/<repo-key>                # symlink → that repo's current run (CLI-only)
@@ -28,6 +29,11 @@ $CLAUDE_PLUGIN_DATA/
 - **Durable spec store** — `specs/<repo-key>/<spec-id>/`, keyed by `(repo,
 spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   lookup key, so re-running a PRD issue resolves the same spec. Reused across runs.
+  Holds `spec.md` + `tasks.json`, the `spec.meta.json` header holdout, and — since
+  [Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park) —
+  a **durable PRD snapshot** `prd.json`, written by `SpecStore.write` and backfilled once
+  on reuse of a pre-Decision-47 spec. The end-of-run traceability phase audits this
+  snapshot rather than re-fetching a possibly-edited PRD from GitHub.
 - **Transient spec-build scratch** — `spec-build/<repo-key>/<issue>/`, a
   discardable handoff buffer for one generate/review loop (keyed by issue, since no
   spec-id exists yet).
@@ -90,6 +96,7 @@ a mismatch is a loud parse error.
 | `ignore_quota`              | boolean                      | When `true`, the quota gate is skipped unconditionally for this run — both orchestrators + the runner read it from state (no per-call threading). Set at create from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`. Default `false`; a legacy run without the field reads as `false`.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `quota`                     | QuotaCheckpoint?             | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `docs`                      | DocsPhase?                   | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `traceability`              | TraceabilityPhase?           | PRD-traceability audit marker ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)); absent until the phase runs, only on a non-debug run. One recorded auditor verdict per numbered PRD requirement. See [`TraceabilityPhase`](#traceabilityphase).                                                                                                                                                                                                                                                                                                                                                                               |
 | `e2e`                       | boolean (default false)      | Whether this run opted into the e2e phase (the `--e2e` flag). Set once at create, immutable across resume. Default `false`: a run without the flag never schedules the e2e stage ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)).                                                                                                                                                                                                                                                                                                                                                                                             |
 | `e2e_assessment`            | E2eAssessment?               | Run-start e2e-assessment record (Decision 40 D3): the coverage forecast, the boot config the assessor resolved into `playwright.config.ts`, and any degraded-coverage warning. Absent until the assessment runs; present only on an `--e2e` run. See [`E2eAssessment`](#e2eassessment).                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `e2e_phase`                 | E2ePhase?                    | E2E-phase marker + author manifest + adjudication cursor; absent until the e2e phase first runs. See [`E2ePhase`](#e2ephase).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -238,6 +245,21 @@ finalizes `completed` without a docs commit.
 There is no `skipped` value — when docs are not applicable (no `/docs` directory or
 `package.json` `factory.docs.enabled: false`), `factory next-task` decides applicability
 read-only and the marker simply stays absent.
+
+## `TraceabilityPhase`
+
+`{ status: "done" | "failed", reason?, attempts?, verdicts, ended_at }` — the engine-owned
+PRD-traceability phase marker ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)).
+Runs on every non-debug run between the e2e phase and docs. `verdicts` is one row per
+numbered PRD requirement — `{ requirement, verdict: "met" | "partial" | "unmet", evidence }`.
+`done` means the audit completed and no requirement is `unmet` (a `done` marker may never
+carry an `unmet` verdict — the cross-field invariant); `partial` verdicts pass the gate but
+surface as gaps in the run report. `failed` (with a `reason`) records a condemning audit —
+any `unmet` verdict fails the run and blocks the finalize rollup (a concluded audit is
+**never retried** — verdicts are judgment, not a transient failure). `attempts` counts
+only auditor **crashes**: a crashed audit retries once (`MAX_TRACE_ATTEMPTS` = 2), and a
+crash at the cap fails the run with empty `verdicts` (unlike docs, traceability is a
+delivery gate, never best-effort-done).
 
 ## `E2ePhase`
 

@@ -349,6 +349,99 @@ describe("docs phase marker", () => {
   });
 });
 
+describe("traceability phase marker (S9, Decision 47)", () => {
+  const MET = {
+    requirement: "Users must be able to log in with email and password",
+    verdict: "met",
+    evidence: "src/auth/login.ts:10 issues the session token; login.test.ts exercises it",
+  };
+  const UNMET = {
+    requirement: "Sessions must expire after 30 minutes",
+    verdict: "unmet",
+    evidence: "no expiry logic anywhere in the diff",
+  };
+
+  it("absent by default → undefined", () => {
+    expect(parseRunState(minimalRun()).traceability).toBeUndefined();
+  });
+
+  it("round-trips a done marker with met+partial verdicts (partial passes — report-surfaced)", () => {
+    const run = parseRunState(
+      minimalRun({
+        traceability: {
+          status: "done",
+          verdicts: [MET, { ...MET, verdict: "partial" }],
+          ended_at: NOW,
+        },
+      }),
+    );
+    expect(run.traceability!.status).toBe("done");
+    expect(run.traceability!.verdicts).toHaveLength(2);
+    expect(run.traceability!.verdicts[1]!.verdict).toBe("partial");
+  });
+
+  it("verdicts default to [] (no parseable audit ever landed)", () => {
+    const run = parseRunState(
+      minimalRun({
+        traceability: { status: "failed", reason: "auditor crashed twice", ended_at: NOW },
+      }),
+    );
+    expect(run.traceability!.verdicts).toEqual([]);
+  });
+
+  it("rejects an unknown verdict value and an empty requirement/evidence", () => {
+    for (const bad of [
+      { ...MET, verdict: "kinda" },
+      { ...MET, requirement: "" },
+      { ...MET, evidence: "" },
+    ]) {
+      expect(() =>
+        parseRunState(
+          minimalRun({ traceability: { status: "done", verdicts: [bad], ended_at: NOW } }),
+        ),
+      ).toThrow();
+    }
+  });
+
+  it("Δ T4: reason is set IFF failed", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({ traceability: { status: "failed", verdicts: [], ended_at: NOW } }),
+      ),
+    ).toThrow(/failed.*no reason/s);
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          traceability: { status: "done", reason: "spurious", verdicts: [], ended_at: NOW },
+        }),
+      ),
+    ).toThrow(/reason is set IFF failed/);
+  });
+
+  it("Δ T4: rejects a done marker carrying any unmet verdict (unmet must record as failed)", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({ traceability: { status: "done", verdicts: [MET, UNMET], ended_at: NOW } }),
+      ),
+    ).toThrow(/unmet/);
+  });
+
+  it("round-trips a failed-with-unmet marker (verdicts persisted for the report)", () => {
+    const run = parseRunState(
+      minimalRun({
+        traceability: {
+          status: "failed",
+          reason: "1 PRD requirement unmet",
+          attempts: 1,
+          verdicts: [MET, UNMET],
+          ended_at: NOW,
+        },
+      }),
+    );
+    expect(run.traceability!.verdicts).toEqual([MET, UNMET]);
+  });
+});
+
 describe("TaskState.phase cursor", () => {
   it("accepts the five task phases and defaults to absent", () => {
     const base = parseTaskState(minimalTask());

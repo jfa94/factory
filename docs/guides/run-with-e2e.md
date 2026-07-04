@@ -201,7 +201,7 @@ the run's e2e contribution in one of:
   undeclared file inside it), the fail-first proof rejects a spec, or the e2e-author returns a
   non-`DONE` status. The run can also fail at the **run-start assessment** (`boot-impossible` /
   `machinery-impossible`), before any task runs. There is deliberately no re-author retry loop.
-  On a failed e2e phase the docs and rollup steps are skipped. A failed verdict is **not
+  On a failed e2e phase the traceability, docs, and rollup steps are skipped. A failed verdict is **not
   permanent**, though: `factory rescue apply --reset-e2e` clears the concluded verdict so the
   phase re-enters and re-runs on the next pass. The clear is **manifest-aware**: a phase that
   failed **after** authoring keeps its manifest and per-task reopen counts (the author is not

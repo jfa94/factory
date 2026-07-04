@@ -50,6 +50,8 @@ will delete the stale durable spec so the loop always emits `generate` (never `r
 env = factory spec resolve [--repo <o/n>] --issue <n> [--supersede]
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
+  unspecifiable → STOP LOUD (exit 1; zero agent cost). Surface env.blockers to the
+      user verbatim — the PRD needs editing before the factory can spec it. Spawn NOTHING.
   generate → remember env.max_iterations (the loop bound)
       spawn spec-generator (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path
@@ -71,7 +73,7 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--no-ship] [--ignore-quota] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--no-ship] [--ignore-quota] [--approve-spec] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 `--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
@@ -99,6 +101,14 @@ exists for the spec, it exits `3`. Two distinct envelopes — check `kind` first
   and do NOT hand-pick the existing run — the flag is the only sanctioned escape.
 
 Pass `--new` (or an explicit `--run-id`) to force an unconditional fresh run with a distinct id.
+
+**`--approve-spec` (S9, Decision 47).** Forward the invoking command's flag verbatim. When set,
+creation completes in full (staging cut, tasks seeded) and the run is then parked — `suspended`
+with NO quota checkpoint — before any envelope reaches the loop; the `created`/`superseded`
+envelope carries `spec_approval: {spec_path, note}`. **STOP there**: report `spec_path` and tell
+the user to review the spec and run `/factory:resume` (resume IS the sign-off). Do NOT call
+`next-task` on a parked run — its quota-gate step clears suspensions and would silently un-park.
+Runners are otherwise unchanged.
 
 **Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the runner
 session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the deterministic engine refusing to
@@ -130,6 +140,10 @@ REFILL (run at loop entry and after every completion):
                   report the reason + STOP (run is suspended — /factory:resume retries)
     "e2e-assessment" → run the E2E-ASSESSMENT STAGE (below); on done/failed, REFILL
                   (failed sweeps every task — next-task routes to finalize)
+    "traceability" → run the TRACEABILITY STAGE (below); on done/failed, REFILL
+                  (failed = run condemned OR crash-at-cap — next-task routes to
+                  finalize, docs skipped); on suspend, report the reason + STOP
+                  (run is suspended — /factory:resume retries)
     "document"  → run the DOCS STAGE (below); on done, REFILL; on suspend,
                   report the reason + STOP (run is suspended — /factory:resume retries)
     "pause"     → PAUSE CONVERGENCE (below)
@@ -183,7 +197,7 @@ refusal + `MERGE_RESYNC_CAP`). Never resolve a conflict, rebase a task branch, o
 retry a merge yourself — a merge failure surfaces through the envelopes like any
 other outcome.
 
-**Run-level stages never overlap tasks.** `finalize`/`e2e`/`e2e-assessment`/`document`/`done`
+**Run-level stages never overlap tasks.** `finalize`/`e2e`/`e2e-assessment`/`traceability`/`document`/`done`
 only emit when the table is empty (the engine emits them only with no drivable task
 work). Drive them foreground exactly as written in their stage blocks. If one ever
 arrives while the table is non-empty, that is an engine defect — STOP LOUD (Iron Law 3).
@@ -251,6 +265,27 @@ e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
     engine spends its one retry on it.)
     aenv = factory run e2e-assess --run <run_id> --results <file>   # may re-spawn once
   case aenv.kind: "done"|"failed" → loop  # failed = run condemned; next-task → finalize
+
+traceability stage (S9, Decision 47 — once per non-debug run, after e2e, before docs):
+  trenv = factory run traceability --run <run_id>
+  case trenv.kind:
+    "spawn"   → spawn the traceability auditor (subagent_type `traceability-auditor`,
+                model per trenv.model, isolation OMITTED — it works IN trenv.worktree,
+                a DETACHED read-only checkout), prompt = trenv.prompt VERBATIM.
+                Write its JSON verdict object {"status":"<line>","verdicts":[{"index":n,
+                "verdict":"met|partial|unmet","evidence":"..."}, ...]} to a results file
+                under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+                (If the auditor died/was skipped, write {"status":"traceability-auditor
+                agent skipped or died (no STATUS line)","verdicts":[]} — the engine
+                spends its one retry on it.)
+                trenv2 = factory run traceability --run <run_id> --results <file>
+                case trenv2.kind:
+                  "done"    → loop  # audit clean (partial rows surface in the report)
+                  "failed"  → loop  # unmet verdict or crash-at-cap — run condemned;
+                                    #   next-task routes to finalize, docs skipped
+                  "suspend" → report trenv2.reason; STOP  # pre-cap crash; /factory:resume retries
+    "done"|"failed" → loop          # idempotent: already concluded
+    "suspend" → report trenv.reason; STOP
 
 docs stage:
   denv = factory run docs --run <run_id>
@@ -343,15 +378,16 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 
 ### Agent spawn matrix
 
-| Agent                                | `subagent_type`                    | isolation                                  |
-| ------------------------------------ | ---------------------------------- | ------------------------------------------ |
-| test-writer                          | `test-writer`                      | **none** (omit) — works IN `tenv.worktree` |
-| implementer                          | `implementer`                      | **none** (omit) — works IN `tenv.worktree` |
-| panel reviewers                      | the manifest `role`                | `"worktree"`                               |
-| holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                               |
-| spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |
-| e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree` |
-| e2e-assessor                         | `e2e-assessor`                     | **none** (omit) — works IN `aenv.worktree` |
+| Agent                                | `subagent_type`                    | isolation                                   |
+| ------------------------------------ | ---------------------------------- | ------------------------------------------- |
+| test-writer                          | `test-writer`                      | **none** (omit) — works IN `tenv.worktree`  |
+| implementer                          | `implementer`                      | **none** (omit) — works IN `tenv.worktree`  |
+| panel reviewers                      | the manifest `role`                | `"worktree"`                                |
+| holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                                |
+| spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                                |
+| e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree`  |
+| e2e-assessor                         | `e2e-assessor`                     | **none** (omit) — works IN `aenv.worktree`  |
+| traceability-auditor                 | `traceability-auditor`             | **none** (omit) — works IN `trenv.worktree` |
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the
@@ -372,6 +408,9 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
   On an `--e2e` run, the e2e stage runs before docs (Decision 39) — a failed
   e2e phase skips docs entirely (don't document code the e2e verdict just
   condemned) and is reported alongside the rollup, not as a separate step.
+  The PRD-traceability audit (S9, Decision 47) sits between e2e and docs on
+  every non-debug run — a failed audit likewise skips docs and blocks the
+  rollup (unmet PRD requirements surface in the report + PRD comment).
 
 ## When NOT to use this skill
 

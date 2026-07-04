@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { defaultConfig } from "../config/schema.js";
 import { parseSpecManifest } from "../spec/schema.js";
-import type { SpecManifest } from "../spec/index.js";
+import type { Prd, SpecManifest } from "../spec/index.js";
 import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/fakes.js";
@@ -90,6 +90,18 @@ export function makeSpec(
       ...(t.tdd_exempt === true ? { tdd_exempt: true } : {}),
     })),
   });
+}
+
+/** S9: a healthy PRD snapshot for `SpecStore.write`'s required third param. */
+export function makePrd(over: Partial<Prd> = {}): Prd {
+  return {
+    issue_number: 42,
+    title: "Checkout Redesign",
+    body: "## Requirements\n\n- checkout must work\n\n## Acceptance Criteria\n\n- returns 201",
+    labels: ["prd"],
+    body_truncated: false,
+    ...over,
+  };
 }
 
 // ---------------------------------------------------------------------------

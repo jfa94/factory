@@ -31,10 +31,12 @@ a loop:
 Both returns are discriminated unions whose `kind` is an **imperative** — it tells
 the runner what to do, not what state something is in.
 
-**`NextTask` kinds:** `work` (drive this ready task) · `document` (run the docs
+**`NextTask` kinds:** `work` (drive this ready task) · `traceability` (run the
+PRD-traceability audit — every non-debug run, before docs) · `document` (run the docs
 phase) · `finalize` (everything terminal — roll up) · `done` (run already terminal)
 · `pause` (quota-blocked; wait — `scope` names the binding window: `5h`, `7d`, or
-`unavailable`).
+`unavailable`). (Opt-in `--e2e` runs also emit `e2e-assessment` and `e2e` — see the
+[e2e guide](../guides/run-with-e2e.md).)
 
 **`NextAction` kinds:** `spawn` (spawn these agents, resume after) · `done` (task
 terminal) · `pause` (quota-blocked; wait).

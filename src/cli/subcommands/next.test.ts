@@ -16,7 +16,7 @@ import { writeFile } from "node:fs/promises";
 import { nextCommand } from "./next.js";
 import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makeOrchestratorDeps, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
+import { makeOrchestratorDeps, makePrd, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
@@ -100,7 +100,7 @@ describe("next --run resolution falls back to runs/current", () => {
     }));
     // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec", makePrd());
 
     // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
     const nowSec = Math.floor(Date.now() / 1000);
@@ -176,7 +176,7 @@ describe("next runs/current guards (--assert-owner)", () => {
       },
     }));
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec", makePrd());
     const nowSec = Math.floor(Date.now() / 1000);
     await writeFile(
       usageCachePath(dir),
@@ -281,6 +281,7 @@ describe("next happy path", () => {
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
       spec,
       "# spec",
+      makePrd(),
     );
 
     // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
@@ -328,6 +329,7 @@ describe("next happy path", () => {
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
       spec,
       "# spec",
+      makePrd(),
     );
 
     const stdout = captureStream(process.stdout);

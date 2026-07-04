@@ -251,7 +251,11 @@ loop on env.kind:
 ```
 
 Every `debug spec` action's envelope is the SAME `SpecBuildEnvelope` union `factory
-spec`'s actions return (`src/cli/subcommands/spec.ts`) — `resolve`/`gate`/`store`
+spec`'s actions return (`src/cli/subcommands/spec.ts`) — including `unspecifiable`
+(S9), which is structurally unreachable here: the synthetic PRD always renders an
+Acceptance Criteria section (one criterion per confirmed blocker), so it passes the
+specifiability gate by construction. If it ever fires anyway, Iron Law 3 applies —
+STOP LOUD, spawn nothing. `resolve`/`gate`/`store`
 are thin pass-throughs fed a `SpecBuildDeps` swapped to a network-free `GhClient`
 that returns the synthetic PRD instead of shelling out to `gh` (`debugRepo` still
 auto-derives `owner/name` from the checkout's `origin` remote, exactly like real

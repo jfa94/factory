@@ -6461,6 +6461,20 @@ var DocsPhaseSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
+var TraceabilityVerdictRowSchema = external_exports.object({
+  requirement: external_exports.string().min(1),
+  verdict: external_exports.enum(["met", "partial", "unmet"]),
+  evidence: external_exports.string().min(1)
+});
+var TraceabilityPhaseSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]),
+  reason: external_exports.string().optional(),
+  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+  verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([]),
+  ended_at: external_exports.string()
+});
 var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
 var E2eManifestEntrySchema = external_exports.object({
   /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
@@ -6595,6 +6609,8 @@ var RunStateSchema = external_exports.object({
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
+  /** PRD-traceability phase marker (S9); absent until the phase runs. */
+  traceability: TraceabilityPhaseSchema.optional(),
   /**
    * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
    * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
@@ -6676,6 +6692,22 @@ function refineRunCrossFields(run10, ctx) {
       status: run10.docs.status,
       reason: run10.docs.reason
     });
+  }
+  if (run10.traceability !== void 0) {
+    reasonIffFailed(ctx, {
+      runId: run10.run_id,
+      path: ["traceability", "reason"],
+      label: "traceability phase",
+      status: run10.traceability.status,
+      reason: run10.traceability.reason
+    });
+    if (run10.traceability.status === "done" && run10.traceability.verdicts.some((v) => v.verdict === "unmet")) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["traceability", "verdicts"],
+        message: `run '${run10.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`
+      });
+    }
   }
   if (run10.e2e_phase !== void 0 && run10.e2e_phase.status !== void 0) {
     const isFailed = run10.e2e_phase.status === "failed";
@@ -7884,7 +7916,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -9135,6 +9167,7 @@ function buildPartialReport(run10, request, opts = {}) {
     ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
     ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {},
     ...buildE2eNarrative(run10),
+    ...buildTraceability(run10),
     ...buildCrossVendorAbsences(run10, bySpecOrder),
     ...opts.warnings !== void 0 && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}
   };
@@ -9142,6 +9175,13 @@ function buildPartialReport(run10, request, opts = {}) {
 function buildCrossVendorAbsences(run10, bySpecOrder) {
   const absences = Object.values(run10.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent.reason })).sort(bySpecOrder);
   return absences.length > 0 ? { cross_vendor_absences: absences } : {};
+}
+function buildTraceability(run10) {
+  const gaps = (run10.traceability?.verdicts ?? []).filter((v) => v.verdict !== "met");
+  return {
+    ...run10.traceability?.status === "failed" ? { traceability_failure: run10.traceability.reason ?? "PRD traceability audit failed" } : {},
+    ...gaps.length > 0 ? { traceability_gaps: gaps } : {}
+  };
 }
 function buildE2eNarrative(run10) {
   const journeys = (run10.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
@@ -9175,6 +9215,12 @@ function renderFailureComment(report) {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     lines.push("", "### End-to-end setup failed before any task ran", plain);
     if (detail !== void 0) lines.push("```", detail, "```");
+  }
+  if (report.traceability_failure !== void 0) {
+    lines.push("", "### Unmet PRD requirements", report.traceability_failure);
+    for (const g of report.traceability_gaps ?? []) {
+      lines.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+    }
   }
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
@@ -9263,6 +9309,18 @@ function renderPartialReportMarkdown(report) {
   if (report.e2e_advisory !== void 0) {
     out.push("## End-to-end verification \u2014 advisory");
     out.push(report.e2e_advisory);
+    out.push("");
+  }
+  if (report.traceability_failure !== void 0) {
+    out.push("## PRD traceability failed");
+    out.push(report.traceability_failure);
+    out.push("");
+  }
+  if (report.traceability_gaps !== void 0) {
+    out.push("## PRD requirement gaps");
+    for (const g of report.traceability_gaps) {
+      out.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+    }
     out.push("");
   }
   if (report.failures.length > 0) {
@@ -9779,11 +9837,12 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
+import { access as access2, readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
 import { join as join8 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
+var PRD_FILE = "prd.json";
 function makeSpecId(issueNumber, slug) {
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
     throw new Error(`makeSpecId: issue number must be a positive integer, got ${issueNumber}`);
@@ -9897,16 +9956,22 @@ var SpecStore = class {
    *
    * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
    * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
-   * subset (no `spec.meta.json` holdout): the holdout is a dataDir reconstruction
-   * detail, and the canonical read-path never consults the mirror. Reruns still
-   * resolve by issue number against the dataDir store (unchanged).
+   * subset (no `spec.meta.json` holdout, no `prd.json` — the PRD is already
+   * public on the issue): the holdout is a dataDir reconstruction detail, and
+   * the canonical read-path never consults the mirror. Reruns still resolve by
+   * issue number against the dataDir store (unchanged).
+   *
+   * S9 (Decision 47): `prd` is REQUIRED — the durable PRD snapshot is what the
+   * traceability stage audits at finalize time (never a `gh` re-fetch: network
+   * at the most expensive moment, and a possibly-edited PRD is a TOCTOU audit).
    */
-  async write(request, specMd) {
+  async write(request, specMd, prd) {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
     await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
     await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join8(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
       join8(dir, META_FILE),
       stringifyJson({
@@ -9931,6 +9996,40 @@ var SpecStore = class {
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
+  }
+  /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
+  async hasPrd(repo, specId) {
+    try {
+      await access2(join8(specDir(this.dataDir, repo, specId), PRD_FILE));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
+   * spec predates the snapshot — never a silent null (traceability would audit
+   * nothing).
+   */
+  async readPrd(repo, specId) {
+    const path6 = join8(specDir(this.dataDir, repo, specId), PRD_FILE);
+    let raw;
+    try {
+      raw = await readFile4(path6, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        throw new Error(
+          `spec ${specId} predates the S9 PRD snapshot \u2014 run \`factory spec resolve --issue ${issueOf(specId) ?? "<n>"}\` to backfill, or \`--supersede\` to regenerate`
+        );
+      }
+      throw err;
+    }
+    return parseJson(raw, path6);
+  }
+  /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
+  async writePrd(repo, specId, prd) {
+    await atomicWriteFile(join8(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd));
+    log17.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`);
   }
   /** Build the run-facing {@link SpecPointer} from a request. */
   toPointer(request) {
@@ -10009,6 +10108,33 @@ function buildReviewSpawn(prd, generated) {
 // src/spec/gates.ts
 function combineGates(...results) {
   const blockers = results.flatMap((r) => r.blockers);
+  return { passed: blockers.length === 0, blockers };
+}
+var MIN_PRD_BODY_CHARS = 200;
+var AC_SECTION_HEADING = /^(acceptance[ -]criteria|acceptance[ -]tests?|success[ -]criteria|definition[ -]of[ -]done)\b/i;
+function specifiabilityGate(body) {
+  const blockers = [];
+  const lines = body.split(/\r?\n/).map((l) => l.trim());
+  const content = lines.filter((l) => l.length > 0 && !/^#{1,6}\s/.test(l)).join("\n");
+  if (content.length < MIN_PRD_BODY_CHARS) {
+    blockers.push(
+      `specifiability: PRD body is trivial (${content.length} chars of content, minimum ${MIN_PRD_BODY_CHARS}) \u2014 describe the problem, the desired behavior, and constraints`
+    );
+  }
+  if (extractPrdRequirements(body).length === 0) {
+    blockers.push(
+      "specifiability: no extractable requirements \u2014 add bulleted requirements or normative (must/should) sentences outside Out-of-Scope/Non-Goals sections"
+    );
+  }
+  const hasAcSection = lines.some((l) => {
+    const heading = /^#{1,6}\s+(.*)$/.exec(l);
+    return heading !== null && AC_SECTION_HEADING.test(heading[1].trim());
+  });
+  if (!hasAcSection) {
+    blockers.push(
+      'specifiability: no acceptance-criteria-shaped section \u2014 add an "## Acceptance Criteria" (or Definition of Done / Success Criteria) section stating verifiable outcomes'
+    );
+  }
   return { passed: blockers.length === 0, blockers };
 }
 var HORIZONTAL_MARKERS = [
@@ -10253,13 +10379,13 @@ function buildManifest(repo, issueNumber, generated) {
 
 // src/spec/build.ts
 import { join as join9 } from "node:path";
-var PRD_FILE = "prd.json";
+var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join9(dir, PRD_FILE),
+    prdPath: join9(dir, PRD_FILE2),
     generatedPath: join9(dir, GENERATED_FILE),
     verdictPath: join9(dir, VERDICT_FILE)
   };
@@ -10270,11 +10396,24 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
+    if (!await deps.store.hasPrd(repo, existing.spec_id)) {
+      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
+    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
   const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
+  const specifiability = specifiabilityGate(prd.body);
+  if (!specifiability.passed) {
+    return {
+      kind: "unspecifiable",
+      repo,
+      issue,
+      prd_path: prdPath,
+      blockers: specifiability.blockers
+    };
+  }
   return {
     kind: "generate",
     repo,
@@ -10322,7 +10461,7 @@ async function storeSpec(deps, repo, issue) {
   });
   if (decision.decision === "NEEDS_REVISION") {
     const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
-    const prd = await readJsonFile(prdPath);
+    const prd2 = await readJsonFile(prdPath);
     return {
       kind: "revise",
       repo,
@@ -10330,12 +10469,13 @@ async function storeSpec(deps, repo, issue) {
       source: "review",
       reason: decision.reason,
       blockers,
-      spawn: buildReviseSpawn(prd, generated, blockers),
+      spawn: buildReviseSpawn(prd2, generated, blockers),
       generated_path: generatedPath
     };
   }
   const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
+  const prd = await readJsonFile(prdPath);
+  const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }
 
@@ -11321,7 +11461,7 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
+import { access as access3, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
@@ -11336,7 +11476,7 @@ function assertNotTruncated(r, what) {
 }
 async function pathExists(absPath) {
   try {
-    await access2(absPath);
+    await access3(absPath);
     return true;
   } catch {
     return false;
@@ -11556,7 +11696,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
 var DefaultFsProbe = class {
   async exists(relPath, opts) {
     try {
-      await access2(path3.join(opts.cwd, relPath));
+      await access3(path3.join(opts.cwd, relPath));
       return true;
     } catch {
       return false;
@@ -12353,11 +12493,11 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passR
 
 // src/verifier/e2e/runner.ts
 import path5 from "node:path";
-import { access as access3 } from "node:fs/promises";
+import { access as access4 } from "node:fs/promises";
 var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 async function pathExists2(p) {
   try {
-    await access3(p);
+    await access4(p);
     return true;
   } catch {
     return false;
@@ -12710,7 +12850,9 @@ function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
 async function commentFailuresOnPrd(deps, report) {
-  if (report.failures.length === 0 && report.e2e_failure === void 0) return false;
+  if (report.failures.length === 0 && report.e2e_failure === void 0 && report.traceability_failure === void 0) {
+    return false;
+  }
   const marker = failureCommentMarker(report.run_id);
   const existing = await deps.gh.listIssueComments({
     repo: report.repo,
@@ -12731,7 +12873,7 @@ async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
-  const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" ? "failed" : taskTerminal;
+  const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" || run10.traceability?.status === "failed" ? "failed" : taskTerminal;
   const contract = await loadGateContract(process.cwd());
   const warnings = contract.state === "absent" ? [
     "gates ran without a .factory/gates.json contract (legacy pre-contract run) \u2014 run `factory scaffold` and commit the contract"
@@ -13951,6 +14093,141 @@ async function runDocsRecord(deps, runId, results) {
   return { kind: "suspend", run_id: runId, reason };
 }
 
+// src/orchestrator/traceability.ts
+import { join as join19 } from "node:path";
+var TRACE_MODEL = "opus";
+var TRACE_MAX_TURNS = 60;
+var MAX_TRACE_ATTEMPTS = 2;
+function traceWorktreePath(dataDir, runId) {
+  return join19(dataDir, "worktrees", runId, ".trace");
+}
+function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
+  const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
+  const criteriaLines = spec.tasks.flatMap((t) => [
+    `[${t.task_id}] ${t.title}:`,
+    ...t.acceptance_criteria.map((c) => `  - ${c}`)
+  ]);
+  return [
+    "You are the factory traceability auditor (agents/traceability-auditor.md).",
+    `1. cd into your worktree: ${worktree} (detached checkout of the staging tip).`,
+    `2. The whole-PRD change set is: git diff ${baseRef}..HEAD \u2014 judge ONLY that diff and the resulting tree.`,
+    "3. The PRD requirements below are the AXIOM. For EACH one, hunt for credible evidence in the diff/tree that it is delivered AND exercised by tests.",
+    "",
+    "PRD requirements:",
+    ...reqLines,
+    "",
+    "Spec acceptance criteria (context only \u2014 judge the requirements, not these):",
+    ...criteriaLines,
+    "",
+    "Verdict rules: met = credible diff evidence, exercised by tests; partial = delivered incompletely or untested; unmet = no credible evidence in the diff/tree. Task statuses are NOT evidence.",
+    "You are READ-ONLY: make NO commits, NO edits, NO pushes.",
+    'Finish with your terminal STATUS line and return exactly {"status": "<line>", "verdicts": [{"index": <n>, "verdict": "met|partial|unmet", "evidence": "<cited evidence, \u2264500 chars>"}, ...]} \u2014 one verdict per requirement R1..Rn, index matching the number above.'
+  ].join("\n");
+}
+async function readRequirements(deps, runId) {
+  const run10 = await deps.state.read(runId);
+  const prd = await new SpecStore({ dataDir: deps.dataDir }).readPrd(
+    run10.spec.repo,
+    run10.spec.spec_id
+  );
+  const requirements = extractPrdRequirements(prd.body);
+  if (requirements.length === 0) {
+    throw new Error(
+      `traceability: PRD #${prd.issue_number} snapshot yields no extractable requirements \u2014 nothing to audit (the specifiability gate should have refused this PRD)`
+    );
+  }
+  return requirements;
+}
+async function runTraceabilityEmit(deps, runId) {
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const base = deps.config.git.baseBranch;
+  const worktree = traceWorktreePath(deps.dataDir, runId);
+  const baseRef = `origin/${base}`;
+  const requirements = await readRequirements(deps, runId);
+  await deps.git.fetch("origin", staging);
+  await deps.git.fetch("origin", base);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["--detach", worktree, `origin/${staging}`]);
+  } else if ((run10.traceability?.attempts ?? 0) >= 1) {
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
+  }
+  return {
+    kind: "spawn",
+    run_id: runId,
+    worktree,
+    base_ref: baseRef,
+    staging_branch: staging,
+    model: TRACE_MODEL,
+    max_turns: TRACE_MAX_TURNS,
+    prompt: buildAuditorPrompt(worktree, baseRef, requirements, deps.spec)
+  };
+}
+var TraceabilityResultsSchema = external_exports.object({
+  status: external_exports.string().min(1),
+  verdicts: external_exports.array(
+    external_exports.object({
+      index: external_exports.number().int().positive(),
+      verdict: external_exports.enum(["met", "partial", "unmet"]),
+      evidence: external_exports.string().min(1).max(500)
+    }).strict()
+  )
+}).strict();
+async function runTraceabilityRecord(deps, runId, results) {
+  const run10 = await deps.state.read(runId);
+  const worktree = traceWorktreePath(deps.dataDir, runId);
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "done") {
+    const requirements = await readRequirements(deps, runId);
+    const byIndex = new Map(results.verdicts.map((v) => [v.index, v]));
+    const covered = byIndex.size === results.verdicts.length && byIndex.size === requirements.length && requirements.every((_, i) => byIndex.has(i + 1));
+    if (!covered) {
+      throw new Error(
+        `traceability: audit must carry exactly one verdict per requirement 1..${requirements.length}, got indices [${results.verdicts.map((v) => v.index).join(", ")}]`
+      );
+    }
+    const rows = requirements.map((requirement, i) => {
+      const v = byIndex.get(i + 1);
+      return { requirement, verdict: v.verdict, evidence: v.evidence };
+    });
+    const unmet = rows.filter((r) => r.verdict === "unmet");
+    await deps.git.worktreeRemove([worktree, "--force"]);
+    if (unmet.length === 0) {
+      await deps.state.update(runId, (s) => ({
+        ...s,
+        traceability: { status: "done", verdicts: rows, ended_at: nowIso() }
+      }));
+      return { kind: "done", run_id: runId };
+    }
+    const reason2 = `PRD requirements unmet: ` + unmet.map((r) => `"${r.requirement}"`).join("; ");
+    await deps.state.update(runId, (s) => ({
+      ...s,
+      traceability: { status: "failed", reason: reason2, verdicts: rows, ended_at: nowIso() }
+    }));
+    return { kind: "failed", run_id: runId, reason: reason2 };
+  }
+  const reason = "reason" in outcome ? outcome.reason : "traceability phase failed";
+  const attempts = (run10.traceability?.attempts ?? 0) + 1;
+  const marker = {
+    status: "failed",
+    reason,
+    attempts,
+    verdicts: [],
+    ended_at: nowIso()
+  };
+  if (attempts >= MAX_TRACE_ATTEMPTS) {
+    await deps.git.worktreeRemove([worktree, "--force"]);
+    await deps.state.update(runId, (s) => ({ ...s, traceability: marker }));
+    return { kind: "failed", run_id: runId, reason };
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    status: "suspended",
+    traceability: marker
+  }));
+  return { kind: "suspend", run_id: runId, reason };
+}
+
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
   const run10 = await deps.state.read(runId);
@@ -13977,8 +14254,20 @@ async function wantsDocs(deps, run10) {
   if ((run10.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
   if (run10.e2e_phase?.status === "failed") return false;
   if (run10.e2e_assessment?.status === "failed") return false;
+  if (run10.traceability?.status === "failed") return false;
   if (decideFinalize(run10).run_status !== "completed") return false;
   return deps.docsApplicable();
+}
+function wantsTraceability(run10) {
+  if (run10.debug) return false;
+  if (run10.traceability?.status === "done") return false;
+  if (run10.traceability?.status === "failed") {
+    if (run10.traceability.verdicts.length > 0) return false;
+    if ((run10.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) return false;
+  }
+  if (run10.e2e_phase?.status === "failed") return false;
+  if (run10.e2e_assessment?.status === "failed") return false;
+  return decideFinalize(run10).run_status === "completed";
 }
 function wantsE2e(run10) {
   if (!run10.e2e) return false;
@@ -14000,8 +14289,9 @@ async function nextTask(deps, runId) {
   const allTerminal = Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run10);
   const needsAssessment = wantsE2eAssessment(run10, allTerminal, needsE2e);
-  const needsDocs = allTerminal && !needsE2e && await wantsDocs(deps, run10);
-  if (allTerminal && !needsE2e && !needsDocs) {
+  const needsTrace = allTerminal && !needsE2e && wantsTraceability(run10);
+  const needsDocs = allTerminal && !needsE2e && !needsTrace && await wantsDocs(deps, run10);
+  if (allTerminal && !needsE2e && !needsTrace && !needsDocs) {
     if (run10.status === "paused" || run10.status === "suspended") {
       const patch = clearCheckpoint();
       await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
@@ -14025,6 +14315,9 @@ async function nextTask(deps, runId) {
   }
   if (needsE2e) {
     return { ...ctx(), kind: "e2e" };
+  }
+  if (needsTrace) {
+    return { ...ctx(), kind: "traceability" };
   }
   if (needsDocs) {
     return { ...ctx(), kind: "document" };
@@ -14103,7 +14396,7 @@ async function nextTask(deps, runId) {
 
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute, join as join19 } from "node:path";
+import { dirname as dirname8, isAbsolute, join as join20 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
@@ -14151,19 +14444,19 @@ var E2eResultsSchema = external_exports.object({
   verdicts: external_exports.array(E2eAdjudicationVerdictSchema).optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-author");
+  return join20(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-run");
+  return join20(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join20(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join20(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join20(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -14596,7 +14889,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   }
   try {
     for (const entry of critical) {
-      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
+      await files.copySpec(join20(authorWorktree, entry.spec_path), join20(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -14693,7 +14986,7 @@ async function markFailed(deps, runId, reason, attempts) {
   log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
-  return join19(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join20(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -14898,13 +15191,13 @@ async function runSuiteAndDecide(deps, runId) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join20 } from "node:path";
+import { join as join21 } from "node:path";
 var log28 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "opus";
 var ASSESSOR_MAX_TURNS = 60;
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-assess");
+  return join21(dataDir, "worktrees", runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -15137,8 +15430,8 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
-import { access as access4, readFile as readFile14 } from "node:fs/promises";
-import { join as join21 } from "node:path";
+import { access as access5, readFile as readFile14 } from "node:fs/promises";
+import { join as join22 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -15199,6 +15492,7 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
   factory run e2e-assess [--run <id>] [--results <path>]
@@ -15208,6 +15502,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
+  traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
@@ -15215,7 +15510,7 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--approve-spec] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -15236,6 +15531,9 @@ Usage:
   --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
                 author + run Playwright journeys against staging before docs/finalize; a
                 mappable failing journey reopens its task with feedback. Persisted as e2e:true.
+  --approve-spec Park the fully-created run (suspended, no quota checkpoint) for human spec
+                sign-off before any agent runs (S9, Decision 47). The envelope names the
+                spec.md to review; 'factory resume' IS the sign-off. Create-only; default off.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; required \u2014 an ownerless run is rejected.
 
@@ -15302,16 +15600,18 @@ function seedTasksFromSpec(request) {
   return tasks;
 }
 async function resolveSpec2(specStore, opts) {
-  if (opts.specId !== void 0) {
-    return specStore.read(opts.repo, opts.specId);
-  }
-  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (resolved === null) {
+  const request = opts.specId !== void 0 ? await specStore.read(opts.repo, opts.specId) : await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (request === null) {
     throw new Error(
       `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
     );
   }
-  return resolved;
+  if (!await specStore.hasPrd(request.repo, request.spec_id)) {
+    throw new Error(
+      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
+    );
+  }
+  return request;
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   const seeded = seedTasksFromSpec(request);
@@ -15443,7 +15743,7 @@ async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile14(join21(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -15457,7 +15757,7 @@ async function assertE2ePrereqs(cwd) {
     if (!hasDep2) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
-    await access4(join21(cwd, "playwright.config.ts"));
+    await access5(join22(cwd, "playwright.config.ts"));
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -15487,7 +15787,7 @@ async function assertGateContract(cwd, gitClient) {
 }
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
-    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
+    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e", "approve-spec"]
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -15529,6 +15829,12 @@ async function runCreate(argv, overrides = {}) {
   if (resume && (args.flag("no-ship") === true || args.flag("e2e") === true)) {
     throw new UsageError(
       "run create: --no-ship/--e2e are create-only and cannot combine with --resume \u2014 a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh."
+    );
+  }
+  const approveSpec = args.flag("approve-spec") === true;
+  if (approveSpec && resume) {
+    throw new UsageError(
+      "run create: --approve-spec is create-only and cannot combine with --resume \u2014 resuming a parked run IS the spec sign-off."
     );
   }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
@@ -15598,11 +15904,26 @@ async function runCreate(argv, overrides = {}) {
     );
     return EXIT.CONFLICT;
   }
+  const park = async (run10) => {
+    const parked = await state.update(run10.run_id, (s) => ({
+      ...s,
+      status: "suspended"
+    }));
+    return {
+      run: parked,
+      spec_approval: {
+        spec_path: join22(specDir(dataDir, repoSlug, run10.spec.spec_id), "spec.md"),
+        note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
+      }
+    };
+  };
   if (result.kind === "created") {
-    emitJson({ kind: "created", run: result.run });
+    const out2 = approveSpec ? await park(result.run) : { run: result.run };
+    emitJson({ kind: "created", ...out2 });
     return EXIT.OK;
   }
-  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
+  const out = approveSpec ? await park(result.run) : { run: result.run };
+  emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -15695,6 +16016,20 @@ var runDocs = phaseCommand({
   parse: (raw) => DocsResultsSchema.parse(raw),
   record: runDocsRecord,
   emit: runDocsEmit
+});
+var TRACE_HELP = `factory run traceability [--run <id>] [--results <path>]
+
+Emit the PRD-traceability audit spawn request (S9, Decision 47), or (with
+--results) record the auditor's per-requirement verdicts: all met/partial \u2192
+phase done; any unmet \u2192 run condemned (finalize blocks the rollup); a crashed
+auditor retries once, then fails the run. The CLI never spawns the auditor \u2014 a
+orchestrator does.`;
+var runTraceability = phaseCommand({
+  help: TRACE_HELP,
+  phase: "traceability",
+  parse: (raw) => TraceabilityResultsSchema.parse(raw),
+  record: runTraceabilityRecord,
+  emit: runTraceabilityEmit
 });
 var E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
 
@@ -15807,6 +16142,8 @@ async function run2(argv) {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "traceability":
+      return runTraceability(rest);
     case "docs":
       return runDocs(rest);
     case "e2e":
@@ -15817,7 +16154,7 @@ async function run2(argv) {
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | e2e-assess | cancel)`
+        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`
       );
   }
 }
@@ -15898,7 +16235,16 @@ async function run3(argv) {
   const deps = wireDeps();
   const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
   emitJson(envelope);
-  return EXIT.OK;
+  if (envelope.kind === "unspecifiable") {
+    emitError(
+      `PRD #${issue} is not specifiable \u2014 fix the PRD and re-run:
+` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
+    );
+  }
+  return specExitCode(envelope);
+}
+function specExitCode(envelope) {
+  return envelope.kind === "unspecifiable" ? EXIT.ERROR : EXIT.OK;
 }
 var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
@@ -16077,6 +16423,13 @@ function renderFindingsBody(confirmedBlockers) {
   }
   return sections.join("\n\n");
 }
+function renderAcceptanceCriteria(confirmedBlockers) {
+  const bullets = confirmedBlockers.map((f) => {
+    const citation = f.file !== void 0 && f.line !== void 0 ? `${f.file}:${f.line}` : "(no citation)";
+    return `- The finding at ${citation} (${f.severity}, ${f.reviewer}) is fixed.`;
+  });
+  return ["## Acceptance Criteria", "", ...bullets].join("\n");
+}
 function buildDebugReport(input) {
   const { confirmedBlockers, passNumber, base } = input;
   const title = `factory debug pass ${passNumber} \u2014 ${confirmedBlockers.length} blocking finding(s)`;
@@ -16091,7 +16444,9 @@ function buildDebugReport(input) {
 
 (no confirmed blockers)` : `${header}
 
-${renderFindingsBody(confirmedBlockers)}`;
+${renderFindingsBody(confirmedBlockers)}
+
+${renderAcceptanceCriteria(confirmedBlockers)}`;
   return { title, body };
 }
 function wireDebugSpecDeps(report, dataDirOverride) {
@@ -16200,10 +16555,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join22(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join23(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join22(dataDir, "debug", runId, `pass-${pass}`);
+  return join23(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -16279,8 +16634,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join22(passDir, "findings.json");
-  const reportPath = join22(passDir, "findings.md");
+  const findingsPath = join23(passDir, "findings.json");
+  const reportPath = join23(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -16579,13 +16934,13 @@ var stateCommand = {
 import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync9 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname10, join as join25, relative } from "node:path";
+import { dirname as dirname10, join as join26, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -16654,8 +17009,8 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join23(opts.targetRoot, ".claude");
-  const path6 = join23(dir, "settings.json");
+  const dir = join24(opts.targetRoot, ".claude");
+  const path6 = join24(dir, "settings.json");
   const created = !existsSync7(path6);
   let existing = {};
   if (!created) {
@@ -16680,16 +17035,16 @@ async function ensureTargetSettings(opts) {
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync8 } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname9, join as join24 } from "node:path";
+import { dirname as dirname9, join as join25 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync8(join24(targetRoot, "deno.json")) || existsSync8(join24(targetRoot, "deno.jsonc"))) {
+  if (existsSync8(join25(targetRoot, "deno.json")) || existsSync8(join25(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync8(join24(targetRoot, "package.json"))) return "npm";
+  if (existsSync8(join25(targetRoot, "package.json"))) return "npm";
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join24(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join25(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -16703,9 +17058,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync8(join24(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync8(join25(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join24(targetRoot, file), "utf8");
+  const raw = await readFile16(join25(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -16721,7 +17076,7 @@ async function resolveNpm(opts) {
   const pkg = await readPackageJson(opts.targetRoot);
   const floor = [];
   if (!hasDep(pkg, "vitest")) floor.push("test gate: no vitest dependency \u2014 install vitest");
-  if (!existsSync8(join24(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync8(join25(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -16733,7 +17088,7 @@ async function resolveNpm(opts) {
   - ${floor.join("\n  - ")}`
     );
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join24(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join25(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -16755,11 +17110,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join24(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join25(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync8(join24(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync8(join25(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -16823,7 +17178,7 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join24(opts.targetRoot, GATE_CONTRACT_REL);
+  const dest = join25(opts.targetRoot, GATE_CONTRACT_REL);
   await mkdir12(dirname9(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack };
@@ -16889,8 +17244,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join25(dir, "templates");
-    if (existsSync9(join25(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join26(dir, "templates");
+    if (existsSync9(join26(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname10(dir);
@@ -16914,8 +17269,8 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join25(templatesDir, ...segs);
-  const dest = join25(targetRoot, ...segs);
+  const src = join26(templatesDir, ...segs);
+  const dest = join26(targetRoot, ...segs);
   if (!existsSync9(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
@@ -16943,7 +17298,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path6 = join25(root, ".gitignore");
+  const path6 = join26(root, ".gitignore");
   const rel = relative(root, path6);
   if (!existsSync9(path6)) {
     await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
@@ -16971,7 +17326,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync9(join25(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync9(join26(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
@@ -17447,7 +17802,7 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync10 } from "node:fs";
 import { readFile as readFile18 } from "node:fs/promises";
-import { join as join26 } from "node:path";
+import { join as join27 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -17485,7 +17840,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join26(dataDir, "merged-settings.json");
+  return join27(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -17561,7 +17916,7 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path6 = join26(pluginRoot, ".claude-plugin", "plugin.json");
+  const path6 = join27(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync10(path6)) return void 0;
   try {
     const parsed = JSON.parse(await readFile18(path6, "utf8"));
@@ -17574,7 +17929,7 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join26(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join27(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync10(userSettingsPath)) {
@@ -17586,7 +17941,7 @@ async function runAutonomyEnsure(opts = {}) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join26(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join27(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile18(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({

@@ -87,6 +87,18 @@ export {
   type DocsResults,
 } from "./docs.js";
 
+// -- traceability phase emit + record orchestrators (factory run traceability seam, S9/D47) --
+export {
+  runTraceabilityEmit,
+  runTraceabilityRecord,
+  traceWorktreePath,
+  MAX_TRACE_ATTEMPTS,
+  TraceabilityResultsSchema,
+  type TraceabilityRunDeps,
+  type TraceabilityAction,
+  type TraceabilityResults,
+} from "./traceability.js";
+
 // -- e2e phase emit + record orchestrators (factory run e2e seam, Decision 39) -----------------
 export {
   runE2eEmit,

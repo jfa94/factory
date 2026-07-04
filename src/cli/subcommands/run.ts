@@ -28,7 +28,7 @@ import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, UsageError, optionalString, parseResultsFlag } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { StateManager, seedTaskRows, assertAcyclic } from "../../core/state/index.js";
+import { StateManager, seedTaskRows, assertAcyclic, specDir } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
 import { nowEpoch } from "../../shared/time.js";
@@ -46,6 +46,9 @@ import {
   runAssessmentEmit,
   runAssessmentRecord,
   AssessmentResultsSchema,
+  runTraceabilityEmit,
+  runTraceabilityRecord,
+  TraceabilityResultsSchema,
   readJsonInput,
 } from "../../orchestrator/index.js";
 import { loadCliDeps, type CliDeps } from "../wiring.js";
@@ -72,6 +75,7 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
   factory run e2e-assess [--run <id>] [--results <path>]
@@ -81,6 +85,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
+  traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
@@ -89,7 +94,7 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--approve-spec] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -110,6 +115,9 @@ Usage:
   --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
                 author + run Playwright journeys against staging before docs/finalize; a
                 mappable failing journey reopens its task with feedback. Persisted as e2e:true.
+  --approve-spec Park the fully-created run (suspended, no quota checkpoint) for human spec
+                sign-off before any agent runs (S9, Decision 47). The envelope names the
+                spec.md to review; 'factory resume' IS the sign-off. Create-only; default off.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; required — an ownerless run is rejected.
 
@@ -279,16 +287,27 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
   // neither/both case can reach here, so no defensive fallback is needed). Narrow
   // on the VALUE (`specId !== undefined`): the `?: never` padding keeps the unused
   // key structurally present, so `"specId" in opts` would not discriminate cleanly.
-  if (opts.specId !== undefined) {
-    return specStore.read(opts.repo, opts.specId);
-  }
-  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (resolved === null) {
+  const request =
+    opts.specId !== undefined
+      ? await specStore.read(opts.repo, opts.specId)
+      : await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (request === null) {
     throw new Error(
       `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
     );
   }
-  return resolved;
+  // S9 preflight: the traceability stage reads the durable PRD snapshot at the
+  // END of the run — refuse NOW rather than fail a fully-paid run. In-protocol
+  // Phase 1 (`spec resolve`) always backfills first; this guards the
+  // off-protocol `--spec-id` path onto a pre-S9 spec.
+  if (!(await specStore.hasPrd(request.repo, request.spec_id))) {
+    throw new Error(
+      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) — ` +
+        `run \`factory spec resolve --issue ${request.issue_number}\` to backfill, ` +
+        `or \`--supersede\` to regenerate`,
+    );
+  }
+  return request;
 }
 
 /**
@@ -704,7 +723,7 @@ export async function runCreate(
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
   const args = parseArgs(argv, {
-    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e"],
+    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e", "approve-spec"],
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -770,6 +789,14 @@ export async function runCreate(
       "run create: --no-ship/--e2e are create-only and cannot combine with --resume — " +
         "a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue " +
         "the existing run, or use --supersede to start fresh.",
+    );
+  }
+  // S9 (Decision 47): --approve-spec is a create-only park; resuming IS the sign-off.
+  const approveSpec = args.flag("approve-spec") === true;
+  if (approveSpec && resume) {
+    throw new UsageError(
+      "run create: --approve-spec is create-only and cannot combine with --resume — " +
+        "resuming a parked run IS the spec sign-off.",
     );
   }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
@@ -847,12 +874,31 @@ export async function runCreate(
     );
     return EXIT.CONFLICT;
   }
+  // S9 (Decision 47): --approve-spec parks the FULLY-created run (staging cut,
+  // tasks seeded) for human spec sign-off — ONE suspend write, NO quota checkpoint
+  // (A2: a non-quota suspend never writes one). `factory resume` clears it (the
+  // sign-off); the runner session STOPS on the parked envelope instead of looping.
+  const park = async (run: RunState) => {
+    const parked = await state.update(run.run_id, (s) => ({
+      ...s,
+      status: "suspended" as const,
+    }));
+    return {
+      run: parked,
+      spec_approval: {
+        spec_path: join(specDir(dataDir, repoSlug, run.spec.spec_id), "spec.md"),
+        note: "run parked for spec approval — review the spec, then run `factory resume`",
+      },
+    };
+  };
   if (result.kind === "created") {
-    emitJson({ kind: "created", run: result.run });
+    const out = approveSpec ? await park(result.run) : { run: result.run };
+    emitJson({ kind: "created", ...out });
     return EXIT.OK;
   }
   // kind === "superseded"
-  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
+  const out = approveSpec ? await park(result.run) : { run: result.run };
+  emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
   return EXIT.OK;
 }
 
@@ -990,6 +1036,22 @@ const runDocs = phaseCommand({
   parse: (raw) => DocsResultsSchema.parse(raw),
   record: runDocsRecord,
   emit: runDocsEmit,
+});
+
+const TRACE_HELP = `factory run traceability [--run <id>] [--results <path>]
+
+Emit the PRD-traceability audit spawn request (S9, Decision 47), or (with
+--results) record the auditor's per-requirement verdicts: all met/partial →
+phase done; any unmet → run condemned (finalize blocks the rollup); a crashed
+auditor retries once, then fails the run. The CLI never spawns the auditor — a
+orchestrator does.`;
+
+const runTraceability = phaseCommand({
+  help: TRACE_HELP,
+  phase: "traceability",
+  parse: (raw) => TraceabilityResultsSchema.parse(raw),
+  record: runTraceabilityRecord,
+  emit: runTraceabilityEmit,
 });
 
 const E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
@@ -1180,6 +1242,8 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "traceability":
+      return runTraceability(rest);
     case "docs":
       return runDocs(rest);
     case "e2e":
@@ -1190,7 +1254,7 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | e2e-assess | cancel)`,
+        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`,
       );
   }
 }

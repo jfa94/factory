@@ -19,6 +19,7 @@ import { FakeGitClient } from "../../git/index.js";
 import { loadConfig } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
 import { SpecStore, buildManifest } from "../../spec/index.js";
+import { makePrd } from "../../orchestrator/orchestrator-fixtures.js";
 import { createRun } from "./run.js";
 import type { ReviewerVerifications } from "../../orchestrator/record.js";
 
@@ -444,7 +445,7 @@ describe("debugSeed", () => {
         },
       ],
     });
-    await store.write(manifest, "# Fix");
+    await store.write(manifest, "# Fix", makePrd());
 
     const started = await debugStart(d, {});
     if (started.kind !== "review") throw new Error("unreachable");
@@ -491,7 +492,7 @@ describe("debugFinalize", () => {
         },
       ],
     });
-    await store.write(manifest, "# Fix");
+    await store.write(manifest, "# Fix", makePrd());
     const state = new StateManager({ dataDir });
     await createRun(state, store, {
       repo: REPO,

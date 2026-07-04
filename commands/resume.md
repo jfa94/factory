@@ -20,6 +20,10 @@ which reconciles, then hands back to resume.)
 A terminal run (`completed` / `failed` / `superseded`) is a LOUD error — there is nothing to
 resume. A `failed` run keeps its `staging/<run-id>` branch banked for `/factory:rescue`.
 
+A run parked by `--approve-spec` (suspended, NO quota checkpoint) clears here
+unconditionally — **resume IS the spec sign-off** (S9, Decision 47). The same
+unconditional clear covers docs/e2e/traceability crash parks.
+
 ## How it runs
 
 Invoke the runner skill, then run its resume entry against the target run:

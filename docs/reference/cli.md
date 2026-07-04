@@ -127,7 +127,16 @@ factory spec store   --repo <owner/name> --issue <n>
 
 - **resolve** — reuse an existing spec for the issue (`{kind:"reuse", pointer}`),
   else fetch the PRD and emit the generate spawn (`{kind:"generate", spawn,
-prd_path, generated_path, max_iterations}`).
+prd_path, generated_path, max_iterations}`). Before emitting `generate`, a
+  **deterministic specifiability gate** ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park))
+  screens the raw PRD body (≥200 non-heading chars, ≥1 extractable requirement, an
+  acceptance-criteria-style heading). A PRD that fails is refused loud and terminal —
+  `{kind:"unspecifiable", prd_path, blockers}` on stdout **and exit `1`** (the exit
+  enum is frozen; the envelope `kind` is the machine discriminator) — before any agent
+  spawn, so an unspecifiable PRD costs zero agent turns. `resolve` also persists a
+  **durable PRD snapshot** (`prd.json`) beside the spec: `reuse` backfills it once via
+  `gh` when a pre-Decision-47 spec lacks it, and `store` writes it on first
+  generation. The traceability phase audits this snapshot, never a re-fetch.
   - `--supersede` — delete the durable spec dir for the issue (`SpecStore.deleteByIssue`,
     idempotent) **before** the reuse check, so resolve always falls through to
     `generate` and the runner regenerates the spec from the PRD. The runner's
@@ -167,7 +176,7 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|resume|finalize|docs|e2e-assess|e2e|cancel>`
+## `run <create|resume|finalize|traceability|docs|e2e-assess|e2e|cancel>`
 
 ### `run create`
 
@@ -180,7 +189,7 @@ loudly at seed time.
 ```
 factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
                    [--new] [--supersede | --resume] [--no-ship] [--e2e]
-                   [--ignore-quota] [--session-id <id>]
+                   [--approve-spec] [--ignore-quota] [--session-id <id>]
 ```
 
 | Flag                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -194,6 +203,7 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 | `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the runner + resume + finalize read it without re-passing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `--e2e`               | Opt into the run-level **e2e phase** ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag), overhauled by [Decision 40](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)): a run-start **e2e-assessment** resolves boot config + machinery before any task, then after every task is terminal, author + run Playwright journeys against the integrated staging app before docs/finalize; a mappable failing journey reopens its task with feedback, an unmappable pre-existing failure is **adjudicated**. Persisted as `e2e: true`. **Create-only + immutable on resume**, exactly like `--no-ship` — rejected loud if paired with `--resume`. **Eagerly checks three static prerequisites at create time** — `package.json`, a `@playwright/test` dependency, and a `playwright.config.ts` — and fails loud if any is missing; `e2e.startCommand`/`e2e.baseURL` are optional overrides, not requirements (the assessment resolves them). See [Run with end-to-end tests](../guides/run-with-e2e.md). |
+| `--approve-spec`      | **Create-only opt-in, default OFF** ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)). Creates the run in full (staging cut, tasks seeded), then parks it `suspended` for human spec sign-off **before any agent runs** — ONE state write, **no quota checkpoint** (a non-quota suspend never writes one). The `created`/`superseded` envelope gains `spec_approval: {spec_path, note}` naming the `spec.md` to review; exit stays `0`. `factory resume` **is** the sign-off (`planResume` clears non-quota suspends unconditionally). Rejected loud if paired with `--resume`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Always required — no exemption (Decision 42)**: an ownerless run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
@@ -205,9 +215,14 @@ command when needed (`ensure`/`status` remain the manual primitives). See
 [Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)
 and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
 
-Loud error if no spec exists for the issue — generate one first. The runner (the
-in-session event loop) drives up to `maxParallelTasks` ready tasks concurrently
-(see [Run the pipeline](../guides/run-the-pipeline.md)).
+Loud error if no spec exists for the issue — generate one first. `run create` also
+**preflights the durable PRD snapshot** ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)):
+the end-of-run traceability phase audits `prd.json`, so a spec that predates the
+snapshot fails create loud with the backfill remedy (`factory spec resolve --issue <n>`,
+or `--supersede` to regenerate) rather than a full-run-cost failure. The in-protocol
+`spec resolve` always backfills first; this guards the off-protocol `--spec-id` path.
+The runner (the in-session event loop) drives up to `maxParallelTasks` ready tasks
+concurrently (see [Run the pipeline](../guides/run-the-pipeline.md)).
 
 **Active-run conflict (Decision 35 — no silent reuse).** A PRD has at most one active
 run at a time. `run create` does **not** reuse an existing run: when a non-terminal
@@ -271,6 +286,54 @@ Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`);
 is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
 `staging-<run-id> → develop` rollup PR but never merges). Emits
 `{kind:"finalized", run, report, rollup?, failure_comment_posted}`.
+
+A **failed traceability phase** ([`run traceability`](#run-traceability), Decision 47)
+overrides the terminal status to `failed` here: finalize blocks the rollup, leaves
+`develop` untouched, and the PRD comment carries an "Unmet PRD requirements" block —
+the same "never ship silently" path a failed e2e phase takes.
+
+### `run traceability`
+
+Orchestrator (emit + record), symmetric with [`run docs`](#run-docs): the run-level
+**PRD-traceability phase** ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park)),
+scheduled once per **non-debug** run **between the e2e phase and docs**, on every
+prospectively-`completed` run (`+1 Opus` per run). The CLI **never spawns the auditor** —
+a runner does.
+
+```
+factory run traceability [--run <id>] [--results <path>]
+```
+
+- **Emit** (no `--results`): reads the durable PRD snapshot (`prd.json`), extracts its
+  numbered requirements (LOUD if none — the specifiability gate should have refused such a
+  PRD), fetches `origin/<baseBranch>` + the staging tip, prepares a **detached, read-only**
+  auditor worktree at `worktrees/<run-id>/.trace` (under `worktrees/`, not `runs/`, so the
+  TCB `data-runs` write-deny does not fire; no branch to GC), and returns a `spawn` request
+  `{kind:"spawn", run_id, worktree, base_ref, staging_branch, model:"opus", max_turns, prompt}`.
+  The prompt embeds the requirements as the **axiom** and directs the `traceability-auditor`
+  agent (`agents/traceability-auditor.md`) to judge ONLY the whole-PRD diff
+  (`git diff base_ref..HEAD`) and resulting tree — never task statuses or review verdicts.
+  Idempotent on resume; a crash-retry resets the worktree to the staging tip.
+- **Record** (`--results <path>`): reads the auditor's
+  `{status:"<STATUS line>", verdicts:[{index, verdict:"met|partial|unmet", evidence}]}`
+  envelope. On a `DONE` status it enforces **semantic coverage** (exactly one verdict per
+  requirement `1..n`, LOUD on a gap/dup), persists one row per requirement (keyed by
+  requirement **text**, not index) in the run-state `traceability` phase marker, removes the
+  worktree, then concludes:
+  - `{kind:"done", run_id}` — no `unmet` verdict (a `partial` **passes** the gate but
+    surfaces as a `traceability_gaps` row in the report). The run proceeds to docs.
+  - `{kind:"failed", run_id, reason}` — any `unmet` verdict. A verdict is judgment, **not
+    retried**; finalize condemns the run (rollup blocked), and the report/PRD comment carry
+    the unmet requirements.
+
+  A **crashed/non-`DONE` auditor** increments `attempts` and, below `MAX_TRACE_ATTEMPTS` (2),
+  suspends the run for a retry (`{kind:"suspend", …}`) **without** a quota checkpoint (resumable
+  via `/factory:resume`); at the cap it concludes `{kind:"failed", …}` — the **anti-docs delta**:
+  docs at cap degrades to best-effort-done, but the delivery gate never ships an unaudited run.
+
+`next-task` schedules `traceability` after e2e and before docs, so a failed audit never
+reaches the docs or rollup steps. Debug runs skip the phase (their review⇄fix loop IS their
+traceability).
 
 ### `run docs`
 
@@ -554,6 +617,11 @@ Emits one of:
   tasks, **in-flight first** (crash-resume finishes started work before opening
   new), then pending in spec order. `max_parallel` is the config's
   `maxParallelTasks` — the runner drives at most that many tasks in flight.
+- `{ kind:"traceability", run_id, data_dir, ship_mode }` — all tasks are terminal and
+  the run will complete (non-debug), but the PRD-traceability audit has not concluded
+  (Decision 47). Ordered **after the e2e phase, before `document`**. The runner runs
+  [`factory run traceability`](#run-traceability); a `failed` audit routes straight to
+  `finalize` (which condemns the run), so `document` never runs on a condemned run.
 - `{ kind:"document", run_id, data_dir, ship_mode }` — all tasks are terminal
   and the run will complete, but `/docs` needs updating first. The runner runs
   `factory run docs`, which emits a scribe spawn request; the runner spawns the scribe

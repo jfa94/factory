@@ -1501,6 +1501,79 @@ the test-writer can write property tests — advisory only, never installs.
 
 ---
 
+## Decision 47 — Spec Hardening: Specifiability Gate, PRD Traceability, Approve-Spec Park
+
+**Date:** 2026-07-04
+
+**Context:** Redesign session S9 (workstream B5). Nothing verified spec-vs-intent:
+a plausible-but-wrong spec shipped with every gate green — the spec chain was the
+least-verified link in the quality spine. Three mechanisms close it.
+
+**Decision:**
+
+- **Specifiability gate (free, pre-generation).** Deterministic
+  `specifiabilityGate(prdBody)` runs in `spec resolve` between the scratch
+  `prd.json` write and the `generate` envelope: ≥200 chars of non-heading body,
+  ≥1 extractable requirement (`extractPrdRequirements` — Out-of-Scope excluded),
+  and an acceptance-criteria-style section heading. Refusal emits a
+  `{kind:"unspecifiable", blockers}` envelope + `EXIT.ERROR` (exit-code enum is
+  FROZEN — the envelope `kind` is the machine discriminator, no new code). The
+  runner STOPS before any agent spawn: the PRD needs editing, at zero agent cost.
+  The gate is UNIVERSAL — debug's synthetic PRD gained a real
+  `## Acceptance Criteria` section (one criterion per finding) instead of a
+  bypass flag. Reuse of an existing spec never re-runs the gate.
+- **Durable PRD snapshot.** `SpecStore.write` takes the PRD as a REQUIRED third
+  param and persists `prd.json` beside `spec.md` (not mirrored to
+  `docs/factory/` — the PRD is already public on the issue). Reuse backfills a
+  missing snapshot once via `gh.fetchPrd`; `run create` preflights its presence
+  (a full-run-cost traceability failure becomes a pre-run refusal). REJECTED: a
+  `gh` re-fetch at finalize — network at the most expensive moment, and it would
+  audit a possibly-edited PRD (TOCTOU). The audit judges the PRD the spec was
+  generated from.
+- **PRD-traceability stage (+1 Opus per run).** A new run-level phase between
+  e2e and docs on EVERY prospectively-completed non-debug run: an Opus auditor
+  (`agents/traceability-auditor.md` — adversarial, evidence-first, read-only,
+  judges ONLY the diff/tree, never task statuses) reads the whole staging diff
+  in a DETACHED worktree (`worktrees/<runId>/.trace`; no branch to GC, TCB-safe)
+  and returns one `met|partial|unmet` verdict per numbered PRD requirement.
+  Coverage is semantically enforced (exactly one verdict per index 1..n, LOUD).
+  Any `unmet` → the phase concludes `failed` (a verdict is judgment — no retry),
+  finalize's terminal override condemns the run, the rollup never ships, and the
+  PRD comment carries an "Unmet PRD requirements" block. `partial` passes but
+  surfaces as `traceability_gaps` in the report even on a done audit.
+  Trace-before-docs ordering: a condemned run never pays the docs Opus, and docs
+  commits stay out of the audited diff. ANTI-DOCS DELTA: an auditor crash at cap
+  (`MAX_TRACE_ATTEMPTS = 2`) concludes `failed` — docs is best-effort-done, the
+  delivery gate never is. A pre-cap crash suspends WITHOUT a quota checkpoint
+  (A2) and re-fires on resume; concluded-vs-awaiting-retry is derived from
+  verdicts-presence (failed + verdicts>0 = concluded unmet; failed + attempts ≥
+  cap + verdicts=[] = concluded crash; derive-don't-store, pinned). Verdict rows
+  persist in the phase marker with requirement TEXT, not index (frozen against
+  extractor drift; bounded — one row per PRD bullet, evidence ≤500 chars).
+  Debug runs skip the stage (their review⇄fix loop IS their traceability), but
+  keep the specifiability gate via the synthetic AC section.
+- **`run create --approve-spec` (default OFF).** The run is created IN FULL
+  (staging cut, tasks seeded), then ONE `state.update` parks it `suspended` with
+  NO quota checkpoint (A2). The envelope gains `spec_approval: {spec_path,
+note}`; still `EXIT.OK`. Resume IS the sign-off — `planResume` already clears
+  non-quota suspends unconditionally, so resume re-implements NOTHING. ACCEPTED
+  HAZARD (documented, not fixed): `next-task` step-4 clears any suspension once
+  the quota gate proceeds — the park holds because `commands/run.md` instructs
+  the session to STOP on the parked envelope (docs/e2e parks share this
+  property).
+
+**Rejected:** a new exit code (enum frozen); per-task traceability (needs the
+whole-diff view, multiplies Opus); a sidecar verdicts file (parse seam that can
+desync from `status`); `gh` PRD re-fetch at finalize (TOCTOU); a debug bypass
+flag for the specifiability gate (AC section instead).
+
+**Consequences:** A PRD that cannot support spec generation is refused for free
+before any agent runs; a run whose shipped diff does not satisfy the PRD's
+requirements cannot merge to develop; and a human can opt into signing off the
+spec before the pipeline spends anything. Cost: +1 Opus audit per completed run.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

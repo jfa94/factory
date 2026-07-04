@@ -225,6 +225,51 @@ describe("finalizeRun", () => {
     expect((await state.read(RUN_ID)).status).toBe("failed");
   });
 
+  it("traceability-failed override (S9, Decision 47): every task shipped but the PRD audit found unmet → failed, no rollup, PRD comment posted", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      traceability: {
+        status: "failed" as const,
+        reason: 'PRD requirements unmet: "returns 201"',
+        verdicts: [
+          {
+            requirement: "checkout must work",
+            verdict: "met" as const,
+            evidence: "checkout.ts:1 + its test",
+          },
+          {
+            requirement: "returns 201",
+            verdict: "unmet" as const,
+            evidence: "no 201 anywhere in the diff",
+          },
+        ],
+        ended_at: NOW,
+      },
+    }));
+
+    const result = await finalizeRun(makeDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    // decideFinalize alone would say "completed" (every task done) — the failed
+    // PRD audit overrides it, exactly like the e2e veto.
+    expect(result.run.status).toBe("failed");
+    expect(result.report.run_status).toBe("failed");
+    expect(result.report.failures).toEqual([]);
+    expect(result.report.traceability_failure).toContain("returns 201");
+    // Only the non-met rows surface as gaps.
+    expect(result.report.traceability_gaps).toEqual([
+      { requirement: "returns 201", verdict: "unmet", evidence: "no 201 anywhere in the diff" },
+    ]);
+    // No rollup: develop must never receive a run that does not deliver its PRD.
+    expect(result.rollup).toBeUndefined();
+    expect(gh.merges).toHaveLength(0);
+    // The PRD comment fires even with zero task failures (a traceability-only veto).
+    expect(result.failureCommentPosted).toBe(true);
+    expect(gh.issueComments.some((c) => c.body.includes("Unmet PRD requirements"))).toBe(true);
+    expect((await state.read(RUN_ID)).status).toBe("failed");
+  });
+
   it("completed + no-merge: opens the rollup PR but never merges it", async () => {
     const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
     await seed(tasks);

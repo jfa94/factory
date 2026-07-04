@@ -7555,6 +7555,20 @@ var DocsPhaseSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
+var TraceabilityVerdictRowSchema = external_exports.object({
+  requirement: external_exports.string().min(1),
+  verdict: external_exports.enum(["met", "partial", "unmet"]),
+  evidence: external_exports.string().min(1)
+});
+var TraceabilityPhaseSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]),
+  reason: external_exports.string().optional(),
+  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+  verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([]),
+  ended_at: external_exports.string()
+});
 var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
 var E2eManifestEntrySchema = external_exports.object({
   /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
@@ -7689,6 +7703,8 @@ var RunStateSchema = external_exports.object({
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
+  /** PRD-traceability phase marker (S9); absent until the phase runs. */
+  traceability: TraceabilityPhaseSchema.optional(),
   /**
    * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
    * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
@@ -7770,6 +7786,22 @@ function refineRunCrossFields(run, ctx) {
       status: run.docs.status,
       reason: run.docs.reason
     });
+  }
+  if (run.traceability !== void 0) {
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["traceability", "reason"],
+      label: "traceability phase",
+      status: run.traceability.status,
+      reason: run.traceability.reason
+    });
+    if (run.traceability.status === "done" && run.traceability.verdicts.some((v) => v.verdict === "unmet")) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["traceability", "verdicts"],
+        message: `run '${run.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`
+      });
+    }
   }
   if (run.e2e_phase !== void 0 && run.e2e_phase.status !== void 0) {
     const isFailed = run.e2e_phase.status === "failed";
