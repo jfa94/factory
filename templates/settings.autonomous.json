@@ -155,7 +155,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(git branch --show-current 2>/dev/null); if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo '{\"decision\":\"block\",\"reason\":\"Cannot edit on main/master. Create a feature branch first.\"}'; exit 0; fi",
+            "command": "FP=$(cat | jq -r '.tool_input.file_path // .tool_input.path // empty'); [ -z \"$FP\" ] && exit 0; DIR=$(dirname \"$FP\"); while [ ! -d \"$DIR\" ] && [ \"$DIR\" != \"/\" ]; do DIR=$(dirname \"$DIR\"); done; ROOT=$(cd \"$DIR\" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null); [ -z \"$ROOT\" ] && exit 0; BRANCH=$(git -C \"$ROOT\" branch --show-current 2>/dev/null); if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo '{\"decision\":\"block\",\"reason\":\"Cannot edit on main/master. Create a feature branch first.\"}'; exit 0; fi",
             "statusMessage": "Checking branch protection"
           }
         ]
