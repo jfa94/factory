@@ -24,48 +24,48 @@
  * A dangling runs/current symlink fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
  */
-import { EXIT, type ExitCode } from "../shared/exit-codes.js";
-import { isTestPath } from "../verifier/deterministic/scope.js";
-import { StateManager } from "../core/state/index.js";
-import { TaskPhaseEnum } from "../core/phase-machine/index.js";
+import {EXIT, type ExitCode} from '../shared/exit-codes.js'
+import {isTestPath} from '../verifier/deterministic/scope.js'
+import {StateManager} from '../core/state/index.js'
+import {TaskPhaseEnum} from '../core/phase-machine/index.js'
 import {
-  loadOwnerScopedRun,
-  resolveActiveTask,
-  isTestWriterPhase,
-  runTaskForPath,
-  BrokenRunStateError,
-  type ActiveRun,
-} from "./hook-context.js";
-import { isNestedShellOrHookBypass } from "./shell-bypass.js";
-import { resolveDataDir, type DataDirOptions } from "../config/load.js";
-import type { RunState } from "../types/index.js";
+    loadOwnerScopedRun,
+    resolveActiveTask,
+    isTestWriterPhase,
+    runTaskForPath,
+    BrokenRunStateError,
+    type ActiveRun,
+} from './hook-context.js'
+import {isNestedShellOrHookBypass} from './shell-bypass.js'
+import {resolveDataDir, type DataDirOptions} from '../config/load.js'
+import type {RunState} from '../types/index.js'
 import {
-  allow,
-  commandOf,
-  deny,
-  decisionToExitCode,
-  emitPermissionDecision,
-  filePathsOf,
-  parseHookInput,
-  toolNameOf,
-  type HookDecision,
-  type HookInput,
-} from "./hook-io.js";
+    allow,
+    commandOf,
+    deny,
+    decisionToExitCode,
+    emitPermissionDecision,
+    filePathsOf,
+    parseHookInput,
+    toolNameOf,
+    type HookDecision,
+    type HookInput,
+} from './hook-io.js'
 
 /** Options for {@link decidePipelineGuards} (injectable). */
 export interface PipelineGuardsDeps extends DataDirOptions {
-  cwd?: string;
-  /** Override the active-run loader for the Bash arms (tests). */
-  loadRun?: (opts: DataDirOptions) => Promise<ActiveRun | null>;
-  /**
-   * Override the per-run-id loader for the path-anchored write-scope arm (tests).
-   * Defaults to `StateManager.read` under the resolved data dir; THROWS (ENOENT /
-   * schema error) for a missing/corrupt run, which the arm maps to a fail-closed deny.
-   */
-  loadRunById?: (dataDir: string, runId: string) => Promise<RunState>;
+    cwd?: string
+    /** Override the active-run loader for the Bash arms (tests). */
+    loadRun?: (opts: DataDirOptions) => Promise<ActiveRun | null>
+    /**
+     * Override the per-run-id loader for the path-anchored write-scope arm (tests).
+     * Defaults to `StateManager.read` under the resolved data dir; THROWS (ENOENT /
+     * schema error) for a missing/corrupt run, which the arm maps to a fail-closed deny.
+     */
+    loadRunById?: (dataDir: string, runId: string) => Promise<RunState>
 }
 
-const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
+const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
 
 // The test-path classification (write-scope arm) shares the verifier's single
 // source of truth ({@link isTestPath} in verifier/deterministic/scope.ts) so the
@@ -79,16 +79,16 @@ const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 // rather than the anchor-only `^\s*` which only catches a bare leading command.
 // Fail-closed: a harmless `echo gh pr create` also matches, which is the safe
 // direction for a deny-gate.
-const GH_PR_CREATE_RE = /(^|[\s&;|(])gh\s+pr\s+create\b/;
-const GH_PR_MERGE_RE = /(^|[\s&;|(])gh\s+pr\s+merge\b/;
+const GH_PR_CREATE_RE = /(^|[\s&;|(])gh\s+pr\s+create\b/
+const GH_PR_MERGE_RE = /(^|[\s&;|(])gh\s+pr\s+merge\b/
 
 /** Detect a `gh pr create` command (anywhere in a compound command). */
 function isGhPrCreate(cmd: string): boolean {
-  return GH_PR_CREATE_RE.test(cmd);
+    return GH_PR_CREATE_RE.test(cmd)
 }
 /** Detect a `gh pr merge` command (anywhere in a compound command). */
 function isGhPrMerge(cmd: string): boolean {
-  return GH_PR_MERGE_RE.test(cmd);
+    return GH_PR_MERGE_RE.test(cmd)
 }
 
 /**
@@ -102,50 +102,50 @@ function isGhPrMerge(cmd: string): boolean {
  * (mirrors the {@link BrokenRunStateError} contract — corruption is never silently
  * allowed). A target outside every worktree is not a producer write → no scope.
  */
-async function decideWriteScope(
-  input: HookInput | null,
-  deps: PipelineGuardsDeps,
-): Promise<HookDecision | null> {
-  const targets = filePathsOf(input);
-  if (targets.length === 0) return null;
+async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDeps): Promise<HookDecision | null> {
+    const targets = filePathsOf(input)
+    if (targets.length === 0) {
+        return null
+    }
 
-  let dataDir: string;
-  try {
-    dataDir = resolveDataDir(deps);
-  } catch {
-    return null; // no resolvable data dir → no worktree → nothing to scope
-  }
-
-  const loadRunById =
-    deps.loadRunById ??
-    ((dir: string, runId: string) => new StateManager({ ...deps, dataDir: dir }).read(runId));
-
-  for (const target of targets) {
-    const ref = runTaskForPath(dataDir, target);
-    if (ref === null) continue; // not a producer-worktree write → no scope
-
-    let run: RunState;
+    let dataDir: string
     try {
-      run = await loadRunById(dataDir, ref.run_id);
+        dataDir = resolveDataDir(deps)
     } catch {
-      // The path names a worktree but its run state cannot be read → fail closed.
-      return deny(
-        "test_writer_scope_broken",
-        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', ` +
-          `whose run state is missing or corrupt; failing closed.`,
-      );
+        return null // no resolvable data dir → no worktree → nothing to scope
     }
 
-    const activeTask = resolveActiveTask(run, ref.task_id);
-    if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
-      return deny(
-        "test_writer_scope",
-        `Test-writer phase: only test files allowed. Detected write to '${target}'. ` +
-          `Move implementation code to the GREEN (exec) phase.`,
-      );
+    const loadRunById =
+        deps.loadRunById ?? ((dir: string, runId: string) => new StateManager({...deps, dataDir: dir}).read(runId))
+
+    for (const target of targets) {
+        const ref = runTaskForPath(dataDir, target)
+        if (ref === null) {
+            continue
+        } // not a producer-worktree write → no scope
+
+        let run: RunState
+        try {
+            run = await loadRunById(dataDir, ref.run_id)
+        } catch {
+            // The path names a worktree but its run state cannot be read → fail closed.
+            return deny(
+                'test_writer_scope_broken',
+                `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', ` +
+                    `whose run state is missing or corrupt; failing closed.`
+            )
+        }
+
+        const activeTask = resolveActiveTask(run, ref.task_id)
+        if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
+            return deny(
+                'test_writer_scope',
+                `Test-writer phase: only test files allowed. Detected write to '${target}'. ` +
+                    `Move implementation code to the GREEN (exec) phase.`
+            )
+        }
     }
-  }
-  return null;
+    return null
 }
 
 /**
@@ -156,56 +156,62 @@ async function decideWriteScope(
  * {@link runPipelineGuards} catches it.
  */
 export async function decidePipelineGuards(
-  input: HookInput | null,
-  deps: PipelineGuardsDeps = {},
+    input: HookInput | null,
+    deps: PipelineGuardsDeps = {}
 ): Promise<HookDecision> {
-  const tool = toolNameOf(input);
-  const cmd = commandOf(input);
+    const tool = toolNameOf(input)
+    const cmd = commandOf(input)
 
-  // (a) test-writer-phase write-scope — anchored to the TARGET PATH, not a global
-  // pointer. A producer writes into its own `<dataDir>/worktrees/<run>/<task>`, so
-  // the write path itself names the owning run+task; an unrelated session's edit
-  // to any other checkout resolves to no run → this arm does not fire.
-  if (WRITE_TOOLS.has(tool)) {
-    const scoped = await decideWriteScope(input, deps);
-    if (scoped !== null) return scoped; // deny; null = no worktree scope, fall through
-  }
+    // (a) test-writer-phase write-scope — anchored to the TARGET PATH, not a global
+    // pointer. A producer writes into its own `<dataDir>/worktrees/<run>/<task>`, so
+    // the write path itself names the owning run+task; an unrelated session's edit
+    // to any other checkout resolves to no run → this arm does not fire.
+    if (WRITE_TOOLS.has(tool)) {
+        const scoped = await decideWriteScope(input, deps)
+        if (scoped !== null) {
+            return scoped
+        } // deny; null = no worktree scope, fall through
+    }
 
-  // (b)+(c) Bash arms still resolve the run owning THIS session (global pointer for
-  // now — re-scoped to owner-session in L1.3). No Bash command → nothing to gate.
-  if (cmd.length === 0) return allow();
+    // (b)+(c) Bash arms still resolve the run owning THIS session (global pointer for
+    // now — re-scoped to owner-session in L1.3). No Bash command → nothing to gate.
+    if (cmd.length === 0) {
+        return allow()
+    }
 
-  // Resolve the run owned by THIS session (env-scoped); fail-safe to the global
-  // pointer when the session id is unavailable (see loadOwnerScopedRun).
-  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
-  const active = await loadRun(deps);
-  if (active === null) return allow(); // no run owned by this session → pass through
+    // Resolve the run owned by THIS session (env-scoped); fail-safe to the global
+    // pointer when the session id is unavailable (see loadOwnerScopedRun).
+    const loadRun = deps.loadRun ?? loadOwnerScopedRun
+    const active = await loadRun(deps)
+    if (active === null) {
+        return allow()
+    } // no run owned by this session → pass through
 
-  // (b) nested-shell / hook-bypass while a run is active.
-  if (isNestedShellOrHookBypass(cmd)) {
-    return deny(
-      "nested_shell_denied",
-      `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`,
-    );
-  }
+    // (b) nested-shell / hook-bypass while a run is active.
+    if (isNestedShellOrHookBypass(cmd)) {
+        return deny(
+            'nested_shell_denied',
+            `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`
+        )
+    }
 
-  // (c) SHIP guard — agent-deny. The factory engine ships deterministically from
-  // INSIDE `factory next-action` (a child_process `gh` call that never transits this
-  // Bash-tool hook — src/orchestrator/ship.ts), so any `gh pr create`/`gh pr merge` that
-  // DOES reach this hook is an agent-initiated ship attempt while a run is active.
-  // That is categorically denied: PRs are opened and merged ONLY by the engine,
-  // whose merge gate gates shipping (derive-don't-store) — there is nothing to
-  // re-derive here, just a security boundary to hold.
-  if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
-    const op = isGhPrCreate(cmd) ? "gh pr create" : "gh pr merge";
-    return deny(
-      "ship_agent_denied",
-      `agent-initiated '${op}' is not allowed while a pipeline run is active: ` +
-        `the factory engine opens and merges PRs deterministically, never an agent.`,
-    );
-  }
+    // (c) SHIP guard — agent-deny. The factory engine ships deterministically from
+    // INSIDE `factory next-action` (a child_process `gh` call that never transits this
+    // Bash-tool hook — src/orchestrator/ship.ts), so any `gh pr create`/`gh pr merge` that
+    // DOES reach this hook is an agent-initiated ship attempt while a run is active.
+    // That is categorically denied: PRs are opened and merged ONLY by the engine,
+    // whose merge gate gates shipping (derive-don't-store) — there is nothing to
+    // re-derive here, just a security boundary to hold.
+    if (tool === 'Bash' && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
+        const op = isGhPrCreate(cmd) ? 'gh pr create' : 'gh pr merge'
+        return deny(
+            'ship_agent_denied',
+            `agent-initiated '${op}' is not allowed while a pipeline run is active: ` +
+                `the factory engine opens and merges PRs deterministically, never an agent.`
+        )
+    }
 
-  return allow();
+    return allow()
 }
 
 /**
@@ -213,43 +219,43 @@ export async function decidePipelineGuards(
  * malformed stdin fails CLOSED (deny). Injectable `readRaw` for tests.
  */
 export async function runPipelineGuards(
-  _argv: string[] = [],
-  deps: PipelineGuardsDeps & { readRaw?: () => Promise<string> } = {},
+    _argv: string[] = [],
+    deps: PipelineGuardsDeps & {readRaw?: () => Promise<string>} = {}
 ): Promise<ExitCode> {
-  let input: HookInput | null;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin();
-    input = parseHookInput(raw);
-  } catch {
-    const decision = deny("malformed_hook_input", "pipeline-guards: unparseable hook input");
-    emitPermissionDecision(decision);
-    return EXIT.ERROR;
-  }
-  let decision: HookDecision;
-  try {
-    decision = await decidePipelineGuards(input, deps);
-  } catch (err) {
-    if (err instanceof BrokenRunStateError) {
-      decision = deny("broken_pipeline_state", err.message);
-    } else {
-      // Corrupt state.json or any other loud failure → fail closed.
-      decision = deny("pipeline_guard_error", (err as Error).message);
+    let input: HookInput | null
+    try {
+        const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin()
+        input = parseHookInput(raw)
+    } catch {
+        const decision = deny('malformed_hook_input', 'pipeline-guards: unparseable hook input')
+        emitPermissionDecision(decision)
+        return EXIT.ERROR
     }
-    emitPermissionDecision(decision);
-    return EXIT.ERROR;
-  }
-  emitPermissionDecision(decision);
-  return decisionToExitCode(decision);
+    let decision: HookDecision
+    try {
+        decision = await decidePipelineGuards(input, deps)
+    } catch (err) {
+        if (err instanceof BrokenRunStateError) {
+            decision = deny('broken_pipeline_state', err.message)
+        } else {
+            // Corrupt state.json or any other loud failure → fail closed.
+            decision = deny('pipeline_guard_error', (err as Error).message)
+        }
+        emitPermissionDecision(decision)
+        return EXIT.ERROR
+    }
+    emitPermissionDecision(decision)
+    return decisionToExitCode(decision)
 }
 
 /** Re-export for phase identification in callers/tests. */
-export { TaskPhaseEnum };
+export {TaskPhaseEnum}
 
 /** Read all of process.stdin as utf-8. */
 async function readAllStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array));
-  }
-  return Buffer.concat(chunks).toString("utf8");
+    const chunks: Buffer[] = []
+    for await (const chunk of process.stdin) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array))
+    }
+    return Buffer.concat(chunks).toString('utf8')
 }

@@ -67,8 +67,8 @@ Logic:
 
 - Inspect commits on the task branch since base, filtered to those tagged with `[<task_id>]`.
 - Classify each commit by files touched (not by message prefix):
-  - `test-only` if all changed paths match test-file patterns (`*.test.*`, `*.spec.*`, `tests/**`, `__tests__/**`).
-  - `impl` otherwise (touches non-test source).
+    - `test-only` if all changed paths match test-file patterns (`*.test.*`, `*.spec.*`, `tests/**`, `__tests__/**`).
+    - `impl` otherwise (touches non-test source).
 - Require that the first `impl` commit is preceded by at least one `test-only` commit tagged with the same task_id.
 - Require that at least one `test-only` commit exists somewhere before any `impl` commit on the task branch.
 - Skip gate (exempt=true) if the task's full diff is tests-only, docs-only, or config-only. "Docs-only" = paths under `docs/`, `*.md`. "Config-only" = paths matching patterns configurable in `package.json.factory.tddConfigPaths` (default: `*.json`, `*.yml`, `*.yaml`, `*.toml`, `.gitignore`).
@@ -83,15 +83,15 @@ Output: structured JSON to state at `.tasks.<task_id>.quality_gates.tdd` = `{ok,
 Rename agents to accurately describe their roles:
 
 - `agents/task-reviewer.md` → `agents/implementation-reviewer.md`
-  - Role: verifies the implementation satisfies the spec's intent, not merely that tests pass. Checks every acceptance criterion is genuinely addressed.
+    - Role: verifies the implementation satisfies the spec's intent, not merely that tests pass. Checks every acceptance criterion is genuinely addressed.
 - `agents/code-reviewer.md` → `agents/quality-reviewer.md`
-  - Role: adversarial code-quality review. Logic errors, security, test quality, AI-specific anti-patterns.
+    - Role: adversarial code-quality review. Logic errors, security, test quality, AI-specific anti-patterns.
 
 Restructure routing in `bin/pipeline-run-task`:
 
 - **Always run two reviewers in parallel per task:**
-  1. `implementation-reviewer` (spec alignment).
-  2. Quality reviewer: Codex (preferred) via `bin/pipeline-codex-review`, or `quality-reviewer` as fallback.
+    1. `implementation-reviewer` (spec alignment).
+    2. Quality reviewer: Codex (preferred) via `bin/pipeline-codex-review`, or `quality-reviewer` as fallback.
 - Update `bin/pipeline-detect-reviewer`: Codex fallback is now `quality-reviewer` (not `task-reviewer`). The implementation reviewer is always Claude Code regardless of Codex availability.
 - Both verdicts merged by existing `bin/pipeline-parse-review`. Any REQUEST_CHANGES blocks.
 

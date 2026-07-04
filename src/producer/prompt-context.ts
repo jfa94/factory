@@ -21,7 +21,7 @@
  * blockers (PanelRunResult.confirmedBlockers) are recorded in as concrete fix
  * instructions, so the implementer patches the specific verified misses.
  */
-import type { Finding } from "../verifier/judgment/index.js";
+import type {Finding} from '../verifier/judgment/index.js'
 
 /**
  * Structural subset of a confirmed-blocker `Finding` this module actually reads
@@ -30,57 +30,57 @@ import type { Finding } from "../verifier/judgment/index.js";
  * verify) and a persisted `TaskState.fix_findings` (the lean `FixFinding[]` D5
  * carries across a fix-forward re-spawn) satisfy it directly — no conversion step.
  */
-export type ConfirmedBlocker = Pick<Finding, "reviewer" | "file" | "line" | "description">;
+export type ConfirmedBlocker = Pick<Finding, 'reviewer' | 'file' | 'line' | 'description'>
 
 /** A single confirmed-blocker fix instruction for the implementer's patch pass. */
 export interface FixInstruction {
-  /** The reviewer that raised it (audit). */
-  readonly reviewer: string;
-  /** The cited file (if localised). */
-  readonly file?: string;
-  /** The cited 1-based line (if localised). */
-  readonly line?: number;
-  /** The human-facing description of what to fix. */
-  readonly description: string;
+    /** The reviewer that raised it (audit). */
+    readonly reviewer: string
+    /** The cited file (if localised). */
+    readonly file?: string
+    /** The cited 1-based line (if localised). */
+    readonly line?: number
+    /** The human-facing description of what to fix. */
+    readonly description: string
 }
 
 /** A prior-failure note injected on rung ≥ 2 ("don't do this"). */
 export interface PriorFailureNote {
-  /** Which rung the failure occurred on. */
-  readonly rung: number;
-  /** A short summary of WHAT failed (e.g. "merge gate blocked by: security"). */
-  readonly summary: string;
+    /** Which rung the failure occurred on. */
+    readonly rung: number
+    /** A short summary of WHAT failed (e.g. "merge gate blocked by: security"). */
+    readonly summary: string
 }
 
 /** Inputs to assemble a producer prompt context. */
 export interface BuildProducerContextInput {
-  /** Stable task id. */
-  readonly taskId: string;
-  /** Short task title. */
-  readonly title: string;
-  /** Task description. */
-  readonly description: string;
-  /**
-   * The acceptance criteria the producer is ALLOWED to see — already
-   * holdout-stripped by the caller (WS9 owns the strip; this module never reads
-   * the holdout key). Must NOT contain any withheld criterion.
-   */
-  readonly visibleCriteria: readonly string[];
-  /** Files the task is scoped to (from the spec). */
-  readonly files: readonly string[];
-  /** The escalation rung this context is for (0 = starting). */
-  readonly rung: number;
-  /**
-   * Confirmed blockers to record in as fix instructions for a PATCH (fix-forward)
-   * pass. Empty on a fresh attempt. Only CONFIRMED blockers (post WS7
-   * verify-then-fix) belong here — never raw reviewer findings.
-   */
-  readonly confirmedBlockers?: readonly ConfirmedBlocker[];
-  /**
-   * Prior-failure notes to inject (rung ≥ 2). Empty on rung 0/1. Their PRESENCE
-   * is the rung-2 "changed variable" (the injected context).
-   */
-  readonly priorFailures?: readonly PriorFailureNote[];
+    /** Stable task id. */
+    readonly taskId: string
+    /** Short task title. */
+    readonly title: string
+    /** Task description. */
+    readonly description: string
+    /**
+     * The acceptance criteria the producer is ALLOWED to see — already
+     * holdout-stripped by the caller (WS9 owns the strip; this module never reads
+     * the holdout key). Must NOT contain any withheld criterion.
+     */
+    readonly visibleCriteria: readonly string[]
+    /** Files the task is scoped to (from the spec). */
+    readonly files: readonly string[]
+    /** The escalation rung this context is for (0 = starting). */
+    readonly rung: number
+    /**
+     * Confirmed blockers to record in as fix instructions for a PATCH (fix-forward)
+     * pass. Empty on a fresh attempt. Only CONFIRMED blockers (post WS7
+     * verify-then-fix) belong here — never raw reviewer findings.
+     */
+    readonly confirmedBlockers?: readonly ConfirmedBlocker[]
+    /**
+     * Prior-failure notes to inject (rung ≥ 2). Empty on rung 0/1. Their PRESENCE
+     * is the rung-2 "changed variable" (the injected context).
+     */
+    readonly priorFailures?: readonly PriorFailureNote[]
 }
 
 /**
@@ -90,31 +90,31 @@ export interface BuildProducerContextInput {
  * the machine-checkable proof the rung-2 context changed.
  */
 export interface ProducerContext {
-  readonly taskId: string;
-  readonly title: string;
-  readonly description: string;
-  /** The holdout-stripped criteria (exactly the input `visibleCriteria`). */
-  readonly acceptanceCriteria: readonly string[];
-  readonly files: readonly string[];
-  readonly rung: number;
-  /** Fix instructions for a patch pass (empty on a fresh attempt). */
-  readonly fixInstructions: readonly FixInstruction[];
-  /** Prior-failure "don't do this" notes (empty on rung 0/1). */
-  readonly priorFailures: readonly PriorFailureNote[];
-  /** True IFF ≥1 prior-failure note was injected — the rung-2 context change. */
-  readonly injectedPriorFailure: boolean;
+    readonly taskId: string
+    readonly title: string
+    readonly description: string
+    /** The holdout-stripped criteria (exactly the input `visibleCriteria`). */
+    readonly acceptanceCriteria: readonly string[]
+    readonly files: readonly string[]
+    readonly rung: number
+    /** Fix instructions for a patch pass (empty on a fresh attempt). */
+    readonly fixInstructions: readonly FixInstruction[]
+    /** Prior-failure "don't do this" notes (empty on rung 0/1). */
+    readonly priorFailures: readonly PriorFailureNote[]
+    /** True IFF ≥1 prior-failure note was injected — the rung-2 context change. */
+    readonly injectedPriorFailure: boolean
 }
 
 /** Map a confirmed-blocker {@link Finding} to a concrete {@link FixInstruction}. */
 function toFixInstruction(f: ConfirmedBlocker): FixInstruction {
-  const base: FixInstruction = { reviewer: f.reviewer, description: f.description };
-  if (f.file !== undefined && f.line !== undefined) {
-    return { ...base, file: f.file, line: f.line };
-  }
-  if (f.file !== undefined) {
-    return { ...base, file: f.file };
-  }
-  return base;
+    const base: FixInstruction = {reviewer: f.reviewer, description: f.description}
+    if (f.file !== undefined && f.line !== undefined) {
+        return {...base, file: f.file, line: f.line}
+    }
+    if (f.file !== undefined) {
+        return {...base, file: f.file}
+    }
+    return base
 }
 
 /**
@@ -123,17 +123,17 @@ function toFixInstruction(f: ConfirmedBlocker): FixInstruction {
  * — there is no parameter or path for it.
  */
 export function buildProducerContext(input: BuildProducerContextInput): ProducerContext {
-  const fixInstructions = (input.confirmedBlockers ?? []).map(toFixInstruction);
-  const priorFailures = input.priorFailures ?? [];
-  return {
-    taskId: input.taskId,
-    title: input.title,
-    description: input.description,
-    acceptanceCriteria: input.visibleCriteria,
-    files: input.files,
-    rung: input.rung,
-    fixInstructions,
-    priorFailures,
-    injectedPriorFailure: priorFailures.length > 0,
-  };
+    const fixInstructions = (input.confirmedBlockers ?? []).map(toFixInstruction)
+    const priorFailures = input.priorFailures ?? []
+    return {
+        taskId: input.taskId,
+        title: input.title,
+        description: input.description,
+        acceptanceCriteria: input.visibleCriteria,
+        files: input.files,
+        rung: input.rung,
+        fixInstructions,
+        priorFailures,
+        injectedPriorFailure: priorFailures.length > 0,
+    }
 }

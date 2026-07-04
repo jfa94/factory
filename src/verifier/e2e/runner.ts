@@ -18,98 +18,98 @@
  * spec→task mapping (the author manifest) are the coroutine's job, layered over the
  * flat {@link E2eResults} this returns.
  */
-import path from "node:path";
-import { access } from "node:fs/promises";
-import { exec } from "../../shared/index.js";
+import path from 'node:path'
+import {access} from 'node:fs/promises'
+import {exec} from '../../shared/index.js'
 
 /** Options for a single {@link runE2e} invocation. */
 export interface E2eRunOpts {
-  /** Working directory the Playwright CLI runs in (a worktree or the target repo). */
-  readonly cwd: string;
-  /** Extra/overriding env vars (merged over process.env, unless {@link replaceEnv}) — e.g. BASE_URL. */
-  readonly env?: Record<string, string>;
-  /**
-   * Run with ONLY {@link env} — no inherited `process.env` (Decision 39 W5). The
-   * code under test is an autonomously-authored, unreviewed e2e spec; it must not
-   * see the parent process's ambient secrets/tokens. Callers pass the PATH, HOME,
-   * and FACTORY_E2E/BASE_URL vars the app boot + Playwright resolution actually need.
-   */
-  readonly replaceEnv?: boolean;
-  /**
-   * Positional path filter passed to `playwright test` — a directory (the
-   * criticality-by-persistence `e2e/` dir, or an ephemeral throwaway dir) or a
-   * single spec file (the fail-first proof scopes to exactly one file). Omit to
-   * run whatever the target's `playwright.config.ts` `testDir` resolves. Ignored
-   * when {@link config} is set — that config's own `testDir` governs instead.
-   */
-  readonly testDir?: string;
-  /** `--grep` pattern, e.g. to re-run one named journey after a reopen. */
-  readonly grep?: string;
-  /**
-   * `--config <path>` — an alternate Playwright config, e.g. the generated
-   * throwaway-spec config (whose `testDir` points at the out-of-repo throwaway
-   * dir; the run worktree's own committed config only covers the critical suite).
-   */
-  readonly config?: string;
+    /** Working directory the Playwright CLI runs in (a worktree or the target repo). */
+    readonly cwd: string
+    /** Extra/overriding env vars (merged over process.env, unless {@link replaceEnv}) — e.g. BASE_URL. */
+    readonly env?: Record<string, string>
+    /**
+     * Run with ONLY {@link env} — no inherited `process.env` (Decision 39 W5). The
+     * code under test is an autonomously-authored, unreviewed e2e spec; it must not
+     * see the parent process's ambient secrets/tokens. Callers pass the PATH, HOME,
+     * and FACTORY_E2E/BASE_URL vars the app boot + Playwright resolution actually need.
+     */
+    readonly replaceEnv?: boolean
+    /**
+     * Positional path filter passed to `playwright test` — a directory (the
+     * criticality-by-persistence `e2e/` dir, or an ephemeral throwaway dir) or a
+     * single spec file (the fail-first proof scopes to exactly one file). Omit to
+     * run whatever the target's `playwright.config.ts` `testDir` resolves. Ignored
+     * when {@link config} is set — that config's own `testDir` governs instead.
+     */
+    readonly testDir?: string
+    /** `--grep` pattern, e.g. to re-run one named journey after a reopen. */
+    readonly grep?: string
+    /**
+     * `--config <path>` — an alternate Playwright config, e.g. the generated
+     * throwaway-spec config (whose `testDir` points at the out-of-repo throwaway
+     * dir; the run worktree's own committed config only covers the critical suite).
+     */
+    readonly config?: string
 }
 
 /** Per-spec outcome, already reconciled against retries by Playwright itself. */
-export type E2eSpecStatus = "passed" | "failed" | "flaky" | "skipped";
+export type E2eSpecStatus = 'passed' | 'failed' | 'flaky' | 'skipped'
 
 /** One spec's outcome, flattened out of the (possibly-nested, describe-block) suite tree. */
 export interface E2eSpecResult {
-  readonly file: string;
-  readonly title: string;
-  readonly status: E2eSpecStatus;
-  /**
-   * Playwright's per-test error message(s) for a `failed` spec (Decision 40 D8) —
-   * the failing assertion/step, ANSI-stripped, capped at
-   * {@link E2E_ERROR_DETAIL_MAX_BYTES}. Absent on non-failed specs.
-   */
-  readonly error?: string;
+    readonly file: string
+    readonly title: string
+    readonly status: E2eSpecStatus
+    /**
+     * Playwright's per-test error message(s) for a `failed` spec (Decision 40 D8) —
+     * the failing assertion/step, ANSI-stripped, capped at
+     * {@link E2E_ERROR_DETAIL_MAX_BYTES}. Absent on non-failed specs.
+     */
+    readonly error?: string
 }
 
 /** Cap on per-spec error detail carried into reopen feedback/prompts — enough for
  * the failing assertion + step, not a full trace dump. */
-export const E2E_ERROR_DETAIL_MAX_BYTES = 4096;
+export const E2E_ERROR_DETAIL_MAX_BYTES = 4096
 
 /** Parsed result of one {@link runE2e} invocation. */
 export interface E2eResults {
-  /** True iff no spec is `failed` (a `flaky` or `skipped` spec does not block). */
-  readonly ok: boolean;
-  readonly specs: readonly E2eSpecResult[];
-  readonly counts: {
-    readonly passed: number;
-    readonly failed: number;
-    readonly flaky: number;
-    readonly skipped: number;
-  };
+    /** True iff no spec is `failed` (a `flaky` or `skipped` spec does not block). */
+    readonly ok: boolean
+    readonly specs: readonly E2eSpecResult[]
+    readonly counts: {
+        readonly passed: number
+        readonly failed: number
+        readonly flaky: number
+        readonly skipped: number
+    }
 }
 
 /** The minimal process result {@link runE2e} needs from the CLI wrapper. */
 export interface E2eProcResult {
-  readonly code: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly truncated: boolean;
+    readonly code: number | null
+    readonly stdout: string
+    readonly stderr: string
+    readonly truncated: boolean
 }
 
 /** Injectable Playwright CLI wrapper (cf. `VitestTool`) — unit tests fake this. */
 export interface PlaywrightTool {
-  run(opts: E2eRunOpts): Promise<E2eProcResult>;
+    run(opts: E2eRunOpts): Promise<E2eProcResult>
 }
 
 async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
+    try {
+        await access(p)
+        return true
+    } catch {
+        return false
+    }
 }
 
 /** A cwd→local-bin resolver, injectable so {@link DefaultPlaywrightTool} unit-tests without fs. */
-export type LocalPlaywrightResolver = (cwd: string) => Promise<string | null>;
+export type LocalPlaywrightResolver = (cwd: string) => Promise<string | null>
 
 /**
  * Resolve the worktree's own `node_modules/.bin/playwright`, walking UP from `cwd`
@@ -118,17 +118,21 @@ export type LocalPlaywrightResolver = (cwd: string) => Promise<string | null>;
  * isn't a reuse of that closed-enum seam.
  */
 export async function resolveLocalPlaywrightBin(
-  cwd: string,
-  exists: (p: string) => Promise<boolean> = pathExists,
+    cwd: string,
+    exists: (p: string) => Promise<boolean> = pathExists
 ): Promise<string | null> {
-  let dir = path.resolve(cwd);
-  for (;;) {
-    const candidate = path.join(dir, "node_modules", ".bin", "playwright");
-    if (await exists(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null; // reached the filesystem root
-    dir = parent;
-  }
+    let dir = path.resolve(cwd)
+    for (;;) {
+        const candidate = path.join(dir, 'node_modules', '.bin', 'playwright')
+        if (await exists(candidate)) {
+            return candidate
+        }
+        const parent = path.dirname(dir)
+        if (parent === dir) {
+            return null
+        } // reached the filesystem root
+        dir = parent
+    }
 }
 
 /**
@@ -137,45 +141,49 @@ export async function resolveLocalPlaywrightBin(
  * fallback.
  */
 function missingBinResult(cwd: string): E2eProcResult {
-  return {
-    code: 127,
-    stdout: "",
-    stderr:
-      `playwright: no local binary found under node_modules/.bin (walked up from ${cwd}); ` +
-      `refusing the npx fallback — install @playwright/test so the pinned local binary resolves.`,
-    truncated: false,
-  };
+    return {
+        code: 127,
+        stdout: '',
+        stderr:
+            `playwright: no local binary found under node_modules/.bin (walked up from ${cwd}); ` +
+            `refusing the npx fallback — install @playwright/test so the pinned local binary resolves.`,
+        truncated: false,
+    }
 }
 
 /** Default PlaywrightTool: local `playwright test [testDir] [--grep <pattern>] --reporter=json`. */
 export class DefaultPlaywrightTool implements PlaywrightTool {
-  constructor(private readonly resolve: LocalPlaywrightResolver = resolveLocalPlaywrightBin) {}
+    constructor(private readonly resolve: LocalPlaywrightResolver = resolveLocalPlaywrightBin) {}
 
-  async run(opts: E2eRunOpts): Promise<E2eProcResult> {
-    const bin = await this.resolve(opts.cwd);
-    if (bin === null) return missingBinResult(opts.cwd);
+    async run(opts: E2eRunOpts): Promise<E2eProcResult> {
+        const bin = await this.resolve(opts.cwd)
+        if (bin === null) {
+            return missingBinResult(opts.cwd)
+        }
 
-    const args = ["test"];
-    if (opts.config) {
-      args.push("--config", opts.config);
-    } else if (opts.testDir) {
-      args.push(opts.testDir);
+        const args = ['test']
+        if (opts.config != null && opts.config.length > 0) {
+            args.push('--config', opts.config)
+        } else if (opts.testDir != null && opts.testDir.length > 0) {
+            args.push(opts.testDir)
+        }
+        if (opts.grep != null && opts.grep.length > 0) {
+            args.push('--grep', opts.grep)
+        }
+        args.push('--reporter=json')
+
+        const result = await exec(bin, args, {
+            cwd: opts.cwd,
+            env: opts.env,
+            envMode: opts.replaceEnv === true ? 'replace' : undefined,
+        })
+        return {
+            code: result.code,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            truncated: result.truncated,
+        }
     }
-    if (opts.grep) args.push("--grep", opts.grep);
-    args.push("--reporter=json");
-
-    const result = await exec(bin, args, {
-      cwd: opts.cwd,
-      env: opts.env,
-      envMode: opts.replaceEnv ? "replace" : undefined,
-    });
-    return {
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      truncated: result.truncated,
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,47 +191,47 @@ export class DefaultPlaywrightTool implements PlaywrightTool {
 // ---------------------------------------------------------------------------
 
 interface PwJsonError {
-  readonly message?: string;
+    readonly message?: string
 }
 
 /** One attempt of one test — carries the error detail the status roll-up drops. */
 interface PwJsonTestResult {
-  readonly error?: PwJsonError;
-  readonly errors?: readonly PwJsonError[];
+    readonly error?: PwJsonError
+    readonly errors?: readonly PwJsonError[]
 }
 
 interface PwJsonTest {
-  /** Already reconciled against retries by Playwright — this IS the flaky signal. */
-  readonly status: "skipped" | "expected" | "unexpected" | "flaky";
-  readonly results?: readonly PwJsonTestResult[];
+    /** Already reconciled against retries by Playwright — this IS the flaky signal. */
+    readonly status: 'skipped' | 'expected' | 'unexpected' | 'flaky'
+    readonly results?: readonly PwJsonTestResult[]
 }
 
 interface PwJsonSpec {
-  readonly title: string;
-  readonly file: string;
-  readonly tests: readonly PwJsonTest[];
+    readonly title: string
+    readonly file: string
+    readonly tests: readonly PwJsonTest[]
 }
 
 interface PwJsonSuite {
-  readonly specs?: readonly PwJsonSpec[];
-  readonly suites?: readonly PwJsonSuite[];
+    readonly specs?: readonly PwJsonSpec[]
+    readonly suites?: readonly PwJsonSuite[]
 }
 
 interface PwJsonReport {
-  readonly suites: readonly PwJsonSuite[];
-  /** Top-level tooling errors (e.g. a `webServer` boot failure) — distinct from a
-   * per-spec failure; Playwright can emit these with an otherwise-empty/clean
-   * `suites` tree, which is exactly the silent-pass case this module must not miss. */
-  readonly errors?: readonly unknown[];
+    readonly suites: readonly PwJsonSuite[]
+    /** Top-level tooling errors (e.g. a `webServer` boot failure) — distinct from a
+     * per-spec failure; Playwright can emit these with an otherwise-empty/clean
+     * `suites` tree, which is exactly the silent-pass case this module must not miss. */
+    readonly errors?: readonly unknown[]
 }
 
 function collectSpecs(suites: readonly PwJsonSuite[] | undefined): PwJsonSpec[] {
-  const out: PwJsonSpec[] = [];
-  for (const suite of suites ?? []) {
-    out.push(...(suite.specs ?? []));
-    out.push(...collectSpecs(suite.suites));
-  }
-  return out;
+    const out: PwJsonSpec[] = []
+    for (const suite of suites ?? []) {
+        out.push(...(suite.specs ?? []))
+        out.push(...collectSpecs(suite.suites))
+    }
+    return out
 }
 
 /**
@@ -232,21 +240,29 @@ function collectSpecs(suites: readonly PwJsonSuite[] | undefined): PwJsonSpec[] 
  * distinct from `failed` — never a reopen trigger (Decision 8).
  */
 function specStatus(spec: PwJsonSpec): E2eSpecStatus {
-  const statuses = spec.tests.map((t) => t.status);
-  if (statuses.includes("unexpected")) return "failed";
-  if (statuses.includes("flaky")) return "flaky";
-  if (statuses.length > 0 && statuses.every((s) => s === "skipped")) return "skipped";
-  return "passed";
+    const statuses = spec.tests.map((t) => t.status)
+    if (statuses.includes('unexpected')) {
+        return 'failed'
+    }
+    if (statuses.includes('flaky')) {
+        return 'flaky'
+    }
+    if (statuses.length > 0 && statuses.every((s) => s === 'skipped')) {
+        return 'skipped'
+    }
+    return 'passed'
 }
 
 // eslint-disable-next-line no-control-regex -- ANSI escapes ARE control chars; stripping them is the point
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const ANSI_RE = /\x1b\[[0-9;]*m/g
 
 function truncateBytes(s: string, max: number): string {
-  if (Buffer.byteLength(s, "utf8") <= max) return s;
-  const clipped = Buffer.from(s, "utf8").subarray(0, max).toString("utf8");
-  // A multi-byte char split at the boundary decodes to U+FFFD — drop it.
-  return clipped.replace(/�+$/, "") + "\n… [error detail truncated]";
+    if (Buffer.byteLength(s, 'utf8') <= max) {
+        return s
+    }
+    const clipped = Buffer.from(s, 'utf8').subarray(0, max).toString('utf8')
+    // A multi-byte char split at the boundary decodes to U+FFFD — drop it.
+    return clipped.replace(/�+$/, '') + '\n… [error detail truncated]'
 }
 
 /**
@@ -254,14 +270,16 @@ function truncateBytes(s: string, max: number): string {
  * — deduped (retries repeat the same assertion), ANSI-stripped, byte-capped.
  */
 function specError(spec: PwJsonSpec): string | undefined {
-  const messages = spec.tests
-    .flatMap((t) => t.results ?? [])
-    .flatMap((r) => (r.errors?.length ? r.errors : r.error ? [r.error] : []))
-    .map((e) => e.message)
-    .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
-    .map((m) => m.replace(ANSI_RE, "").trim());
-  if (messages.length === 0) return undefined;
-  return truncateBytes([...new Set(messages)].join("\n---\n"), E2E_ERROR_DETAIL_MAX_BYTES);
+    const messages = spec.tests
+        .flatMap((t) => t.results ?? [])
+        .flatMap((r) => (r.errors != null && r.errors.length > 0 ? r.errors : r.error ? [r.error] : []))
+        .map((e) => e.message)
+        .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+        .map((m) => m.replace(ANSI_RE, '').trim())
+    if (messages.length === 0) {
+        return undefined
+    }
+    return truncateBytes([...new Set(messages)].join('\n---\n'), E2E_ERROR_DETAIL_MAX_BYTES)
 }
 
 /**
@@ -278,27 +296,25 @@ function specError(spec: PwJsonSpec): string | undefined {
  * their existing call shape.
  */
 export function parseE2eReport(json: string, code: number | null = 0): E2eResults {
-  let report: PwJsonReport;
-  try {
-    report = JSON.parse(json) as PwJsonReport;
-  } catch (err) {
-    throw new Error(
-      `e2e runner: could not parse Playwright JSON reporter output: ${(err as Error).message}`,
-    );
-  }
-  const specs = collectSpecs(report.suites).map((s) => {
-    const status = specStatus(s);
-    const error = status === "failed" ? specError(s) : undefined;
-    return { file: s.file, title: s.title, status, ...(error !== undefined && { error }) };
-  });
-  const counts = {
-    passed: specs.filter((s) => s.status === "passed").length,
-    failed: specs.filter((s) => s.status === "failed").length,
-    flaky: specs.filter((s) => s.status === "flaky").length,
-    skipped: specs.filter((s) => s.status === "skipped").length,
-  };
-  const ok = counts.failed === 0 && (report.errors ?? []).length === 0 && code === 0;
-  return { ok, specs, counts };
+    let report: PwJsonReport
+    try {
+        report = JSON.parse(json) as PwJsonReport
+    } catch (err) {
+        throw new Error(`e2e runner: could not parse Playwright JSON reporter output: ${(err as Error).message}`)
+    }
+    const specs = collectSpecs(report.suites).map((s) => {
+        const status = specStatus(s)
+        const error = status === 'failed' ? specError(s) : undefined
+        return {file: s.file, title: s.title, status, ...(error !== undefined && {error})}
+    })
+    const counts = {
+        passed: specs.filter((s) => s.status === 'passed').length,
+        failed: specs.filter((s) => s.status === 'failed').length,
+        flaky: specs.filter((s) => s.status === 'flaky').length,
+        skipped: specs.filter((s) => s.status === 'skipped').length,
+    }
+    const ok = counts.failed === 0 && (report.errors ?? []).length === 0 && code === 0
+    return {ok, specs, counts}
 }
 
 /**
@@ -308,19 +324,17 @@ export function parseE2eReport(json: string, code: number | null = 0): E2eResult
  * crashed boot — distinct from a red test, which still emits a valid JSON report).
  */
 export async function runE2e(
-  opts: E2eRunOpts,
-  tool: PlaywrightTool = new DefaultPlaywrightTool(),
+    opts: E2eRunOpts,
+    tool: PlaywrightTool = new DefaultPlaywrightTool()
 ): Promise<E2eResults> {
-  const result = await tool.run(opts);
-  if (result.truncated) {
-    throw new Error(
-      `e2e runner: Playwright JSON reporter output for ${opts.cwd} was TRUNCATED (hit maxBuffer) — refusing to parse a clipped payload`,
-    );
-  }
-  if (result.stdout.trim().length === 0) {
-    throw new Error(
-      `e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`,
-    );
-  }
-  return parseE2eReport(result.stdout, result.code);
+    const result = await tool.run(opts)
+    if (result.truncated) {
+        throw new Error(
+            `e2e runner: Playwright JSON reporter output for ${opts.cwd} was TRUNCATED (hit maxBuffer) — refusing to parse a clipped payload`
+        )
+    }
+    if (result.stdout.trim().length === 0) {
+        throw new Error(`e2e runner: playwright produced no output (code=${result.code ?? 'null'}): ${result.stderr}`)
+    }
+    return parseE2eReport(result.stdout, result.code)
 }

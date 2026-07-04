@@ -11,9 +11,9 @@
  * (src/orchestrator/quota-gate.ts) runs it and acts on the decision. This module is the
  * pure producer dial only.
  */
-import type { Config } from "../config/schema.js";
-import type { RiskTier } from "../types/index.js";
-import { assertNever } from "../types/index.js";
+import type {Config} from '../config/schema.js'
+import type {RiskTier} from '../types/index.js'
+import {assertNever} from '../types/index.js'
 
 /**
  * Select the producer model for a task from its risk tier (Decision 25). This is
@@ -21,15 +21,15 @@ import { assertNever } from "../types/index.js";
  * `config.quota.producerModels`.
  */
 export function selectProducerModel(riskTier: RiskTier, config: Config): string {
-  const models = config.quota.producerModels;
-  switch (riskTier) {
-    case "low":
-      return models.low;
-    case "medium":
-      return models.medium;
-    case "high":
-      return models.high;
-    default:
-      return assertNever(riskTier);
-  }
+    const models = config.quota.producerModels
+    switch (riskTier) {
+        case 'low':
+            return models.low
+        case 'medium':
+            return models.medium
+        case 'high':
+            return models.high
+        default:
+            return assertNever(riskTier)
+    }
 }

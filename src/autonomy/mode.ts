@@ -17,7 +17,7 @@
 
 /** The single autonomous-mode predicate: exactly `FACTORY_AUTONOMOUS_MODE === "1"`. */
 export function isAutonomous(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.FACTORY_AUTONOMOUS_MODE === "1";
+    return env.FACTORY_AUTONOMOUS_MODE === '1'
 }
 
 /**
@@ -27,21 +27,23 @@ export function isAutonomous(env: NodeJS.ProcessEnv = process.env): boolean {
  * uncaught to the bin entrypoint, which prints it and exits non-zero.
  */
 export class NotAutonomousError extends Error {
-  constructor() {
-    super(
-      "Pipeline halted: not running in autonomous mode (FACTORY_AUTONOMOUS_MODE is unset).\n" +
-        "The factory runs unattended and refuses to start or resume a run otherwise.\n" +
-        "Run `factory autonomy ensure`, then relaunch the session with:\n" +
-        "  claude --settings <merged-settings.json>\n" +
-        "Check the current state any time with `factory autonomy status`.",
-    );
-    this.name = "NotAutonomousError";
-  }
+    constructor() {
+        super(
+            'Pipeline halted: not running in autonomous mode (FACTORY_AUTONOMOUS_MODE is unset).\n' +
+                'The factory runs unattended and refuses to start or resume a run otherwise.\n' +
+                'Run `factory autonomy ensure`, then relaunch the session with:\n' +
+                '  claude --settings <merged-settings.json>\n' +
+                'Check the current state any time with `factory autonomy status`.'
+        )
+        this.name = 'NotAutonomousError'
+    }
 }
 
 /** Refuse to proceed unless autonomous mode is active. */
 export function requireAutonomousMode(env: NodeJS.ProcessEnv = process.env): void {
-  if (!isAutonomous(env)) throw new NotAutonomousError();
+    if (!isAutonomous(env)) {
+        throw new NotAutonomousError()
+    }
 }
 
 /**
@@ -49,13 +51,13 @@ export function requireAutonomousMode(env: NodeJS.ProcessEnv = process.env): voi
  * table row, surfaced to the user so a halt explains itself.
  */
 export type PreflightReason =
-  | "not-autonomous"
-  | "missing-settings"
-  | "stale-version"
-  | "unstamped"
-  | "fresh"
-  | "ci-raw-env"
-  | "version-unknowable";
+    | 'not-autonomous'
+    | 'missing-settings'
+    | 'stale-version'
+    | 'unstamped'
+    | 'fresh'
+    | 'ci-raw-env'
+    | 'version-unknowable'
 
 /**
  * The run-entry preflight verdict.
@@ -65,9 +67,9 @@ export type PreflightReason =
  * reintroduce false freshness. Regenerating always implies halt-for-relaunch.
  */
 export interface PreflightDecision {
-  readonly proceed: boolean;
-  readonly regenerate: boolean;
-  readonly reason: PreflightReason;
+    readonly proceed: boolean
+    readonly regenerate: boolean
+    readonly reason: PreflightReason
 }
 
 /**
@@ -79,41 +81,41 @@ export interface PreflightDecision {
  * and acts on the verdict. See Decision 31.
  */
 export function decideAutonomyPreflight(input: {
-  autonomous: boolean;
-  mergedSettingsPresent: boolean;
-  pluginVersion: string | undefined;
-  onDiskVersion: string | undefined;
+    autonomous: boolean
+    mergedSettingsPresent: boolean
+    pluginVersion: string | undefined
+    onDiskVersion: string | undefined
 }): PreflightDecision {
-  const { autonomous, mergedSettingsPresent, pluginVersion, onDiskVersion } = input;
+    const {autonomous, mergedSettingsPresent, pluginVersion, onDiskVersion} = input
 
-  // Not autonomous: this session can never make itself autonomous, so always
-  // (re)scaffold the settings and halt for the relaunch.
-  if (!autonomous) {
-    return {
-      proceed: false,
-      regenerate: true,
-      reason: mergedSettingsPresent ? "not-autonomous" : "missing-settings",
-    };
-  }
+    // Not autonomous: this session can never make itself autonomous, so always
+    // (re)scaffold the settings and halt for the relaunch.
+    if (!autonomous) {
+        return {
+            proceed: false,
+            regenerate: true,
+            reason: mergedSettingsPresent ? 'not-autonomous' : 'missing-settings',
+        }
+    }
 
-  // Autonomous with no settings file: the env was exported directly (CI / raw
-  // env). Nothing to scaffold for the running session — proceed.
-  if (!mergedSettingsPresent) {
-    return { proceed: true, regenerate: false, reason: "ci-raw-env" };
-  }
+    // Autonomous with no settings file: the env was exported directly (CI / raw
+    // env). Nothing to scaffold for the running session — proceed.
+    if (!mergedSettingsPresent) {
+        return {proceed: true, regenerate: false, reason: 'ci-raw-env'}
+    }
 
-  // Autonomous with a settings file. Can we prove staleness?
-  if (pluginVersion === undefined) {
-    // Plugin version is unknowable, so a regenerate could not stamp one either:
-    // regenerating would only churn. Proceed.
-    return { proceed: true, regenerate: false, reason: "version-unknowable" };
-  }
-  if (onDiskVersion === undefined) {
-    // A pre-versioning artifact (or hand-edited) — treat as stale.
-    return { proceed: false, regenerate: true, reason: "unstamped" };
-  }
-  if (onDiskVersion !== pluginVersion) {
-    return { proceed: false, regenerate: true, reason: "stale-version" };
-  }
-  return { proceed: true, regenerate: false, reason: "fresh" };
+    // Autonomous with a settings file. Can we prove staleness?
+    if (pluginVersion === undefined) {
+        // Plugin version is unknowable, so a regenerate could not stamp one either:
+        // regenerating would only churn. Proceed.
+        return {proceed: true, regenerate: false, reason: 'version-unknowable'}
+    }
+    if (onDiskVersion === undefined) {
+        // A pre-versioning artifact (or hand-edited) — treat as stale.
+        return {proceed: false, regenerate: true, reason: 'unstamped'}
+    }
+    if (onDiskVersion !== pluginVersion) {
+        return {proceed: false, regenerate: true, reason: 'stale-version'}
+    }
+    return {proceed: true, regenerate: false, reason: 'fresh'}
 }

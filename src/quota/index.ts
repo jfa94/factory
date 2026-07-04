@@ -15,50 +15,40 @@
 
 // Usage signal seam + reader
 export {
-  StatuslineUsageSignal,
-  fakeUsageSignal,
-  readingFromCache,
-  usageCachePath,
-  STALE_CEILING_SECONDS,
-  STALE_WARN_SECONDS,
-} from "./usage-source.js";
-export type {
-  UsageSignal,
-  UsageReading,
-  WindowUsage,
-  UnavailableReason,
-  StatuslineUsageOptions,
-} from "./usage-source.js";
+    StatuslineUsageSignal,
+    fakeUsageSignal,
+    readingFromCache,
+    usageCachePath,
+    STALE_CEILING_SECONDS,
+    STALE_WARN_SECONDS,
+} from './usage-source.js'
+export type {UsageSignal, UsageReading, WindowUsage, UnavailableReason, StatuslineUsageOptions} from './usage-source.js'
 
 // Window math
 export {
-  computeWindowHour,
-  computeWindowDay,
-  hourlyThresholdFor,
-  dailyThresholdFor,
-  FIVE_HOUR_WINDOW_SECONDS,
-  SEVEN_DAY_WINDOW_SECONDS,
-} from "./window.js";
+    computeWindowHour,
+    computeWindowDay,
+    hourlyThresholdFor,
+    dailyThresholdFor,
+    FIVE_HOUR_WINDOW_SECONDS,
+    SEVEN_DAY_WINDOW_SECONDS,
+} from './window.js'
 
 // Pacer
-export { evaluate } from "./pacer.js";
-export type { QuotaDecision } from "./pacer.js";
+export {evaluate} from './pacer.js'
+export type {QuotaDecision} from './pacer.js'
 
 // Checkpoint patches
-export { buildCheckpoint, buildUnavailableCheckpoint, clearCheckpoint } from "./checkpoint.js";
-export type {
-  CheckpointableDecision,
-  CheckpointPatch,
-  ClearCheckpointPatch,
-} from "./checkpoint.js";
+export {buildCheckpoint, buildUnavailableCheckpoint, clearCheckpoint} from './checkpoint.js'
+export type {CheckpointableDecision, CheckpointPatch, ClearCheckpointPatch} from './checkpoint.js'
 
 // Circuit breaker
-export { evaluate as evaluateCircuitBreaker } from "./circuit-breaker.js";
-export type { CircuitBreakerInput, CircuitBreakerResult } from "./circuit-breaker.js";
+export {evaluate as evaluateCircuitBreaker} from './circuit-breaker.js'
+export type {CircuitBreakerInput, CircuitBreakerResult} from './circuit-breaker.js'
 
 // Quota-router (producer dial only)
-export { selectProducerModel } from "./router.js";
+export {selectProducerModel} from './router.js'
 
 // Resume seam
-export { planResume } from "./resume.js";
-export type { ResumePlan } from "./resume.js";
+export {planResume} from './resume.js'
+export type {ResumePlan} from './resume.js'

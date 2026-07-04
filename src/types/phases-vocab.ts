@@ -17,12 +17,12 @@
  */
 
 /** All per-task phases in execution order. */
-export const TASK_PHASES = ["preflight", "tests", "exec", "verify", "ship"] as const;
-export type TaskPhaseLiteral = (typeof TASK_PHASES)[number];
+export const TASK_PHASES = ['preflight', 'tests', 'exec', 'verify', 'ship'] as const
+export type TaskPhaseLiteral = (typeof TASK_PHASES)[number]
 
 /**
  * The subset of task phases that can appear in a spawn envelope (preflight only
  * advances; ship never spawns).
  */
-export const SPAWN_PHASES = ["tests", "exec", "verify"] as const;
-export type SpawnPhaseLiteral = (typeof SPAWN_PHASES)[number];
+export const SPAWN_PHASES = ['tests', 'exec', 'verify'] as const
+export type SpawnPhaseLiteral = (typeof SPAWN_PHASES)[number]

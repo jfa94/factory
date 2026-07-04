@@ -1,25 +1,25 @@
 ---
-description: "Run the whole-scope review⇄fix loop against the diff since a base ref (or the entire tree), driven by the same risk-invariant panel + producer⇄reviewer machinery /factory:run uses, until clean or the pass cap is hit"
-argument-hint: "[--base <hash>|--full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]"
+description: 'Run the whole-scope review⇄fix loop against the diff since a base ref (or the entire tree), driven by the same risk-invariant panel + producer⇄reviewer machinery /factory:run uses, until clean or the pass cap is hit'
+argument-hint: '[--base <hash>|--full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]'
 arguments:
-  - name: "--base"
-    description: "Diff base (commit hash) for the whole-scope review. Mutually exclusive with --full. Default: HEAD~1."
-    required: false
-  - name: "--full"
-    description: "Review the ENTIRE codebase (diffs against git's empty-tree SHA). Mutually exclusive with --base."
-    required: false
-  - name: "--no-ship"
-    description: "Open the debug session's task/rollup PRs but never merge. Default (omit): live — auto-merge."
-    required: false
-  - name: "--author-e2e"
-    description: "Opt the eventual debug run into the e2e-authoring phase during the task loop (same engine stage /factory:run --e2e uses)."
-    required: false
-  - name: "--max-passes"
-    description: "Cap on review⇄fix passes before the loop must stop and finalize with residual findings. Default: 5."
-    required: false
-  - name: "--session-id"
-    description: "Owning Claude Code session id (defaults to $CLAUDE_CODE_SESSION_ID)."
-    required: false
+    - name: '--base'
+      description: 'Diff base (commit hash) for the whole-scope review. Mutually exclusive with --full. Default: HEAD~1.'
+      required: false
+    - name: '--full'
+      description: "Review the ENTIRE codebase (diffs against git's empty-tree SHA). Mutually exclusive with --base."
+      required: false
+    - name: '--no-ship'
+      description: "Open the debug session's task/rollup PRs but never merge. Default (omit): live — auto-merge."
+      required: false
+    - name: '--author-e2e'
+      description: 'Opt the eventual debug run into the e2e-authoring phase during the task loop (same engine stage /factory:run --e2e uses).'
+      required: false
+    - name: '--max-passes'
+      description: 'Cap on review⇄fix passes before the loop must stop and finalize with residual findings. Default: 5.'
+      required: false
+    - name: '--session-id'
+      description: 'Owning Claude Code session id (defaults to $CLAUDE_CODE_SESSION_ID).'
+      required: false
 ---
 
 # /factory:debug

@@ -24,16 +24,16 @@
  * pure breaker can scale its threshold proportionally — `maxConsecutiveFailures` is
  * the configurable FLOOR.
  */
-import { evaluate, type CircuitBreakerResult } from "../quota/circuit-breaker.js";
-import type { Config, StateManager } from "./deps.js";
+import {evaluate, type CircuitBreakerResult} from '../quota/circuit-breaker.js'
+import type {Config, StateManager} from './deps.js'
 
 /** A tripped breaker verdict (the human reason) — the gate's only non-null return. */
-export type CircuitBreakerTrip = Extract<CircuitBreakerResult, { tripped: true }>;
+export type CircuitBreakerTrip = Extract<CircuitBreakerResult, {tripped: true}>
 
 /** The narrow deps the breaker gate needs (a subset of {@link import("./orchestrator.js").OrchestratorDeps}). */
 export interface CircuitBreakerGateDeps {
-  readonly state: StateManager;
-  readonly config: Config;
+    readonly state: StateManager
+    readonly config: Config
 }
 
 /**
@@ -41,19 +41,19 @@ export interface CircuitBreakerGateDeps {
  * (carrying the human reason) or null to proceed. Pure w.r.t. state — never writes.
  */
 export async function applyCircuitBreaker(
-  deps: CircuitBreakerGateDeps,
-  runId: string,
+    deps: CircuitBreakerGateDeps,
+    runId: string
 ): Promise<CircuitBreakerTrip | null> {
-  const run = await deps.state.read(runId);
+    const run = await deps.state.read(runId)
 
-  // Genuine producer-capability exhaustion only (see header).
-  const capabilityFailures = Object.values(run.tasks).filter(
-    (t) => t.status === "failed" && t.failure_class === "capability-budget",
-  ).length;
+    // Genuine producer-capability exhaustion only (see header).
+    const capabilityFailures = Object.values(run.tasks).filter(
+        (t) => t.status === 'failed' && t.failure_class === 'capability-budget'
+    ).length
 
-  const verdict = evaluate(
-    { cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run.tasks).length },
-    deps.config,
-  );
-  return verdict.tripped ? verdict : null;
+    const verdict = evaluate(
+        {cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run.tasks).length},
+        deps.config
+    )
+    return verdict.tripped ? verdict : null
 }

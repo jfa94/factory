@@ -13,17 +13,17 @@
 
 // Types live in core/state (sanctioned downward import); re-exported here for
 // verifier/deterministic consumers so their import paths are unchanged.
-import type { GateId } from "../../core/state/derive.js";
-export type { GateId, EvidenceGate } from "../../core/state/derive.js";
+import type {GateId} from '../../core/state/derive.js'
+export type {GateId, EvidenceGate} from '../../core/state/derive.js'
 
 /** All gate ids, in canonical order (drives default enablement + iteration). */
 export const GATE_IDS: readonly GateId[] = [
-  "test",
-  "tdd",
-  "coverage",
-  "mutation",
-  "sast",
-  "type",
-  "lint",
-  "build",
-] as const;
+    'test',
+    'tdd',
+    'coverage',
+    'mutation',
+    'sast',
+    'type',
+    'lint',
+    'build',
+] as const

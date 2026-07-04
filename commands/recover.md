@@ -1,13 +1,13 @@
 ---
-description: "Repair a stalled factory run with ONE self-routing verb: resume, rescue, or page — whatever the run actually needs"
-argument-hint: "[--run <id>] [--dry-run]"
+description: 'Repair a stalled factory run with ONE self-routing verb: resume, rescue, or page — whatever the run actually needs'
+argument-hint: '[--run <id>] [--dry-run]'
 arguments:
-  - name: "--run"
-    description: "Run id to recover (OPTIONAL — defaults to the current run, runs/current)"
-    required: false
-  - name: "--dry-run"
-    description: "Scan and report the chosen route only; write nothing"
-    required: false
+    - name: '--run'
+      description: 'Run id to recover (OPTIONAL — defaults to the current run, runs/current)'
+      required: false
+    - name: '--dry-run'
+      description: 'Scan and report the chosen route only; write nothing'
+      required: false
 ---
 
 # /factory:recover

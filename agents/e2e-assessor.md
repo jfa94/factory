@@ -45,7 +45,7 @@ For each **committed** spec under `<testDir>/` whose asserted behavior one of th
 run's tasks will touch, emit an `affected_specs` row:
 
 ```json
-{ "spec_path": "e2e/checkout.spec.ts", "task_ids": ["task-03"], "expectation": "needs-update" }
+{"spec_path": "e2e/checkout.spec.ts", "task_ids": ["task-03"], "expectation": "needs-update"}
 ```
 
 - `expectation: "needs-update"` — the task **intentionally changes** what the spec
@@ -69,11 +69,11 @@ Return exactly this JSON shape (a fenced ```json block is fine):
 
 ```json
 {
-  "status": "ok",
-  "reason": "…",
-  "warning": "…",
-  "resolved": { "start_command": "npm run dev", "base_url": "http://localhost:3000" },
-  "affected_specs": []
+    "status": "ok",
+    "reason": "…",
+    "warning": "…",
+    "resolved": {"start_command": "npm run dev", "base_url": "http://localhost:3000"},
+    "affected_specs": []
 }
 ```
 

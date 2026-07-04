@@ -1,13 +1,13 @@
 ---
-description: "Resume a paused/suspended factory run where it left off (re-check the quota gate, continue the loop)"
-argument-hint: "[--run <id>] [--ignore-quota]"
+description: 'Resume a paused/suspended factory run where it left off (re-check the quota gate, continue the loop)'
+argument-hint: '[--run <id>] [--ignore-quota]'
 arguments:
-  - name: "--run"
-    description: "Run id to resume (OPTIONAL — defaults to the current run, runs/current)"
-    required: false
-  - name: "--ignore-quota"
-    description: "Bypass the live quota re-check: persists ignore_quota=true on the run and force-continues regardless of the current window reading. Use to override a mistaken suspend or after a manual quota reset. NOT a mode/ship flag — can be combined freely."
-    required: false
+    - name: '--run'
+      description: 'Run id to resume (OPTIONAL — defaults to the current run, runs/current)'
+      required: false
+    - name: '--ignore-quota'
+      description: 'Bypass the live quota re-check: persists ignore_quota=true on the run and force-continues regardless of the current window reading. Use to override a mistaken suspend or after a manual quota reset. NOT a mode/ship flag — can be combined freely.'
+      required: false
 ---
 
 # /factory:resume

@@ -19,8 +19,8 @@
  * (D26 fixed depth). The request is validated through the frozen
  * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
-import { parseSpawnRequest, type SpawnRequest, type SpawnRole } from "../../types/index.js";
-import type { CrossVendorResolution } from "./vendor.js";
+import {parseSpawnRequest, type SpawnRequest, type SpawnRole} from '../../types/index.js'
+import type {CrossVendorResolution} from './vendor.js'
 
 /**
  * The four fixed panel roles, in a stable order. CLOSED: this list IS the panel
@@ -28,11 +28,11 @@ import type { CrossVendorResolution } from "./vendor.js";
  * Exported so the acceptance test asserts the exact set.
  */
 export const PANEL_ROLES: readonly SpawnRole[] = [
-  "implementation-reviewer",
-  "quality-reviewer",
-  "silent-failure-hunter",
-  "systemic-failure-reviewer",
-] as const;
+    'implementation-reviewer',
+    'quality-reviewer',
+    'silent-failure-hunter',
+    'systemic-failure-reviewer',
+] as const
 
 /**
  * The `prompt_ref` placeholder for a panel reviewer. The WS2 AgentSpecSchema
@@ -49,7 +49,7 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
  * `reviews/prompts/<role>.md` file, and no runner should try to Read one).
  */
 function promptRefFor(role: SpawnRole): string {
-  return `reviews/prompts/${role}.md`;
+    return `reviews/prompts/${role}.md`
 }
 
 /**
@@ -72,27 +72,27 @@ function promptRefFor(role: SpawnRole): string {
  * RiskTier because no tier is in scope.
  */
 export function buildPanelManifest(
-  resumePhase: SpawnRequest["resume_phase"],
-  model: string,
-  maxTurns: number,
-  crossVendor?: CrossVendorResolution,
+    resumePhase: SpawnRequest['resume_phase'],
+    model: string,
+    maxTurns: number,
+    crossVendor?: CrossVendorResolution
 ): SpawnRequest {
-  const agents = PANEL_ROLES.map((role) => ({
-    role,
-    isolation: "worktree" as const,
-    model,
-    max_turns: maxTurns,
-    prompt_ref: promptRefFor(role),
-  }));
-  const cross_vendor =
-    crossVendor === undefined
-      ? undefined
-      : crossVendor.status === "present"
-        ? ({ status: "present", model: crossVendor.slot.model } as const)
-        : ({ status: "absent", reason: crossVendor.reason } as const);
-  return parseSpawnRequest({
-    resume_phase: resumePhase,
-    agents,
-    ...(cross_vendor !== undefined ? { cross_vendor } : {}),
-  });
+    const agents = PANEL_ROLES.map((role) => ({
+        role,
+        isolation: 'worktree' as const,
+        model,
+        max_turns: maxTurns,
+        prompt_ref: promptRefFor(role),
+    }))
+    const cross_vendor =
+        crossVendor === undefined
+            ? undefined
+            : crossVendor.status === 'present'
+              ? ({status: 'present', model: crossVendor.slot.model} as const)
+              : ({status: 'absent', reason: crossVendor.reason} as const)
+    return parseSpawnRequest({
+        resume_phase: resumePhase,
+        agents,
+        ...(cross_vendor !== undefined ? {cross_vendor} : {}),
+    })
 }

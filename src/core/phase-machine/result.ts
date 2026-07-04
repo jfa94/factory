@@ -20,21 +20,21 @@
  * shape. The orchestrator (WS10), not the engine, ACTS on a result; the engine only
  * surfaces it after one structural exhaustiveness check (engine.ts).
  */
-import type { TaskPhase } from "./phases.js";
-import type { SpawnRequest } from "./spawn.js";
-import type { FailureClass } from "../state/index.js";
+import type {TaskPhase} from './phases.js'
+import type {SpawnRequest} from './spawn.js'
+import type {FailureClass} from '../state/index.js'
 
 /** Handler finished a phase with no spawn; advance to phase `to`. */
 export interface AdvanceResult {
-  kind: "advance";
-  /** The phase the task advances TO (the resumed-at phase). */
-  to: TaskPhase;
+    kind: 'advance'
+    /** The phase the task advances TO (the resumed-at phase). */
+    to: TaskPhase
 }
 
 /** Handler needs subagents; spawn them and resume at `request.resume_phase`. */
 export interface SpawnAgentsResult {
-  kind: "spawn-agents";
-  request: SpawnRequest;
+    kind: 'spawn-agents'
+    request: SpawnRequest
 }
 
 /**
@@ -43,10 +43,10 @@ export interface SpawnAgentsResult {
  * `suspended`). Optional `resets_at_epoch` is the resume horizon.
  */
 export interface GracefulStopResult {
-  kind: "graceful-stop";
-  scope: "5h" | "7d";
-  reason: string;
-  resets_at_epoch?: number;
+    kind: 'graceful-stop'
+    scope: '5h' | '7d'
+    reason: string
+    resets_at_epoch?: number
 }
 
 /**
@@ -55,11 +55,11 @@ export interface GracefulStopResult {
  * its current in-flight status.
  */
 export interface WaitRetryResult {
-  kind: "wait-retry";
-  phase: TaskPhase;
-  reason: string;
-  attempt: number;
-  max_attempts: number;
+    kind: 'wait-retry'
+    phase: TaskPhase
+    reason: string
+    attempt: number
+    max_attempts: number
 }
 
 /**
@@ -68,8 +68,8 @@ export interface WaitRetryResult {
  * mirrors the WS1 "failure_class set IFF failed" invariant.
  */
 export interface TaskTerminalResult {
-  kind: "task-terminal";
-  outcome: { outcome: "done" } | { outcome: "failed"; failure_class: FailureClass; reason: string };
+    kind: 'task-terminal'
+    outcome: {outcome: 'done'} | {outcome: 'failed'; failure_class: FailureClass; reason: string}
 }
 
 /**
@@ -79,18 +79,18 @@ export interface TaskTerminalResult {
  * = all tasks done; `failed` = any task failed or run could not finish.
  */
 export interface FinalizeTerminalResult {
-  kind: "finalize-terminal";
-  run_status: "completed" | "failed";
+    kind: 'finalize-terminal'
+    run_status: 'completed' | 'failed'
 }
 
 /** The closed PhaseResult discriminated union (literal `kind`). */
 export type PhaseResult =
-  | AdvanceResult
-  | SpawnAgentsResult
-  | GracefulStopResult
-  | WaitRetryResult
-  | TaskTerminalResult
-  | FinalizeTerminalResult;
+    | AdvanceResult
+    | SpawnAgentsResult
+    | GracefulStopResult
+    | WaitRetryResult
+    | TaskTerminalResult
+    | FinalizeTerminalResult
 
 // ---------------------------------------------------------------------------
 // Exhaustiveness primitive
@@ -104,9 +104,7 @@ export type PhaseResult =
  * can never silently advance.
  */
 export function assertNever(x: never): never {
-  throw new Error(
-    `assertNever: unhandled value ${JSON.stringify(x)} — a PhaseResult.kind was not handled`,
-  );
+    throw new Error(`assertNever: unhandled value ${JSON.stringify(x)} — a PhaseResult.kind was not handled`)
 }
 
 // ---------------------------------------------------------------------------
@@ -114,55 +112,44 @@ export function assertNever(x: never): never {
 // ---------------------------------------------------------------------------
 
 export function advance(to: TaskPhase): AdvanceResult {
-  return { kind: "advance", to };
+    return {kind: 'advance', to}
 }
 
 export function spawn(request: SpawnRequest): SpawnAgentsResult {
-  return { kind: "spawn-agents", request };
+    return {kind: 'spawn-agents', request}
 }
 
-export function gracefulStop(
-  scope: "5h" | "7d",
-  reason: string,
-  resets_at_epoch?: number,
-): GracefulStopResult {
-  return resets_at_epoch === undefined
-    ? { kind: "graceful-stop", scope, reason }
-    : { kind: "graceful-stop", scope, reason, resets_at_epoch };
+export function gracefulStop(scope: '5h' | '7d', reason: string, resets_at_epoch?: number): GracefulStopResult {
+    return resets_at_epoch === undefined
+        ? {kind: 'graceful-stop', scope, reason}
+        : {kind: 'graceful-stop', scope, reason, resets_at_epoch}
 }
 
-export function waitRetry(
-  phase: TaskPhase,
-  reason: string,
-  attempt: number,
-  max_attempts: number,
-): WaitRetryResult {
-  // T2: enforce the attempt ≤ max_attempts invariant at construction time. The engine
-  // also throws (engine.ts:124-132), but callers like panel-run.ts:198 build
-  // WaitRetryResult directly without routing through the engine — this closes that gap.
-  if (attempt > max_attempts) {
-    throw new Error(
-      `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`,
-    );
-  }
-  return { kind: "wait-retry", phase, reason, attempt, max_attempts };
+export function waitRetry(phase: TaskPhase, reason: string, attempt: number, max_attempts: number): WaitRetryResult {
+    // T2: enforce the attempt ≤ max_attempts invariant at construction time. The engine
+    // also throws (engine.ts:124-132), but callers like panel-run.ts:198 build
+    // WaitRetryResult directly without routing through the engine — this closes that gap.
+    if (attempt > max_attempts) {
+        throw new Error(
+            `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`
+        )
+    }
+    return {kind: 'wait-retry', phase, reason, attempt, max_attempts}
 }
 
 export function taskDone(): TaskTerminalResult {
-  return { kind: "task-terminal", outcome: { outcome: "done" } };
+    return {kind: 'task-terminal', outcome: {outcome: 'done'}}
 }
 
 export function taskFailed(failure_class: FailureClass, reason: string): TaskTerminalResult {
-  return {
-    kind: "task-terminal",
-    outcome: { outcome: "failed", failure_class, reason },
-  };
+    return {
+        kind: 'task-terminal',
+        outcome: {outcome: 'failed', failure_class, reason},
+    }
 }
 
-export function finalizeTerminal(
-  run_status: FinalizeTerminalResult["run_status"],
-): FinalizeTerminalResult {
-  return { kind: "finalize-terminal", run_status };
+export function finalizeTerminal(run_status: FinalizeTerminalResult['run_status']): FinalizeTerminalResult {
+    return {kind: 'finalize-terminal', run_status}
 }
 
 // ---------------------------------------------------------------------------
@@ -176,16 +163,16 @@ export function finalizeTerminal(
  * are continuations, not terminals.
  */
 export function isTerminalResult(r: PhaseResult): boolean {
-  switch (r.kind) {
-    case "task-terminal":
-    case "finalize-terminal":
-    case "graceful-stop":
-      return true;
-    case "advance":
-    case "spawn-agents":
-    case "wait-retry":
-      return false;
-    default:
-      return assertNever(r);
-  }
+    switch (r.kind) {
+        case 'task-terminal':
+        case 'finalize-terminal':
+        case 'graceful-stop':
+            return true
+        case 'advance':
+        case 'spawn-agents':
+        case 'wait-retry':
+            return false
+        default:
+            return assertNever(r)
+    }
 }

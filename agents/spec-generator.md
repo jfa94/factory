@@ -6,12 +6,12 @@ maxTurns: 60
 isolation: worktree
 description: "Converts a PRD (GitHub issue) into a structured spec (spec markdown + risk-tiered task list). Spawned by the runner's spec loop; returns a GenerateResult JSON the CLI gates and stores. Apex-pinned (Opus / max effort, Decision 21)."
 skills:
-  - prd-to-spec
+    - prd-to-spec
 tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
+    - Bash
+    - Read
+    - Grep
+    - Glob
 ---
 
 # Spec Generator
@@ -106,21 +106,21 @@ bad `risk_tier`, an empty/over-3 `files` array, or any extra/legacy field (`revi
 
 ```json
 {
-  "specMd": "# <feature> spec\n\n…architecture, decisions & assumptions, vertical slices…",
-  "slug": "short-kebab-slug",
-  "tasks": [
-    {
-      "task_id": "T1",
-      "title": "Short descriptive title",
-      "description": "What this task delivers and why",
-      "files": ["src/path/one.ts", "src/path/two.test.ts"],
-      "acceptance_criteria": ["A pass/fail predicate a test can assert", "…"],
-      "tests_to_write": ["Concrete test: asserts X given Y", "…"],
-      "depends_on": [],
-      "risk_tier": "low | medium | high",
-      "risk_rationale": "Why this tier (difficulty × stakes)"
-    }
-  ]
+    "specMd": "# <feature> spec\n\n…architecture, decisions & assumptions, vertical slices…",
+    "slug": "short-kebab-slug",
+    "tasks": [
+        {
+            "task_id": "T1",
+            "title": "Short descriptive title",
+            "description": "What this task delivers and why",
+            "files": ["src/path/one.ts", "src/path/two.test.ts"],
+            "acceptance_criteria": ["A pass/fail predicate a test can assert", "…"],
+            "tests_to_write": ["Concrete test: asserts X given Y", "…"],
+            "depends_on": [],
+            "risk_tier": "low | medium | high",
+            "risk_rationale": "Why this tier (difficulty × stakes)"
+        }
+    ]
 }
 ```
 

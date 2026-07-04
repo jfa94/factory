@@ -16,13 +16,13 @@
  * cycles. Pure — no I/O; the caller (`factory debug seed`) owns the
  * `state.update` write.
  */
-import { seedTaskRows, assertAcyclic } from "../core/state/index.js";
-import type { SpecManifest } from "../spec/index.js";
-import type { TaskState } from "../types/index.js";
+import {seedTaskRows, assertAcyclic} from '../core/state/index.js'
+import type {SpecManifest} from '../spec/index.js'
+import type {TaskState} from '../types/index.js'
 
 /** Namespace a bare spec task id with its debug-pass prefix. */
 function namespacedId(passNumber: number, taskId: string): string {
-  return `p${passNumber}-${taskId}`;
+    return `p${passNumber}-${taskId}`
 }
 
 /**
@@ -44,16 +44,16 @@ function namespacedId(passNumber: number, taskId: string): string {
  * `state.update(runId, s => ({...s, tasks: appendTasksFromSpec(s.tasks, request, passNumber)}))`.
  */
 export function appendTasksFromSpec(
-  existingTasks: Record<string, TaskState>,
-  request: SpecManifest,
-  passNumber: number,
+    existingTasks: Record<string, TaskState>,
+    request: SpecManifest,
+    passNumber: number
 ): Record<string, TaskState> {
-  const ctx = {
-    context: "appendTasksFromSpec",
-    specLabel: `spec ${request.spec_id} (pass ${passNumber})`,
-  };
-  const newBatch = seedTaskRows(request.tasks, ctx, (id) => namespacedId(passNumber, id));
-  const merged: Record<string, TaskState> = { ...existingTasks, ...newBatch };
-  assertAcyclic(merged, ctx);
-  return merged;
+    const ctx = {
+        context: 'appendTasksFromSpec',
+        specLabel: `spec ${request.spec_id} (pass ${passNumber})`,
+    }
+    const newBatch = seedTaskRows(request.tasks, ctx, (id) => namespacedId(passNumber, id))
+    const merged: Record<string, TaskState> = {...existingTasks, ...newBatch}
+    assertAcyclic(merged, ctx)
+    return merged
 }

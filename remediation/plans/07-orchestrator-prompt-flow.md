@@ -216,45 +216,45 @@ Find the current "## Execution Sequence" section. Replace the prose with an expl
 For each task `$t` in the current parallel group:
 
 1. **Pre-flight**
-   - `pipeline-quota-check` — if paused, sleep and continue to next loop iteration
-   - `pipeline-classify-risk $t` — record risk level in state
-   - `pipeline-build-prompt $run_id $t` — get the full executor prompt
+    - `pipeline-quota-check` — if paused, sleep and continue to next loop iteration
+    - `pipeline-classify-risk $t` — record risk level in state
+    - `pipeline-build-prompt $run_id $t` — get the full executor prompt
 
 2. **Execute**
-   - Spawn `task-executor` agent with the built prompt (isolation: worktree)
-   - On return, record `worktree_path` in `.tasks.$t.worktree`
-   - If the agent failed hard (Agent tool returned non-success), mark `.tasks.$t.status = failed` and jump to step 7
+    - Spawn `task-executor` agent with the built prompt (isolation: worktree)
+    - On return, record `worktree_path` in `.tasks.$t.worktree`
+    - If the agent failed hard (Agent tool returned non-success), mark `.tasks.$t.status = failed` and jump to step 7
 
 3. **Quality Gate**
-   - `pipeline-quality-gate $run_id $t $worktree_path`
-   - If exit != 0 → record failures in state, increment `.tasks.$t.quality_attempts`
-     - If attempts < 3: mark `.status = ci_fixing`, spawn executor again with quality failure logs as context, goto step 3
-     - If attempts >= 3: mark `.status = needs_human_review`, `pipeline-gh-comment --type ci-escalation`, jump to step 7
+    - `pipeline-quality-gate $run_id $t $worktree_path`
+    - If exit != 0 → record failures in state, increment `.tasks.$t.quality_attempts`
+        - If attempts < 3: mark `.status = ci_fixing`, spawn executor again with quality failure logs as context, goto step 3
+        - If attempts >= 3: mark `.status = needs_human_review`, `pipeline-gh-comment --type ci-escalation`, jump to step 7
 
 4. **Spawn Reviewers**
-   - Always: spawn `implementation-reviewer` with `$worktree_path` and task context
-   - If `risk_level == security`: also spawn `quality-reviewer` (and any user-provided security-reviewer/architecture-reviewer that exist)
-   - All reviewers run in parallel (emit one assistant message with N Agent calls)
+    - Always: spawn `implementation-reviewer` with `$worktree_path` and task context
+    - If `risk_level == security`: also spawn `quality-reviewer` (and any user-provided security-reviewer/architecture-reviewer that exist)
+    - All reviewers run in parallel (emit one assistant message with N Agent calls)
 
 5. **Parse Verdicts**
-   - For each returned reviewer: `pipeline-parse-review <output-file>`
-   - If any verdict is `REQUEST_CHANGES` with `blockers > 0`:
-     - Increment `.tasks.$t.review_attempts`
-     - If attempts < 3: mark `.status = ci_fixing`, rebuild prompt with review feedback, goto step 2
-     - If attempts >= 3: mark `.status = needs_human_review`, escalate, jump to step 7
-   - If any verdict is `NEEDS_DISCUSSION`: mark `.status = needs_human_review`, escalate, jump to step 7
-   - If all verdicts are `APPROVE`: continue to step 6
+    - For each returned reviewer: `pipeline-parse-review <output-file>`
+    - If any verdict is `REQUEST_CHANGES` with `blockers > 0`:
+        - Increment `.tasks.$t.review_attempts`
+        - If attempts < 3: mark `.status = ci_fixing`, rebuild prompt with review feedback, goto step 2
+        - If attempts >= 3: mark `.status = needs_human_review`, escalate, jump to step 7
+    - If any verdict is `NEEDS_DISCUSSION`: mark `.status = needs_human_review`, escalate, jump to step 7
+    - If all verdicts are `APPROVE`: continue to step 6
 
 6. **Create PR & Wait**
-   - `pipeline-branch task-commit $t` — commit to `task/$t` branch
-   - `gh pr create ...` — open the PR
-   - `pipeline-wait-pr $t` — wait for mergeable state, rebase if needed
-   - On success: mark `.tasks.$t.status = done`
-   - On failure: mark `.status = needs_human_review`, escalate
+    - `pipeline-branch task-commit $t` — commit to `task/$t` branch
+    - `gh pr create ...` — open the PR
+    - `pipeline-wait-pr $t` — wait for mergeable state, rebase if needed
+    - On success: mark `.tasks.$t.status = done`
+    - On failure: mark `.status = needs_human_review`, escalate
 
 7. **Finalize**
-   - `pipeline-state write "$run_id" ".tasks.$t.finished_at" "$(date -u +%FT%TZ)"`
-   - Move to next task in group
+    - `pipeline-state write "$run_id" ".tasks.$t.finished_at" "$(date -u +%FT%TZ)"`
+    - Move to next task in group
 
 After all tasks in the group are terminal (done/failed/needs_human_review), move to the next parallel group.
 ```

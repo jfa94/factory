@@ -25,16 +25,17 @@
  * wider. The autonomous-mode deny-list / `Bash(*)` is intentionally NOT mirrored
  * here; a human approves anything the pipeline didn't anticipate.
  */
-import { mkdir, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {mkdir, readFile} from 'node:fs/promises'
+import {existsSync} from 'node:fs'
+import {join} from 'node:path'
 
-import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { stringifyJson } from "../../shared/json.js";
-import { createLogger } from "../../shared/logging.js";
-import { tildeShorten } from "../../shared/paths.js";
+import {atomicWriteFile} from '../../shared/atomic-write.js'
+import {stringifyJson} from '../../shared/json.js'
+import {createLogger} from '../../shared/logging.js'
+import {tildeShorten} from '../../shared/paths.js'
 
-const log = createLogger("cli:target-settings");
+const log = createLogger('cli:target-settings')
 
 /**
  * The data-dir-INDEPENDENT half of the permission allow-list an interactive
@@ -56,21 +57,21 @@ const log = createLogger("cli:target-settings");
  * {@link buildTargetDataDirRules} (see below for why).
  */
 export const FACTORY_TARGET_BASE_ALLOWLIST: readonly string[] = [
-  "Bash(factory:*)",
-  "Bash(git:*)",
-  "Bash(gh:*)",
-  "Bash(npm:*)",
-  "Bash(npx:*)",
-  "Read",
-  "Write",
-  "Edit",
-  "Grep",
-  "Glob",
-  "Agent",
-];
+    'Bash(factory:*)',
+    'Bash(git:*)',
+    'Bash(gh:*)',
+    'Bash(npm:*)',
+    'Bash(npx:*)',
+    'Read',
+    'Write',
+    'Edit',
+    'Grep',
+    'Glob',
+    'Agent',
+]
 
 /** The verbs scoped to the data dir in the baked `Read|Write|Edit(<dir>/**)` rules. */
-const DATA_DIR_VERBS = ["Read", "Write", "Edit"] as const;
+const DATA_DIR_VERBS = ['Read', 'Write', 'Edit'] as const
 
 /**
  * STALE allow entries the OLD emitter wrote: the literal `${CLAUDE_PLUGIN_DATA}`
@@ -84,13 +85,13 @@ const DATA_DIR_VERBS = ["Read", "Write", "Edit"] as const;
  * legitimately references the var is never clobbered.
  */
 const STALE_DATA_DIR_ALLOW: readonly string[] = [
-  "Read(${CLAUDE_PLUGIN_DATA}/**)",
-  "Write(${CLAUDE_PLUGIN_DATA}/**)",
-  "Edit(${CLAUDE_PLUGIN_DATA}/**)",
-];
+    'Read(${CLAUDE_PLUGIN_DATA}/**)',
+    'Write(${CLAUDE_PLUGIN_DATA}/**)',
+    'Edit(${CLAUDE_PLUGIN_DATA}/**)',
+]
 
 /** The stale literal-placeholder `additionalDirectories` entry (see {@link STALE_DATA_DIR_ALLOW}). */
-const STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
+const STALE_DATA_DIR_ADDITIONAL = '${CLAUDE_PLUGIN_DATA}'
 
 /**
  * The baked, per-install data-dir permission strings. Built from the CLI-resolved
@@ -99,15 +100,15 @@ const STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
  * the rules keep matching even when another plugin has hijacked the env var.
  */
 export interface TargetDataDirRules {
-  /**
-   * Base path for the `Read|Write|Edit(<base>/**)` allow globs. The `~`-tilde
-   * form when the data dir is under `$HOME` (git-safe in a committed
-   * `.claude/settings.json` — no username leaked; Claude Code expands `~/` in
-   * Read/Write/Edit globs), else the absolute path.
-   */
-  readonly allowGlobBase: string;
-  /** The `permissions.additionalDirectories` value (same tilde-or-absolute form). */
-  readonly additionalDir: string;
+    /**
+     * Base path for the `Read|Write|Edit(<base>/**)` allow globs. The `~`-tilde
+     * form when the data dir is under `$HOME` (git-safe in a committed
+     * `.claude/settings.json` — no username leaked; Claude Code expands `~/` in
+     * Read/Write/Edit globs), else the absolute path.
+     */
+    readonly allowGlobBase: string
+    /** The `permissions.additionalDirectories` value (same tilde-or-absolute form). */
+    readonly additionalDir: string
 }
 
 /**
@@ -122,38 +123,38 @@ export interface TargetDataDirRules {
  * `additionalDir` to the absolute form (`opts.dataDir`).
  */
 export function buildTargetDataDirRules(opts: {
-  /** The absolute, canonical data dir (from `resolveDataDir()`). */
-  readonly dataDir: string;
-  /** `$HOME`, for the tilde shortening. */
-  readonly home: string;
+    /** The absolute, canonical data dir (from `resolveDataDir()`). */
+    readonly dataDir: string
+    /** `$HOME`, for the tilde shortening. */
+    readonly home: string
 }): TargetDataDirRules {
-  const baked = tildeShorten(opts.dataDir, opts.home);
-  return { allowGlobBase: baked, additionalDir: baked };
+    const baked = tildeShorten(opts.dataDir, opts.home)
+    return {allowGlobBase: baked, additionalDir: baked}
 }
 
 /** The three baked `Read|Write|Edit(<base>/**)` allow rules for a resolved dir. */
 function dataDirAllowRules(allowGlobBase: string): string[] {
-  return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
+    return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`)
 }
 
 /** Result of an idempotent {@link mergeTargetSettings}. */
 export interface MergeResult {
-  /** The merged settings object (a NEW object; the input is not mutated). */
-  readonly settings: Record<string, unknown>;
-  /** Whether the merge actually altered anything (false ⇒ already complete). */
-  readonly changed: boolean;
+    /** The merged settings object (a NEW object; the input is not mutated). */
+    readonly settings: Record<string, unknown>
+    /** Whether the merge actually altered anything (false ⇒ already complete). */
+    readonly changed: boolean
 }
 
 /** Result of {@link ensureTargetSettings} (the on-disk wrapper). */
 export interface EnsureResult extends MergeResult {
-  /** Absolute path to the written `.claude/settings.json`. */
-  readonly path: string;
-  /** Whether the file did not exist before (a fresh emit vs. a merge). */
-  readonly created: boolean;
+    /** Absolute path to the written `.claude/settings.json`. */
+    readonly path: string
+    /** Whether the file did not exist before (a fresh emit vs. a merge). */
+    readonly created: boolean
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+    return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 /**
@@ -172,64 +173,58 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * already present. Idempotent: re-merging an already-baked, stale-free settings
  * reports `changed:false`.
  */
-export function mergeTargetSettings(
-  existing: Record<string, unknown>,
-  dataDirRules: TargetDataDirRules,
-): MergeResult {
-  // Structured clone so the caller's object is never mutated (test isolation +
-  // safe re-merge of an already-merged object).
-  const settings: Record<string, unknown> = structuredClone(existing);
-  let changed = false;
+export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRules: TargetDataDirRules): MergeResult {
+    // Structured clone so the caller's object is never mutated (test isolation +
+    // safe re-merge of an already-merged object).
+    const settings: Record<string, unknown> = structuredClone(existing)
+    let changed = false
 
-  // permissions.allow — strip the stale placeholder rules (migration), then union
-  // the base allow-list + the baked data-dir rules. User entries kept first.
-  const permissions = isObject(settings.permissions) ? settings.permissions : {};
-  const currentAllow = Array.isArray(permissions.allow)
-    ? permissions.allow.filter((e): e is string => typeof e === "string")
-    : [];
-  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
-  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
-  const targetAllow = [
-    ...FACTORY_TARGET_BASE_ALLOWLIST,
-    ...dataDirAllowRules(dataDirRules.allowGlobBase),
-  ];
-  const have = new Set(strippedAllow);
-  const additions = targetAllow.filter((e) => !have.has(e));
-  if (removedStaleAllow || additions.length > 0) {
-    permissions.allow = [...strippedAllow, ...additions];
-    settings.permissions = permissions;
-    changed = true;
-  }
+    // permissions.allow — strip the stale placeholder rules (migration), then union
+    // the base allow-list + the baked data-dir rules. User entries kept first.
+    const permissions = isObject(settings.permissions) ? settings.permissions : {}
+    const currentAllow = Array.isArray(permissions.allow)
+        ? permissions.allow.filter((e): e is string => typeof e === 'string')
+        : []
+    const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e))
+    const removedStaleAllow = strippedAllow.length !== currentAllow.length
+    const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)]
+    const have = new Set(strippedAllow)
+    const additions = targetAllow.filter((e) => !have.has(e))
+    if (removedStaleAllow || additions.length > 0) {
+        permissions.allow = [...strippedAllow, ...additions]
+        settings.permissions = permissions
+        changed = true
+    }
 
-  // permissions.additionalDirectories — same strip-then-union so the built-in file
-  // tools never trip the working-directory boundary on out-of-tree data-dir writes
-  // (`results/<run>`, `worktrees/<run>/<task>`). The single baked parent entry
-  // grants recursive access to every managed subdir.
-  const currentDirs = Array.isArray(permissions.additionalDirectories)
-    ? permissions.additionalDirectories.filter((e): e is string => typeof e === "string")
-    : [];
-  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
-  const removedStaleDir = strippedDirs.length !== currentDirs.length;
-  const haveDirs = new Set(strippedDirs);
-  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
-  if (removedStaleDir || dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
-    settings.permissions = permissions;
-    changed = true;
-  }
+    // permissions.additionalDirectories — same strip-then-union so the built-in file
+    // tools never trip the working-directory boundary on out-of-tree data-dir writes
+    // (`results/<run>`, `worktrees/<run>/<task>`). The single baked parent entry
+    // grants recursive access to every managed subdir.
+    const currentDirs = Array.isArray(permissions.additionalDirectories)
+        ? permissions.additionalDirectories.filter((e): e is string => typeof e === 'string')
+        : []
+    const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL)
+    const removedStaleDir = strippedDirs.length !== currentDirs.length
+    const haveDirs = new Set(strippedDirs)
+    const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e))
+    if (removedStaleDir || dirAdditions.length > 0) {
+        permissions.additionalDirectories = [...strippedDirs, ...dirAdditions]
+        settings.permissions = permissions
+        changed = true
+    }
 
-  // worktree.baseRef: "head" — the staging-determinism invariant. Only mutate when
-  // baseRef is not already "head": bind the (possibly fresh) worktree object AND
-  // flip baseRef together inside the change branch, so an existing `{baseRef:"head"}`
-  // is a true no-op (no redundant self-assignment).
-  const worktree = isObject(settings.worktree) ? settings.worktree : {};
-  if (worktree.baseRef !== "head") {
-    worktree.baseRef = "head";
-    settings.worktree = worktree;
-    changed = true;
-  }
+    // worktree.baseRef: "head" — the staging-determinism invariant. Only mutate when
+    // baseRef is not already "head": bind the (possibly fresh) worktree object AND
+    // flip baseRef together inside the change branch, so an existing `{baseRef:"head"}`
+    // is a true no-op (no redundant self-assignment).
+    const worktree = isObject(settings.worktree) ? settings.worktree : {}
+    if (worktree.baseRef !== 'head') {
+        worktree.baseRef = 'head'
+        settings.worktree = worktree
+        changed = true
+    }
 
-  return { settings, changed };
+    return {settings, changed}
 }
 
 /**
@@ -245,40 +240,40 @@ export function mergeTargetSettings(
  *   re-emitting the broken `${CLAUDE_PLUGIN_DATA}` rule.
  */
 export async function ensureTargetSettings(opts: {
-  readonly targetRoot: string;
-  readonly dataDirRules: TargetDataDirRules;
+    readonly targetRoot: string
+    readonly dataDirRules: TargetDataDirRules
 }): Promise<EnsureResult> {
-  const dir = join(opts.targetRoot, ".claude");
-  const path = join(dir, "settings.json");
-  const created = !existsSync(path);
+    const dir = join(opts.targetRoot, '.claude')
+    const path = join(dir, 'settings.json')
+    const created = !existsSync(path)
 
-  let existing: Record<string, unknown> = {};
-  if (!created) {
-    const raw = await readFile(path, "utf8");
-    const parsed: unknown = raw.trim().length > 0 ? JSON.parse(raw) : {};
-    if (isObject(parsed)) {
-      existing = parsed;
-    } else {
-      // Valid JSON but not an object (array / number / string). We're about to
-      // write a merged settings object, which REPLACES this file — warn loudly so
-      // the destructive overwrite is visible (the non-JSON case already throws via
-      // JSON.parse above; this is the silently-coerced gap).
-      log.warn(
-        `${path} is valid JSON but not an object (${
-          Array.isArray(parsed) ? "array" : typeof parsed
-        }); replacing it with the factory settings object`,
-      );
+    let existing: Record<string, unknown> = {}
+    if (!created) {
+        const raw = await readFile(path, 'utf8')
+        const parsed: unknown = raw.trim().length > 0 ? JSON.parse(raw) : {}
+        if (isObject(parsed)) {
+            existing = parsed
+        } else {
+            // Valid JSON but not an object (array / number / string). We're about to
+            // write a merged settings object, which REPLACES this file — warn loudly so
+            // the destructive overwrite is visible (the non-JSON case already throws via
+            // JSON.parse above; this is the silently-coerced gap).
+            log.warn(
+                `${path} is valid JSON but not an object (${
+                    Array.isArray(parsed) ? 'array' : typeof parsed
+                }); replacing it with the factory settings object`
+            )
+        }
     }
-  }
 
-  const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
+    const {settings, changed} = mergeTargetSettings(existing, opts.dataDirRules)
 
-  // Write when creating OR when the merge altered something. A no-op merge of an
-  // existing file leaves the file byte-for-byte untouched (idempotent on disk).
-  if (created || changed) {
-    await mkdir(dir, { recursive: true });
-    await atomicWriteFile(path, stringifyJson(settings));
-  }
+    // Write when creating OR when the merge altered something. A no-op merge of an
+    // existing file leaves the file byte-for-byte untouched (idempotent on disk).
+    if (created || changed) {
+        await mkdir(dir, {recursive: true})
+        await atomicWriteFile(path, stringifyJson(settings))
+    }
 
-  return { settings, changed, created, path };
+    return {settings, changed, created, path}
 }

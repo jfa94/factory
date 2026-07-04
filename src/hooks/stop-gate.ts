@@ -33,13 +33,13 @@
  * Output contract (Stop hook): a block (corruption only) is `{decision:"block",reason}`
  * on STDOUT with exit 0 (the JSON is the block signal). Allow = no output, exit 0.
  */
-import { EXIT, type ExitCode } from "../shared/exit-codes.js";
-import { createLogger } from "../shared/logging.js";
-import { StateManager, isTerminalTaskStatus, type RunState } from "../core/state/index.js";
-import type { DataDirOptions } from "../config/load.js";
-import { deny, emitBlockDecision, parseHookInput, readStdin, sessionIdOf } from "./hook-io.js";
+import {EXIT, type ExitCode} from '../shared/exit-codes.js'
+import {createLogger} from '../shared/logging.js'
+import {StateManager, isTerminalTaskStatus, type RunState} from '../core/state/index.js'
+import type {DataDirOptions} from '../config/load.js'
+import {deny, emitBlockDecision, parseHookInput, readStdin, sessionIdOf} from './hook-io.js'
 
-const log = createLogger("hook:stop-gate");
+const log = createLogger('hook:stop-gate')
 
 /**
  * The pure stop decision (separated from I/O so it is trivially unit-testable). The
@@ -50,9 +50,9 @@ const log = createLogger("hook:stop-gate");
  * module header). The only corruption block (inaccessible data directory) is emitted
  * directly by {@link runStopGate}, not modelled here.
  */
-export type StopAction = { kind: "allow" } | { kind: "allow-unfinalized"; run_id: string };
+export type StopAction = {kind: 'allow'} | {kind: 'allow-unfinalized'; run_id: string}
 
-const ALLOW: StopAction = { kind: "allow" };
+const ALLOW: StopAction = {kind: 'allow'}
 
 /**
  * Decide what to log when the session stops, given a run snapshot and the id of the
@@ -71,48 +71,52 @@ const ALLOW: StopAction = { kind: "allow" };
  *   5. otherwise (≥1 task, all terminal)         → allow-unfinalized (hint only).
  */
 export function decideStop(run: RunState | null, stoppingSession?: string): StopAction {
-  if (run === null) return ALLOW; // no active run — nothing to gate.
-  if (run.status !== "running") return ALLOW; // terminal / paused / suspended: intentional.
+    if (run === null) {
+        return ALLOW
+    } // no active run — nothing to gate.
+    if (run.status !== 'running') {
+        return ALLOW
+    } // terminal / paused / suspended: intentional.
 
-  // (a) DEBUG-AWARENESS — a debug run loops through multiple review⇄fix passes
-  // before finalizing (unlike a plain run, which finalizes as soon as all tasks go
-  // terminal). The debug driver, not the Stop gate, owns finalize between passes.
-  if (run.debug === true) return ALLOW; // the debug driver owns finalize between passes
+    // (a) DEBUG-AWARENESS — a debug run loops through multiple review⇄fix passes
+    // before finalizing (unlike a plain run, which finalizes as soon as all tasks go
+    // terminal). The debug driver, not the Stop gate, owns finalize between passes.
+    if (run.debug) {
+        return ALLOW
+    } // the debug driver owns finalize between passes
 
-  // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
-  // stopping, that run is unrelated to this session: pass through.
-  // (`run create` now requires an owner, so un-owned runs don't arise in normal
-  // operation. The guard is belt-and-suspenders for unusual paths.)
-  if (
-    run.owner_session !== undefined &&
-    stoppingSession !== undefined &&
-    stoppingSession !== run.owner_session
-  ) {
-    return ALLOW;
-  }
+    // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
+    // stopping, that run is unrelated to this session: pass through.
+    // (`run create` now requires an owner, so un-owned runs don't arise in normal
+    // operation. The guard is belt-and-suspenders for unusual paths.)
+    if (run.owner_session !== undefined && stoppingSession !== undefined && stoppingSession !== run.owner_session) {
+        return ALLOW
+    }
 
-  const tasks = Object.values(run.tasks);
-  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
-  // Pending = in-flight tasks OR setup not finished (spec/tasks not yet populated).
-  const pending = tasks.length === 0 || nonTerminal.length > 0;
+    const tasks = Object.values(run.tasks)
+    const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status))
+    // Pending = in-flight tasks OR setup not finished (spec/tasks not yet populated).
+    const pending = tasks.length === 0 || nonTerminal.length > 0
 
-  // Pending work NO LONGER blocks the stop (the session-hostage fix). The session may
-  // end; the run stays `running` and is resumed idempotently by `factory resume`.
-  if (pending) return ALLOW;
+    // Pending work NO LONGER blocks the stop (the session-hostage fix). The session may
+    // end; the run stays `running` and is resumed idempotently by `factory resume`.
+    if (pending) {
+        return ALLOW
+    }
 
-  // ≥1 task, all terminal, run still `running` → leave it that way (resumable);
-  // the next `factory resume` routes through the real finalizeRun.
-  return { kind: "allow-unfinalized", run_id: run.run_id };
+    // ≥1 task, all terminal, run still `running` → leave it that way (resumable);
+    // the next `factory resume` routes through the real finalizeRun.
+    return {kind: 'allow-unfinalized', run_id: run.run_id}
 }
 
 /** Options for {@link runStopGate} (injectable for tests). */
 export interface StopGateDeps extends DataDirOptions {
-  /** Override the StateManager (tests). */
-  manager?: Pick<StateManager, "findActiveByOwner">;
-  /** stdout writer (tests capture the block JSON). */
-  emit?: (s: string) => void;
-  /** Read the raw Stop-hook stdin (tests inject; prod reads process.stdin). */
-  readRaw?: () => Promise<string>;
+    /** Override the StateManager (tests). */
+    manager?: Pick<StateManager, 'findActiveByOwner'>
+    /** stdout writer (tests capture the block JSON). */
+    emit?: (s: string) => void
+    /** Read the raw Stop-hook stdin (tests inject; prod reads process.stdin). */
+    readRaw?: () => Promise<string>
 }
 
 /**
@@ -125,58 +129,53 @@ export interface StopGateDeps extends DataDirOptions {
  * non-zero exit. The ONLY block is the data-dir corruption case; everything else
  * passes through (an all-terminal unfinalized run gets a log hint, no mutation).
  */
-export async function runStopGate(
-  _argv: string[] = [],
-  deps: StopGateDeps = {},
-): Promise<ExitCode> {
-  const emit = deps.emit ?? ((s: string) => process.stdout.write(s));
-  const manager = deps.manager ?? new StateManager(deps);
+export async function runStopGate(_argv: string[] = [], deps: StopGateDeps = {}): Promise<ExitCode> {
+    const emit = deps.emit ?? ((s: string) => process.stdout.write(s))
+    const manager = deps.manager ?? new StateManager(deps)
 
-  // Resolve the stopping session id from the Stop event stdin (best-effort: a
-  // malformed/empty/absent payload leaves it undefined → the gate stays unscoped).
-  let stoppingSession: string | undefined;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    stoppingSession = sessionIdOf(parseHookInput(raw));
-  } catch (err) {
-    // A corrupt stdin is non-fatal here — we just lose session-scoping (degraded:
-    // unknown stopper → null → allow). Never block the stop on this.
-    log.error(`Stop hook stdin unparseable (session-scoping skipped): ${(err as Error).message}`);
-    stoppingSession = undefined;
-  }
-
-  let run: RunState | null;
-  try {
-    run = stoppingSession !== undefined ? await manager.findActiveByOwner(stoppingSession) : null;
-    if (run === null && stoppingSession !== undefined) {
-      // No single owned run found: either no active run, or session owns ≥2 (ambiguous).
-      // Either way, nothing to finalize — allow the stop.
-      log.warn(
-        `Stop: session '${stoppingSession}' has no single attributed active run; passing through.`,
-      );
+    // Resolve the stopping session id from the Stop event stdin (best-effort: a
+    // malformed/empty/absent payload leaves it undefined → the gate stays unscoped).
+    let stoppingSession: string | undefined
+    try {
+        const raw = deps.readRaw ? await deps.readRaw() : await readStdin()
+        stoppingSession = sessionIdOf(parseHookInput(raw))
+    } catch (err) {
+        // A corrupt stdin is non-fatal here — we just lose session-scoping (degraded:
+        // unknown stopper → null → allow). Never block the stop on this.
+        log.error(`Stop hook stdin unparseable (session-scoping skipped): ${(err as Error).message}`)
+        stoppingSession = undefined
     }
-  } catch (err) {
-    // A failure here means our own data directory is inaccessible (listRuns → readdir
-    // failed with a non-ENOENT error). Foreign runs' unreadable state.json files are
-    // silently skipped by listRuns — they never surface here.
-    const rawMsg = (err as Error).message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
-    const reason =
-      `could not enumerate run state: ${rawMsg}. ` +
-      `Investigate the factory data directory before stopping.`;
-    log.error(reason);
-    emitBlockDecision(deny(reason), emit);
-    return EXIT.OK;
-  }
 
-  const action = decideStop(run, stoppingSession);
-  if (action.kind === "allow-unfinalized") {
-    // Deliberately NOT finalized here: a state-only status flip would bypass the real
-    // finalizeRun delivery (rollup PR, PRD close, e2e-failed override) and strand the
-    // run in a healthy-looking but undelivered terminal state.
-    log.info(
-      `run ${action.run_id}: all tasks terminal but the run is not finalized — ` +
-        `left running; \`factory resume\` will run the real finalize`,
-    );
-  }
-  return EXIT.OK;
+    let run: RunState | null
+    try {
+        run = stoppingSession !== undefined ? await manager.findActiveByOwner(stoppingSession) : null
+        if (run === null && stoppingSession !== undefined) {
+            // No single owned run found: either no active run, or session owns ≥2 (ambiguous).
+            // Either way, nothing to finalize — allow the stop.
+            log.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`)
+        }
+    } catch (err) {
+        // A failure here means our own data directory is inaccessible (listRuns → readdir
+        // failed with a non-ENOENT error). Foreign runs' unreadable state.json files are
+        // silently skipped by listRuns — they never surface here.
+        // eslint-disable-next-line no-control-regex -- intentional: strip control chars from an error message
+        const rawMsg = (err as Error).message.replace(/[\x00-\x1f]/g, ' ').slice(0, 200)
+        const reason =
+            `could not enumerate run state: ${rawMsg}. ` + `Investigate the factory data directory before stopping.`
+        log.error(reason)
+        emitBlockDecision(deny(reason), emit)
+        return EXIT.OK
+    }
+
+    const action = decideStop(run, stoppingSession)
+    if (action.kind === 'allow-unfinalized') {
+        // Deliberately NOT finalized here: a state-only status flip would bypass the real
+        // finalizeRun delivery (rollup PR, PRD close, e2e-failed override) and strand the
+        // run in a healthy-looking but undelivered terminal state.
+        log.info(
+            `run ${action.run_id}: all tasks terminal but the run is not finalized — ` +
+                `left running; \`factory resume\` will run the real finalize`
+        )
+    }
+    return EXIT.OK
 }

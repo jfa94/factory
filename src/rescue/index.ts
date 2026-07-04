@@ -8,13 +8,13 @@
  * these; the rescue-diagnostic LLM agent (markdown, runner-spawned) consumes
  * `scan` and drives `apply --task …` — the CLI never spawns it (Model A).
  */
-export { scanRun } from "./scan.js";
-export type { RescueScan, RescueTaskLine, RescueDisposition } from "./scan.js";
+export {scanRun} from './scan.js'
+export type {RescueScan, RescueTaskLine, RescueDisposition} from './scan.js'
 
-export { assessWork } from "./assess.js";
-export type { WorkProbe, WorkAssessment, TaskWork } from "./assess.js";
+export {assessWork} from './assess.js'
+export type {WorkProbe, WorkAssessment, TaskWork} from './assess.js'
 
-export { applyRescue, resetTaskRow } from "./apply.js";
-export type { RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts } from "./apply.js";
+export {applyRescue, resetTaskRow} from './apply.js'
+export type {RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts} from './apply.js'
 
-export { effectiveAutoResets } from "./auto.js";
+export {effectiveAutoResets} from './auto.js'

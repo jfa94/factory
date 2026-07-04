@@ -40,14 +40,14 @@ Every critical spec needs one assertion titled with the `control:` prefix that p
 **any** boot of the app, regardless of whether your new feature exists:
 
 ```typescript
-test("control: app shell renders", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByRole("navigation")).toBeVisible();
-});
+test('control: app shell renders', async ({page}) => {
+    await page.goto('/')
+    await expect(page.getByRole('navigation')).toBeVisible()
+})
 
-test("checkout completes and shows order confirmation", async ({ page }) => {
-  // ... the actual journey, expected to fail on the unmodified base app
-});
+test('checkout completes and shows order confirmation', async ({page}) => {
+    // ... the actual journey, expected to fail on the unmodified base app
+})
 ```
 
 The engine runs your spec twice before merging it: once against the **unmodified base

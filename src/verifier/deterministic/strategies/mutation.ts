@@ -28,15 +28,15 @@
  * so a repo without mutation tooling skips cleanly rather than driving `npx stryker`
  * into a not-installed failure.
  */
-import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
-import { ran, skip } from "../strategy.js";
-import { mutationScope } from "../scope.js";
-import type { GateTools } from "../tools.js";
-import { STRYKER_CONFIG_BASENAMES } from "../../../shared/gate-config-names.js";
+import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
+import {ran, skip} from '../strategy.js'
+import {mutationScope} from '../scope.js'
+import type {GateTools} from '../tools.js'
+import {STRYKER_CONFIG_BASENAMES} from '../../../shared/gate-config-names.js'
 
 /** Strict float compare: pass IFF score >= target (no rounding). */
 export function scorePasses(score: number, target: number): boolean {
-  return score >= target;
+    return score >= target
 }
 
 /**
@@ -46,69 +46,67 @@ export function scorePasses(score: number, target: number): boolean {
  * is e.g. `.stryker.config.mjs` is no longer silently skipped `no-mutation-config`
  * while CI runs Stryker. Same list backs the TCB write-protection (jfa94#11).
  */
-export const STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES;
+export const STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES
 
 /** Worktree-relative path the stryker binary resolves to after `npm install`. */
-export const STRYKER_BIN = "node_modules/.bin/stryker";
+export const STRYKER_BIN = 'node_modules/.bin/stryker'
 
 export const mutationStrategy: GateStrategy<GateTools> = {
-  id: "mutation",
-  async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
-    const target = ctx.config.quality.mutationScoreTarget;
-    const opts = { cwd: ctx.worktree };
+    id: 'mutation',
+    async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
+        const target = ctx.config.quality.mutationScoreTarget
+        const opts = {cwd: ctx.worktree}
 
-    // Applicability first: no stryker tooling/config ⇒ NOT APPLICABLE (skip).
-    if (!(await ctx.tools.fs.exists(STRYKER_BIN, opts))) {
-      return skip("mutation", "no-mutation-binary");
-    }
-    if (!(await ctx.tools.fs.existsAny(STRYKER_CONFIGS, opts))) {
-      return skip("mutation", "no-mutation-config");
-    }
+        // Applicability first: no stryker tooling/config ⇒ NOT APPLICABLE (skip).
+        if (!(await ctx.tools.fs.exists(STRYKER_BIN, opts))) {
+            return skip('mutation', 'no-mutation-binary')
+        }
+        if (!(await ctx.tools.fs.existsAny(STRYKER_CONFIGS, opts))) {
+            return skip('mutation', 'no-mutation-config')
+        }
 
-    const base = `origin/${ctx.baseRef}`;
+        const base = `origin/${ctx.baseRef}`
 
-    // Fail-closed if the base ref is absent — without it we cannot reproduce CI's
-    // scope (bin/pipeline-mutation-gate:77-80).
-    if (!(await ctx.tools.git.refExists(base, opts))) {
-      return ran("mutation", false, `base-missing: ${base} not found`);
-    }
+        // Fail-closed if the base ref is absent — without it we cannot reproduce CI's
+        // scope (bin/pipeline-mutation-gate:77-80).
+        if (!(await ctx.tools.git.refExists(base, opts))) {
+            return ran('mutation', false, `base-missing: ${base} not found`)
+        }
 
-    const changed = await ctx.tools.git.changedFiles(base, opts);
-    const scope = mutationScope(changed);
-    if (scope.length === 0) {
-      return skip("mutation", "no-mutable-changes");
-    }
+        const changed = await ctx.tools.git.changedFiles(base, opts)
+        const scope = mutationScope(changed)
+        if (scope.length === 0) {
+            return skip('mutation', 'no-mutable-changes')
+        }
 
-    const result = await ctx.tools.stryker.run(scope, opts);
-    if (result.proc.truncated) {
-      throw new Error(
-        "mutation gate: stryker report truncated — refusing to parse a clipped payload",
-      );
-    }
-    const report = result.report;
-    // A present, derivable score is AUTHORITATIVE — compare against the factory's
-    // own `mutationScoreTarget` regardless of stryker's exit code. Target repos gate
-    // CI via stryker's `break: N` threshold (a non-zero exit when CI's bar isn't
-    // met); that bar must NOT double-gate the factory's independent target here. Only
-    // when no score is derivable does the exit code matter (a crash before scoring).
-    if (report.report === "present" && report.mutationScore !== null) {
-      const score = report.mutationScore;
-      return scorePasses(score, target)
-        ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`)
-        : ran("mutation", false, `score-below-target: ${score} < ${target}`);
-    }
-    // No derivable score. A non-zero exit means stryker crashed BEFORE producing one.
-    if (result.proc.code !== 0) {
-      return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
-    }
-    // Green exit but still no score: scope is non-empty, so an absent / unparseable /
-    // score-less report is an anomaly → fail-closed (bash A2 / T4d), never a waive.
-    if (report.report === "absent") {
-      return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
-    }
-    if (report.report === "unparseable") {
-      return ran("mutation", false, "unparseable-report: stryker report JSON did not parse");
-    }
-    return ran("mutation", false, "no-score: report has no derivable mutation score");
-  },
-};
+        const result = await ctx.tools.stryker.run(scope, opts)
+        if (result.proc.truncated) {
+            throw new Error('mutation gate: stryker report truncated — refusing to parse a clipped payload')
+        }
+        const report = result.report
+        // A present, derivable score is AUTHORITATIVE — compare against the factory's
+        // own `mutationScoreTarget` regardless of stryker's exit code. Target repos gate
+        // CI via stryker's `break: N` threshold (a non-zero exit when CI's bar isn't
+        // met); that bar must NOT double-gate the factory's independent target here. Only
+        // when no score is derivable does the exit code matter (a crash before scoring).
+        if (report.report === 'present' && report.mutationScore !== null) {
+            const score = report.mutationScore
+            return scorePasses(score, target)
+                ? ran('mutation', true, `mutation score ${score} >= ${target} (scope ${scope.length})`)
+                : ran('mutation', false, `score-below-target: ${score} < ${target}`)
+        }
+        // No derivable score. A non-zero exit means stryker crashed BEFORE producing one.
+        if (result.proc.code !== 0) {
+            return ran('mutation', false, `stryker-failed: exit=${result.proc.code ?? 'null'}`)
+        }
+        // Green exit but still no score: scope is non-empty, so an absent / unparseable /
+        // score-less report is an anomaly → fail-closed (bash A2 / T4d), never a waive.
+        if (report.report === 'absent') {
+            return ran('mutation', false, 'no-report: stryker produced no report despite mutable files')
+        }
+        if (report.report === 'unparseable') {
+            return ran('mutation', false, 'unparseable-report: stryker report JSON did not parse')
+        }
+        return ran('mutation', false, 'no-score: report has no derivable mutation score')
+    },
+}

@@ -26,21 +26,21 @@
  * failures) — the frozen RunState has no breaker field; this module is the PURE
  * predicate over values the orchestrator threads in.
  */
-import type { Config } from "../config/schema.js";
+import type {Config} from '../config/schema.js'
 
 /**
  * Failures tolerated per task in the graph before the run is pathological.
  * Deliberately a module constant, NOT config — no speculative knob; the operator
  * surface is the floor (`maxConsecutiveFailures`).
  */
-const FAILURE_RATIO = 0.15;
+const FAILURE_RATIO = 0.15
 
 /** Inputs the orchestrator threads into the breaker (counter derived in the gate). */
 export interface CircuitBreakerInput {
-  /** Cumulative genuine capability-budget task failures so far (non-negative integer). */
-  cumulativeFailures: number;
-  /** Total tasks in the run's task graph (non-negative integer) — sizes the proportional threshold. */
-  totalTasks: number;
+    /** Cumulative genuine capability-budget task failures so far (non-negative integer). */
+    cumulativeFailures: number
+    /** Total tasks in the run's task graph (non-negative integer) — sizes the proportional threshold. */
+    totalTasks: number
 }
 
 /**
@@ -48,12 +48,10 @@ export interface CircuitBreakerInput {
  * plus which arm fired: `failures` (genuine capability exhaustion) and
  * `fail-closed` (corrupt input) are pathologies that hard-abort the run.
  */
-export type CircuitBreakerResult =
-  | { tripped: false }
-  | { tripped: true; arm: "failures" | "fail-closed"; reason: string };
+export type CircuitBreakerResult = {tripped: false} | {tripped: true; arm: 'failures' | 'fail-closed'; reason: string}
 
 function isNonNegativeFinite(value: number): boolean {
-  return Number.isFinite(value) && value >= 0;
+    return Number.isFinite(value) && value >= 0
 }
 
 /**
@@ -61,39 +59,39 @@ function isNonNegativeFinite(value: number): boolean {
  * tripped). Independent of quota.
  */
 export function evaluate(input: CircuitBreakerInput, config: Config): CircuitBreakerResult {
-  const { cumulativeFailures, totalTasks } = input;
+    const {cumulativeFailures, totalTasks} = input
 
-  if (!isNonNegativeFinite(cumulativeFailures)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`,
-    };
-  }
+    if (!isNonNegativeFinite(cumulativeFailures)) {
+        return {
+            tripped: true,
+            arm: 'fail-closed',
+            reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`,
+        }
+    }
 
-  if (!isNonNegativeFinite(totalTasks)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`,
-    };
-  }
+    if (!isNonNegativeFinite(totalTasks)) {
+        return {
+            tripped: true,
+            arm: 'fail-closed',
+            reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`,
+        }
+    }
 
-  const { maxConsecutiveFailures } = config;
-  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
-  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
+    const {maxConsecutiveFailures} = config
+    const proportional = Math.ceil(FAILURE_RATIO * totalTasks)
+    const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional)
 
-  if (cumulativeFailures >= effectiveThreshold) {
-    const derivation =
-      proportional > maxConsecutiveFailures
-        ? `ceil(${FAILURE_RATIO} × ${totalTasks} tasks)`
-        : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
-    return {
-      tripped: true,
-      arm: "failures",
-      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`,
-    };
-  }
+    if (cumulativeFailures >= effectiveThreshold) {
+        const derivation =
+            proportional > maxConsecutiveFailures
+                ? `ceil(${FAILURE_RATIO} × ${totalTasks} tasks)`
+                : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`
+        return {
+            tripped: true,
+            arm: 'failures',
+            reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`,
+        }
+    }
 
-  return { tripped: false };
+    return {tripped: false}
 }

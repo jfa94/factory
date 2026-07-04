@@ -8,96 +8,67 @@
  */
 
 // exec seam (injectable runners)
-export { makeRunner, runOrThrow, defaultGitRunner, defaultGhRunner } from "./exec-tools.js";
-export type { CommandRunner, GitRunner, GhRunner } from "./exec-tools.js";
+export {makeRunner, runOrThrow, defaultGitRunner, defaultGhRunner} from './exec-tools.js'
+export type {CommandRunner, GitRunner, GhRunner} from './exec-tools.js'
 
 // git client
-export { DefaultGitClient } from "./git-client.js";
-export type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
+export {DefaultGitClient} from './git-client.js'
+export type {GitClient, GitOpts, MergeOptions, PushOptions} from './git-client.js'
 
 // repo identity resolution (Prompt G / F-repo): auto-derive --repo from origin
-export {
-  parseRemoteUrl,
-  validateRepoSlug,
-  isValidRepoSlug,
-  splitRepoSlug,
-  resolveRepo,
-} from "./repo.js";
-export type { ResolveRepoArgs } from "./repo.js";
+export {parseRemoteUrl, validateRepoSlug, isValidRepoSlug, splitRepoSlug, resolveRepo} from './repo.js'
+export type {ResolveRepoArgs} from './repo.js'
 
 // gh client
-export { DefaultGhClient, parseGhJson, aggregateChecks } from "./gh-client.js";
+export {DefaultGhClient, parseGhJson, aggregateChecks} from './gh-client.js'
 export type {
-  GhClient,
-  GhOpts,
-  PullRequest,
-  CreatedPr,
-  ChecksState,
-  PrListArgs,
-  PrCreateArgs,
-  PrMergeOptions,
-  ProtectionApiResult,
-  ProtectionPutBody,
-} from "./gh-client.js";
+    GhClient,
+    GhOpts,
+    PullRequest,
+    CreatedPr,
+    ChecksState,
+    PrListArgs,
+    PrCreateArgs,
+    PrMergeOptions,
+    ProtectionApiResult,
+    ProtectionPutBody,
+} from './gh-client.js'
 
 // staging → develop rollup (WS12 / §④, Δ S)
-export { rollup } from "./rollup.js";
-export type { RollupArgs, RollupResult, RollupNotMergedReason } from "./rollup.js";
+export {rollup} from './rollup.js'
+export type {RollupArgs, RollupResult, RollupNotMergedReason} from './rollup.js'
 
 // run-scoped branch naming (Δ M)
-export { runScopedBranch, isRunScopedBranch, parseRunScopedBranch } from "./branch.js";
-export type { RunScopedBranchParts } from "./branch.js";
+export {runScopedBranch, isRunScopedBranch, parseRunScopedBranch} from './branch.js'
+export type {RunScopedBranchParts} from './branch.js'
 
 // worktree lifecycle (D12)
-export {
-  createTaskWorktree,
-  assertBaseIsStagingTip,
-  ensureOnStaging,
-  removeWorktree,
-} from "./worktree.js";
-export type {
-  CreateTaskWorktreeArgs,
-  TaskWorktree,
-  AssertBaseArgs,
-  EnsureOnStagingArgs,
-} from "./worktree.js";
+export {createTaskWorktree, assertBaseIsStagingTip, ensureOnStaging, removeWorktree} from './worktree.js'
+export type {CreateTaskWorktreeArgs, TaskWorktree, AssertBaseArgs, EnsureOnStagingArgs} from './worktree.js'
 
 // worktree dependency provisioning (setupCommand / lockfile install before gates)
-export { provisionWorktree, resolveSetupCommand } from "./provision.js";
-export type {
-  ProvisionWorktreeArgs,
-  ProvisionWorktreeFn,
-  ProvisionRunResult,
-} from "./provision.js";
+export {provisionWorktree, resolveSetupCommand} from './provision.js'
+export type {ProvisionWorktreeArgs, ProvisionWorktreeFn, ProvisionRunResult} from './provision.js'
 
 // idempotent PR create (Δ P)
-export { createTaskPrIdempotent } from "./pr.js";
-export type { CreateTaskPrArgs, TaskPrResult } from "./pr.js";
+export {createTaskPrIdempotent} from './pr.js'
+export type {CreateTaskPrArgs, TaskPrResult} from './pr.js'
 
 // serial writer (Δ L / #1)
-export { MergeSerializer } from "./serial-writer.js";
-export type { MergeSerializerOptions, MergeOutcome, MergeLockTuning } from "./serial-writer.js";
+export {MergeSerializer} from './serial-writer.js'
+export type {MergeSerializerOptions, MergeOutcome, MergeLockTuning} from './serial-writer.js'
 
 // branch-protection probe + gate (#2 / Δ A)
-export {
-  probeProtection,
-  requireProtectionOrRefuse,
-  provisionProtection,
-  ProtectionMissingError,
-} from "./protection.js";
-export type {
-  ProtectionState,
-  ProbeProtectionArgs,
-  ProvisionProtectionArgs,
-} from "./protection.js";
+export {probeProtection, requireProtectionOrRefuse, provisionProtection, ProtectionMissingError} from './protection.js'
+export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs} from './protection.js'
 
 // staging-init / reconcile
-export { ensureStaging } from "./staging.js";
-export type { EnsureStagingArgs, EnsureStagingResult } from "./staging.js";
+export {ensureStaging} from './staging.js'
+export type {EnsureStagingArgs, EnsureStagingResult} from './staging.js'
 
 // per-run staging branch naming (Decision 33)
-export { runStagingBranch, resolveStagingBranch, RUN_STAGING_PREFIX } from "./run-staging.js";
+export {runStagingBranch, resolveStagingBranch, RUN_STAGING_PREFIX} from './run-staging.js'
 
 // fakes for downstream unit tests
-export { FakeGitClient, FakeGhClient } from "./fakes.js";
-export type { FakeGitOptions, FakeGhOptions } from "./fakes.js";
+export {FakeGitClient, FakeGhClient} from './fakes.js'
+export type {FakeGitOptions, FakeGhOptions} from './fakes.js'

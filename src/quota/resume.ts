@@ -16,11 +16,11 @@
  * status/quota patch (Decision 24 — suspended means "no work dropped, nothing
  * failed quality", so done/failed tasks stay exactly as persisted).
  */
-import type { RunState } from "../types/index.js";
-import type { Config } from "../config/schema.js";
-import type { UsageReading } from "./usage-source.js";
-import { evaluate as evaluatePacer, type QuotaDecision } from "./pacer.js";
-import { clearCheckpoint, type ClearCheckpointPatch } from "./checkpoint.js";
+import type {RunState} from '../types/index.js'
+import type {Config} from '../config/schema.js'
+import type {UsageReading} from './usage-source.js'
+import {evaluate as evaluatePacer, type QuotaDecision} from './pacer.js'
+import {clearCheckpoint, type ClearCheckpointPatch} from './checkpoint.js'
 
 /**
  * The plan a resume produces:
@@ -34,9 +34,9 @@ import { clearCheckpoint, type ClearCheckpointPatch } from "./checkpoint.js";
  *                       state, so there is nothing to resume.
  */
 export type ResumePlan =
-  | { kind: "resume"; clear: ClearCheckpointPatch }
-  | { kind: "pause"; decision: QuotaDecision }
-  | { kind: "not-resumable"; status: RunState["status"] };
+    | {kind: 'resume'; clear: ClearCheckpointPatch}
+    | {kind: 'pause'; decision: QuotaDecision}
+    | {kind: 'not-resumable'; status: RunState['status']}
 
 /**
  * Decide whether a persisted run can resume now. Pure given the run, a FRESH
@@ -45,33 +45,28 @@ export type ResumePlan =
  * and the run returns to `running`, while any non-proceed decision keeps it
  * blocked (fail-closed: an unobservable reading is `pause`, never resumed).
  */
-export function planResume(
-  run: RunState,
-  reading: UsageReading,
-  config: Config,
-  nowEpoch: number,
-): ResumePlan {
-  if (run.status !== "paused" && run.status !== "suspended") {
-    return { kind: "not-resumable", status: run.status };
-  }
+export function planResume(run: RunState, reading: UsageReading, config: Config, nowEpoch: number): ResumePlan {
+    if (run.status !== 'paused' && run.status !== 'suspended') {
+        return {kind: 'not-resumable', status: run.status}
+    }
 
-  // --ignore-quota: skip the live pacer check and force a clear unconditionally.
-  if (run.ignore_quota) {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
+    // --ignore-quota: skip the live pacer check and force a clear unconditionally.
+    if (run.ignore_quota) {
+        return {kind: 'resume', clear: clearCheckpoint()}
+    }
 
-  // No quota checkpoint ⇒ the stop was NOT quota-caused (docs/e2e/spec-approval
-  // park — every quota stop, including the unavailable fail-closed suspend, writes
-  // `run.quota`). The pacer has no say over a non-quota suspend: consulting it
-  // would fail-closed block a resume on an unobservable reading for a run that was
-  // never quota-stopped. Clear unconditionally — resume IS the sign-off.
-  if (run.quota === undefined) {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
+    // No quota checkpoint ⇒ the stop was NOT quota-caused (docs/e2e/spec-approval
+    // park — every quota stop, including the unavailable fail-closed suspend, writes
+    // `run.quota`). The pacer has no say over a non-quota suspend: consulting it
+    // would fail-closed block a resume on an unobservable reading for a run that was
+    // never quota-stopped. Clear unconditionally — resume IS the sign-off.
+    if (run.quota === undefined) {
+        return {kind: 'resume', clear: clearCheckpoint()}
+    }
 
-  const decision = evaluatePacer(reading, config, nowEpoch);
-  if (decision.kind === "proceed") {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
-  return { kind: "pause", decision };
+    const decision = evaluatePacer(reading, config, nowEpoch)
+    if (decision.kind === 'proceed') {
+        return {kind: 'resume', clear: clearCheckpoint()}
+    }
+    return {kind: 'pause', decision}
 }

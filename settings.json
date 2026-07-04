@@ -1,23 +1,23 @@
 {
-  "env": {
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
-  },
-  "permissions": {
-    "allow": [
-      "Bash(pipeline-*)",
-      "Bash(git *)",
-      "Bash(gh *)",
-      "Bash(pnpm *)",
-      "Bash(npm *)",
-      "Bash(npx *)",
-      "Bash(yarn *)",
-      "Bash(bun *)",
-      "Read",
-      "Write",
-      "Edit",
-      "Grep",
-      "Glob",
-      "Agent"
-    ]
-  }
+    "env": {
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+    },
+    "permissions": {
+        "allow": [
+            "Bash(pipeline-*)",
+            "Bash(git *)",
+            "Bash(gh *)",
+            "Bash(pnpm *)",
+            "Bash(npm *)",
+            "Bash(npx *)",
+            "Bash(yarn *)",
+            "Bash(bun *)",
+            "Read",
+            "Write",
+            "Edit",
+            "Grep",
+            "Glob",
+            "Agent"
+        ]
+    }
 }

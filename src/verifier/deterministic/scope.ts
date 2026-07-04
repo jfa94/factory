@@ -26,21 +26,35 @@
  * tests/ test/ spec/ __tests__/ at the repo root and nested per-package.
  */
 export function isTestPath(file: string): boolean {
-  // Suffix-based: .test.<ext> / .spec.<ext>
-  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) return true;
-  // Suffix-based: _test.<ext> (Go, Python, Ruby, Elixir)
-  if (/_test\.(go|py|rb|exs)$/.test(file)) return true;
-  // Suffix-based: *Test.<ext> (Java, Kotlin, PHP)
-  if (/Test\.(java|kt|php)$/.test(file)) return true;
-  // Suffix-based: *Tests.<ext> (Swift, C#)
-  if (/Tests\.(swift|cs)$/.test(file)) return true;
-  // Suffix-based: *_spec.rb (RSpec)
-  if (/_spec\.rb$/.test(file)) return true;
-  // Directory-based — root layout (no leading dir).
-  if (/^(tests|test|spec|__tests__)\//.test(file)) return true;
-  // Directory-based — nested / per-package (monorepo) layout.
-  if (/\/(tests|test|spec|__tests__)\//.test(file)) return true;
-  return false;
+    // Suffix-based: .test.<ext> / .spec.<ext>
+    if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
+        return true
+    }
+    // Suffix-based: _test.<ext> (Go, Python, Ruby, Elixir)
+    if (/_test\.(go|py|rb|exs)$/.test(file)) {
+        return true
+    }
+    // Suffix-based: *Test.<ext> (Java, Kotlin, PHP)
+    if (/Test\.(java|kt|php)$/.test(file)) {
+        return true
+    }
+    // Suffix-based: *Tests.<ext> (Swift, C#)
+    if (/Tests\.(swift|cs)$/.test(file)) {
+        return true
+    }
+    // Suffix-based: *_spec.rb (RSpec)
+    if (file.endsWith('_spec.rb')) {
+        return true
+    }
+    // Directory-based — root layout (no leading dir).
+    if (/^(tests|test|spec|__tests__)\//.test(file)) {
+        return true
+    }
+    // Directory-based — nested / per-package (monorepo) layout.
+    if (/\/(tests|test|spec|__tests__)\//.test(file)) {
+        return true
+    }
+    return false
 }
 
 /**
@@ -49,9 +63,13 @@ export function isTestPath(file: string): boolean {
  * docs-only commit is NOT classified as impl.
  */
 export function isDocsPath(file: string): boolean {
-  if (/^docs\//.test(file)) return true;
-  if (file.endsWith(".md")) return true;
-  return false;
+    if (file.startsWith('docs/')) {
+        return true
+    }
+    if (file.endsWith('.md')) {
+        return true
+    }
+    return false
 }
 
 /**
@@ -65,14 +83,24 @@ export function isDocsPath(file: string): boolean {
  * `index.ts`, which the TDD test-path matrix does not).
  */
 export function isMutableSrc(file: string): boolean {
-  // Must be under src/ and a .ts file (the `:(glob)src/**/*.ts` pathspec).
-  if (!/^src\/.*\.ts$/.test(file)) return false;
-  // Exclusions: .test.ts / .spec.ts / .d.ts, /types/, /data/, index.ts (any dir).
-  if (/\.(test|spec|d)\.ts$/.test(file)) return false;
-  if (file.includes("/types/")) return false;
-  if (file.includes("/data/")) return false;
-  if (/(^|\/)index\.ts$/.test(file)) return false;
-  return true;
+    // Must be under src/ and a .ts file (the `:(glob)src/**/*.ts` pathspec).
+    if (!/^src\/.*\.ts$/.test(file)) {
+        return false
+    }
+    // Exclusions: .test.ts / .spec.ts / .d.ts, /types/, /data/, index.ts (any dir).
+    if (/\.(test|spec|d)\.ts$/.test(file)) {
+        return false
+    }
+    if (file.includes('/types/')) {
+        return false
+    }
+    if (file.includes('/data/')) {
+        return false
+    }
+    if (/(^|\/)index\.ts$/.test(file)) {
+        return false
+    }
+    return true
 }
 
 /**
@@ -85,7 +113,7 @@ export function isMutableSrc(file: string): boolean {
  * as a SKIP, never a pass-by-default.
  */
 export function mutationScope(changedFiles: readonly string[]): string[] {
-  return filterDedup(changedFiles, isMutableSrc);
+    return filterDedup(changedFiles, isMutableSrc)
 }
 
 /**
@@ -94,7 +122,7 @@ export function mutationScope(changedFiles: readonly string[]): string[] {
  * run to the changed tests.
  */
 export function diffScopedTestFiles(changedFiles: readonly string[]): string[] {
-  return filterDedup(changedFiles, isTestPath);
+    return filterDedup(changedFiles, isTestPath)
 }
 
 /**
@@ -107,18 +135,22 @@ export function diffScopedTestFiles(changedFiles: readonly string[]): string[] {
  * does NOT work (tested — still zero files).
  */
 export function escapeStrykerGlob(p: string): string {
-  return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
+    return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`)
 }
 
 /** Keep the files matching `keep`, de-duplicated and order-preserving. */
 function filterDedup(files: readonly string[], keep: (file: string) => boolean): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const f of files) {
-    if (!keep(f)) continue;
-    if (seen.has(f)) continue;
-    seen.add(f);
-    out.push(f);
-  }
-  return out;
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const f of files) {
+        if (!keep(f)) {
+            continue
+        }
+        if (seen.has(f)) {
+            continue
+        }
+        seen.add(f)
+        out.push(f)
+    }
+    return out
 }

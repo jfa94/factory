@@ -15,7 +15,7 @@
  * a {@link ClassifyDecision}: either `retry` or `fail` with a closed
  * {@link FailureClass} + reason. No re-exec is attempted for a `fail`.
  */
-import type { FailureClass } from "../types/index.js";
+import type {FailureClass} from '../types/index.js'
 
 /**
  * A failure signal WS8 must classify. CLOSED discriminated union on `kind`:
@@ -38,20 +38,20 @@ import type { FailureClass } from "../types/index.js";
  *     classifier, decides the cap).
  */
 export type FailureSignal =
-  | {
-      readonly kind: "producer-status";
-      readonly status: "blocked-escalate" | "test-defective" | "needs-context" | "error";
-      readonly reason: string;
-    }
-  | { readonly kind: "verifier-error"; readonly reason: string }
-  | {
-      readonly kind: "gate-failure";
-      readonly gate: string;
-      readonly structurallyUnfixable: boolean;
-      readonly reason: string;
-    }
-  | { readonly kind: "environmental"; readonly reason: string }
-  | { readonly kind: "merge-gate-blocked"; readonly reason: string };
+    | {
+          readonly kind: 'producer-status'
+          readonly status: 'blocked-escalate' | 'test-defective' | 'needs-context' | 'error'
+          readonly reason: string
+      }
+    | {readonly kind: 'verifier-error'; readonly reason: string}
+    | {
+          readonly kind: 'gate-failure'
+          readonly gate: string
+          readonly structurallyUnfixable: boolean
+          readonly reason: string
+      }
+    | {readonly kind: 'environmental'; readonly reason: string}
+    | {readonly kind: 'merge-gate-blocked'; readonly reason: string}
 
 /**
  * The classification result. CLOSED:
@@ -61,12 +61,12 @@ export type FailureSignal =
  *     report (Decision 22).
  */
 export type ClassifyDecision =
-  | { readonly action: "retry"; readonly reason: string }
-  | { readonly action: "fail"; readonly failureClass: FailureClass; readonly reason: string };
+    | {readonly action: 'retry'; readonly reason: string}
+    | {readonly action: 'fail'; readonly failureClass: FailureClass; readonly reason: string}
 
 /** Exhaustiveness primitive local to WS8 (mirrors the WS2 assertNever discipline). */
 function exhaustive(x: never): never {
-  throw new Error(`classify: unhandled FailureSignal ${JSON.stringify(x)}`);
+    throw new Error(`classify: unhandled FailureSignal ${JSON.stringify(x)}`)
 }
 
 /**
@@ -85,54 +85,54 @@ function exhaustive(x: never): never {
  *   - merge-gate-blocked (fix-forward)           → capability
  */
 export function classifyFailure(signal: FailureSignal): ClassifyDecision {
-  switch (signal.kind) {
-    case "producer-status": {
-      if (signal.status === "blocked-escalate") {
-        // The producer itself reports the task is unworkable as specified — a
-        // spec defect. Re-exec on a stronger model cannot fix the target.
-        return {
-          action: "fail",
-          failureClass: "spec-defect",
-          reason: `producer reported the task unworkable as specified: ${signal.reason}`,
-        };
-      }
-      if (signal.status === "test-defective") {
-        // The implementer reports the RED test itself is wrong. Re-running the
-        // TEST-WRITER (resume phase chosen by the caller, transitions.ts) with the
-        // defect fed back can regenerate a correct test — so this is RETRYABLE, not
-        // a terminal spec-defect. The ladder bounds it by the escalation cap.
-        return { action: "retry", reason: `RED test reported defective: ${signal.reason}` };
-      }
-      // needs-context / error: a stronger model or fresh context may succeed.
-      return { action: "retry", reason: signal.reason };
+    switch (signal.kind) {
+        case 'producer-status': {
+            if (signal.status === 'blocked-escalate') {
+                // The producer itself reports the task is unworkable as specified — a
+                // spec defect. Re-exec on a stronger model cannot fix the target.
+                return {
+                    action: 'fail',
+                    failureClass: 'spec-defect',
+                    reason: `producer reported the task unworkable as specified: ${signal.reason}`,
+                }
+            }
+            if (signal.status === 'test-defective') {
+                // The implementer reports the RED test itself is wrong. Re-running the
+                // TEST-WRITER (resume phase chosen by the caller, transitions.ts) with the
+                // defect fed back can regenerate a correct test — so this is RETRYABLE, not
+                // a terminal spec-defect. The ladder bounds it by the escalation cap.
+                return {action: 'retry', reason: `RED test reported defective: ${signal.reason}`}
+            }
+            // needs-context / error: a stronger model or fresh context may succeed.
+            return {action: 'retry', reason: signal.reason}
+        }
+        case 'gate-failure': {
+            if (signal.structurallyUnfixable) {
+                return {
+                    action: 'fail',
+                    failureClass: 'spec-defect',
+                    reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`,
+                }
+            }
+            return {action: 'retry', reason: `gate '${signal.gate}' failed: ${signal.reason}`}
+        }
+        case 'environmental': {
+            return {
+                action: 'fail',
+                failureClass: 'blocked-environmental',
+                reason: `environmental blocker: ${signal.reason}`,
+            }
+        }
+        case 'verifier-error': {
+            // LOUD + unresolved: never auto-advance, never silently fail. Re-run the
+            // bounded verify (the ladder/verify-retry budget bounds it).
+            return {action: 'retry', reason: `verifier error (unresolved): ${signal.reason}`}
+        }
+        case 'merge-gate-blocked': {
+            // Confirmed blockers remain — fix-forward / retry.
+            return {action: 'retry', reason: signal.reason}
+        }
+        default:
+            return exhaustive(signal)
     }
-    case "gate-failure": {
-      if (signal.structurallyUnfixable) {
-        return {
-          action: "fail",
-          failureClass: "spec-defect",
-          reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`,
-        };
-      }
-      return { action: "retry", reason: `gate '${signal.gate}' failed: ${signal.reason}` };
-    }
-    case "environmental": {
-      return {
-        action: "fail",
-        failureClass: "blocked-environmental",
-        reason: `environmental blocker: ${signal.reason}`,
-      };
-    }
-    case "verifier-error": {
-      // LOUD + unresolved: never auto-advance, never silently fail. Re-run the
-      // bounded verify (the ladder/verify-retry budget bounds it).
-      return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
-    }
-    case "merge-gate-blocked": {
-      // Confirmed blockers remain — fix-forward / retry.
-      return { action: "retry", reason: signal.reason };
-    }
-    default:
-      return exhaustive(signal);
-  }
 }

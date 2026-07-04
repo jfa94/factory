@@ -1,14 +1,14 @@
 ---
 name: silent-failure-hunter
 model: opus
-description: "Silent-failure lens of the risk-invariant panel: swallowed exceptions, empty/log-only catch blocks, ignored return values and error tuples, unchecked promises, and fallbacks that mask failure as success. Runs in a fresh context. Emits a RawReview JSON."
+description: 'Silent-failure lens of the risk-invariant panel: swallowed exceptions, empty/log-only catch blocks, ignored return values and error tuples, unchecked promises, and fallbacks that mask failure as success. Runs in a fresh context. Emits a RawReview JSON.'
 skills:
-  - review-protocol
+    - review-protocol
 tools:
-  - Bash
-  - Read
-  - Grep
-  - Glob
+    - Bash
+    - Read
+    - Grep
+    - Glob
 ---
 
 # Silent-Failure Hunter

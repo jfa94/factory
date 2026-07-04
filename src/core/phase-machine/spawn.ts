@@ -15,9 +15,9 @@
  * codes, no reading state.json for control flow. {@link parseSpawnRequest} is the
  * LOUD validating entry (mirrors WS1 `parseRunState`).
  */
-import { z } from "zod";
-import { TaskPhaseEnum } from "./phases.js";
-import { EffortEnum } from "../../config/schema.js";
+import {z} from 'zod'
+import {TaskPhaseEnum} from './phases.js'
+import {EffortEnum} from '../../config/schema.js'
 
 /**
  * The reviewer/producer roles the engine may ask the orchestrator to spawn. CLOSED set:
@@ -27,15 +27,15 @@ import { EffortEnum } from "../../config/schema.js";
  * lens — silent-failure-hunter, systemic-failure-reviewer) plus the run-level `scribe`.
  */
 export const SpawnRoleEnum = z.enum([
-  "test-writer",
-  "implementer",
-  "implementation-reviewer",
-  "quality-reviewer",
-  "silent-failure-hunter",
-  "systemic-failure-reviewer",
-  "scribe",
-]);
-export type SpawnRole = z.infer<typeof SpawnRoleEnum>;
+    'test-writer',
+    'implementer',
+    'implementation-reviewer',
+    'quality-reviewer',
+    'silent-failure-hunter',
+    'systemic-failure-reviewer',
+    'scribe',
+])
+export type SpawnRole = z.infer<typeof SpawnRoleEnum>
 
 /**
  * One agent to spawn. `isolation` defaults to `"worktree"` (the normal case — the
@@ -43,24 +43,24 @@ export type SpawnRole = z.infer<typeof SpawnRoleEnum>;
  * invariant); `"none"` reuses the caller's tree (offline/test paths).
  */
 export const AgentSpecSchema = z.object({
-  /** The reviewer/producer role (closed set). */
-  role: SpawnRoleEnum,
-  /** Worktree isolation. Defaults to "worktree". */
-  isolation: z.enum(["worktree", "none"]).default("worktree"),
-  /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
-  model: z.string().min(1),
-  /** Hard turn budget for the agent (positive integer). */
-  max_turns: z.number().int().positive(),
-  /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: z.string().min(1),
-  /**
-   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
-   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
-   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
-   */
-  effort: EffortEnum.optional(),
-});
-export type AgentSpec = z.infer<typeof AgentSpecSchema>;
+    /** The reviewer/producer role (closed set). */
+    role: SpawnRoleEnum,
+    /** Worktree isolation. Defaults to "worktree". */
+    isolation: z.enum(['worktree', 'none']).default('worktree'),
+    /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
+    model: z.string().min(1),
+    /** Hard turn budget for the agent (positive integer). */
+    max_turns: z.number().int().positive(),
+    /** Pointer to the prompt artifact, run-store relative (non-empty). */
+    prompt_ref: z.string().min(1),
+    /**
+     * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
+     * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
+     * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
+     */
+    effort: EffortEnum.optional(),
+})
+export type AgentSpec = z.infer<typeof AgentSpecSchema>
 
 /**
  * The resolved cross-vendor slot stamped on a VERIFY panel manifest (S5/C).
@@ -69,24 +69,24 @@ export type AgentSpec = z.infer<typeof AgentSpecSchema>;
  * as `crossVendorAbsent` in its results file. Absent from producer manifests.
  */
 export const CrossVendorStampSchema = z.union([
-  z.object({ status: z.literal("present"), model: z.string().min(1) }),
-  z.object({ status: z.literal("absent"), reason: z.string().min(1) }),
-]);
-export type CrossVendorStamp = z.infer<typeof CrossVendorStampSchema>;
+    z.object({status: z.literal('present'), model: z.string().min(1)}),
+    z.object({status: z.literal('absent'), reason: z.string().min(1)}),
+])
+export type CrossVendorStamp = z.infer<typeof CrossVendorStampSchema>
 
 /**
  * The full request: the phase the engine RESUMES at once the listed agents have
  * returned, plus a non-empty list of agents to spawn (in parallel).
  */
 export const SpawnRequestSchema = z.object({
-  /** Engine resumes here after the agents return. A per-task phase. */
-  resume_phase: TaskPhaseEnum,
-  /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: z.array(AgentSpecSchema).min(1),
-  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
-  cross_vendor: CrossVendorStampSchema.optional(),
-});
-export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
+    /** Engine resumes here after the agents return. A per-task phase. */
+    resume_phase: TaskPhaseEnum,
+    /** Agents to spawn; at least one (an empty request is a programming error). */
+    agents: z.array(AgentSpecSchema).min(1),
+    /** Cross-vendor resolution — verify panel manifests only (S5/C). */
+    cross_vendor: CrossVendorStampSchema.optional(),
+})
+export type SpawnRequest = z.infer<typeof SpawnRequestSchema>
 
 /**
  * Parse + validate an unknown value as a {@link SpawnRequest}. LOUD (ZodError) on
@@ -95,5 +95,5 @@ export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
  * validating entry point.
  */
 export function parseSpawnRequest(raw: unknown): SpawnRequest {
-  return SpawnRequestSchema.parse(raw);
+    return SpawnRequestSchema.parse(raw)
 }

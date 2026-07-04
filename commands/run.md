@@ -1,34 +1,34 @@
 ---
-description: "Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)"
-argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--no-ship] [--e2e] [--approve-spec] [--supersede | --resume] [--ignore-quota]"
+description: 'Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)'
+argument-hint: '(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--no-ship] [--e2e] [--approve-spec] [--supersede | --resume] [--ignore-quota]'
 arguments:
-  - name: "--repo"
-    description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
-    required: false
-  - name: "--issue"
-    description: "PRD issue number — the stable spec lookup key"
-    required: false
-  - name: "--spec-id"
-    description: "Explicit <issue>-<slug> spec id, instead of --issue"
-    required: false
-  - name: "--no-ship"
-    description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
-    required: false
-  - name: "--e2e"
-    description: "Opt into run-level e2e (Decisions 39/40): create checks the static Playwright prerequisites (scaffold provides them); a run-start e2e-assessment resolves boot config + authors seed/auth machinery BEFORE any task; once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --no-ship"
-    required: false
-  - name: "--approve-spec"
-    description: "Park the fully-created run (suspended, no quota checkpoint) for human spec sign-off BEFORE any agent runs (S9, Decision 47). The envelope names the spec.md to review; `/factory:resume` IS the sign-off. CREATE-ONLY, default off"
-    required: false
-  - name: "--supersede"
-    description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)"
-    required: false
-  - name: "--resume"
-    description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run with its PERSISTED ship intent; never pass --no-ship alongside it"
-    required: false
-  - name: "--ignore-quota"
-    description: "Bypass the weekly-quota hard stop: allows creating or superseding a run even when the existing run is 7d-parked. Persisted on the run so subsequent steps skip the quota gate too. Use only to override a mistaken suspend or after a manual quota reset."
-    required: false
+    - name: '--repo'
+      description: 'Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)'
+      required: false
+    - name: '--issue'
+      description: 'PRD issue number — the stable spec lookup key'
+      required: false
+    - name: '--spec-id'
+      description: 'Explicit <issue>-<slug> spec id, instead of --issue'
+      required: false
+    - name: '--no-ship'
+      description: 'CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)'
+      required: false
+    - name: '--e2e'
+      description: 'Opt into run-level e2e (Decisions 39/40): create checks the static Playwright prerequisites (scaffold provides them); a run-start e2e-assessment resolves boot config + authors seed/auth machinery BEFORE any task; once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --no-ship'
+      required: false
+    - name: '--approve-spec'
+      description: 'Park the fully-created run (suspended, no quota checkpoint) for human spec sign-off BEFORE any agent runs (S9, Decision 47). The envelope names the spec.md to review; `/factory:resume` IS the sign-off. CREATE-ONLY, default off'
+      required: false
+    - name: '--supersede'
+      description: 'If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)'
+      required: false
+    - name: '--resume'
+      description: 'If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run with its PERSISTED ship intent; never pass --no-ship alongside it'
+      required: false
+    - name: '--ignore-quota'
+      description: 'Bypass the weekly-quota hard stop: allows creating or superseding a run even when the existing run is 7d-parked. Persisted on the run so subsequent steps skip the quota gate too. Use only to override a mistaken suspend or after a manual quota reset.'
+      required: false
 ---
 
 # /factory:run
@@ -88,12 +88,12 @@ two distinct conflict envelopes — **handle `kind` first**:
 
 ```json
 {
-  "kind": "pause",
-  "scope": "7d",
-  "run_id": "…",
-  "status": "suspended",
-  "reason": "…",
-  "resets_at_epoch": 1234567890
+    "kind": "pause",
+    "scope": "7d",
+    "run_id": "…",
+    "status": "suspended",
+    "reason": "…",
+    "resets_at_epoch": 1234567890
 }
 ```
 
@@ -110,7 +110,7 @@ Run /factory:resume after it resets, or re-run with --ignore-quota to override.
 ### `kind:"exists"` — generic active-run conflict
 
 ```json
-{ "kind": "exists", "existing": { "run_id": "…", "status": "running" } }
+{"kind": "exists", "existing": {"run_id": "…", "status": "running"}}
 ```
 
 Unless the user already passed `--supersede`/`--resume` (forwarded by the skill, skipping

@@ -32,73 +32,73 @@ vitest suite (158 tests), and `pnpm run build` (2 bundles) are green.
 
 ```ts
 import {
-  // WS1 state core
-  RunStateSchema,
-  TaskStateSchema,
-  SpecPointerSchema,
-  parseRunState,
-  parseTaskState, // ← USE THESE, not raw .parse
-  StateManager,
-  deriveGateVerdict,
-  deriveAllGatesVerdict,
-  derivePanelVerdict,
-  deriveFloorVerdict,
-  isTerminalRunStatus,
-  isTerminalTaskStatus,
-  RunStatusEnum,
-  TaskStatusEnum,
-  FailureClassEnum,
-  RiskTierEnum,
-  PanelVerdictEnum,
-  // WS2 phase machine
-  runPhase,
-  nextPhaseFor,
-  decideFinalize,
-  advance,
-  spawn,
-  gracefulStop,
-  waitRetry,
-  taskDone,
-  taskFailed,
-  finalizeTerminal,
-  assertNever,
-  isTerminalResult,
-  parseSpawnManifest,
-  TaskPhaseEnum,
-  RunPhaseEnum,
-  nextPhase,
-  phaseToInFlightStatus,
-} from "../types/index.js";
+    // WS1 state core
+    RunStateSchema,
+    TaskStateSchema,
+    SpecPointerSchema,
+    parseRunState,
+    parseTaskState, // ← USE THESE, not raw .parse
+    StateManager,
+    deriveGateVerdict,
+    deriveAllGatesVerdict,
+    derivePanelVerdict,
+    deriveFloorVerdict,
+    isTerminalRunStatus,
+    isTerminalTaskStatus,
+    RunStatusEnum,
+    TaskStatusEnum,
+    FailureClassEnum,
+    RiskTierEnum,
+    PanelVerdictEnum,
+    // WS2 phase machine
+    runPhase,
+    nextPhaseFor,
+    decideFinalize,
+    advance,
+    spawn,
+    gracefulStop,
+    waitRetry,
+    taskDone,
+    taskFailed,
+    finalizeTerminal,
+    assertNever,
+    isTerminalResult,
+    parseSpawnManifest,
+    TaskPhaseEnum,
+    RunPhaseEnum,
+    nextPhase,
+    phaseToInFlightStatus,
+} from '../types/index.js'
 
 import type {
-  RunState,
-  TaskState,
-  SpecPointer,
-  RunStatus,
-  TaskStatus,
-  FailureClass,
-  RiskTier,
-  PanelVerdict,
-  ReviewerResult,
-  QuotaCheckpoint,
-  GateEvidence,
-  GateVerdict,
-  PhaseResult,
-  SpawnRequest,
-  AgentSpec,
-  SpawnRole,
-  TaskPhase,
-  RunPhase,
-  EnginePhase,
-  PhaseContext,
-  PhaseHandlers,
-  AdvanceResult,
-  SpawnAgentsResult,
-  GracefulStopResult,
-  WaitRetryResult,
-  TaskTerminalResult,
-  FinalizeTerminalResult,
-} from "../types/index.js";
+    RunState,
+    TaskState,
+    SpecPointer,
+    RunStatus,
+    TaskStatus,
+    FailureClass,
+    RiskTier,
+    PanelVerdict,
+    ReviewerResult,
+    QuotaCheckpoint,
+    GateEvidence,
+    GateVerdict,
+    PhaseResult,
+    SpawnRequest,
+    AgentSpec,
+    SpawnRole,
+    TaskPhase,
+    RunPhase,
+    EnginePhase,
+    PhaseContext,
+    PhaseHandlers,
+    AdvanceResult,
+    SpawnAgentsResult,
+    GracefulStopResult,
+    WaitRetryResult,
+    TaskTerminalResult,
+    FinalizeTerminalResult,
+} from '../types/index.js'
 ```
 
 ---
@@ -112,8 +112,8 @@ A value outside any set is a **loud parse error**, never a silent pass.
 | Enum           | Members                                                                    | Notes                                                                                                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `RunStatus`    | `running` · `completed` · `superseded` · `paused` · `suspended` · `failed` | terminal = {completed, failed, superseded}; `superseded` marks a run replaced by `--supersede` (Decision 35), `paused`/`suspended` are **quota** states (Δ E — kept distinct). `partial` was retired (Decision 34 — develop receives whole PRDs only). |
-| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `failed`    | terminal = {done, failed}. No human-gate statuses (Decision 5).                                                                                                                                                                                       |
-| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`              | closed (Δ D); set **IFF** task is `failed`.                                                                                                                                                                                                           |
+| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `failed`     | terminal = {done, failed}. No human-gate statuses (Decision 5).                                                                                                                                                                                        |
+| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`              | closed (Δ D); set **IFF** task is `failed`.                                                                                                                                                                                                            |
 | `RiskTier`     | `low` · `medium` · `high`                                                  | the **single** producer dial (Decision 25); does not size the verifier.                                                                                                                                                                                |
 | `PanelVerdict` | `approve` · `blocked` · `error`                                            | floor is conjunctive (unanimous `approve`); `error` is never silently an approve.                                                                                                                                                                      |
 
@@ -181,9 +181,9 @@ deriveFloorVerdict(task, gateEvidence): GateVerdict              // BOTH layers 
 ### 3.1 Phase vocabulary (two separate closed enums)
 
 ```ts
-TaskPhase = "preflight" | "tests" | "exec" | "verify" | "ship"; // per-task order
-RunPhase = "finalize"; // run-level, runs ONCE, terminal
-EnginePhase = TaskPhase | RunPhase;
+TaskPhase = 'preflight' | 'tests' | 'exec' | 'verify' | 'ship' // per-task order
+RunPhase = 'finalize' // run-level, runs ONCE, terminal
+EnginePhase = TaskPhase | RunPhase
 ```
 
 `finalize` is deliberately a **separate** enum so `nextPhase` walking past `ship`
@@ -193,14 +193,14 @@ the engine never writes state).
 
 ### 3.2 `PhaseResult` — the engine↔runner seam (discriminated union on `kind`)
 
-| `kind`              | Payload                                                 | Meaning                                                                        |
-| ------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `advance`           | `to: TaskPhase`                                         | phase done, no spawn; resume at `to`.                                          |
-| `spawn-agents`      | `request: SpawnRequest`                               | spawn agents, resume at `request.resume_phase`.                                |
-| `graceful-stop`     | `scope: "5h"\|"7d"`, `reason`, `resets_at_epoch?`       | quota breach — pause (5h) / suspend (7d). Never a fail.                        |
-| `wait-retry`        | `phase`, `reason`, `attempt`, `max_attempts`            | re-invoke SAME phase; **bounded** (engine throws if `attempt > max_attempts`). |
+| `kind`              | Payload                                                | Meaning                                                                        |
+| ------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `advance`           | `to: TaskPhase`                                        | phase done, no spawn; resume at `to`.                                          |
+| `spawn-agents`      | `request: SpawnRequest`                                | spawn agents, resume at `request.resume_phase`.                                |
+| `graceful-stop`     | `scope: "5h"\|"7d"`, `reason`, `resets_at_epoch?`      | quota breach — pause (5h) / suspend (7d). Never a fail.                        |
+| `wait-retry`        | `phase`, `reason`, `attempt`, `max_attempts`           | re-invoke SAME phase; **bounded** (engine throws if `attempt > max_attempts`). |
 | `task-terminal`     | `outcome: {done}` or `{failed, failure_class, reason}` | task reached terminal status.                                                  |
-| `finalize-terminal` | `run_status: "completed"\|"failed"\|"superseded"`       | run finalized. Terminal by construction.                                       |
+| `finalize-terminal` | `run_status: "completed"\|"failed"\|"superseded"`      | run finalized. Terminal by construction.                                       |
 
 Build results only via the constructors (`advance`, `spawn`, `gracefulStop`,
 `waitRetry`, `taskDone`, `taskFailed`, `finalizeTerminal`) so the shape never drifts.

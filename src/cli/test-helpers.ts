@@ -6,10 +6,10 @@
  */
 
 export interface CapturedStream {
-  /** Returns all data written to the stream since capture began. */
-  read(): string;
-  /** Restores the original write implementation. */
-  restore(): void;
+    /** Returns all data written to the stream since capture began. */
+    read(): string
+    /** Restores the original write implementation. */
+    restore(): void
 }
 
 /**
@@ -18,16 +18,16 @@ export interface CapturedStream {
  * The caller is responsible for calling `restore()` — typically in a `finally` block.
  */
 export function captureStream(stream: NodeJS.WritableStream): CapturedStream {
-  const chunks: string[] = [];
-  const original = (stream as NodeJS.WriteStream).write.bind(stream);
-  (stream as NodeJS.WriteStream).write = (chunk: string | Uint8Array): boolean => {
-    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-    return true;
-  };
-  return {
-    read: () => chunks.join(""),
-    restore: () => {
-      (stream as NodeJS.WriteStream).write = original;
-    },
-  };
+    const chunks: string[] = []
+    const original = (stream as NodeJS.WriteStream).write.bind(stream)
+    ;(stream as NodeJS.WriteStream).write = (chunk: string | Uint8Array): boolean => {
+        chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
+        return true
+    }
+    return {
+        read: () => chunks.join(''),
+        restore: () => {
+            ;(stream as NodeJS.WriteStream).write = original
+        },
+    }
 }

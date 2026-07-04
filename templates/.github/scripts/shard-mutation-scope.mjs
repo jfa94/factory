@@ -8,6 +8,17 @@ function escapeStrykerGlob(p) {
   return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
 }
 
+// src/shared/assert.ts
+function nonNull(x, msg) {
+  if (x == null) {
+    throw new Error(msg ?? "unexpected nullish value");
+  }
+  return x;
+}
+function at(a, i) {
+  return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
+}
+
 // src/verifier/deterministic/shard.ts
 function sloc(text) {
   let count = 0;
@@ -16,22 +27,36 @@ function sloc(text) {
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (inBlockComment) {
-      if (line.includes("*/")) inBlockComment = false;
+      if (line.includes("*/")) {
+        inBlockComment = false;
+      }
       continue;
     }
     if (inImport) {
-      if (line.includes(";")) inImport = false;
+      if (line.includes(";")) {
+        inImport = false;
+      }
       continue;
     }
-    if (line === "") continue;
-    if (line.startsWith("//")) continue;
-    if (line.startsWith("*")) continue;
+    if (line === "") {
+      continue;
+    }
+    if (line.startsWith("//")) {
+      continue;
+    }
+    if (line.startsWith("*")) {
+      continue;
+    }
     if (line.startsWith("/*")) {
-      if (!line.includes("*/")) inBlockComment = true;
+      if (!line.includes("*/")) {
+        inBlockComment = true;
+      }
       continue;
     }
     if (/^import\b/.test(line) || /^export\b.*\bfrom\b/.test(line)) {
-      if (!line.includes(";")) inImport = true;
+      if (!line.includes(";")) {
+        inImport = true;
+      }
       continue;
     }
     count++;
@@ -43,16 +68,20 @@ function shardByCost(files, weights, n) {
     load: 0,
     files: []
   }));
-  if (bins.length === 0) return [];
+  if (bins.length === 0) {
+    return [];
+  }
   const items = files.map((file, i) => {
     const w = weights[i];
     return { file, weight: typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1 };
   });
   items.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   for (const { file, weight } of items) {
-    let lightest = bins[0];
+    let lightest = at(bins, 0);
     for (const bin of bins) {
-      if (bin.load < lightest.load) lightest = bin;
+      if (bin.load < lightest.load) {
+        lightest = bin;
+      }
     }
     lightest.files.push(file);
     lightest.load += weight;

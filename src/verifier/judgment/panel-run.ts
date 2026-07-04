@@ -22,55 +22,55 @@
  * re-spawn; runPanel does not loop a debate.
  */
 import {
-  advance,
-  deriveMergeGateVerdict,
-  mergeGateBlockReason,
-  spawn,
-  waitRetry,
-  type GateEvidence,
-  type GateVerdict,
-  type ReviewerResult,
-  type SpawnRequest,
-  type PhaseResult,
-  type TaskPhase,
-} from "../../types/index.js";
-import { isCitable, type Finding, type RawReview } from "./finding.js";
-import { verifyCitations, type SourceReader } from "./citation-verify.js";
-import { confirmBlocker, type FindingVerifierRunner } from "./finding-verifier.js";
-import type { CrossVendorResolution } from "./vendor.js";
+    advance,
+    deriveMergeGateVerdict,
+    mergeGateBlockReason,
+    spawn,
+    waitRetry,
+    type GateEvidence,
+    type GateVerdict,
+    type ReviewerResult,
+    type SpawnRequest,
+    type PhaseResult,
+    type TaskPhase,
+} from '../../types/index.js'
+import {isCitable, type Finding, type RawReview} from './finding.js'
+import {verifyCitations, type SourceReader} from './citation-verify.js'
+import {confirmBlocker, type FindingVerifierRunner} from './finding-verifier.js'
+import type {CrossVendorResolution} from './vendor.js'
 
 /** A reviewer's findings after citation-verify + independent confirmation. */
 export interface AdjudicatedReviewer {
-  /** Reviewer identity (role string). */
-  readonly reviewer: string;
-  /** The reviewer's raw self-reported verdict (before the merge gate is derived). */
-  readonly rawVerdict: RawReview["verdict"];
-  /** Blocking findings that survived citation-verify AND were CONFIRMED. */
-  readonly confirmedBlockers: readonly Finding[];
-  /** True iff any confirmation was UNRESOLVED (verifier error) — fails LOUDLY. */
-  readonly hadVerifierError: boolean;
+    /** Reviewer identity (role string). */
+    readonly reviewer: string
+    /** The reviewer's raw self-reported verdict (before the merge gate is derived). */
+    readonly rawVerdict: RawReview['verdict']
+    /** Blocking findings that survived citation-verify AND were CONFIRMED. */
+    readonly confirmedBlockers: readonly Finding[]
+    /** True iff any confirmation was UNRESOLVED (verifier error) — fails LOUDLY. */
+    readonly hadVerifierError: boolean
 }
 
 /** The full result of one verify pass. */
 export interface PanelRunResult {
-  /** Per-reviewer adjudicated detail (audit). */
-  readonly adjudicated: readonly AdjudicatedReviewer[];
-  /** The WS1 ReviewerResult[] to persist (coherent counts). */
-  readonly reviewerResults: readonly ReviewerResult[];
-  /** The DERIVED merge gate verdict (never stored; recomputed here). */
-  readonly mergeGate: GateVerdict;
-  /** The PhaseResult the orchestrator acts on. */
-  readonly result: PhaseResult;
-  /**
-   * Δ U — the LOUD record of a SECOND-VENDOR ABSENCE. Present (with a reason)
-   * IFF the caller supplied a {@link RunPanelInput.crossVendor} resolution whose
-   * status is `absent`. Left `undefined` when a second vendor IS present or when
-   * no resolution was supplied — so a consumer that wants to surface "review ran
-   * without an independent vendor" has a non-silent, machine-checkable signal
-   * rather than having to re-probe. resolveCrossVendor (vendor.ts) is the source
-   * of this resolution; runPanel never papers the absence over.
-   */
-  readonly crossVendorAbsence?: { readonly reason: string };
+    /** Per-reviewer adjudicated detail (audit). */
+    readonly adjudicated: readonly AdjudicatedReviewer[]
+    /** The WS1 ReviewerResult[] to persist (coherent counts). */
+    readonly reviewerResults: readonly ReviewerResult[]
+    /** The DERIVED merge gate verdict (never stored; recomputed here). */
+    readonly mergeGate: GateVerdict
+    /** The PhaseResult the orchestrator acts on. */
+    readonly result: PhaseResult
+    /**
+     * Δ U — the LOUD record of a SECOND-VENDOR ABSENCE. Present (with a reason)
+     * IFF the caller supplied a {@link RunPanelInput.crossVendor} resolution whose
+     * status is `absent`. Left `undefined` when a second vendor IS present or when
+     * no resolution was supplied — so a consumer that wants to surface "review ran
+     * without an independent vendor" has a non-silent, machine-checkable signal
+     * rather than having to re-probe. resolveCrossVendor (vendor.ts) is the source
+     * of this resolution; runPanel never papers the absence over.
+     */
+    readonly crossVendorAbsence?: {readonly reason: string}
 }
 
 /**
@@ -79,41 +79,43 @@ export interface PanelRunResult {
  * are still citation-verified + confirmed for the audit trail.
  */
 async function adjudicateReviewer(
-  review: RawReview,
-  source: SourceReader,
-  makeRunner: (review: RawReview) => FindingVerifierRunner,
-  redact: boolean,
+    review: RawReview,
+    source: SourceReader,
+    makeRunner: (review: RawReview) => FindingVerifierRunner,
+    redact: boolean
 ): Promise<AdjudicatedReviewer> {
-  const blocking = review.findings.filter((f) => f.blocking);
-  const { kept } = verifyCitations(blocking, source, { redact });
+    const blocking = review.findings.filter((f) => f.blocking)
+    const {kept} = verifyCitations(blocking, source, {redact})
 
-  const runner = makeRunner(review);
-  const confirmed: Finding[] = [];
-  let hadVerifierError = false;
+    const runner = makeRunner(review)
+    const confirmed: Finding[] = []
+    let hadVerifierError = false
 
-  for (const { finding, citedLine } of kept) {
-    // Only citable findings reach here (citation-verify drops uncitable ones),
-    // but guard for type-narrowing clarity.
-    if (!isCitable(finding)) continue;
-    // Confirm at the reviewer's CITED coordinates: that's what the independent
-    // verifier (and any pre-recorded replay verdict, keyed file:line) saw. The
-    // RELOCATED finding is what gets forwarded, so fix_findings/reports carry
-    // the corrected line.
-    const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine);
-    if (outcome.status === "confirmed") {
-      confirmed.push(finding);
-    } else if (outcome.status === "error") {
-      hadVerifierError = true;
+    for (const {finding, citedLine} of kept) {
+        // Only citable findings reach here (citation-verify drops uncitable ones),
+        // but guard for type-narrowing clarity.
+        if (!isCitable(finding)) {
+            continue
+        }
+        // Confirm at the reviewer's CITED coordinates: that's what the independent
+        // verifier (and any pre-recorded replay verdict, keyed file:line) saw. The
+        // RELOCATED finding is what gets forwarded, so fix_findings/reports carry
+        // the corrected line.
+        const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine)
+        if (outcome.status === 'confirmed') {
+            confirmed.push(finding)
+        } else if (outcome.status === 'error') {
+            hadVerifierError = true
+        }
+        // refuted ⇒ not forwarded (intentionally dropped from confirmed).
     }
-    // refuted ⇒ not forwarded (intentionally dropped from confirmed).
-  }
 
-  return {
-    reviewer: review.reviewer,
-    rawVerdict: review.verdict,
-    confirmedBlockers: confirmed,
-    hadVerifierError,
-  };
+    return {
+        reviewer: review.reviewer,
+        rawVerdict: review.verdict,
+        confirmedBlockers: confirmed,
+        hadVerifierError,
+    }
 }
 
 /**
@@ -124,58 +126,58 @@ async function adjudicateReviewer(
  *   - otherwise ⇒ `approve`.
  */
 function reviewerResultOf(a: AdjudicatedReviewer): ReviewerResult {
-  if (a.hadVerifierError || a.rawVerdict === "error") {
-    return {
-      reviewer: a.reviewer,
-      verdict: "error",
-      confirmed_blockers: a.confirmedBlockers.length,
-    };
-  }
-  if (a.confirmedBlockers.length > 0) {
-    return {
-      reviewer: a.reviewer,
-      verdict: "blocked",
-      confirmed_blockers: a.confirmedBlockers.length,
-    };
-  }
-  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
+    if (a.hadVerifierError || a.rawVerdict === 'error') {
+        return {
+            reviewer: a.reviewer,
+            verdict: 'error',
+            confirmed_blockers: a.confirmedBlockers.length,
+        }
+    }
+    if (a.confirmedBlockers.length > 0) {
+        return {
+            reviewer: a.reviewer,
+            verdict: 'blocked',
+            confirmed_blockers: a.confirmedBlockers.length,
+        }
+    }
+    return {reviewer: a.reviewer, verdict: 'approve', confirmed_blockers: 0}
 }
 
 /** Inputs to {@link runPanel}. */
 export interface RunPanelInput {
-  /** Raw reviewer outputs (already parsed via parseRawReview). */
-  readonly reviews: readonly RawReview[];
-  /** Source reader for deterministic citation-verify. */
-  readonly source: SourceReader;
-  /** Build the INDEPENDENT verifier for a given reviewer's findings (D27). */
-  readonly makeRunner: (review: RawReview) => FindingVerifierRunner;
-  /** Deterministic-gate evidence to combine with the panel (WS6 supplies it). */
-  readonly gateEvidence: readonly GateEvidence[];
-  /** The phase to advance/retry at (the verify phase). */
-  readonly phase: TaskPhase;
-  /** Redact retained finding text (Δ K). Defaults to true. */
-  readonly redact?: boolean;
-  /** Bounded re-review attempt accounting for the wait-retry on a blocked merge gate. */
-  readonly attempt?: number;
-  readonly maxAttempts?: number;
-  /**
-   * Δ U — the resolved cross-vendor slot ({@link resolveCrossVendor}). When its
-   * status is `absent`, runPanel records the absence LOUDLY on
-   * {@link PanelRunResult.crossVendorAbsence}; when `present` (or omitted) no
-   * absence is recorded. The caller resolves it (runPanel stays free of the
-   * probe) and hands the resolution in — minimal wiring, no change to merge gate /
-   * citation / confirm semantics.
-   */
-  readonly crossVendor?: CrossVendorResolution;
-  /**
-   * S5/C — `review.requireCrossVendor === "block"`. When true AND the resolution
-   * is `absent`, the quality-reviewer's result is DEMOTED to `verdict: "error"`
-   * (synthesized, like enforcePanelRoster) before the merge gate derives — an
-   * error verdict fails the gate, routing the existing wait-retry/escalate path.
-   * Covers the runtime-fallback case too: probe said present, `codex exec` failed
-   * at run time, the Claude fallback ran same-vendor.
-   */
-  readonly blockOnCrossVendorAbsence?: boolean;
+    /** Raw reviewer outputs (already parsed via parseRawReview). */
+    readonly reviews: readonly RawReview[]
+    /** Source reader for deterministic citation-verify. */
+    readonly source: SourceReader
+    /** Build the INDEPENDENT verifier for a given reviewer's findings (D27). */
+    readonly makeRunner: (review: RawReview) => FindingVerifierRunner
+    /** Deterministic-gate evidence to combine with the panel (WS6 supplies it). */
+    readonly gateEvidence: readonly GateEvidence[]
+    /** The phase to advance/retry at (the verify phase). */
+    readonly phase: TaskPhase
+    /** Redact retained finding text (Δ K). Defaults to true. */
+    readonly redact?: boolean
+    /** Bounded re-review attempt accounting for the wait-retry on a blocked merge gate. */
+    readonly attempt?: number
+    readonly maxAttempts?: number
+    /**
+     * Δ U — the resolved cross-vendor slot ({@link resolveCrossVendor}). When its
+     * status is `absent`, runPanel records the absence LOUDLY on
+     * {@link PanelRunResult.crossVendorAbsence}; when `present` (or omitted) no
+     * absence is recorded. The caller resolves it (runPanel stays free of the
+     * probe) and hands the resolution in — minimal wiring, no change to merge gate /
+     * citation / confirm semantics.
+     */
+    readonly crossVendor?: CrossVendorResolution
+    /**
+     * S5/C — `review.requireCrossVendor === "block"`. When true AND the resolution
+     * is `absent`, the quality-reviewer's result is DEMOTED to `verdict: "error"`
+     * (synthesized, like enforcePanelRoster) before the merge gate derives — an
+     * error verdict fails the gate, routing the existing wait-retry/escalate path.
+     * Covers the runtime-fallback case too: probe said present, `codex exec` failed
+     * at run time, the Claude fallback ran same-vendor.
+     */
+    readonly blockOnCrossVendorAbsence?: boolean
 }
 
 /**
@@ -185,7 +187,7 @@ export interface RunPanelInput {
  * and passed in.
  */
 export function spawnPanel(request: SpawnRequest): PhaseResult {
-  return spawn(request);
+    return spawn(request)
 }
 
 /**
@@ -193,57 +195,50 @@ export function spawnPanel(request: SpawnRequest): PhaseResult {
  * merge gate. Never stores the verdict; recomputes it via {@link deriveMergeGateVerdict}.
  */
 export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
-  const redact = input.redact ?? true;
+    const redact = input.redact ?? true
 
-  const adjudicated: AdjudicatedReviewer[] = [];
-  for (const review of input.reviews) {
-    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
-  }
+    const adjudicated: AdjudicatedReviewer[] = []
+    for (const review of input.reviews) {
+        adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact))
+    }
 
-  let reviewerResults: readonly ReviewerResult[] = adjudicated.map(reviewerResultOf);
+    let reviewerResults: readonly ReviewerResult[] = adjudicated.map(reviewerResultOf)
 
-  // S5/C block mode: the quality-reviewer slot REQUIRED a second vendor and none
-  // ran — demote its result to `error` (synthesize one if the review is missing,
-  // fail-closed) so the derived merge gate blocks with an honest reason.
-  const demoted =
-    input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === "absent";
-  if (demoted) {
-    const hasQuality = reviewerResults.some((r) => r.reviewer === "quality-reviewer");
-    reviewerResults = hasQuality
-      ? reviewerResults.map((r) =>
-          r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" as const } : r,
-        )
-      : [
-          ...reviewerResults,
-          { reviewer: "quality-reviewer", verdict: "error" as const, confirmed_blockers: 0 },
-        ];
-  }
+    // S5/C block mode: the quality-reviewer slot REQUIRED a second vendor and none
+    // ran — demote its result to `error` (synthesize one if the review is missing,
+    // fail-closed) so the derived merge gate blocks with an honest reason.
+    const demoted = input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === 'absent'
+    if (demoted) {
+        const hasQuality = reviewerResults.some((r) => r.reviewer === 'quality-reviewer')
+        reviewerResults = hasQuality
+            ? reviewerResults.map((r) => (r.reviewer === 'quality-reviewer' ? {...r, verdict: 'error' as const} : r))
+            : [...reviewerResults, {reviewer: 'quality-reviewer', verdict: 'error' as const, confirmed_blockers: 0}]
+    }
 
-  // DERIVE the merge gate (Δ V / D26): both the deterministic gates and the judgment
-  // panel must pass; an `error` reviewer fails it LOUDLY. Never read from storage.
-  const mergeGate = deriveMergeGateVerdict({ reviewers: [...reviewerResults] }, input.gateEvidence);
+    // DERIVE the merge gate (Δ V / D26): both the deterministic gates and the judgment
+    // panel must pass; an `error` reviewer fails it LOUDLY. Never read from storage.
+    const mergeGate = deriveMergeGateVerdict({reviewers: [...reviewerResults]}, input.gateEvidence)
 
-  const result: PhaseResult = mergeGate.passed
-    ? advance(nextOrSelf(input.phase))
-    : waitRetry(
-        input.phase,
-        demoted && input.crossVendor?.status === "absent"
-          ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}`
-          : mergeGateBlockReason(reviewerResults, input.gateEvidence),
-        input.attempt ?? 1,
-        input.maxAttempts ?? 1,
-      );
+    const result: PhaseResult = mergeGate.passed
+        ? advance(nextOrSelf(input.phase))
+        : waitRetry(
+              input.phase,
+              demoted
+                  ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}`
+                  : mergeGateBlockReason(reviewerResults, input.gateEvidence),
+              input.attempt ?? 1,
+              input.maxAttempts ?? 1
+          )
 
-  // Δ U: surface a second-vendor ABSENCE loudly on the panel result. We never
-  // substitute a same-vendor reviewer into the cross-vendor slot (vendor.ts
-  // refuses that); the absence simply becomes a non-silent field the consumer
-  // can read. `present` (or an omitted resolution) records nothing.
-  const crossVendorAbsence =
-    input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : undefined;
+    // Δ U: surface a second-vendor ABSENCE loudly on the panel result. We never
+    // substitute a same-vendor reviewer into the cross-vendor slot (vendor.ts
+    // refuses that); the absence simply becomes a non-silent field the consumer
+    // can read. `present` (or an omitted resolution) records nothing.
+    const crossVendorAbsence = input.crossVendor?.status === 'absent' ? {reason: input.crossVendor.reason} : undefined
 
-  return crossVendorAbsence === undefined
-    ? { adjudicated, reviewerResults, mergeGate, result }
-    : { adjudicated, reviewerResults, mergeGate, result, crossVendorAbsence };
+    return crossVendorAbsence === undefined
+        ? {adjudicated, reviewerResults, mergeGate, result}
+        : {adjudicated, reviewerResults, mergeGate, result, crossVendorAbsence}
 }
 
 /**
@@ -254,5 +249,5 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
  * source of truth, so we mirror only the verify→ship edge WS7 owns.
  */
 function nextOrSelf(phase: TaskPhase): TaskPhase {
-  return phase === "verify" ? "ship" : phase;
+    return phase === 'verify' ? 'ship' : phase
 }

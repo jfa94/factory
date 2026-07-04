@@ -1,19 +1,19 @@
 ---
-description: "Inspect or edit factory pipeline settings"
-argument-hint: "[--get <key>] [--set <key=value>] [--unset <key>]"
+description: 'Inspect or edit factory pipeline settings'
+argument-hint: '[--get <key>] [--set <key=value>] [--unset <key>]'
 arguments:
-  - name: "--get"
-    description: "Print one resolved value (dotted key path)"
-    required: false
-  - name: "--set"
-    description: "Set a value (key=value, repeatable), validate, persist"
-    required: false
-  - name: "--unset"
-    description: "Revert a key to its default (repeatable)"
-    required: false
-  - name: "--detect-gate-env"
-    description: "Auto-detect CI build env → gap-fill quality.gateEnv (standalone)"
-    required: false
+    - name: '--get'
+      description: 'Print one resolved value (dotted key path)'
+      required: false
+    - name: '--set'
+      description: 'Set a value (key=value, repeatable), validate, persist'
+      required: false
+    - name: '--unset'
+      description: 'Revert a key to its default (repeatable)'
+      required: false
+    - name: '--detect-gate-env'
+      description: 'Auto-detect CI build env → gap-fill quality.gateEnv (standalone)'
+      required: false
 ---
 
 # /factory:configure

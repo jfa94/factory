@@ -307,10 +307,10 @@ Tests-first force edge case discovery before implementing. Tests-after verify yo
 **RED**
 
 ```typescript
-test("rejects empty email", async () => {
-  const result = await submitForm({ email: "" });
-  expect(result.error).toBe("Email required");
-});
+test('rejects empty email', async () => {
+    const result = await submitForm({email: ''})
+    expect(result.error).toBe('Email required')
+})
 ```
 
 **Verify RED**
@@ -324,10 +324,10 @@ FAIL: expected 'Email required', got undefined
 
 ```typescript
 function submitForm(data: FormData) {
-  if (!data.email?.trim()) {
-    return { error: "Email required" };
-  }
-  // ...
+    if (!data.email?.trim()) {
+        return {error: 'Email required'}
+    }
+    // ...
 }
 ```
 
@@ -358,12 +358,12 @@ Can't check all boxes? You skipped TDD. Start over.
 
 ## When Stuck
 
-| Problem                | Solution                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------ |
+| Problem                | Solution                                                                                                                   |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Don't know how to test | Write wished-for API. Write assertion first. Ask the user, or emit STATUS: NEEDS_CONTEXT if running in an autonomous task. |
-| Test too complicated   | Design too complicated. Simplify interface.                                                |
-| Must mock everything   | Code too coupled. Use dependency injection.                                                |
-| Test setup huge        | Extract helpers. Still complex? Simplify design.                                           |
+| Test too complicated   | Design too complicated. Simplify interface.                                                                                |
+| Must mock everything   | Code too coupled. Use dependency injection.                                                                                |
+| Test setup huge        | Extract helpers. Still complex? Simplify design.                                                                           |
 
 ## Debugging Integration
 

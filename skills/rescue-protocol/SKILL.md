@@ -69,57 +69,57 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
 
 2. **Scan.**
 
-   ```
-   factory rescue scan [--run <id>]
-   ```
+    ```
+    factory rescue scan [--run <id>]
+    ```
 
-   Emits the read-only `RescueScan` (see `reference/disposition-taxonomy.md`):
+    Emits the read-only `RescueScan` (see `reference/disposition-taxonomy.md`):
 
-   ```jsonc
-   {
-     "run_id", "run_status",
-     "counts": { "total", "shipped", "runnable", "stuck", "recoverable", "dead_end" },
-     "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
-     "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
-     "needs_rescue", "e2e_failed", "rollup_pending", "would_deadlock", "summary",
-     "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ],
-     // Read-only recoverable-work survey (git-grounded; EVIDENCE, never an action). One
-     // entry per non-shipped branched task, measured against origin/staging-<run-id>.
-     "work": {
-       "base_ref", "base_resolved",
-       "tasks": [ { "task_id", "branch", "branch_exists", "commits_ahead", "pr_number?" }, ... ]
-     }
-   }
-   ```
+    ```jsonc
+    {
+      "run_id", "run_status",
+      "counts": { "total", "shipped", "runnable", "stuck", "recoverable", "dead_end" },
+      "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
+      "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
+      "needs_rescue", "e2e_failed", "rollup_pending", "would_deadlock", "summary",
+      "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ],
+      // Read-only recoverable-work survey (git-grounded; EVIDENCE, never an action). One
+      // entry per non-shipped branched task, measured against origin/staging-<run-id>.
+      "work": {
+        "base_ref", "base_resolved",
+        "tasks": [ { "task_id", "branch", "branch_exists", "commits_ahead", "pr_number?" }, ... ]
+      }
+    }
+    ```
 
-   `work` is diagnostic only: it tells you which dropped tasks carry committed work (high
-   `commits_ahead`) vs none. It changes nothing — `apply`/resume still re-cut a reset task's
-   branch from staging and redo it. Pass each dead-end's `work` line through to the
-   `rescue-diagnostic` agent (step 5) as corroborating evidence.
+    `work` is diagnostic only: it tells you which dropped tasks carry committed work (high
+    `commits_ahead`) vs none. It changes nothing — `apply`/resume still re-cut a reset task's
+    branch from staging and redo it. Pass each dead-end's `work` line through to the
+    `rescue-diagnostic` agent (step 5) as corroborating evidence.
 
 3. **Short-circuit if clean.** If `needs_rescue` is `false` AND `would_deadlock` is `false`,
    there is nothing for rescue to reset. Skip to step 7 (resume) if the run is non-terminal;
    otherwise report `summary` (it may note dead-ends that need a fix + `--include-dead-ends`)
    and stop. **If `dry-run=true`, report the scan and stop here regardless** — never apply.
 
-   3b. **`scan.e2e_failed` / `scan.e2e_assessment_failed` never short-circuit and never
-   auto-resolve (Iron Law 4).** If either is `true`, proceed to step 4 regardless of task-level
-   `needs_rescue`. Apply `--reset-e2e` alongside the default set ONLY if `reset-e2e=true` was
-   explicitly passed; otherwise leave it failed and name it in your report — there is no
-   diagnostic-agent path for e2e (unlike dead-ends), so never guess at whether the underlying
-   cause has cleared.
+    3b. **`scan.e2e_failed` / `scan.e2e_assessment_failed` never short-circuit and never
+    auto-resolve (Iron Law 4).** If either is `true`, proceed to step 4 regardless of task-level
+    `needs_rescue`. Apply `--reset-e2e` alongside the default set ONLY if `reset-e2e=true` was
+    explicitly passed; otherwise leave it failed and name it in your report — there is no
+    diagnostic-agent path for e2e (unlike dead-ends), so never guess at whether the underlying
+    cause has cleared.
 
-   3c. **`scan.rollup_pending` never short-circuits and never auto-resolves (Iron Law 4b).** If
-   `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--recheck-rollup`
-   alongside the default set ONLY if `recheck-rollup=true` was explicitly passed; otherwise
-   leave it alone and name it in your report — never guess at whether the queued merge landed.
+    3c. **`scan.rollup_pending` never short-circuits and never auto-resolves (Iron Law 4b).** If
+    `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--recheck-rollup`
+    alongside the default set ONLY if `recheck-rollup=true` was explicitly passed; otherwise
+    leave it alone and name it in your report — never guess at whether the queued merge landed.
 
-   **If `tasks` was given (non-empty):** skip the default + diagnostic paths entirely — apply
-   exactly those ids and go to step 7:
+    **If `tasks` was given (non-empty):** skip the default + diagnostic paths entirely — apply
+    exactly those ids and go to step 7:
 
-   ```
-   factory rescue apply [--run <id>] --task <id> [--task <id> ...]
-   ```
+    ```
+    factory rescue apply [--run <id>] --task <id> [--task <id> ...]
+    ```
 
 4. **Apply the default (safe) set.** Resets stuck (crashed in-flight) + recoverable
    (`blocked-environmental`) tasks, and reopens a terminal run that had work to reset. Add
@@ -127,44 +127,44 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
    `--recheck-rollup` when `scan.rollup_pending` is `true` AND `recheck-rollup=true` was passed
    (per 3c):
 
-   ```
-   factory rescue apply [--run <id>] [--reset-e2e] [--recheck-rollup]
-   ```
+    ```
+    factory rescue apply [--run <id>] [--reset-e2e] [--recheck-rollup]
+    ```
 
-   Emits `{ run_id, run_status, reset: [...], reopened, skipped: [...] }`. `run_status` is
-   `running` when a terminal run was reopened (by reset work, a cleared e2e verdict, or a
-   rechecked rollup). This is safe to auto-apply — it never resets a dead-end, never touches
-   `done` work, and never clears a failed e2e verdict or rechecks a pending rollup without the
-   explicit `reset-e2e=true` / `recheck-rollup=true` input.
+    Emits `{ run_id, run_status, reset: [...], reopened, skipped: [...] }`. `run_status` is
+    `running` when a terminal run was reopened (by reset work, a cleared e2e verdict, or a
+    rechecked rollup). This is safe to auto-apply — it never resets a dead-end, never touches
+    `done` work, and never clears a failed e2e verdict or rechecks a pending rollup without the
+    explicit `reset-e2e=true` / `recheck-rollup=true` input.
 
 5. **Decide on dead-ends (only if any).** For each id in `scan.dead_ends`, decide whether the
    root cause has cleared. Two paths:
-   - **Diagnostic-gated (autonomous).** Spawn the read-only `rescue-diagnostic` agent — one
-     `Agent()` per dead-end, in a single message — passing each task's scan line + its matching
-     `work` entry (`work.tasks[task_id]`) + the ground truth you can gather (`worktree_path`,
-     `review_files`, `ci_logs_path`, the durable `spec_path`). See
-     `reference/diagnostic-agent-contract.md`. Harvest each agent's final
-     message (its decision JSON). For every `decision: "reset"`, reset that one:
+    - **Diagnostic-gated (autonomous).** Spawn the read-only `rescue-diagnostic` agent — one
+      `Agent()` per dead-end, in a single message — passing each task's scan line + its matching
+      `work` entry (`work.tasks[task_id]`) + the ground truth you can gather (`worktree_path`,
+      `review_files`, `ci_logs_path`, the durable `spec_path`). See
+      `reference/diagnostic-agent-contract.md`. Harvest each agent's final
+      message (its decision JSON). For every `decision: "reset"`, reset that one:
 
-     ```
-     factory rescue apply [--run <id>] --task <task-id> [--task <task-id> ...]
-     ```
+        ```
+        factory rescue apply [--run <id>] --task <task-id> [--task <task-id> ...]
+        ```
 
-     (Naming a task IS the assertion the cause is fixed, so `--task` resets a dead-end without
-     `--include-dead-ends`.) `leave-dropped` / `no-action` → leave it; the run finalizes
-     `failed` with `develop` untouched (Decision 34 — develop receives only whole PRDs), which
-     is the correct loud outcome.
+        (Naming a task IS the assertion the cause is fixed, so `--task` resets a dead-end without
+        `--include-dead-ends`.) `leave-dropped` / `no-action` → leave it; the run finalizes
+        `failed` with `develop` untouched (Decision 34 — develop receives only whole PRDs), which
+        is the correct loud outcome.
 
-   - **Human-asserted.** If a human has confirmed the upstream root cause is fixed for the
-     whole set (e.g. the spec was amended, a stronger model is now available), reset them all:
+    - **Human-asserted.** If a human has confirmed the upstream root cause is fixed for the
+      whole set (e.g. the spec was amended, a stronger model is now available), reset them all:
 
-     ```
-     factory rescue apply [--run <id>] --include-dead-ends
-     ```
+        ```
+        factory rescue apply [--run <id>] --include-dead-ends
+        ```
 
-     When run interactively and dead-ends exist, confirm with one `AskUserQuestion`
-     (`reset-all-dead-ends` / `diagnose-each` / `leave-dropped`) before resetting — resetting a
-     determined failure burns a full pipeline cycle.
+        When run interactively and dead-ends exist, confirm with one `AskUserQuestion`
+        (`reset-all-dead-ends` / `diagnose-each` / `leave-dropped`) before resetting — resetting a
+        determined failure burns a full pipeline cycle.
 
 6. **Reconcile git/GitHub drift.** Run state is now repaired, but the remote may still
    disagree with it (`rescue scan`/`apply` touch RUN STATE only). Re-run `factory rescue scan`
@@ -174,17 +174,17 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
    The agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
    run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or discards.
    Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked, evidence }`):
-   - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
-     missing source SHA). Report `evidence` and STOP — do not hand off to resume.
-   - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve / skip)
-     before anything destructive happens. The agent did NOT act on these — on **approve**, the
-     orchestrator (which holds the authority the read-mostly agent lacks) performs that single
-     op itself (e.g. delete the named orphan branch); on **skip**, leave it. Never force-push to
-     satisfy a prompt; if reconciliation genuinely requires a force, that is a STOP, not a fix.
-   - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift is cleared; proceed.
+    - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
+      missing source SHA). Report `evidence` and STOP — do not hand off to resume.
+    - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve / skip)
+      before anything destructive happens. The agent did NOT act on these — on **approve**, the
+      orchestrator (which holds the authority the read-mostly agent lacks) performs that single
+      op itself (e.g. delete the named orphan branch); on **skip**, leave it. Never force-push to
+      satisfy a prompt; if reconciliation genuinely requires a force, that is a STOP, not a fix.
+    - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift is cleared; proceed.
 
-   Only once the agent reports `reconciled` (or every `needs_prompt` was resolved by an approved
-   op) is the run safe to resume.
+    Only once the agent reports `reconciled` (or every `needs_prompt` was resolved by an approved
+    op) is the run safe to resume.
 
 7. **Re-scan to confirm (optional).** A second `scan` should show the reset tasks now
    `runnable` and `would_deadlock: false`. `apply` is idempotent, so a re-run is a safe no-op.
@@ -192,18 +192,18 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
 8. **Hand off to resume.** Invoke the orchestrator skill directly (the autonomous path — no
    human round-trip):
 
-   ```
-   Skill(pipeline-runner)   # then run its resume entry: factory resume [--run <id>]
-   ```
+    ```
+    Skill(pipeline-runner)   # then run its resume entry: factory resume [--run <id>]
+    ```
 
-   - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the runner now picks up the
-     reset (and reopened) tasks.
-   - `{ kind: "pause", run_id, status, reason, resets_at_epoch? }` → the quota window
-     has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset
-     state is durable and a later resume continues from it.
+    - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the runner now picks up the
+      reset (and reopened) tasks.
+    - `{ kind: "pause", run_id, status, reason, resets_at_epoch? }` → the quota window
+      has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset
+      state is durable and a later resume continues from it.
 
-   Do not tell the user to type `/factory:resume` themselves — calling the skill directly
-   is the autonomous path. The slash command is only the manual-narration fallback.
+    Do not tell the user to type `/factory:resume` themselves — calling the skill directly
+    is the autonomous path. The slash command is only the manual-narration fallback.
 
 ## When NOT to use rescue
 

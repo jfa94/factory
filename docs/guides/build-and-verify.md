@@ -79,8 +79,8 @@ it at the root:
 ```yaml
 - name: Assert committed bundles match a fresh build (semgrep scans src, ships dist)
   run: |
-    npm run build
-    git diff --exit-code -- dist/ templates/.github/scripts/shard-mutation-scope.mjs
+      npm run build
+      git diff --exit-code -- dist/ templates/.github/scripts/shard-mutation-scope.mjs
 ```
 
 Because `scripts/build.mjs` is a deterministic, dependency-inlined esbuild (no

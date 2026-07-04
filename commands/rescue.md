@@ -1,25 +1,25 @@
 ---
-description: "Surgically recover a stalled factory run (explicit task resets, dead-ends, e2e verdicts, rollups) and hand off to resume"
-argument-hint: "[--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--dry-run]"
+description: 'Surgically recover a stalled factory run (explicit task resets, dead-ends, e2e verdicts, rollups) and hand off to resume'
+argument-hint: '[--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--dry-run]'
 arguments:
-  - name: "--run"
-    description: "Run id to rescue (defaults to the current run)"
-    required: false
-  - name: "--task"
-    description: "Reset exactly this task (repeatable); resets a dead-end without --include-dead-ends"
-    required: false
-  - name: "--include-dead-ends"
-    description: "Also reset determined drops (spec-defect / capability-budget) — only after the root cause is actually fixed"
-    required: false
-  - name: "--reset-e2e"
-    description: "Clear a failed e2e-phase verdict or a failed run-start e2e-assessment (Decisions 39/40) so it re-enters — only after the underlying cause no longer applies"
-    required: false
-  - name: "--recheck-rollup"
-    description: "Reopen a completed run whose rollup armed but never landed, so a re-drive re-checks it — only after confirming the queued merge landed"
-    required: false
-  - name: "--dry-run"
-    description: "Scan and report only; skip apply and the resume handoff"
-    required: false
+    - name: '--run'
+      description: 'Run id to rescue (defaults to the current run)'
+      required: false
+    - name: '--task'
+      description: 'Reset exactly this task (repeatable); resets a dead-end without --include-dead-ends'
+      required: false
+    - name: '--include-dead-ends'
+      description: 'Also reset determined drops (spec-defect / capability-budget) — only after the root cause is actually fixed'
+      required: false
+    - name: '--reset-e2e'
+      description: 'Clear a failed e2e-phase verdict or a failed run-start e2e-assessment (Decisions 39/40) so it re-enters — only after the underlying cause no longer applies'
+      required: false
+    - name: '--recheck-rollup'
+      description: 'Reopen a completed run whose rollup armed but never landed, so a re-drive re-checks it — only after confirming the queued merge landed'
+      required: false
+    - name: '--dry-run'
+      description: 'Scan and report only; skip apply and the resume handoff'
+      required: false
 ---
 
 # /factory:rescue

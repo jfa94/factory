@@ -14,59 +14,59 @@
  * non-zero exit so a broken environment halts at preflight rather than surfacing
  * as an opaque downstream gate failure (Iron Law 3: fail loud, never blind-retry).
  */
-import { access } from "node:fs/promises";
-import path from "node:path";
-import { exec, createLogger } from "../shared/index.js";
+import {access} from 'node:fs/promises'
+import path from 'node:path'
+import {exec, createLogger} from '../shared/index.js'
 
-const log = createLogger("provision");
+const log = createLogger('provision')
 
 /**
  * Lockfile → install command, probed in order (most specific first). The
  * `--frozen-lockfile` / `npm ci` forms install EXACTLY the committed lockfile —
  * deterministic, the right shape for a throwaway gate worktree.
  */
-const LOCKFILE_INSTALL: ReadonlyArray<readonly [string, string]> = [
-  ["pnpm-lock.yaml", "pnpm install --frozen-lockfile"],
-  ["yarn.lock", "yarn install --frozen-lockfile"],
-  ["package-lock.json", "npm ci"],
-  ["npm-shrinkwrap.json", "npm ci"],
-];
+const LOCKFILE_INSTALL: readonly (readonly [string, string])[] = [
+    ['pnpm-lock.yaml', 'pnpm install --frozen-lockfile'],
+    ['yarn.lock', 'yarn install --frozen-lockfile'],
+    ['package-lock.json', 'npm ci'],
+    ['npm-shrinkwrap.json', 'npm ci'],
+]
 
 /** Outcome a {@link ProvisionWorktreeArgs.run} runner reports back. */
 export interface ProvisionRunResult {
-  readonly code: number | null;
-  readonly stderr: string;
+    readonly code: number | null
+    readonly stderr: string
 }
 
 /** Args to {@link provisionWorktree}. */
 export interface ProvisionWorktreeArgs {
-  /** Absolute worktree path — the cwd the setup command runs in. */
-  readonly path: string;
-  /** `quality.setupCommand`; when set and non-blank it wins over lockfile detection. */
-  readonly setupCommand?: string;
-  /** Injectable file-exists predicate (default: real `fs.access`). */
-  readonly fileExists?: (absPath: string) => Promise<boolean>;
-  /** Injectable command runner (default: real shell exec). */
-  readonly run?: (command: string, cwd: string) => Promise<ProvisionRunResult>;
+    /** Absolute worktree path — the cwd the setup command runs in. */
+    readonly path: string
+    /** `quality.setupCommand`; when set and non-blank it wins over lockfile detection. */
+    readonly setupCommand?: string | undefined
+    /** Injectable file-exists predicate (default: real `fs.access`). */
+    readonly fileExists?: (absPath: string) => Promise<boolean>
+    /** Injectable command runner (default: real shell exec). */
+    readonly run?: (command: string, cwd: string) => Promise<ProvisionRunResult>
 }
 
 /** A {@link provisionWorktree}-shaped function, for injection into the preflight handler. */
-export type ProvisionWorktreeFn = (args: ProvisionWorktreeArgs) => Promise<void>;
+export type ProvisionWorktreeFn = (args: ProvisionWorktreeArgs) => Promise<void>
 
 async function defaultFileExists(absPath: string): Promise<boolean> {
-  try {
-    await access(absPath);
-    return true;
-  } catch {
-    return false;
-  }
+    try {
+        await access(absPath)
+        return true
+    } catch {
+        return false
+    }
 }
 
 async function defaultRun(command: string, cwd: string): Promise<ProvisionRunResult> {
-  // The command is trusted — operator `quality.setupCommand` or a fixed
-  // lockfile-install string — so the `shell` escape hatch is acceptable here.
-  const r = await exec(command, [], { cwd, shell: true });
-  return { code: r.code, stderr: r.stderr };
+    // The command is trusted — operator `quality.setupCommand` or a fixed
+    // lockfile-install string — so the `shell` escape hatch is acceptable here.
+    const r = await exec(command, [], {cwd, shell: true})
+    return {code: r.code, stderr: r.stderr}
 }
 
 /**
@@ -76,15 +76,19 @@ async function defaultRun(command: string, cwd: string): Promise<ProvisionRunRes
  * the gate contract's per-gate `command`, Decision 46).
  */
 export async function resolveSetupCommand(
-  worktreePath: string,
-  setupCommand: string | undefined,
-  fileExists: (absPath: string) => Promise<boolean>,
+    worktreePath: string,
+    setupCommand: string | undefined,
+    fileExists: (absPath: string) => Promise<boolean>
 ): Promise<string | null> {
-  if (setupCommand !== undefined && setupCommand.trim().length > 0) return setupCommand;
-  for (const [lockfile, command] of LOCKFILE_INSTALL) {
-    if (await fileExists(path.join(worktreePath, lockfile))) return command;
-  }
-  return null;
+    if (setupCommand !== undefined && setupCommand.trim().length > 0) {
+        return setupCommand
+    }
+    for (const [lockfile, command] of LOCKFILE_INSTALL) {
+        if (await fileExists(path.join(worktreePath, lockfile))) {
+            return command
+        }
+    }
+    return null
 }
 
 /**
@@ -93,22 +97,22 @@ export async function resolveSetupCommand(
  * non-zero exit.
  */
 export async function provisionWorktree(args: ProvisionWorktreeArgs): Promise<void> {
-  const fileExists = args.fileExists ?? defaultFileExists;
-  const run = args.run ?? defaultRun;
+    const fileExists = args.fileExists ?? defaultFileExists
+    const run = args.run ?? defaultRun
 
-  const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
-  if (command === null) {
-    log.debug(`no setupCommand and no lockfile in ${args.path} — skipping worktree provisioning`);
-    return;
-  }
+    const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists)
+    if (command === null) {
+        log.debug(`no setupCommand and no lockfile in ${args.path} — skipping worktree provisioning`)
+        return
+    }
 
-  log.info(`provisioning worktree: ${command} (cwd=${args.path})`);
-  const res = await run(command, args.path);
-  if (res.code !== 0) {
-    const detail = res.stderr.trim();
-    throw new Error(
-      `worktree provisioning failed: \`${command}\` exited ${res.code ?? "null"} in ${args.path}` +
-        (detail.length > 0 ? `\n${detail}` : ""),
-    );
-  }
+    log.info(`provisioning worktree: ${command} (cwd=${args.path})`)
+    const res = await run(command, args.path)
+    if (res.code !== 0) {
+        const detail = res.stderr.trim()
+        throw new Error(
+            `worktree provisioning failed: \`${command}\` exited ${res.code ?? 'null'} in ${args.path}` +
+                (detail.length > 0 ? `\n${detail}` : '')
+        )
+    }
 }

@@ -1,93 +1,93 @@
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "^Bash$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js write-protection",
-            "timeout": 5,
-            "statusMessage": "Checking TCB write-protection"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js branch-protection",
-            "timeout": 5,
-            "statusMessage": "Checking branch protection"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js secret-guard",
-            "timeout": 15,
-            "statusMessage": "Scanning staged changes for secrets"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
-            "timeout": 10,
-            "statusMessage": "Checking pipeline command guards"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
-            "timeout": 5,
-            "statusMessage": "Guarding holdout answer-key"
-          }
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "^Bash$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js write-protection",
+                        "timeout": 5,
+                        "statusMessage": "Checking TCB write-protection"
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js branch-protection",
+                        "timeout": 5,
+                        "statusMessage": "Checking branch protection"
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js secret-guard",
+                        "timeout": 15,
+                        "statusMessage": "Scanning staged changes for secrets"
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
+                        "timeout": 10,
+                        "statusMessage": "Checking pipeline command guards"
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
+                        "timeout": 5,
+                        "statusMessage": "Guarding holdout answer-key"
+                    }
+                ]
+            },
+            {
+                "matcher": "^(Edit|Write|MultiEdit)$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js write-protection",
+                        "timeout": 5,
+                        "statusMessage": "Checking TCB write-protection"
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
+                        "timeout": 10,
+                        "statusMessage": "Checking pipeline path-scope guards"
+                    }
+                ]
+            },
+            {
+                "matcher": "^(Read|Grep|Glob)$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
+                        "timeout": 5,
+                        "statusMessage": "Guarding holdout answer-key"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js stop-gate",
+                        "timeout": 15,
+                        "statusMessage": "Checking run state"
+                    }
+                ]
+            }
+        ],
+        "SubagentStop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js subagent-stop",
+                        "timeout": 15,
+                        "statusMessage": "Recording subagent verdict to state"
+                    }
+                ]
+            }
         ]
-      },
-      {
-        "matcher": "^(Edit|Write|MultiEdit)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js write-protection",
-            "timeout": 5,
-            "statusMessage": "Checking TCB write-protection"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
-            "timeout": 10,
-            "statusMessage": "Checking pipeline path-scope guards"
-          }
-        ]
-      },
-      {
-        "matcher": "^(Read|Grep|Glob)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
-            "timeout": 5,
-            "statusMessage": "Guarding holdout answer-key"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js stop-gate",
-            "timeout": 15,
-            "statusMessage": "Checking run state"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js subagent-stop",
-            "timeout": 15,
-            "statusMessage": "Recording subagent verdict to state"
-          }
-        ]
-      }
-    ]
-  }
+    }
 }

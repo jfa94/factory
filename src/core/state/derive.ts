@@ -20,10 +20,10 @@
  * of machine-checkable evidence; the panel (judgment) verdict is the conjunction
  * (unanimity) over reviewer results — itself derived, never stored.
  */
-import type { ReviewerResult, TaskState } from "./schema.js";
+import type {ReviewerResult, TaskState} from './schema.js'
 
 /** The closed set of deterministic gates. */
-export type GateId = "test" | "tdd" | "coverage" | "mutation" | "sast" | "type" | "lint" | "build";
+export type GateId = 'test' | 'tdd' | 'coverage' | 'mutation' | 'sast' | 'type' | 'lint' | 'build'
 
 /**
  * The closed evidence-label domain for {@link GateEvidence.gate}. A gate verdict's
@@ -35,7 +35,7 @@ export type GateId = "test" | "tdd" | "coverage" | "mutation" | "sast" | "type" 
  * `"test"`) is rejected at compile time. Widening this to `string` would re-open
  * the hole; keep it a closed union.
  */
-export type EvidenceGate = GateId | "holdout" | `panel:${string}`;
+export type EvidenceGate = GateId | 'holdout' | `panel:${string}`
 
 /**
  * Evidence a deterministic gate produced on this run/check. This is GROUND TRUTH
@@ -45,24 +45,24 @@ export type EvidenceGate = GateId | "holdout" | `panel:${string}`;
  * trail of where it came from.
  */
 export interface GateEvidence {
-  /**
-   * Stable evidence label, drawn from the closed {@link EvidenceGate} domain: a
-   * deterministic gate id (`"test"`/`"coverage"`/…), the holdout check
-   * (`"holdout"`), or a panel reviewer (`` `panel:${reviewer}` ``). NOT `string` —
-   * a typo'd label (e.g. `"tests"`) is a compile error, not a silently-mislabelled
-   * audit entry.
-   */
-  gate: EvidenceGate;
-  /**
-   * The raw machine-checkable outcome of running the gate NOW. The whole point of
-   * derive-don't-store: this is produced by executing the gate, not by reading a
-   * remembered boolean. If a caller could only supply a remembered value, that is
-   * a bug in the caller — the type names this field `observed` to make that
-   * misuse self-evident in review.
-   */
-  observed: boolean;
-  /** Optional detail for the audit trail (e.g. "mutation score 82% ≥ 80%"). */
-  detail?: string;
+    /**
+     * Stable evidence label, drawn from the closed {@link EvidenceGate} domain: a
+     * deterministic gate id (`"test"`/`"coverage"`/…), the holdout check
+     * (`"holdout"`), or a panel reviewer (`` `panel:${reviewer}` ``). NOT `string` —
+     * a typo'd label (e.g. `"tests"`) is a compile error, not a silently-mislabelled
+     * audit entry.
+     */
+    gate: EvidenceGate
+    /**
+     * The raw machine-checkable outcome of running the gate NOW. The whole point of
+     * derive-don't-store: this is produced by executing the gate, not by reading a
+     * remembered boolean. If a caller could only supply a remembered value, that is
+     * a bug in the caller — the type names this field `observed` to make that
+     * misuse self-evident in review.
+     */
+    observed: boolean
+    /** Optional detail for the audit trail (e.g. "mutation score 82% ≥ 80%"). */
+    detail?: string
 }
 
 /**
@@ -72,7 +72,7 @@ export interface GateEvidence {
  * mint one. `declare const` ⇒ the brand is type-only: it has NO runtime presence,
  * so it never appears in `Object.keys`, JSON, or the observable `__derived` field.
  */
-declare const DERIVED_BRAND: unique symbol;
+declare const DERIVED_BRAND: unique symbol
 
 /**
  * A computed verdict. There is intentionally no constructor that takes a
@@ -83,16 +83,16 @@ declare const DERIVED_BRAND: unique symbol;
  * symbol key), turning the old by-convention rule into a compiler-enforced one.
  */
 export interface GateVerdict {
-  /** True iff the gate passes, computed from the supplied evidence. */
-  readonly passed: boolean;
-  /** The gate this verdict is for. */
-  readonly gate: string;
-  /** Observable brand: marks this value as freshly derived, not reconstructed from JSON. */
-  readonly __derived: true;
-  /** Phantom nominal brand (type-only; see {@link DERIVED_BRAND}). */
-  readonly [DERIVED_BRAND]: true;
-  /** The evidence the verdict was derived from (audit trail). */
-  readonly from: readonly GateEvidence[];
+    /** True iff the gate passes, computed from the supplied evidence. */
+    readonly passed: boolean
+    /** The gate this verdict is for. */
+    readonly gate: string
+    /** Observable brand: marks this value as freshly derived, not reconstructed from JSON. */
+    readonly __derived: true
+    /** Phantom nominal brand (type-only; see {@link DERIVED_BRAND}). */
+    readonly [DERIVED_BRAND]: true
+    /** The evidence the verdict was derived from (audit trail). */
+    readonly from: readonly GateEvidence[]
 }
 
 /**
@@ -101,7 +101,7 @@ export interface GateVerdict {
  * function stays a plain literal builder and external code has no mint at all.
  */
 function mkVerdict(passed: boolean, gate: string, from: readonly GateEvidence[]): GateVerdict {
-  return { passed, gate, __derived: true, from } as GateVerdict;
+    return {passed, gate, __derived: true, from} as GateVerdict
 }
 
 /**
@@ -112,7 +112,7 @@ function mkVerdict(passed: boolean, gate: string, from: readonly GateEvidence[])
  * always receives exactly one piece of evidence.)
  */
 export function deriveGateVerdict(evidence: GateEvidence): GateVerdict {
-  return mkVerdict(evidence.observed === true, evidence.gate, [evidence]);
+    return mkVerdict(evidence.observed, evidence.gate, [evidence])
 }
 
 /**
@@ -121,8 +121,8 @@ export function deriveGateVerdict(evidence: GateEvidence): GateVerdict {
  * gates run has not been verified — never treat "nothing ran" as a pass).
  */
 export function deriveAllGatesVerdict(evidence: readonly GateEvidence[]): GateVerdict {
-  const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
-  return mkVerdict(passed, "all", [...evidence]);
+    const passed = evidence.length > 0 && evidence.every((e) => e.observed)
+    return mkVerdict(passed, 'all', [...evidence])
 }
 
 /**
@@ -137,25 +137,25 @@ export function deriveAllGatesVerdict(evidence: readonly GateEvidence[]): GateVe
  * NOTHING that could be a stored panel verdict.
  */
 export function derivePanelVerdict(
-  reviewersOrTask: readonly ReviewerResult[] | Pick<TaskState, "reviewers">,
+    reviewersOrTask: readonly ReviewerResult[] | Pick<TaskState, 'reviewers'>
 ): GateVerdict {
-  // Array.isArray's guard is `any[]`, which does NOT narrow a readonly array out
-  // of the union's else branch — so the Pick cast there is load-bearing, but the
-  // true branch narrows cleanly without one.
-  const reviewers: readonly ReviewerResult[] = Array.isArray(reviewersOrTask)
-    ? reviewersOrTask
-    : (reviewersOrTask as Pick<TaskState, "reviewers">).reviewers;
-  const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === "approve");
-  // The panel's "evidence" is each reviewer's verdict; expose it for audit.
-  return mkVerdict(
-    passed,
-    "panel",
-    reviewers.map((r) => ({
-      gate: `panel:${r.reviewer}`,
-      observed: r.verdict === "approve",
-      detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`,
-    })),
-  );
+    // Array.isArray's guard is `any[]`, which does NOT narrow a readonly array out
+    // of the union's else branch — so the Pick cast there is load-bearing, but the
+    // true branch narrows cleanly without one.
+    const reviewers: readonly ReviewerResult[] = Array.isArray(reviewersOrTask)
+        ? reviewersOrTask
+        : (reviewersOrTask as Pick<TaskState, 'reviewers'>).reviewers
+    const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === 'approve')
+    // The panel's "evidence" is each reviewer's verdict; expose it for audit.
+    return mkVerdict(
+        passed,
+        'panel',
+        reviewers.map((r) => ({
+            gate: `panel:${r.reviewer}`,
+            observed: r.verdict === 'approve',
+            detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`,
+        }))
+    )
 }
 
 /**
@@ -165,12 +165,12 @@ export function derivePanelVerdict(
  * array — never from a stored merge-gate boolean.
  */
 export function deriveMergeGateVerdict(
-  task: Pick<TaskState, "reviewers">,
-  gateEvidence: readonly GateEvidence[],
+    task: Pick<TaskState, 'reviewers'>,
+    gateEvidence: readonly GateEvidence[]
 ): GateVerdict {
-  const det = deriveAllGatesVerdict(gateEvidence);
-  const panel = derivePanelVerdict(task);
-  return mkVerdict(det.passed && panel.passed, "merge-gate", [...det.from, ...panel.from]);
+    const det = deriveAllGatesVerdict(gateEvidence)
+    const panel = derivePanelVerdict(task)
+    return mkVerdict(det.passed && panel.passed, 'merge-gate', [...det.from, ...panel.from])
 }
 
 /**
@@ -192,22 +192,28 @@ export function deriveMergeGateVerdict(
  * Only when nothing specific is identifiable does the generic fallback remain.
  */
 export function mergeGateBlockReason(
-  reviewers: readonly ReviewerResult[],
-  gateEvidence: readonly GateEvidence[],
+    reviewers: readonly ReviewerResult[],
+    gateEvidence: readonly GateEvidence[]
 ): string {
-  const parts: string[] = [];
-  if (gateEvidence.length === 0) {
-    parts.push("no deterministic gate evidence");
-  } else {
-    const failed = gateEvidence.filter((g) => g.observed !== true);
-    if (failed.length > 0) {
-      const named = failed.map((g) => (g.detail ? `${g.gate} (${g.detail})` : g.gate));
-      parts.push(`failed gates: ${named.join(", ")}`);
+    const parts: string[] = []
+    if (gateEvidence.length === 0) {
+        parts.push('no deterministic gate evidence')
+    } else {
+        const failed = gateEvidence.filter((g) => !g.observed)
+        if (failed.length > 0) {
+            const named = failed.map((g) =>
+                g.detail != null && g.detail.length > 0 ? `${g.gate} (${g.detail})` : g.gate
+            )
+            parts.push(`failed gates: ${named.join(', ')}`)
+        }
     }
-  }
-  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "merge gate not unanimous";
+    const blocked = reviewers.filter((r) => r.verdict === 'blocked').map((r) => r.reviewer)
+    const errored = reviewers.filter((r) => r.verdict === 'error').map((r) => r.reviewer)
+    if (blocked.length > 0) {
+        parts.push(`blocked by: ${blocked.join(', ')}`)
+    }
+    if (errored.length > 0) {
+        parts.push(`unresolved (verifier error): ${errored.join(', ')}`)
+    }
+    return parts.length > 0 ? parts.join('; ') : 'merge gate not unanimous'
 }

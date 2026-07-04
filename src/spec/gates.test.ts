@@ -1,324 +1,320 @@
-import { describe, it, expect } from "vitest";
+import {describe, it, expect} from 'vitest'
 import {
-  verticalSliceGate,
-  testabilityGate,
-  traceabilityGate,
-  runSpecGates,
-  extractPrdRequirements,
-  specifiabilityGate,
-} from "./gates.js";
-import type { SpecTask } from "./schema.js";
-import type { Prd } from "./gh.js";
+    verticalSliceGate,
+    testabilityGate,
+    traceabilityGate,
+    runSpecGates,
+    extractPrdRequirements,
+    specifiabilityGate,
+} from './gates.js'
+import type {SpecTask} from './schema.js'
+import type {Prd} from './gh.js'
 
 function task(overrides: Partial<SpecTask> = {}): SpecTask {
-  return {
-    task_id: "task_1",
-    title: "Add checkout endpoint",
-    description: "Implement the checkout endpoint",
-    files: ["src/checkout.ts"],
-    acceptance_criteria: ["POST /checkout returns 201 with an order id"],
-    tests_to_write: ["POST /checkout returns 201 and an order id for a valid cart"],
-    depends_on: [],
-    risk_tier: "medium",
-    risk_rationale: "payment path",
-    ...overrides,
-  };
+    return {
+        task_id: 'task_1',
+        title: 'Add checkout endpoint',
+        description: 'Implement the checkout endpoint',
+        files: ['src/checkout.ts'],
+        acceptance_criteria: ['POST /checkout returns 201 with an order id'],
+        tests_to_write: ['POST /checkout returns 201 and an order id for a valid cart'],
+        depends_on: [],
+        risk_tier: 'medium',
+        risk_rationale: 'payment path',
+        ...overrides,
+    }
 }
 
 const prd = (body: string): Prd => ({
-  issue_number: 7,
-  title: "Checkout",
-  body,
-  labels: [],
-  body_truncated: false,
-});
+    issue_number: 7,
+    title: 'Checkout',
+    body,
+    labels: [],
+    body_truncated: false,
+})
 
-describe("testability gate — per-criterion (Δ vague criterion blocks)", () => {
-  it("Δ testability: a criterion with no covering tests_to_write entry BLOCKS, cited", () => {
-    const t = task({
-      acceptance_criteria: ["the inventory ledger decrements on purchase"],
-      tests_to_write: ["POST /checkout returns 201 for a valid cart"], // unrelated
-    });
-    const r = testabilityGate([t]);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("inventory ledger"))).toBe(true);
-  });
+describe('testability gate — per-criterion (Δ vague criterion blocks)', () => {
+    it('Δ testability: a criterion with no covering tests_to_write entry BLOCKS, cited', () => {
+        const t = task({
+            acceptance_criteria: ['the inventory ledger decrements on purchase'],
+            tests_to_write: ['POST /checkout returns 201 for a valid cart'], // unrelated
+        })
+        const r = testabilityGate([t])
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('inventory ledger'))).toBe(true)
+    })
 
-  it("Δ testability: a vague/non-actionable criterion BLOCKS", () => {
-    const t = task({
-      acceptance_criteria: ["the checkout works well"],
-      tests_to_write: ["checkout works"],
-    });
-    const r = testabilityGate([t]);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("vague"))).toBe(true);
-  });
+    it('Δ testability: a vague/non-actionable criterion BLOCKS', () => {
+        const t = task({
+            acceptance_criteria: ['the checkout works well'],
+            tests_to_write: ['checkout works'],
+        })
+        const r = testabilityGate([t])
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('vague'))).toBe(true)
+    })
 
-  it("Δ testability: a concrete criterion with a matching test PASSES", () => {
-    const r = testabilityGate([task()]);
-    expect(r.passed).toBe(true);
-    expect(r.blockers).toEqual([]);
-  });
-});
+    it('Δ testability: a concrete criterion with a matching test PASSES', () => {
+        const r = testabilityGate([task()])
+        expect(r.passed).toBe(true)
+        expect(r.blockers).toEqual([])
+    })
+})
 
-describe("vertical-slice gate", () => {
-  it("blocks a purely-horizontal decomposition (all tasks are bare layers)", () => {
-    const tasks = [
-      task({ task_id: "t1", title: "Database schema" }),
-      task({ task_id: "t2", title: "Backend" }),
-      task({ task_id: "t3", title: "Frontend" }),
-    ];
-    const r = verticalSliceGate(tasks);
-    expect(r.passed).toBe(false);
-    expect(r.blockers[0]).toContain("horizontal");
-  });
+describe('vertical-slice gate', () => {
+    it('blocks a purely-horizontal decomposition (all tasks are bare layers)', () => {
+        const tasks = [
+            task({task_id: 't1', title: 'Database schema'}),
+            task({task_id: 't2', title: 'Backend'}),
+            task({task_id: 't3', title: 'Frontend'}),
+        ]
+        const r = verticalSliceGate(tasks)
+        expect(r.passed).toBe(false)
+        expect(r.blockers[0]).toContain('horizontal')
+    })
 
-  it("passes a mixed/feature decomposition", () => {
-    const tasks = [
-      task({ task_id: "t1", title: "Add checkout endpoint with order creation" }),
-      task({ task_id: "t2", title: "Database schema" }),
-    ];
-    expect(verticalSliceGate(tasks).passed).toBe(true);
-  });
+    it('passes a mixed/feature decomposition', () => {
+        const tasks = [
+            task({task_id: 't1', title: 'Add checkout endpoint with order creation'}),
+            task({task_id: 't2', title: 'Database schema'}),
+        ]
+        expect(verticalSliceGate(tasks).passed).toBe(true)
+    })
 
-  it("passes a single-task spec (no decomposition to judge)", () => {
-    expect(verticalSliceGate([task({ title: "Backend" })]).passed).toBe(true);
-  });
-});
+    it('passes a single-task spec (no decomposition to judge)', () => {
+        expect(verticalSliceGate([task({title: 'Backend'})]).passed).toBe(true)
+    })
+})
 
-describe("traceability gate — BIDIRECTIONAL, PRD = axiom", () => {
-  const body =
-    "- The system must let a user submit a checkout order.\n" +
-    "- The system must email an order confirmation receipt.\n";
+describe('traceability gate — BIDIRECTIONAL, PRD = axiom', () => {
+    const body =
+        '- The system must let a user submit a checkout order.\n' +
+        '- The system must email an order confirmation receipt.\n'
 
-  it("Δ traceability: a PRD requirement with NO covering acceptance criterion BLOCKS (backward)", () => {
-    // Spec covers checkout submission but NOT the email confirmation requirement.
-    const tasks = [
-      task({
-        task_id: "t1",
-        title: "Submit checkout order",
-        description: "user submits a checkout order",
-        acceptance_criteria: ["a user can submit a checkout order"],
-        tests_to_write: ["user can submit a checkout order"],
-      }),
-    ];
-    const r = traceabilityGate(prd(body), tasks);
-    expect(r.passed).toBe(false);
-    expect(
-      r.blockers.some(
-        (b) => b.includes("email") || b.includes("confirmation") || b.includes("receipt"),
-      ),
-    ).toBe(true);
-  });
+    it('Δ traceability: a PRD requirement with NO covering acceptance criterion BLOCKS (backward)', () => {
+        // Spec covers checkout submission but NOT the email confirmation requirement.
+        const tasks = [
+            task({
+                task_id: 't1',
+                title: 'Submit checkout order',
+                description: 'user submits a checkout order',
+                acceptance_criteria: ['a user can submit a checkout order'],
+                tests_to_write: ['user can submit a checkout order'],
+            }),
+        ]
+        const r = traceabilityGate(prd(body), tasks)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('email') || b.includes('confirmation') || b.includes('receipt'))).toBe(
+            true
+        )
+    })
 
-  it("Δ traceability: a task that ladders to NO PRD requirement BLOCKS (forward)", () => {
-    const tasks = [
-      task({
-        task_id: "t1",
-        title: "Submit checkout order",
-        description: "user submits a checkout order",
-        acceptance_criteria: [
-          "a user can submit a checkout order",
-          "an order confirmation email receipt is sent",
-        ],
-        tests_to_write: ["user submits checkout order", "order confirmation email receipt sent"],
-      }),
-      task({
-        task_id: "t2",
-        title: "Add an unrelated analytics dashboard widget",
-        description: "render telemetry sparklines on a metrics dashboard",
-        acceptance_criteria: ["the analytics dashboard renders telemetry sparklines"],
-        tests_to_write: ["analytics dashboard renders telemetry sparklines"],
-      }),
-    ];
-    const r = traceabilityGate(prd(body), tasks);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("t2") && b.includes("ladder"))).toBe(true);
-  });
+    it('Δ traceability: a task that ladders to NO PRD requirement BLOCKS (forward)', () => {
+        const tasks = [
+            task({
+                task_id: 't1',
+                title: 'Submit checkout order',
+                description: 'user submits a checkout order',
+                acceptance_criteria: [
+                    'a user can submit a checkout order',
+                    'an order confirmation email receipt is sent',
+                ],
+                tests_to_write: ['user submits checkout order', 'order confirmation email receipt sent'],
+            }),
+            task({
+                task_id: 't2',
+                title: 'Add an unrelated analytics dashboard widget',
+                description: 'render telemetry sparklines on a metrics dashboard',
+                acceptance_criteria: ['the analytics dashboard renders telemetry sparklines'],
+                tests_to_write: ['analytics dashboard renders telemetry sparklines'],
+            }),
+        ]
+        const r = traceabilityGate(prd(body), tasks)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('t2') && b.includes('ladder'))).toBe(true)
+    })
 
-  it("Δ traceability: a fully-covered spec (both directions) PASSES", () => {
-    const tasks = [
-      task({
-        task_id: "t1",
-        title: "Submit checkout order",
-        description: "user submits a checkout order",
-        acceptance_criteria: ["a user can submit a checkout order"],
-        tests_to_write: ["user submits a checkout order"],
-      }),
-      task({
-        task_id: "t2",
-        title: "Email order confirmation receipt",
-        description: "system emails an order confirmation receipt",
-        acceptance_criteria: ["the system emails an order confirmation receipt on submit"],
-        tests_to_write: ["system emails order confirmation receipt"],
-      }),
-    ];
-    const r = traceabilityGate(prd(body), tasks);
-    expect(r.passed).toBe(true);
-    expect(r.blockers).toEqual([]);
-  });
+    it('Δ traceability: a fully-covered spec (both directions) PASSES', () => {
+        const tasks = [
+            task({
+                task_id: 't1',
+                title: 'Submit checkout order',
+                description: 'user submits a checkout order',
+                acceptance_criteria: ['a user can submit a checkout order'],
+                tests_to_write: ['user submits a checkout order'],
+            }),
+            task({
+                task_id: 't2',
+                title: 'Email order confirmation receipt',
+                description: 'system emails an order confirmation receipt',
+                acceptance_criteria: ['the system emails an order confirmation receipt on submit'],
+                tests_to_write: ['system emails order confirmation receipt'],
+            }),
+        ]
+        const r = traceabilityGate(prd(body), tasks)
+        expect(r.passed).toBe(true)
+        expect(r.blockers).toEqual([])
+    })
 
-  it("Δ traceability: a PRD with no extractable requirements BLOCKS (cannot verify the axiom)", () => {
-    const r = traceabilityGate(prd("   \n  \n"), [task()]);
-    expect(r.passed).toBe(false);
-  });
-});
+    it('Δ traceability: a PRD with no extractable requirements BLOCKS (cannot verify the axiom)', () => {
+        const r = traceabilityGate(prd('   \n  \n'), [task()])
+        expect(r.passed).toBe(false)
+    })
+})
 
-describe("extractPrdRequirements", () => {
-  it("pulls bullets, numbered items, and normative sentences", () => {
-    const reqs = extractPrdRequirements(
-      "# Heading\n- bullet one\n1. numbered item\nThe app must persist sessions.\nplain prose line\n",
-    );
-    expect(reqs).toContain("bullet one");
-    expect(reqs).toContain("numbered item");
-    expect(reqs.some((r) => r.includes("must persist sessions"))).toBe(true);
-    // A plain non-normative prose line is not a requirement.
-    expect(reqs).not.toContain("plain prose line");
-  });
+describe('extractPrdRequirements', () => {
+    it('pulls bullets, numbered items, and normative sentences', () => {
+        const reqs = extractPrdRequirements(
+            '# Heading\n- bullet one\n1. numbered item\nThe app must persist sessions.\nplain prose line\n'
+        )
+        expect(reqs).toContain('bullet one')
+        expect(reqs).toContain('numbered item')
+        expect(reqs.some((r) => r.includes('must persist sessions'))).toBe(true)
+        // A plain non-normative prose line is not a requirement.
+        expect(reqs).not.toContain('plain prose line')
+    })
 
-  it("Δ skips bullets and normative sentences under an Out of Scope section", () => {
-    const reqs = extractPrdRequirements(
-      [
-        "## Requirements",
-        "- show balance",
-        "## Out of Scope",
-        "- Transaction history",
-        "The app must not send push notifications.",
-        "## Rollout",
-        "- feature flag",
-      ].join("\n"),
-    );
-    expect(reqs).toContain("show balance");
-    expect(reqs).not.toContain("Transaction history");
-    expect(reqs.some((r) => r.includes("push notifications"))).toBe(false);
-    // A same-level heading after the excluded section resets the skip.
-    expect(reqs).toContain("feature flag");
-  });
+    it('Δ skips bullets and normative sentences under an Out of Scope section', () => {
+        const reqs = extractPrdRequirements(
+            [
+                '## Requirements',
+                '- show balance',
+                '## Out of Scope',
+                '- Transaction history',
+                'The app must not send push notifications.',
+                '## Rollout',
+                '- feature flag',
+            ].join('\n')
+        )
+        expect(reqs).toContain('show balance')
+        expect(reqs).not.toContain('Transaction history')
+        expect(reqs.some((r) => r.includes('push notifications'))).toBe(false)
+        // A same-level heading after the excluded section resets the skip.
+        expect(reqs).toContain('feature flag')
+    })
 
-  it("Δ a subsection nested under an excluded section stays skipped", () => {
-    const reqs = extractPrdRequirements(
-      ["## Out of Scope", "### Later maybe", "- realtime sync", "# Goals", "- login"].join("\n"),
-    );
-    expect(reqs).not.toContain("realtime sync");
-    // A higher-level heading also resets the skip.
-    expect(reqs).toContain("login");
-  });
+    it('Δ a subsection nested under an excluded section stays skipped', () => {
+        const reqs = extractPrdRequirements(
+            ['## Out of Scope', '### Later maybe', '- realtime sync', '# Goals', '- login'].join('\n')
+        )
+        expect(reqs).not.toContain('realtime sync')
+        // A higher-level heading also resets the skip.
+        expect(reqs).toContain('login')
+    })
 
-  it("Δ recognizes exclusion-heading variants case-insensitively", () => {
-    for (const heading of ["Out-of-Scope", "Non-goals", "NON GOALS", "Not doing", "Won't do"]) {
-      const reqs = extractPrdRequirements(
-        `## ${heading}\n- excluded thing\n## Scope\n- kept thing\n`,
-      );
-      expect(reqs, heading).not.toContain("excluded thing");
-      expect(reqs, heading).toContain("kept thing");
-    }
-  });
-});
+    it('Δ recognizes exclusion-heading variants case-insensitively', () => {
+        for (const heading of ['Out-of-Scope', 'Non-goals', 'NON GOALS', 'Not doing', "Won't do"]) {
+            const reqs = extractPrdRequirements(`## ${heading}\n- excluded thing\n## Scope\n- kept thing\n`)
+            expect(reqs, heading).not.toContain('excluded thing')
+            expect(reqs, heading).toContain('kept thing')
+        }
+    })
+})
 
-describe("runSpecGates — conjunctive", () => {
-  it("aggregates blockers from every failing gate", () => {
-    const tasks = [
-      task({
-        task_id: "t1",
-        title: "Backend",
-        acceptance_criteria: ["works well"],
-        tests_to_write: ["x"],
-      }),
-      task({
-        task_id: "t2",
-        title: "Frontend",
-        acceptance_criteria: ["works well"],
-        tests_to_write: ["x"],
-      }),
-    ];
-    const r = runSpecGates(prd("- must do a thing\n"), tasks);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.length).toBeGreaterThan(1);
-  });
-});
+describe('runSpecGates — conjunctive', () => {
+    it('aggregates blockers from every failing gate', () => {
+        const tasks = [
+            task({
+                task_id: 't1',
+                title: 'Backend',
+                acceptance_criteria: ['works well'],
+                tests_to_write: ['x'],
+            }),
+            task({
+                task_id: 't2',
+                title: 'Frontend',
+                acceptance_criteria: ['works well'],
+                tests_to_write: ['x'],
+            }),
+        ]
+        const r = runSpecGates(prd('- must do a thing\n'), tasks)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.length).toBeGreaterThan(1)
+    })
+})
 
-describe("specifiability gate — deterministic pre-generation refusal (S9)", () => {
-  const HEALTHY_BODY = [
-    "## Summary",
-    "",
-    "Shoppers authenticate to the application with their email address and password. " +
-      "A successful login issues a session token the client stores and presents on " +
-      "subsequent requests to the application programming interface.",
-    "",
-    "## Requirements",
-    "",
-    "- Users must be able to log in with email and password and receive a session token",
-    "",
-    "## Acceptance Criteria",
-    "",
-    "- User logs in with valid email and password and receives a session token",
-  ].join("\n");
+describe('specifiability gate — deterministic pre-generation refusal (S9)', () => {
+    const HEALTHY_BODY = [
+        '## Summary',
+        '',
+        'Shoppers authenticate to the application with their email address and password. ' +
+            'A successful login issues a session token the client stores and presents on ' +
+            'subsequent requests to the application programming interface.',
+        '',
+        '## Requirements',
+        '',
+        '- Users must be able to log in with email and password and receive a session token',
+        '',
+        '## Acceptance Criteria',
+        '',
+        '- User logs in with valid email and password and receives a session token',
+    ].join('\n')
 
-  /** ≥200 chars of prose, no bullets, no normative verbs — nothing extractable. */
-  const PROSE_NO_REQUIREMENTS =
-    "The team wants the dashboard to feel snappier for shoppers browsing on their phones. " +
-    "Today the landing view takes a long time to draw and people abandon the page before it " +
-    "settles. We want a faster first paint and a calmer layout overall for everyone involved.";
+    /** ≥200 chars of prose, no bullets, no normative verbs — nothing extractable. */
+    const PROSE_NO_REQUIREMENTS =
+        'The team wants the dashboard to feel snappier for shoppers browsing on their phones. ' +
+        'Today the landing view takes a long time to draw and people abandon the page before it ' +
+        'settles. We want a faster first paint and a calmer layout overall for everyone involved.'
 
-  it("Δ specifiability: a trivial (too-short) body is refused, blocker names the minimum", () => {
-    const r = specifiabilityGate(
-      "## Summary\n\nFix the login bug.\n\n- login must work\n\n## Acceptance Criteria\n\n- login works with a valid password",
-    );
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("trivial") && b.includes("200"))).toBe(true);
-    expect(r.blockers).toHaveLength(1);
-  });
+    it('Δ specifiability: a trivial (too-short) body is refused, blocker names the minimum', () => {
+        const r = specifiabilityGate(
+            '## Summary\n\nFix the login bug.\n\n- login must work\n\n## Acceptance Criteria\n\n- login works with a valid password'
+        )
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('trivial') && b.includes('200'))).toBe(true)
+        expect(r.blockers).toHaveLength(1)
+    })
 
-  it("Δ specifiability: a body with no extractable requirement is refused", () => {
-    const body = `${PROSE_NO_REQUIREMENTS}\n\n## Acceptance Criteria\n\nThe page feels pleasant.`;
-    const r = specifiabilityGate(body);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("no extractable requirements"))).toBe(true);
-    expect(r.blockers).toHaveLength(1);
-  });
+    it('Δ specifiability: a body with no extractable requirement is refused', () => {
+        const body = `${PROSE_NO_REQUIREMENTS}\n\n## Acceptance Criteria\n\nThe page feels pleasant.`
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('no extractable requirements'))).toBe(true)
+        expect(r.blockers).toHaveLength(1)
+    })
 
-  it("Δ specifiability: a body without an acceptance-criteria-shaped section is refused", () => {
-    const body = `${PROSE_NO_REQUIREMENTS}\n\n## Requirements\n\n- the landing view must render its first paint within one second on a phone`;
-    const r = specifiabilityGate(body);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("acceptance-criteria"))).toBe(true);
-    expect(r.blockers).toHaveLength(1);
-  });
+    it('Δ specifiability: a body without an acceptance-criteria-shaped section is refused', () => {
+        const body = `${PROSE_NO_REQUIREMENTS}\n\n## Requirements\n\n- the landing view must render its first paint within one second on a phone`
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('acceptance-criteria'))).toBe(true)
+        expect(r.blockers).toHaveLength(1)
+    })
 
-  it("Δ specifiability: a healthy PRD passes", () => {
-    const r = specifiabilityGate(HEALTHY_BODY);
-    expect(r.passed).toBe(true);
-    expect(r.blockers).toEqual([]);
-  });
+    it('Δ specifiability: a healthy PRD passes', () => {
+        const r = specifiabilityGate(HEALTHY_BODY)
+        expect(r.passed).toBe(true)
+        expect(r.blockers).toEqual([])
+    })
 
-  it("Δ specifiability: all failing checks are reported together (no early exit)", () => {
-    const r = specifiabilityGate("Make the app better please.");
-    expect(r.passed).toBe(false);
-    expect(r.blockers).toHaveLength(3);
-  });
+    it('Δ specifiability: all failing checks are reported together (no early exit)', () => {
+        const r = specifiabilityGate('Make the app better please.')
+        expect(r.passed).toBe(false)
+        expect(r.blockers).toHaveLength(3)
+    })
 
-  it("Δ specifiability: bullets only under Out-of-Scope do not count as requirements", () => {
-    const body = [
-      PROSE_NO_REQUIREMENTS,
-      "",
-      "## Out of Scope",
-      "",
-      "- rewriting the settings page",
-      "- migrating the design system",
-      "",
-      "## Acceptance Criteria",
-      "",
-      "Nothing verifiable here yet.",
-    ].join("\n");
-    const r = specifiabilityGate(body);
-    expect(r.passed).toBe(false);
-    expect(r.blockers.some((b) => b.includes("no extractable requirements"))).toBe(true);
-    expect(r.blockers).toHaveLength(1);
-  });
+    it('Δ specifiability: bullets only under Out-of-Scope do not count as requirements', () => {
+        const body = [
+            PROSE_NO_REQUIREMENTS,
+            '',
+            '## Out of Scope',
+            '',
+            '- rewriting the settings page',
+            '- migrating the design system',
+            '',
+            '## Acceptance Criteria',
+            '',
+            'Nothing verifiable here yet.',
+        ].join('\n')
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('no extractable requirements'))).toBe(true)
+        expect(r.blockers).toHaveLength(1)
+    })
 
-  it("accepts 'Definition of Done' as the acceptance-criteria-shaped section", () => {
-    const body = `${PROSE_NO_REQUIREMENTS}\n\n- the landing view must render within one second\n\n### Definition of Done\n\n- first paint under one second on a mid-range phone`;
-    const r = specifiabilityGate(body);
-    expect(r.passed).toBe(true);
-  });
-});
+    it("accepts 'Definition of Done' as the acceptance-criteria-shaped section", () => {
+        const body = `${PROSE_NO_REQUIREMENTS}\n\n- the landing view must render within one second\n\n### Definition of Done\n\n- first paint under one second on a mid-range phone`
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(true)
+    })
+})

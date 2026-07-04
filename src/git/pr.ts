@@ -10,31 +10,31 @@
  * a reporter; the orchestrator persists `{number}` via StateManager.updateTask). It
  * tests against the fake with zero network.
  */
-import { createLogger } from "../shared/index.js";
-import { GitSchema } from "../config/schema.js";
-import type { GhClient } from "./gh-client.js";
+import {createLogger} from '../shared/index.js'
+import {GitSchema} from '../config/schema.js'
+import type {GhClient} from './gh-client.js'
 
-const log = createLogger("git");
+const log = createLogger('git')
 
-const GIT_DEFAULTS = GitSchema.parse({});
+const GIT_DEFAULTS = GitSchema.parse({})
 
 /** Args to {@link createTaskPrIdempotent}. */
 export interface CreateTaskPrArgs {
-  ghClient: GhClient;
-  /** Head branch (the run-scoped task branch). */
-  branch: string;
-  title: string;
-  body: string;
-  /** Base branch to target. Defaults to the configured staging branch. */
-  base?: string;
+    ghClient: GhClient
+    /** Head branch (the run-scoped task branch). */
+    branch: string
+    title: string
+    body: string
+    /** Base branch to target. Defaults to the configured staging branch. */
+    base?: string
 }
 
 /** Result of {@link createTaskPrIdempotent}. */
 export interface TaskPrResult {
-  number: number;
-  url: string;
-  /** True iff an existing open PR was found (no new PR opened). */
-  resumed: boolean;
+    number: number
+    url: string
+    /** True iff an existing open PR was found (no new PR opened). */
+    resumed: boolean
 }
 
 /**
@@ -43,31 +43,29 @@ export interface TaskPrResult {
  * number + url and whether it was resumed.
  */
 export async function createTaskPrIdempotent(args: CreateTaskPrArgs): Promise<TaskPrResult> {
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+    const base = args.base ?? GIT_DEFAULTS.stagingBranch
 
-  // Δ P: look up by head FIRST (state "all"). A kill can land after the PR was
-  // opened OR even after it MERGED but before the run recorded `done` — BOTH are
-  // the same logical PR, and re-creating either would open a duplicate (or hit
-  // "no commits between" once the squashed branch diverged from staging). Prefer
-  // an OPEN PR (the normal resume); fall back to a MERGED one (post-merge-crash
-  // resume) so ship re-enters and the serial-writer merge step idempotently
-  // no-ops. A CLOSED-unmerged PR is NOT a resume target (manual intervention) —
-  // fall through and open a fresh PR.
-  const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
-  const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
-  if (pr !== undefined) {
-    log.info(
-      `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`,
-    );
-    return { number: pr.number, url: pr.url ?? "", resumed: true };
-  }
+    // Δ P: look up by head FIRST (state "all"). A kill can land after the PR was
+    // opened OR even after it MERGED but before the run recorded `done` — BOTH are
+    // the same logical PR, and re-creating either would open a duplicate (or hit
+    // "no commits between" once the squashed branch diverged from staging). Prefer
+    // an OPEN PR (the normal resume); fall back to a MERGED one (post-merge-crash
+    // resume) so ship re-enters and the serial-writer merge step idempotently
+    // no-ops. A CLOSED-unmerged PR is NOT a resume target (manual intervention) —
+    // fall through and open a fresh PR.
+    const existing = await args.ghClient.prList({head: args.branch, base, state: 'all'})
+    const pr = existing.find((p) => p.state === 'OPEN') ?? existing.find((p) => p.state === 'MERGED')
+    if (pr !== undefined) {
+        log.info(`resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`)
+        return {number: pr.number, url: pr.url ?? '', resumed: true}
+    }
 
-  const created = await args.ghClient.prCreate({
-    base,
-    head: args.branch,
-    title: args.title,
-    body: args.body,
-  });
-  log.info(`created PR #${created.number} for head '${args.branch}'`);
-  return { number: created.number, url: created.url, resumed: false };
+    const created = await args.ghClient.prCreate({
+        base,
+        head: args.branch,
+        title: args.title,
+        body: args.body,
+    })
+    log.info(`created PR #${created.number} for head '${args.branch}'`)
+    return {number: created.number, url: created.url, resumed: false}
 }

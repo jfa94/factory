@@ -13,37 +13,38 @@
  * The {@link UsageSignal} interface lets units test the pacer with a fake, so no
  * statusline file is needed to exercise the decision logic.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { z } from "zod";
-import { parseJson } from "../shared/json.js";
-import { nowEpoch as defaultNowEpoch } from "../shared/time.js";
-import { createLogger } from "../shared/logging.js";
-import { resolveDataDir, type DataDirOptions } from "../config/load.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {existsSync, readFileSync} from 'node:fs'
+import {join} from 'node:path'
+import {z} from 'zod'
+import {parseJson} from '../shared/json.js'
+import {nowEpoch as defaultNowEpoch} from '../shared/time.js'
+import {createLogger} from '../shared/logging.js'
+import {resolveDataDir, type DataDirOptions} from '../config/load.js'
 
-const log = createLogger("quota:usage");
+const log = createLogger('quota:usage')
 
 /** Hard staleness ceiling, seconds. A cache older than this is a prior session. */
-export const STALE_CEILING_SECONDS = 3600;
+export const STALE_CEILING_SECONDS = 3600
 /** Soft staleness threshold, seconds. Older than this warns but is still usable. */
-export const STALE_WARN_SECONDS = 120;
+export const STALE_WARN_SECONDS = 120
 
 /** A specific, closed reason a reading is unavailable (matches the bash sentinels). */
 export type UnavailableReason =
-  | "usage-cache-missing"
-  | "usage-cache-malformed"
-  | "usage-cache-fields-missing"
-  | "resets-at-missing"
-  | "usage-cache-too-stale"
-  | "five-hour-window-reset"
-  | "seven-day-window-reset";
+    | 'usage-cache-missing'
+    | 'usage-cache-malformed'
+    | 'usage-cache-fields-missing'
+    | 'resets-at-missing'
+    | 'usage-cache-too-stale'
+    | 'five-hour-window-reset'
+    | 'seven-day-window-reset'
 
 /** Per-window observation: current utilization (%) + the reset horizon (epoch s). */
 export interface WindowUsage {
-  /** Utilization percentage in [0, ∞); the bash truncates floats to int — we keep the number. */
-  utilizationPct: number;
-  /** Epoch SECONDS when this window resets. */
-  resetsAtEpoch: number;
+    /** Utilization percentage in [0, ∞); the bash truncates floats to int — we keep the number. */
+    utilizationPct: number
+    /** Epoch SECONDS when this window resets. */
+    resetsAtEpoch: number
 }
 
 /**
@@ -52,18 +53,18 @@ export interface WindowUsage {
  * not an exception — observability gaps are routed, not thrown.
  */
 export type UsageReading =
-  | {
-      kind: "available";
-      fiveHour: WindowUsage;
-      sevenDay: WindowUsage;
-      /** Epoch SECONDS the statusline cache was written. */
-      capturedAt: number;
-    }
-  | { kind: "unavailable"; reason: UnavailableReason };
+    | {
+          kind: 'available'
+          fiveHour: WindowUsage
+          sevenDay: WindowUsage
+          /** Epoch SECONDS the statusline cache was written. */
+          capturedAt: number
+      }
+    | {kind: 'unavailable'; reason: UnavailableReason}
 
 /** The seam the pacer consumes. Fakeable in units; the default reads the cache. */
 export interface UsageSignal {
-  read(): Promise<UsageReading>;
+    read(): Promise<UsageReading>
 }
 
 /**
@@ -75,28 +76,30 @@ export interface UsageSignal {
  * contract is "degraded ⇒ sentinel", not "degraded ⇒ crash".
  */
 const RawWindowSchema = z
-  .object({
-    used_percentage: z.unknown().optional(),
-    resets_at: z.unknown().optional(),
-  })
-  .passthrough();
+    .object({
+        used_percentage: z.unknown().optional(),
+        resets_at: z.unknown().optional(),
+    })
+    .passthrough()
 
 const RawCacheSchema = z
-  .object({
-    five_hour: RawWindowSchema.optional(),
-    seven_day: RawWindowSchema.optional(),
-    captured_at: z.unknown().optional(),
-  })
-  .passthrough();
+    .object({
+        five_hour: RawWindowSchema.optional(),
+        seven_day: RawWindowSchema.optional(),
+        captured_at: z.unknown().optional(),
+    })
+    .passthrough()
 
 /** Coerce an unknown JSON scalar to a finite number, or null if not numeric. */
 function asFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value
+    }
+    return null
 }
 
 function unavailable(reason: UnavailableReason): UsageReading {
-  return { kind: "unavailable", reason };
+    return {kind: 'unavailable', reason}
 }
 
 /**
@@ -105,62 +108,62 @@ function unavailable(reason: UnavailableReason): UsageReading {
  * testing without touching the filesystem.
  */
 export function readingFromCache(raw: unknown, nowEpoch: number): UsageReading {
-  const parsed = RawCacheSchema.safeParse(raw);
-  if (!parsed.success) {
-    return unavailable("usage-cache-malformed");
-  }
-  const cache = parsed.data;
+    const parsed = RawCacheSchema.safeParse(raw)
+    if (!parsed.success) {
+        return unavailable('usage-cache-malformed')
+    }
+    const cache = parsed.data
 
-  // Freshness: a non-numeric captured_at coerces to 0 (bash does the same), which
-  // then trips the >3600s ceiling — fail-closed, never proceed on unknown age.
-  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
-  const age = nowEpoch - capturedAt;
-  if (age > STALE_CEILING_SECONDS) {
-    return unavailable("usage-cache-too-stale");
-  }
-  if (age > STALE_WARN_SECONDS) {
-    log.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) — data may be stale`);
-  }
+    // Freshness: a non-numeric captured_at coerces to 0 (bash does the same), which
+    // then trips the >3600s ceiling — fail-closed, never proceed on unknown age.
+    const capturedAt = asFiniteNumber(cache.captured_at) ?? 0
+    const age = nowEpoch - capturedAt
+    if (age > STALE_CEILING_SECONDS) {
+        return unavailable('usage-cache-too-stale')
+    }
+    if (age > STALE_WARN_SECONDS) {
+        log.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) — data may be stale`)
+    }
 
-  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
-  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
-  if (fivePct === null || sevenPct === null) {
-    return unavailable("usage-cache-fields-missing");
-  }
+    const fivePct = asFiniteNumber(cache.five_hour?.used_percentage)
+    const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage)
+    if (fivePct === null || sevenPct === null) {
+        return unavailable('usage-cache-fields-missing')
+    }
 
-  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
-  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
-  if (fiveResets === null || sevenResets === null) {
-    return unavailable("resets-at-missing");
-  }
+    const fiveResets = asFiniteNumber(cache.five_hour?.resets_at)
+    const sevenResets = asFiniteNumber(cache.seven_day?.resets_at)
+    if (fiveResets === null || sevenResets === null) {
+        return unavailable('resets-at-missing')
+    }
 
-  // Post-reset stale guard: a resets_at already in the past means the cache
-  // reflects a previous window (Claude Code only refreshes rate_limits on its own
-  // API responses). Treat as unavailable so the gate fails closed.
-  if (fiveResets <= nowEpoch) {
-    return unavailable("five-hour-window-reset");
-  }
-  if (sevenResets <= nowEpoch) {
-    return unavailable("seven-day-window-reset");
-  }
+    // Post-reset stale guard: a resets_at already in the past means the cache
+    // reflects a previous window (Claude Code only refreshes rate_limits on its own
+    // API responses). Treat as unavailable so the gate fails closed.
+    if (fiveResets <= nowEpoch) {
+        return unavailable('five-hour-window-reset')
+    }
+    if (sevenResets <= nowEpoch) {
+        return unavailable('seven-day-window-reset')
+    }
 
-  return {
-    kind: "available",
-    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
-    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
-    capturedAt,
-  };
+    return {
+        kind: 'available',
+        fiveHour: {utilizationPct: fivePct, resetsAtEpoch: fiveResets},
+        sevenDay: {utilizationPct: sevenPct, resetsAtEpoch: sevenResets},
+        capturedAt,
+    }
 }
 
 /** Path to the statusline usage cache inside a data dir. */
 export function usageCachePath(dataDir: string): string {
-  return join(dataDir, "usage-cache.json");
+    return join(dataDir, 'usage-cache.json')
 }
 
 /** Options for {@link StatuslineUsageSignal}. */
 export interface StatuslineUsageOptions extends DataDirOptions {
-  /** Injectable clock (epoch seconds) for deterministic tests. */
-  now?: () => number;
+    /** Injectable clock (epoch seconds) for deterministic tests. */
+    now?: () => number
 }
 
 /**
@@ -169,43 +172,47 @@ export interface StatuslineUsageOptions extends DataDirOptions {
  * appropriate unavailable sentinel — this reader NEVER throws on a degraded cache.
  */
 export class StatuslineUsageSignal implements UsageSignal {
-  private readonly opts: StatuslineUsageOptions;
+    private readonly opts: StatuslineUsageOptions
 
-  constructor(opts: StatuslineUsageOptions = {}) {
-    this.opts = opts;
-  }
-
-  async read(): Promise<UsageReading> {
-    const now = (this.opts.now ?? defaultNowEpoch)();
-    let dataDir: string;
-    try {
-      dataDir = resolveDataDir(this.opts);
-    } catch {
-      // No data dir resolvable → the cache cannot exist. Fail closed.
-      return unavailable("usage-cache-missing");
+    constructor(opts: StatuslineUsageOptions = {}) {
+        this.opts = opts
     }
 
-    const file = usageCachePath(dataDir);
-    if (!existsSync(file)) {
-      log.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
-      return unavailable("usage-cache-missing");
+    read(): Promise<UsageReading> {
+        return Promise.resolve(this.readSync())
     }
 
-    let raw: unknown;
-    try {
-      raw = parseJson<unknown>(readFileSync(file, "utf8"), file);
-    } catch (err) {
-      log.warn(
-        `usage-cache.json is malformed at ${file}: ${(err as Error).message}; emitting unavailable sentinel`,
-      );
-      return unavailable("usage-cache-malformed");
-    }
+    private readSync(): UsageReading {
+        const now = (this.opts.now ?? defaultNowEpoch)()
+        let dataDir: string
+        try {
+            dataDir = resolveDataDir(this.opts)
+        } catch {
+            // No data dir resolvable → the cache cannot exist. Fail closed.
+            return unavailable('usage-cache-missing')
+        }
 
-    return readingFromCache(raw, now);
-  }
+        const file = usageCachePath(dataDir)
+        if (!existsSync(file)) {
+            log.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`)
+            return unavailable('usage-cache-missing')
+        }
+
+        let raw: unknown
+        try {
+            raw = parseJson(readFileSync(file, 'utf8'), file)
+        } catch (err) {
+            log.warn(
+                `usage-cache.json is malformed at ${file}: ${(err as Error).message}; emitting unavailable sentinel`
+            )
+            return unavailable('usage-cache-malformed')
+        }
+
+        return readingFromCache(raw, now)
+    }
 }
 
 /** A fixed-reading fake {@link UsageSignal} for unit tests. */
 export function fakeUsageSignal(reading: UsageReading): UsageSignal {
-  return { read: async () => reading };
+    return {read: () => Promise.resolve(reading)}
 }

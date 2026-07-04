@@ -58,18 +58,18 @@ Treat any field as possibly absent:
 
 ```jsonc
 {
-  "run_id": "<run-id>",
-  "scan": {
-    /* the RescueScan: per-task lines carry { task_id, status, disposition,
+    "run_id": "<run-id>",
+    "scan": {
+        /* the RescueScan: per-task lines carry { task_id, status, disposition,
        failure_class?, branch?, pr_number? }, plus totals / resettable / would_deadlock */
-  },
-  "repo": {
-    "target_root": "<abs-path to the target repo working tree>",
-    "owner": "<owner>",
-    "name": "<repo>",
-    "staging_branch": "staging/<run-id>", // the run's per-run integration branch (Decision 33)
-    "base_branch": "develop", // config.git.baseBranch — the rollup target
-  },
+    },
+    "repo": {
+        "target_root": "<abs-path to the target repo working tree>",
+        "owner": "<owner>",
+        "name": "<repo>",
+        "staging_branch": "staging/<run-id>", // the run's per-run integration branch (Decision 33)
+        "base_branch": "develop", // config.git.baseBranch — the rollup target
+    },
 }
 ```
 
@@ -105,24 +105,24 @@ required):
 
 ```jsonc
 {
-  "reconciled": true, // true ONLY if no blocker and no unaddressed needs_prompt remains
-  "actions": [
-    // forward-only repairs you ACTUALLY performed
-    "fetched origin; forward-merged origin/develop into staging/run-… (ff, now at <sha>); pushed",
-  ],
-  "needs_prompt": [
-    // destructive/ambiguous items for the runner to confirm — you did NOT act
-    {
-      "action": "delete orphan branch factory/run/t3",
-      "reason": "no live task; deletion is destructive (Iron Law 3)",
-    },
-  ],
-  "blocked": false, // true if a non-auto-recoverable obstacle (merge conflict, missing SHA) stops you
-  "evidence": [
-    // commands + outputs you actually observed
-    "git merge-base --is-ancestor origin/develop staging/run-… → non-zero (branch behind)",
-    "gh pr view 42 → state: MERGED",
-  ],
+    "reconciled": true, // true ONLY if no blocker and no unaddressed needs_prompt remains
+    "actions": [
+        // forward-only repairs you ACTUALLY performed
+        "fetched origin; forward-merged origin/develop into staging/run-… (ff, now at <sha>); pushed",
+    ],
+    "needs_prompt": [
+        // destructive/ambiguous items for the runner to confirm — you did NOT act
+        {
+            "action": "delete orphan branch factory/run/t3",
+            "reason": "no live task; deletion is destructive (Iron Law 3)",
+        },
+    ],
+    "blocked": false, // true if a non-auto-recoverable obstacle (merge conflict, missing SHA) stops you
+    "evidence": [
+        // commands + outputs you actually observed
+        "git merge-base --is-ancestor origin/develop staging/run-… → non-zero (branch behind)",
+        "gh pr view 42 → state: MERGED",
+    ],
 }
 ```
 

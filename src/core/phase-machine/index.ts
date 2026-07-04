@@ -7,49 +7,38 @@
  */
 
 // --- Phase vocabulary ---
-export {
-  TaskPhaseEnum,
-  RunPhaseEnum,
-  TASK_PHASE_ORDER,
-  nextPhase,
-  phaseToInFlightStatus,
-} from "./phases.js";
-export type { TaskPhase, RunPhase } from "./phases.js";
+export {TaskPhaseEnum, RunPhaseEnum, TASK_PHASE_ORDER, nextPhase, phaseToInFlightStatus} from './phases.js'
+export type {TaskPhase, RunPhase} from './phases.js'
 
 // --- Spawn request (Zod) ---
-export {
-  SpawnRoleEnum,
-  AgentSpecSchema,
-  SpawnRequestSchema,
-  parseSpawnRequest,
-} from "./spawn.js";
-export type { SpawnRole, AgentSpec, SpawnRequest } from "./spawn.js";
+export {SpawnRoleEnum, AgentSpecSchema, SpawnRequestSchema, parseSpawnRequest} from './spawn.js'
+export type {SpawnRole, AgentSpec, SpawnRequest} from './spawn.js'
 
 // --- PhaseResult union + constructors + primitives ---
 export {
-  assertNever,
-  isTerminalResult,
-  advance,
-  spawn,
-  gracefulStop,
-  waitRetry,
-  taskDone,
-  taskFailed,
-  finalizeTerminal,
-} from "./result.js";
+    assertNever,
+    isTerminalResult,
+    advance,
+    spawn,
+    gracefulStop,
+    waitRetry,
+    taskDone,
+    taskFailed,
+    finalizeTerminal,
+} from './result.js'
 export type {
-  PhaseResult,
-  AdvanceResult,
-  SpawnAgentsResult,
-  GracefulStopResult,
-  WaitRetryResult,
-  TaskTerminalResult,
-  FinalizeTerminalResult,
-} from "./result.js";
+    PhaseResult,
+    AdvanceResult,
+    SpawnAgentsResult,
+    GracefulStopResult,
+    WaitRetryResult,
+    TaskTerminalResult,
+    FinalizeTerminalResult,
+} from './result.js'
 
 // --- Handler contract (the fakeable seam) ---
-export type { PhaseContext, PhaseHandlers } from "./handlers.js";
+export type {PhaseContext, PhaseHandlers} from './handlers.js'
 
 // --- The engine ---
-export { runPhase, nextPhaseFor, decideFinalize } from "./engine.js";
-export type { EnginePhase } from "./engine.js";
+export {runPhase, nextPhaseFor, decideFinalize} from './engine.js'
+export type {EnginePhase} from './engine.js'

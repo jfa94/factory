@@ -37,11 +37,11 @@ that.
    code in the diff, and the test(s) exercising it (Grep the tree — tests may
    predate the diff only if the diff wires behavior into them).
 4. Assign exactly ONE verdict per requirement — no skips, no duplicates:
-   - `met` — credible diff evidence, exercised by tests.
-   - `partial` — real progress in the diff, but incomplete coverage of the
-     requirement (e.g. happy path only, missing constraint, untested branch).
-   - `unmet` — no credible evidence in the diff, or evidence contradicts the
-     requirement.
+    - `met` — credible diff evidence, exercised by tests.
+    - `partial` — real progress in the diff, but incomplete coverage of the
+      requirement (e.g. happy path only, missing constraint, untested branch).
+    - `unmet` — no credible evidence in the diff, or evidence contradicts the
+      requirement.
 5. Cite evidence tersely (`file:line`, test name) — ≤500 chars per verdict. For
    `unmet`, state what you looked for and did not find.
 
@@ -56,14 +56,14 @@ Your final message is consumed by the engine. End with EXACTLY this JSON shape
 
 ```json
 {
-  "status": "STATUS: DONE",
-  "verdicts": [
-    {
-      "index": 1,
-      "verdict": "met",
-      "evidence": "src/checkout.ts:42 + checkout.test.ts 'returns 201'"
-    }
-  ]
+    "status": "STATUS: DONE",
+    "verdicts": [
+        {
+            "index": 1,
+            "verdict": "met",
+            "evidence": "src/checkout.ts:42 + checkout.test.ts 'returns 201'"
+        }
+    ]
 }
 ```
 

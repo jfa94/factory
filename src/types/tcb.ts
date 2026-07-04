@@ -16,32 +16,32 @@
  * — mirrors the WS1/WS2 closed-enum discipline.
  */
 export type TcbCategory =
-  | "ci-workflows"
-  | "gate-config"
-  | "gate-contract"
-  | "hooks"
-  | "data-runs"
-  | "data-specs"
-  | "data-config"
-  | "docs-factory"
-  | "e2e-suite";
+    | 'ci-workflows'
+    | 'gate-config'
+    | 'gate-contract'
+    | 'hooks'
+    | 'data-runs'
+    | 'data-specs'
+    | 'data-config'
+    | 'docs-factory'
+    | 'e2e-suite'
 
 /** One compiled denylist rule. `test(absPath)` decides membership. */
 export interface TcbRule {
-  /** Which protection class this rule enforces. */
-  readonly category: TcbCategory;
-  /** Human-readable description of what the rule protects (for deny reasons). */
-  readonly describe: string;
-  /** True iff the (already canonicalized, absolute) path is protected by this rule. */
-  readonly test: (absPath: string) => boolean;
+    /** Which protection class this rule enforces. */
+    readonly category: TcbCategory
+    /** Human-readable description of what the rule protects (for deny reasons). */
+    readonly describe: string
+    /** True iff the (already canonicalized, absolute) path is protected by this rule. */
+    readonly test: (absPath: string) => boolean
 }
 
 /** A positive match: the rule that fired + the canonical path it matched. */
 export interface TcbMatch {
-  /** The rule that matched. */
-  readonly rule: TcbRule;
-  /** The canonical absolute path that matched (post normalize/realpath). */
-  readonly canonical: string;
+    /** The rule that matched. */
+    readonly rule: TcbRule
+    /** The canonical absolute path that matched (post normalize/realpath). */
+    readonly canonical: string
 }
 
 /**
@@ -52,8 +52,8 @@ export interface TcbMatch {
  * WHERE the data dir is, never WHETHER it is protected.
  */
 export interface TcbContext {
-  /** The repo root (target repo) absolute path. Used for `.github/`, `hooks/`, `e2e/`. */
-  readonly repoRoot?: string;
-  /** The plugin data dir absolute path (out-of-repo `runs/`, `specs/`). */
-  readonly dataDir?: string;
+    /** The repo root (target repo) absolute path. Used for `.github/`, `hooks/`, `e2e/`. */
+    readonly repoRoot?: string
+    /** The plugin data dir absolute path (out-of-repo `runs/`, `specs/`). */
+    readonly dataDir?: string | undefined
 }

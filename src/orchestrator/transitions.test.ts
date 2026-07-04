@@ -7,459 +7,474 @@
  * the units in isolation (every branch of escalateOrFail / applyProducerOutcome /
  * classifyProducerFailure / markInFlight / completeTask / failTask / failStep).
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {mkdtemp, rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {
-  markInFlight,
-  completeTask,
-  failTask,
-  failStep,
-  escalateOrFail,
-  classifyProducerFailure,
-  applyProducerOutcome,
-  type TransitionDeps,
-} from "./transitions.js";
-import { StateManager } from "../core/state/manager.js";
-import { ESCALATION_CAP } from "../producer/index.js";
-import type { ClassifyDecision, ProducerOutcome } from "../producer/index.js";
-import type { TaskState, TaskPhase } from "../types/index.js";
+    markInFlight,
+    completeTask,
+    failTask,
+    failStep,
+    escalateOrFail,
+    classifyProducerFailure,
+    applyProducerOutcome,
+    type TransitionDeps,
+} from './transitions.js'
+import {StateManager} from '../core/state/manager.js'
+import {ESCALATION_CAP} from '../producer/index.js'
+import type {ClassifyDecision, ProducerOutcome} from '../producer/index.js'
+import type {TaskState, TaskPhase} from '../types/index.js'
 
-const RUN_ID = "run-1";
+const RUN_ID = 'run-1'
 
-describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () => {
-  let dataDir: string;
-  let state: StateManager;
-  let deps: TransitionDeps;
+describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () => {
+    let dataDir: string
+    let state: StateManager
+    let deps: TransitionDeps
 
-  beforeEach(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "factory-transitions-"));
-    state = new StateManager({
-      dataDir,
-      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
-    });
-    deps = { state };
-    await state.create({
-      run_id: RUN_ID,
-      spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
-    });
-  });
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'factory-transitions-'))
+        state = new StateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        deps = {state}
+        await state.create({
+            run_id: RUN_ID,
+            spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
+        })
+    })
 
-  afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
-  });
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+    })
 
-  /** Seed one task row (schema-valid via StateManager.update). */
-  async function seedTask(t: Partial<TaskState> & { task_id: string }) {
-    await state.update(RUN_ID, (s) => ({
-      ...s,
-      tasks: {
-        ...s.tasks,
-        [t.task_id]: {
-          task_id: t.task_id,
-          status: t.status ?? "pending",
-          depends_on: t.depends_on ?? [],
-          escalation_rung: t.escalation_rung ?? 0,
-          reviewers: t.reviewers ?? [],
-          merge_resyncs: t.merge_resyncs ?? 0,
-          ...(t.started_at ? { started_at: t.started_at } : {}),
-          ...(t.ended_at ? { ended_at: t.ended_at } : {}),
-          ...(t.producer_role ? { producer_role: t.producer_role } : {}),
-          ...(t.test_revision_feedback ? { test_revision_feedback: t.test_revision_feedback } : {}),
-          ...(t.e2e_feedback ? { e2e_feedback: t.e2e_feedback } : {}),
-          ...(t.spawn_in_flight ? { spawn_in_flight: t.spawn_in_flight } : {}),
-        },
-      },
-    }));
-  }
-
-  async function readTask(taskId: string): Promise<TaskState> {
-    const run = await state.read(RUN_ID);
-    const task = run.tasks[taskId];
-    if (task === undefined) throw new Error(`test: task '${taskId}' missing`);
-    return task;
-  }
-
-  // -- markInFlight ---------------------------------------------------------
-
-  it("markInFlight maps each phase to its in-flight status and stamps started_at once", async () => {
-    await seedTask({ task_id: "t1" });
-    const cases: ReadonlyArray<[TaskPhase, TaskState["status"]]> = [
-      ["preflight", "pending"],
-      ["tests", "executing"],
-      ["exec", "executing"],
-      ["verify", "reviewing"],
-      ["ship", "shipping"],
-    ];
-    let firstStamp: string | undefined;
-    for (const [phase, status] of cases) {
-      await markInFlight(deps, RUN_ID, "t1", phase);
-      const task = await readTask("t1");
-      expect(task.status).toBe(status);
-      expect(task.started_at).toBeDefined();
-      firstStamp ??= task.started_at;
-      // started_at is stamped on first entry and never moves.
-      expect(task.started_at).toBe(firstStamp);
+    /** Seed one task row (schema-valid via StateManager.update). */
+    async function seedTask(t: Partial<TaskState> & {task_id: string}) {
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            tasks: {
+                ...s.tasks,
+                [t.task_id]: {
+                    task_id: t.task_id,
+                    status: t.status ?? 'pending',
+                    depends_on: t.depends_on ?? [],
+                    escalation_rung: t.escalation_rung ?? 0,
+                    reviewers: t.reviewers ?? [],
+                    merge_resyncs: t.merge_resyncs ?? 0,
+                    ...(t.started_at != null && t.started_at.length > 0 ? {started_at: t.started_at} : {}),
+                    ...(t.ended_at != null && t.ended_at.length > 0 ? {ended_at: t.ended_at} : {}),
+                    ...(t.producer_role ? {producer_role: t.producer_role} : {}),
+                    ...(t.test_revision_feedback != null && t.test_revision_feedback.length > 0
+                        ? {test_revision_feedback: t.test_revision_feedback}
+                        : {}),
+                    ...(t.e2e_feedback != null && t.e2e_feedback.length > 0 ? {e2e_feedback: t.e2e_feedback} : {}),
+                    ...(t.spawn_in_flight ? {spawn_in_flight: t.spawn_in_flight} : {}),
+                },
+            },
+        }))
     }
-  });
 
-  // -- completeTask ---------------------------------------------------------
-
-  it("completeTask persists done + ended_at and returns a done step", async () => {
-    await seedTask({ task_id: "t1", status: "shipping" });
-    const step = await completeTask(deps, RUN_ID, "t1");
-
-    expect(step).toEqual({ done: true, outcome: { outcome: "done" } });
-    const task = await readTask("t1");
-    expect(task.status).toBe("done");
-    expect(task.ended_at).toBeDefined();
-  });
-
-  it("completeTask preserves a pre-existing ended_at (stamped once)", async () => {
-    const ended = "2026-06-01T00:00:00.000Z";
-    await seedTask({ task_id: "t1", status: "shipping", ended_at: ended });
-    await completeTask(deps, RUN_ID, "t1");
-    expect((await readTask("t1")).ended_at).toBe(ended);
-  });
-
-  it("completeTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
-    await seedTask({
-      task_id: "t1",
-      status: "shipping",
-      spawn_in_flight: { phase: "verify", rung: 0, tip_sha: "sha-tip" },
-    });
-    await completeTask(deps, RUN_ID, "t1");
-    expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
-  });
-
-  it("completeTask clears any e2e_feedback (Decision 39 — cleared once the task ships again)", async () => {
-    await seedTask({
-      task_id: "t1",
-      status: "shipping",
-      e2e_feedback: "checkout: expected order confirmation, got 500",
-    });
-    await completeTask(deps, RUN_ID, "t1");
-    expect((await readTask("t1")).e2e_feedback).toBeUndefined();
-  });
-
-  // -- failTask / failStep --------------------------------------------------
-
-  it("failTask persists the closed failure_class + reason (loud fail)", async () => {
-    await seedTask({ task_id: "t1", status: "executing" });
-    await failTask(deps, RUN_ID, "t1", "spec-defect", "criterion self-contradictory");
-
-    const task = await readTask("t1");
-    expect(task.status).toBe("failed");
-    expect(task.failure_class).toBe("spec-defect");
-    expect(task.failure_reason).toBe("criterion self-contradictory");
-    expect(task.ended_at).toBeDefined();
-  });
-
-  it("failTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
-    await seedTask({
-      task_id: "t1",
-      status: "executing",
-      escalation_rung: 2, // must match spawn_in_flight.rung (T3: rung never goes backward)
-      spawn_in_flight: { phase: "exec", rung: 2, tip_sha: "sha-tip" },
-    });
-    await failTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");
-    expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
-  });
-
-  it("failStep fails then returns the failed outcome step", async () => {
-    await seedTask({ task_id: "t1", status: "executing" });
-    const step = await failStep(deps, RUN_ID, "t1", "blocked-environmental", "ci down");
-
-    expect(step).toEqual({
-      done: true,
-      outcome: { outcome: "failed", failure_class: "blocked-environmental", reason: "ci down" },
-    });
-    expect((await readTask("t1")).status).toBe("failed");
-  });
-
-  // -- escalateOrFail -------------------------------------------------------
-
-  it("escalateOrFail on a fail decision is an immediate classified fail (no rung burn)", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const decision: ClassifyDecision = {
-      action: "fail",
-      failureClass: "spec-defect",
-      reason: "unworkable",
-    };
-    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
-
-    expect(step.done).toBe(true);
-    const task = await readTask("t1");
-    expect(task.status).toBe("failed");
-    expect(task.escalation_rung).toBe(0); // never escalated
-  });
-
-  it("escalateOrFail on a retry below the cap bumps the rung, clears reviewers, resumes at the phase", async () => {
-    await seedTask({
-      task_id: "t1",
-      status: "reviewing",
-      escalation_rung: 0,
-      reviewers: [{ reviewer: "quality-reviewer", verdict: "blocked", confirmed_blockers: 1 }],
-    });
-    const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
-    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
-
-    expect(step).toEqual({ done: false, phase: "exec" });
-    const task = await readTask("t1");
-    expect(task.escalation_rung).toBe(1);
-    expect(task.reviewers).toEqual([]); // stale reviewers cleared so verify re-derives
-  });
-
-  it("escalateOrFail on a retry AT the cap fails capability-budget (ladder owns the cap)", async () => {
-    await seedTask({ task_id: "t1", status: "reviewing", escalation_rung: ESCALATION_CAP });
-    const decision: ClassifyDecision = { action: "retry", reason: "still blocked" };
-    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
-
-    expect(step.done).toBe(true);
-    if (!step.done) throw new Error("unreachable");
-    expect(step.outcome.outcome).toBe("failed");
-    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
-    expect(step.outcome.failure_class).toBe("capability-budget");
-    expect((await readTask("t1")).escalation_rung).toBe(ESCALATION_CAP); // not bumped past cap
-  });
-
-  it("escalateOrFail throws loud if the task vanished mid-flight", async () => {
-    const decision: ClassifyDecision = { action: "retry", reason: "x" };
-    await expect(escalateOrFail(deps, RUN_ID, "ghost", decision, "exec")).rejects.toThrow(
-      /vanished/i,
-    );
-  });
-
-  // N1 (S2 parallel enablers) — PINNING TEST. DO NOT "FIX" THE BEHAVIOR THIS PINS
-  // WITHOUT READING THIS COMMENT.
-  //
-  // escalateOrFail reads the run OUTSIDE the state lock (transitions.ts: the
-  // `deps.state.read` snapshot) and computes `nextRung` from that snapshot, then
-  // writes it back in a separate locked updateTask. Two CONCURRENT same-task
-  // escalations therefore LOSE AN UPDATE: both read rung=0, both write rung=1 —
-  // one escalation rung is silently skipped (and with it a model/effort dial bump).
-  //
-  // This is deliberately NOT fixed in the engine. The protocol prevents it:
-  // one-driver-per-task — every `factory` call runs FOREGROUND in the single
-  // runner session (S3 event loop), so exactly one next-action drives a given
-  // task at a time. The backstops if the protocol is violated are the per-run
-  // state write lock (no torn writes) and the result_key exactly-once gate
-  // (orchestrator.ts recordResults: stale/duplicate results reject LOUD — the
-  // sequential seam is pinned in orchestrator.test.ts "stale results…rejects").
-  //
-  // If you make escalateOrFail compute the rung INSIDE the updateTask mutator
-  // (the merge_resyncs pattern in orchestrator.ts), this test flips to rung=2 —
-  // update it deliberately, and only with the protocol context above in mind.
-  //
-  // Approximation note (per the S2 plan): this pins the transitions-layer lost
-  // update deterministically via a read barrier, not the full two-process
-  // next-action race (which needs two OS processes to bypass the in-process lock
-  // queue). The damage pinned is the same seam the race would hit.
-  it("N1: two CONCURRENT same-task escalations lose an update — rung lands at 1, not 2 (protocol, not engine, prevents this)", async () => {
-    await seedTask({ task_id: "t1", status: "reviewing", escalation_rung: 0 });
-
-    // Barrier StateManager over the same dataDir: both escalations must complete
-    // their outside-lock read BEFORE either proceeds to write — deterministic, no
-    // timing. (After the barrier opens, later internal reads pass straight through.)
-    class ReadBarrierStateManager extends StateManager {
-      reads = 0;
-      private open!: () => void;
-      private readonly barrier = new Promise<void>((resolve) => {
-        this.open = resolve;
-      });
-      override async read(runId: string): Promise<Awaited<ReturnType<StateManager["read"]>>> {
-        const snapshot = await super.read(runId);
-        this.reads += 1;
-        if (this.reads === 2) this.open();
-        await this.barrier;
-        return snapshot;
-      }
+    async function readTask(taskId: string): Promise<TaskState> {
+        const run = await state.read(RUN_ID)
+        const task = run.tasks[taskId]
+        if (task === undefined) {
+            throw new Error(`test: task '${taskId}' missing`)
+        }
+        return task
     }
-    const racingState = new ReadBarrierStateManager({
-      dataDir,
-      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
-    });
-    const racingDeps: TransitionDeps = { state: racingState };
-    const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
 
-    const [stepA, stepB] = await Promise.all([
-      escalateOrFail(racingDeps, RUN_ID, "t1", decision, "exec"),
-      escalateOrFail(racingDeps, RUN_ID, "t1", decision, "exec"),
-    ]);
+    // -- markInFlight ---------------------------------------------------------
 
-    // Both callers believe they escalated…
-    expect(stepA).toEqual({ done: false, phase: "exec" });
-    expect(stepB).toEqual({ done: false, phase: "exec" });
-    // …but the rung moved by ONE, not two: the second write clobbered the first.
-    expect((await readTask("t1")).escalation_rung).toBe(1);
-  });
+    it('markInFlight maps each phase to its in-flight status and stamps started_at once', async () => {
+        await seedTask({task_id: 't1'})
+        const cases: readonly [TaskPhase, TaskState['status']][] = [
+            ['preflight', 'pending'],
+            ['tests', 'executing'],
+            ['exec', 'executing'],
+            ['verify', 'reviewing'],
+            ['ship', 'shipping'],
+        ]
+        let firstStamp: string | undefined
+        for (const [phase, status] of cases) {
+            await markInFlight(deps, RUN_ID, 't1', phase)
+            const task = await readTask('t1')
+            expect(task.status).toBe(status)
+            expect(task.started_at).toBeDefined()
+            firstStamp ??= task.started_at
+            // started_at is stamped on first entry and never moves.
+            expect(task.started_at).toBe(firstStamp)
+        }
+    })
 
-  // -- classifyProducerFailure ----------------------------------------------
+    // -- completeTask ---------------------------------------------------------
 
-  it("classifyProducerFailure: blocked-escalate → fail spec-defect", () => {
-    const d = classifyProducerFailure({ status: "blocked-escalate", reason: "unworkable" });
-    expect(d).toEqual({
-      action: "fail",
-      failureClass: "spec-defect",
-      reason: expect.stringContaining("unworkable"),
-    });
-  });
+    it('completeTask persists done + ended_at and returns a done step', async () => {
+        await seedTask({task_id: 't1', status: 'shipping'})
+        const step = await completeTask(deps, RUN_ID, 't1')
 
-  it("classifyProducerFailure: needs-context and error → retry (capability)", () => {
-    expect(classifyProducerFailure({ status: "needs-context", reason: "r1" }).action).toBe("retry");
-    expect(classifyProducerFailure({ status: "error", reason: "r2" }).action).toBe("retry");
-  });
+        expect(step).toEqual({done: true, outcome: {outcome: 'done'}})
+        const task = await readTask('t1')
+        expect(task.status).toBe('done')
+        expect(task.ended_at).toBeDefined()
+    })
 
-  it("classifyProducerFailure: test-defective → retry (regenerate the RED test)", () => {
-    expect(classifyProducerFailure({ status: "test-defective", reason: "wrong pin" }).action).toBe(
-      "retry",
-    );
-  });
+    it('completeTask preserves a pre-existing ended_at (stamped once)', async () => {
+        const ended = '2026-06-01T00:00:00.000Z'
+        await seedTask({task_id: 't1', status: 'shipping', ended_at: ended})
+        await completeTask(deps, RUN_ID, 't1')
+        expect((await readTask('t1')).ended_at).toBe(ended)
+    })
 
-  it("classifyProducerFailure throws if handed a done outcome", () => {
-    expect(() => classifyProducerFailure({ status: "done" } as ProducerOutcome)).toThrow(/done/i);
-  });
+    it('completeTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'shipping',
+            spawn_in_flight: {phase: 'verify', rung: 0, tip_sha: 'sha-tip'},
+        })
+        await completeTask(deps, RUN_ID, 't1')
+        expect((await readTask('t1')).spawn_in_flight).toBeUndefined()
+    })
 
-  // -- applyProducerOutcome -------------------------------------------------
+    it('completeTask clears any e2e_feedback (Decision 39 — cleared once the task ships again)', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'shipping',
+            e2e_feedback: 'checkout: expected order confirmation, got 500',
+        })
+        await completeTask(deps, RUN_ID, 't1')
+        expect((await readTask('t1')).e2e_feedback).toBeUndefined()
+    })
 
-  it("applyProducerOutcome on done records producer_role and advances to resumePhase", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "implementer", phase: "exec", resumePhase: "verify" },
-      { status: "done" },
-    );
+    // -- failTask / failStep --------------------------------------------------
 
-    expect(step).toEqual({ done: false, phase: "verify" });
-    const task = await readTask("t1");
-    expect(task.producer_role).toBe("implementer");
-    expect(task.escalation_rung).toBe(0); // a success never bumps the rung
-  });
+    it('failTask persists the closed failure_class + reason (loud fail)', async () => {
+        await seedTask({task_id: 't1', status: 'executing'})
+        await failTask(deps, RUN_ID, 't1', 'spec-defect', 'criterion self-contradictory')
 
-  it("applyProducerOutcome on a failure status escalates at the SAME producer phase", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const outcome: ProducerOutcome = { status: "error", reason: "tool crashed" };
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "implementer", phase: "exec", resumePhase: "verify" },
-      outcome,
-    );
+        const task = await readTask('t1')
+        expect(task.status).toBe('failed')
+        expect(task.failure_class).toBe('spec-defect')
+        expect(task.failure_reason).toBe('criterion self-contradictory')
+        expect(task.ended_at).toBeDefined()
+    })
 
-    // error → retry → resumes at the producer phase (exec), rung bumped.
-    expect(step).toEqual({ done: false, phase: "exec" });
-    expect((await readTask("t1")).escalation_rung).toBe(1);
-  });
+    it('failTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'executing',
+            escalation_rung: 2, // must match spawn_in_flight.rung (T3: rung never goes backward)
+            spawn_in_flight: {phase: 'exec', rung: 2, tip_sha: 'sha-tip'},
+        })
+        await failTask(deps, RUN_ID, 't1', 'capability-budget', 'cap reached')
+        expect((await readTask('t1')).spawn_in_flight).toBeUndefined()
+    })
 
-  it("applyProducerOutcome on blocked-escalate fails immediately (spec-defect, no rung burn)", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const outcome: ProducerOutcome = { status: "blocked-escalate", reason: "unworkable" };
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "test-writer", phase: "tests", resumePhase: "exec" },
-      outcome,
-    );
+    it('failStep fails then returns the failed outcome step', async () => {
+        await seedTask({task_id: 't1', status: 'executing'})
+        const step = await failStep(deps, RUN_ID, 't1', 'blocked-environmental', 'ci down')
 
-    expect(step.done).toBe(true);
-    if (!step.done) throw new Error("unreachable");
-    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
-    expect(step.outcome.failure_class).toBe("spec-defect");
-    expect((await readTask("t1")).escalation_rung).toBe(0);
-  });
+        expect(step).toEqual({
+            done: true,
+            outcome: {outcome: 'failed', failure_class: 'blocked-environmental', reason: 'ci down'},
+        })
+        expect((await readTask('t1')).status).toBe('failed')
+    })
 
-  // -- applyProducerOutcome: test-defective recovery (Δ D) ------------------
+    // -- escalateOrFail -------------------------------------------------------
 
-  it("applyProducerOutcome on test-defective resumes at TESTS (not exec), persists feedback, bumps rung", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const outcome: ProducerOutcome = {
-      status: "test-defective",
-      reason: "RED test pins user_id = auth.uid()",
-    };
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "implementer", phase: "exec", resumePhase: "verify" },
-      outcome,
-    );
+    it('escalateOrFail on a fail decision is an immediate classified fail (no rung burn)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const decision: ClassifyDecision = {
+            action: 'fail',
+            failureClass: 'spec-defect',
+            reason: 'unworkable',
+        }
+        const step = await escalateOrFail(deps, RUN_ID, 't1', decision, 'exec')
 
-    // Recovers by regenerating the test: resume at `tests`, NOT the implementer's exec.
-    expect(step).toEqual({ done: false, phase: "tests" });
-    const task = await readTask("t1");
-    expect(task.escalation_rung).toBe(1); // bounded by the cap
-    expect(task.test_revision_feedback).toContain("auth.uid()");
-  });
+        expect(step.done).toBe(true)
+        const task = await readTask('t1')
+        expect(task.status).toBe('failed')
+        expect(task.escalation_rung).toBe(0) // never escalated
+    })
 
-  it("applyProducerOutcome on a non-exec test-defective escalates as a producer error (does not throw)", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
-    const outcome: ProducerOutcome = { status: "test-defective", reason: "x" };
-    // The parser is role-blind, so a test-writer can emit 'test-defective'.
-    // That signal is nonsensical for the role: classify as a producer error so
-    // the ladder records + caps it instead of escaping next-action's catch.
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "test-writer", phase: "tests", resumePhase: "exec" },
-      outcome,
-    );
-    // error → retry → resumes at the SAME phase (tests), rung bumped.
-    expect(step).toEqual({ done: false, phase: "tests" });
-    const task = await readTask("t1");
-    expect(task.escalation_rung).toBe(1);
-    // test_revision_feedback is NOT set — only the exec path sets it.
-    expect(task.test_revision_feedback).toBeUndefined();
-  });
+    it('escalateOrFail on a retry below the cap bumps the rung, clears reviewers, resumes at the phase', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'reviewing',
+            escalation_rung: 0,
+            reviewers: [{reviewer: 'quality-reviewer', verdict: 'blocked', confirmed_blockers: 1}],
+        })
+        const decision: ClassifyDecision = {action: 'retry', reason: 'merge gate blocked'}
+        const step = await escalateOrFail(deps, RUN_ID, 't1', decision, 'exec')
 
-  it("a completed test-writer clears any pending test_revision_feedback (no stale leak)", async () => {
-    await seedTask({
-      task_id: "t1",
-      status: "executing",
-      escalation_rung: 1,
-      test_revision_feedback: "prior test pinned a wrong literal",
-    });
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "test-writer", phase: "tests", resumePhase: "exec" },
-      { status: "done" },
-    );
+        expect(step).toEqual({done: false, phase: 'exec'})
+        const task = await readTask('t1')
+        expect(task.escalation_rung).toBe(1)
+        expect(task.reviewers).toEqual([]) // stale reviewers cleared so verify re-derives
+    })
 
-    expect(step).toEqual({ done: false, phase: "exec" });
-    expect((await readTask("t1")).test_revision_feedback).toBeUndefined();
-  });
+    it('escalateOrFail on a retry AT the cap fails capability-budget (ladder owns the cap)', async () => {
+        await seedTask({task_id: 't1', status: 'reviewing', escalation_rung: ESCALATION_CAP})
+        const decision: ClassifyDecision = {action: 'retry', reason: 'still blocked'}
+        const step = await escalateOrFail(deps, RUN_ID, 't1', decision, 'exec')
 
-  it("test-defective at the cap fails capability-budget (bounded recovery, no infinite loop)", async () => {
-    await seedTask({ task_id: "t1", status: "executing", escalation_rung: ESCALATION_CAP });
-    const step = await applyProducerOutcome(
-      deps,
-      RUN_ID,
-      "t1",
-      { role: "implementer", phase: "exec", resumePhase: "verify" },
-      { status: "test-defective", reason: "still pinning the wrong literal" },
-    );
+        expect(step.done).toBe(true)
+        if (!step.done) {
+            throw new Error('unreachable')
+        }
+        expect(step.outcome.outcome).toBe('failed')
+        if (step.outcome.outcome !== 'failed') {
+            throw new Error('unreachable')
+        }
+        expect(step.outcome.failure_class).toBe('capability-budget')
+        expect((await readTask('t1')).escalation_rung).toBe(ESCALATION_CAP) // not bumped past cap
+    })
 
-    expect(step.done).toBe(true);
-    if (!step.done) throw new Error("unreachable");
-    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
-    expect(step.outcome.failure_class).toBe("capability-budget");
-  });
+    it('escalateOrFail throws loud if the task vanished mid-flight', async () => {
+        const decision: ClassifyDecision = {action: 'retry', reason: 'x'}
+        await expect(escalateOrFail(deps, RUN_ID, 'ghost', decision, 'exec')).rejects.toThrow(/vanished/i)
+    })
 
-  // -- markInFlight phase cursor persistence --------------------------------
+    // N1 (S2 parallel enablers) — PINNING TEST. DO NOT "FIX" THE BEHAVIOR THIS PINS
+    // WITHOUT READING THIS COMMENT.
+    //
+    // escalateOrFail reads the run OUTSIDE the state lock (transitions.ts: the
+    // `deps.state.read` snapshot) and computes `nextRung` from that snapshot, then
+    // writes it back in a separate locked updateTask. Two CONCURRENT same-task
+    // escalations therefore LOSE AN UPDATE: both read rung=0, both write rung=1 —
+    // one escalation rung is silently skipped (and with it a model/effort dial bump).
+    //
+    // This is deliberately NOT fixed in the engine. The protocol prevents it:
+    // one-driver-per-task — every `factory` call runs FOREGROUND in the single
+    // runner session (S3 event loop), so exactly one next-action drives a given
+    // task at a time. The backstops if the protocol is violated are the per-run
+    // state write lock (no torn writes) and the result_key exactly-once gate
+    // (orchestrator.ts recordResults: stale/duplicate results reject LOUD — the
+    // sequential seam is pinned in orchestrator.test.ts "stale results…rejects").
+    //
+    // If you make escalateOrFail compute the rung INSIDE the updateTask mutator
+    // (the merge_resyncs pattern in orchestrator.ts), this test flips to rung=2 —
+    // update it deliberately, and only with the protocol context above in mind.
+    //
+    // Approximation note (per the S2 plan): this pins the transitions-layer lost
+    // update deterministically via a read barrier, not the full two-process
+    // next-action race (which needs two OS processes to bypass the in-process lock
+    // queue). The damage pinned is the same seam the race would hit.
+    it('N1: two CONCURRENT same-task escalations lose an update — rung lands at 1, not 2 (protocol, not engine, prevents this)', async () => {
+        await seedTask({task_id: 't1', status: 'reviewing', escalation_rung: 0})
 
-  it("markInFlight persists the precise phase cursor", async () => {
-    await seedTask({ task_id: "t1" });
-    await markInFlight({ state }, RUN_ID, "t1", "exec");
-    const run = await state.read(RUN_ID);
-    expect(run.tasks["t1"]?.status).toBe("executing");
-    expect(run.tasks["t1"]?.phase).toBe("exec");
-  });
-});
+        // Barrier StateManager over the same dataDir: both escalations must complete
+        // their outside-lock read BEFORE either proceeds to write — deterministic, no
+        // timing. (After the barrier opens, later internal reads pass straight through.)
+        class ReadBarrierStateManager extends StateManager {
+            reads = 0
+            private open!: () => void
+            private readonly barrier = new Promise<void>((resolve) => {
+                this.open = resolve
+            })
+            override async read(runId: string): Promise<Awaited<ReturnType<StateManager['read']>>> {
+                const snapshot = await super.read(runId)
+                this.reads += 1
+                if (this.reads === 2) {
+                    this.open()
+                }
+                await this.barrier
+                return snapshot
+            }
+        }
+        const racingState = new ReadBarrierStateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        const racingDeps: TransitionDeps = {state: racingState}
+        const decision: ClassifyDecision = {action: 'retry', reason: 'merge gate blocked'}
+
+        const [stepA, stepB] = await Promise.all([
+            escalateOrFail(racingDeps, RUN_ID, 't1', decision, 'exec'),
+            escalateOrFail(racingDeps, RUN_ID, 't1', decision, 'exec'),
+        ])
+
+        // Both callers believe they escalated…
+        expect(stepA).toEqual({done: false, phase: 'exec'})
+        expect(stepB).toEqual({done: false, phase: 'exec'})
+        // …but the rung moved by ONE, not two: the second write clobbered the first.
+        expect((await readTask('t1')).escalation_rung).toBe(1)
+    })
+
+    // -- classifyProducerFailure ----------------------------------------------
+
+    it('classifyProducerFailure: blocked-escalate → fail spec-defect', () => {
+        const d = classifyProducerFailure({status: 'blocked-escalate', reason: 'unworkable'})
+        expect(d.action).toBe('fail')
+        if (d.action !== 'fail') {
+            throw new Error('expected fail')
+        }
+        expect(d.failureClass).toBe('spec-defect')
+        expect(d.reason).toContain('unworkable')
+    })
+
+    it('classifyProducerFailure: needs-context and error → retry (capability)', () => {
+        expect(classifyProducerFailure({status: 'needs-context', reason: 'r1'}).action).toBe('retry')
+        expect(classifyProducerFailure({status: 'error', reason: 'r2'}).action).toBe('retry')
+    })
+
+    it('classifyProducerFailure: test-defective → retry (regenerate the RED test)', () => {
+        expect(classifyProducerFailure({status: 'test-defective', reason: 'wrong pin'}).action).toBe('retry')
+    })
+
+    it('classifyProducerFailure throws if handed a done outcome', () => {
+        expect(() => classifyProducerFailure({status: 'done'})).toThrow(/done/i)
+    })
+
+    // -- applyProducerOutcome -------------------------------------------------
+
+    it('applyProducerOutcome on done records producer_role and advances to resumePhase', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+            {status: 'done'}
+        )
+
+        expect(step).toEqual({done: false, phase: 'verify'})
+        const task = await readTask('t1')
+        expect(task.producer_role).toBe('implementer')
+        expect(task.escalation_rung).toBe(0) // a success never bumps the rung
+    })
+
+    it('applyProducerOutcome on a failure status escalates at the SAME producer phase', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const outcome: ProducerOutcome = {status: 'error', reason: 'tool crashed'}
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+            outcome
+        )
+
+        // error → retry → resumes at the producer phase (exec), rung bumped.
+        expect(step).toEqual({done: false, phase: 'exec'})
+        expect((await readTask('t1')).escalation_rung).toBe(1)
+    })
+
+    it('applyProducerOutcome on blocked-escalate fails immediately (spec-defect, no rung burn)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const outcome: ProducerOutcome = {status: 'blocked-escalate', reason: 'unworkable'}
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
+            outcome
+        )
+
+        expect(step.done).toBe(true)
+        if (!step.done) {
+            throw new Error('unreachable')
+        }
+        if (step.outcome.outcome !== 'failed') {
+            throw new Error('unreachable')
+        }
+        expect(step.outcome.failure_class).toBe('spec-defect')
+        expect((await readTask('t1')).escalation_rung).toBe(0)
+    })
+
+    // -- applyProducerOutcome: test-defective recovery (Δ D) ------------------
+
+    it('applyProducerOutcome on test-defective resumes at TESTS (not exec), persists feedback, bumps rung', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const outcome: ProducerOutcome = {
+            status: 'test-defective',
+            reason: 'RED test pins user_id = auth.uid()',
+        }
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+            outcome
+        )
+
+        // Recovers by regenerating the test: resume at `tests`, NOT the implementer's exec.
+        expect(step).toEqual({done: false, phase: 'tests'})
+        const task = await readTask('t1')
+        expect(task.escalation_rung).toBe(1) // bounded by the cap
+        expect(task.test_revision_feedback).toContain('auth.uid()')
+    })
+
+    it('applyProducerOutcome on a non-exec test-defective escalates as a producer error (does not throw)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const outcome: ProducerOutcome = {status: 'test-defective', reason: 'x'}
+        // The parser is role-blind, so a test-writer can emit 'test-defective'.
+        // That signal is nonsensical for the role: classify as a producer error so
+        // the ladder records + caps it instead of escaping next-action's catch.
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
+            outcome
+        )
+        // error → retry → resumes at the SAME phase (tests), rung bumped.
+        expect(step).toEqual({done: false, phase: 'tests'})
+        const task = await readTask('t1')
+        expect(task.escalation_rung).toBe(1)
+        // test_revision_feedback is NOT set — only the exec path sets it.
+        expect(task.test_revision_feedback).toBeUndefined()
+    })
+
+    it('a completed test-writer clears any pending test_revision_feedback (no stale leak)', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'executing',
+            escalation_rung: 1,
+            test_revision_feedback: 'prior test pinned a wrong literal',
+        })
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
+            {status: 'done'}
+        )
+
+        expect(step).toEqual({done: false, phase: 'exec'})
+        expect((await readTask('t1')).test_revision_feedback).toBeUndefined()
+    })
+
+    it('test-defective at the cap fails capability-budget (bounded recovery, no infinite loop)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: ESCALATION_CAP})
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+            {status: 'test-defective', reason: 'still pinning the wrong literal'}
+        )
+
+        expect(step.done).toBe(true)
+        if (!step.done) {
+            throw new Error('unreachable')
+        }
+        if (step.outcome.outcome !== 'failed') {
+            throw new Error('unreachable')
+        }
+        expect(step.outcome.failure_class).toBe('capability-budget')
+    })
+
+    // -- markInFlight phase cursor persistence --------------------------------
+
+    it('markInFlight persists the precise phase cursor', async () => {
+        await seedTask({task_id: 't1'})
+        await markInFlight({state}, RUN_ID, 't1', 'exec')
+        const run = await state.read(RUN_ID)
+        expect(run.tasks.t1?.status).toBe('executing')
+        expect(run.tasks.t1?.phase).toBe('exec')
+    })
+})

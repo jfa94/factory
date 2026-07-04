@@ -29,36 +29,28 @@
  * never reads either field, but a real trap for any future caller that decides to
  * start reading `result.mergeGate`/`result.result` off of this call.
  */
-import { buildPanelManifest } from "../verifier/judgment/panel.js";
-import type { CrossVendorResolution } from "../verifier/judgment/vendor.js";
-import { parseRawReview, type Finding } from "../verifier/judgment/finding.js";
-import { runPanel, type AdjudicatedReviewer } from "../verifier/judgment/panel-run.js";
-import {
-  buildWorktreeSource,
-  makeReplayRunnerFactory,
-  type ReviewerVerifications,
-} from "../orchestrator/record.js";
-import type { SpawnRequest } from "../types/index.js";
-import {
-  runE2e,
-  DefaultPlaywrightTool,
-  type E2eResults,
-  type PlaywrightTool,
-} from "../verifier/e2e/index.js";
-import type { Config } from "../config/index.js";
+import {buildPanelManifest} from '../verifier/judgment/panel.js'
+import type {CrossVendorResolution} from '../verifier/judgment/vendor.js'
+import {parseRawReview, type Finding} from '../verifier/judgment/finding.js'
+import {runPanel, type AdjudicatedReviewer} from '../verifier/judgment/panel-run.js'
+import {buildWorktreeSource, makeReplayRunnerFactory, type ReviewerVerifications} from '../orchestrator/record.js'
+import type {SpawnRequest} from '../types/index.js'
+import {runE2e, DefaultPlaywrightTool, type E2eResults, type PlaywrightTool} from '../verifier/e2e/index.js'
+import type {Config} from '../config/index.js'
+import {nonNull} from '../shared/assert.js'
 
 /** The panel spawn manifest bundled with the whole-scope review's diff scope. */
 export interface DebugReviewManifest {
-  /** The panel {@link SpawnRequest} built by {@link buildPanelManifest}. */
-  readonly manifest: SpawnRequest;
-  /** The diff base (a git ref or the empty-tree SHA). */
-  readonly base: string;
-  /** The debug staging checkout path the reviewers run against. */
-  readonly worktree: string;
-  /** Cross-vendor availability, derived from the caller's REAL resolution (Δ U/S5). */
-  readonly codexAvailable: boolean;
-  /** The exact absence reason when unavailable — the runner echoes it verbatim. */
-  readonly codexAbsentReason?: string;
+    /** The panel {@link SpawnRequest} built by {@link buildPanelManifest}. */
+    readonly manifest: SpawnRequest
+    /** The diff base (a git ref or the empty-tree SHA). */
+    readonly base: string
+    /** The debug staging checkout path the reviewers run against. */
+    readonly worktree: string
+    /** Cross-vendor availability, derived from the caller's REAL resolution (Δ U/S5). */
+    readonly codexAvailable: boolean
+    /** The exact absence reason when unavailable — the runner echoes it verbatim. */
+    readonly codexAbsentReason?: string
 }
 
 /**
@@ -67,49 +59,44 @@ export interface DebugReviewManifest {
  * the result with the debug-specific diff-scope fields. No new validation logic.
  */
 export function buildReviewManifest(opts: {
-  readonly resumePhase: SpawnRequest["resume_phase"];
-  readonly model: string;
-  readonly maxTurns: number;
-  readonly base: string;
-  readonly worktree: string;
-  /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
-  readonly crossVendor: CrossVendorResolution;
+    readonly resumePhase: SpawnRequest['resume_phase']
+    readonly model: string
+    readonly maxTurns: number
+    readonly base: string
+    readonly worktree: string
+    /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
+    readonly crossVendor: CrossVendorResolution
 }): DebugReviewManifest {
-  const manifest = buildPanelManifest(
-    opts.resumePhase,
-    opts.model,
-    opts.maxTurns,
-    opts.crossVendor,
-  );
-  return {
-    manifest,
-    base: opts.base,
-    worktree: opts.worktree,
-    codexAvailable: opts.crossVendor.status === "present",
-    ...(opts.crossVendor.status === "absent" ? { codexAbsentReason: opts.crossVendor.reason } : {}),
-  };
+    const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns, opts.crossVendor)
+    return {
+        manifest,
+        base: opts.base,
+        worktree: opts.worktree,
+        codexAvailable: opts.crossVendor.status === 'present',
+        ...(opts.crossVendor.status === 'absent' ? {codexAbsentReason: opts.crossVendor.reason} : {}),
+    }
 }
 
 /** Input to {@link adjudicateWholeScope}. */
 export interface AdjudicateWholeScopeInput {
-  /** Raw, untrusted reviewer JSON output — one entry per panel reviewer. */
-  readonly reviews: readonly unknown[];
-  /** Already-recorded independent finding-verifier verdicts, per reviewer. */
-  readonly verifications: readonly ReviewerVerifications[];
-  /** The worktree citation-verify reads cited files from. */
-  readonly worktree: string;
-  /** Δ U — a recorded second-vendor absence, threaded to the replay runner factory. */
-  readonly crossVendorAbsent?: { readonly reason: string };
+    /** Raw, untrusted reviewer JSON output — one entry per panel reviewer. */
+    readonly reviews: readonly unknown[]
+    /** Already-recorded independent finding-verifier verdicts, per reviewer. */
+    readonly verifications: readonly ReviewerVerifications[]
+    /** The worktree citation-verify reads cited files from. */
+    readonly worktree: string
+    /** Δ U — a recorded second-vendor absence, threaded to the replay runner factory. */
+    readonly crossVendorAbsent?: {readonly reason: string}
 }
 
 /** The result of adjudicating a whole-scope review. */
 export interface AdjudicateWholeScopeResult {
-  /** Per-reviewer adjudicated detail, passed through from `runPanel`. */
-  readonly adjudicated: readonly AdjudicatedReviewer[];
-  /** Every CONFIRMED blocking finding, flattened across all reviewers. */
-  readonly confirmedBlockers: readonly Finding[];
-  /** True iff no reviewer has a confirmed blocker. */
-  readonly clean: boolean;
+    /** Per-reviewer adjudicated detail, passed through from `runPanel`. */
+    readonly adjudicated: readonly AdjudicatedReviewer[]
+    /** Every CONFIRMED blocking finding, flattened across all reviewers. */
+    readonly confirmedBlockers: readonly Finding[]
+    /** True iff no reviewer has a confirmed blocker. */
+    readonly clean: boolean
 }
 
 /**
@@ -127,50 +114,44 @@ export interface AdjudicateWholeScopeResult {
  * Deliberately does NOT read or return `result.mergeGate`/`result.result` — see
  * module header.
  */
-export async function adjudicateWholeScope(
-  input: AdjudicateWholeScopeInput,
-): Promise<AdjudicateWholeScopeResult> {
-  const reviews = input.reviews.map(parseRawReview);
-  const source = await buildWorktreeSource(input.worktree, reviews);
-  const makeRunner = makeReplayRunnerFactory({
-    reviews: input.reviews,
-    verifications: input.verifications,
-    ...(input.crossVendorAbsent !== undefined
-      ? { crossVendorAbsent: input.crossVendorAbsent }
-      : {}),
-  });
+export async function adjudicateWholeScope(input: AdjudicateWholeScopeInput): Promise<AdjudicateWholeScopeResult> {
+    const reviews = input.reviews.map(parseRawReview)
+    const source = await buildWorktreeSource(input.worktree, reviews)
+    const makeRunner = makeReplayRunnerFactory({
+        reviews: input.reviews,
+        verifications: input.verifications,
+        ...(input.crossVendorAbsent !== undefined ? {crossVendorAbsent: input.crossVendorAbsent} : {}),
+    })
 
-  const result = await runPanel({
-    reviews,
-    source,
-    makeRunner,
-    gateEvidence: [],
-    phase: "verify",
-    redact: true,
-  });
+    const result = await runPanel({
+        reviews,
+        source,
+        makeRunner,
+        gateEvidence: [],
+        phase: 'verify',
+        redact: true,
+    })
 
-  // Fail CLOSED on a verifier error (D27), mirroring reviewerResultOf's
-  // identical `hadVerifierError` handling for the per-task merge gate
-  // (`panel-run.ts`): an unresolved confirmation means this pass's true
-  // clean/dirty status is UNKNOWN, not merely "not clean" — never silently
-  // coerce it into `clean: false` and keep looping.
-  const erroredReviewers = result.adjudicated
-    .filter((a) => a.hadVerifierError)
-    .map((a) => a.reviewer);
-  if (erroredReviewers.length > 0) {
-    throw new Error(
-      `adjudicateWholeScope: finding-verifier error for reviewer(s) ${erroredReviewers.join(", ")} — ` +
-        "a blocking finding's confirmation status could not be determined for this pass. " +
-        "Retry the verify spawn for the affected reviewer(s) and re-record before this pass can be judged clean or findings.",
-    );
-  }
+    // Fail CLOSED on a verifier error (D27), mirroring reviewerResultOf's
+    // identical `hadVerifierError` handling for the per-task merge gate
+    // (`panel-run.ts`): an unresolved confirmation means this pass's true
+    // clean/dirty status is UNKNOWN, not merely "not clean" — never silently
+    // coerce it into `clean: false` and keep looping.
+    const erroredReviewers = result.adjudicated.filter((a) => a.hadVerifierError).map((a) => a.reviewer)
+    if (erroredReviewers.length > 0) {
+        throw new Error(
+            `adjudicateWholeScope: finding-verifier error for reviewer(s) ${erroredReviewers.join(', ')} — ` +
+                "a blocking finding's confirmation status could not be determined for this pass. " +
+                'Retry the verify spawn for the affected reviewer(s) and re-record before this pass can be judged clean or findings.'
+        )
+    }
 
-  const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers);
-  return {
-    adjudicated: result.adjudicated,
-    confirmedBlockers,
-    clean: confirmedBlockers.length === 0,
-  };
+    const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers)
+    return {
+        adjudicated: result.adjudicated,
+        confirmedBlockers,
+        clean: confirmedBlockers.length === 0,
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -208,20 +189,20 @@ export async function adjudicateWholeScope(
 
 /** Input to {@link runCommittedE2e}. */
 export interface RunCommittedE2eInput {
-  /** The debug staging checkout the committed e2e suite runs against. */
-  readonly cwd: string;
-  /** `testDir`/`startCommand`/`baseURL`/`readyTimeoutMs` — the resolved e2e config block. */
-  readonly config: Config["e2e"];
+    /** The debug staging checkout the committed e2e suite runs against. */
+    readonly cwd: string
+    /** `testDir`/`startCommand`/`baseURL`/`readyTimeoutMs` — the resolved e2e config block. */
+    readonly config: Config['e2e']
 }
 
 /** The result of {@link runCommittedE2e}: either the suite never ran, or it ran and produced findings. */
 export type E2eFoldResult =
-  | { readonly kind: "skipped"; readonly reason: string }
-  | {
-      readonly kind: "ran";
-      readonly results: E2eResults;
-      readonly findings: readonly Finding[];
-    };
+    | {readonly kind: 'skipped'; readonly reason: string}
+    | {
+          readonly kind: 'ran'
+          readonly results: E2eResults
+          readonly findings: readonly Finding[]
+      }
 
 /**
  * The env every debug-driven Playwright invocation gets — mirrors
@@ -230,13 +211,13 @@ export type E2eFoldResult =
  * this after confirming both `baseURL`/`startCommand` are set (the `!`s
  * below are load-bearing on that precondition, matching e2e.ts's own).
  */
-function debugE2eEnv(cfg: Config["e2e"]): Record<string, string> {
-  return {
-    BASE_URL: cfg.baseURL!,
-    FACTORY_E2E_START_COMMAND: cfg.startCommand!,
-    FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
-    FACTORY_E2E: "1",
-  };
+function debugE2eEnv(cfg: Config['e2e']): Record<string, string> {
+    return {
+        BASE_URL: nonNull(cfg.baseURL),
+        FACTORY_E2E_START_COMMAND: nonNull(cfg.startCommand),
+        FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
+        FACTORY_E2E: '1',
+    }
 }
 
 /**
@@ -247,13 +228,15 @@ function debugE2eEnv(cfg: Config["e2e"]): Record<string, string> {
  * `replaceEnv: true` so `runE2e`'s underlying `exec` does not merge this
  * over `process.env`.
  */
-function scrubbedDebugE2eEnv(cfg: Config["e2e"]): Record<string, string> {
-  const env = debugE2eEnv(cfg);
-  for (const key of ["PATH", "HOME"]) {
-    const v = process.env[key];
-    if (v !== undefined) env[key] = v;
-  }
-  return env;
+function scrubbedDebugE2eEnv(cfg: Config['e2e']): Record<string, string> {
+    const env = debugE2eEnv(cfg)
+    for (const key of ['PATH', 'HOME']) {
+        const v = process.env[key]
+        if (v !== undefined) {
+            env[key] = v
+        }
+    }
+    return env
 }
 
 /**
@@ -276,77 +259,82 @@ function scrubbedDebugE2eEnv(cfg: Config["e2e"]): Record<string, string> {
  * it rather than shelling out to a real Playwright binary.
  */
 export async function runCommittedE2e(
-  input: RunCommittedE2eInput,
-  tool: PlaywrightTool = new DefaultPlaywrightTool(),
+    input: RunCommittedE2eInput,
+    tool: PlaywrightTool = new DefaultPlaywrightTool()
 ): Promise<E2eFoldResult> {
-  const { config } = input;
-  if (!config.startCommand || !config.baseURL) {
-    return {
-      kind: "skipped",
-      reason:
-        "e2e.startCommand/e2e.baseURL not configured — run `factory configure " +
-        "--set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`",
-    };
-  }
+    const {config} = input
+    if (
+        config.startCommand == null ||
+        config.startCommand.length === 0 ||
+        config.baseURL == null ||
+        config.baseURL.length === 0
+    ) {
+        return {
+            kind: 'skipped',
+            reason:
+                'e2e.startCommand/e2e.baseURL not configured — run `factory configure ' +
+                '--set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`',
+        }
+    }
 
-  // runE2e THROWS on a tooling-level failure (missing Playwright binary, empty/
-  // truncated reporter output) — fold it into the same uncitable blocking-finding
-  // shape as an ok:false run instead of crashing the debug loop.
-  let results: E2eResults;
-  try {
-    results = await runE2e(
-      {
-        cwd: input.cwd,
-        env: scrubbedDebugE2eEnv(config),
-        replaceEnv: true,
-        testDir: config.testDir,
-      },
-      tool,
-    );
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return {
-      kind: "ran",
-      results: { ok: false, specs: [], counts: { passed: 0, failed: 0, flaky: 0, skipped: 0 } },
-      findings: [
-        {
-          reviewer: "e2e",
-          severity: "critical",
-          blocking: true,
-          quote: "(uncitable — e2e tooling failure, no per-spec citation available)",
-          claim: "the Playwright e2e run itself failed (tooling error, not a spec failure)",
-          description: `e2e tooling error — the Playwright run itself failed: ${detail}`,
-        },
-      ],
-    };
-  }
+    // runE2e THROWS on a tooling-level failure (missing Playwright binary, empty/
+    // truncated reporter output) — fold it into the same uncitable blocking-finding
+    // shape as an ok:false run instead of crashing the debug loop.
+    let results: E2eResults
+    try {
+        results = await runE2e(
+            {
+                cwd: input.cwd,
+                env: scrubbedDebugE2eEnv(config),
+                replaceEnv: true,
+                testDir: config.testDir,
+            },
+            tool
+        )
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        return {
+            kind: 'ran',
+            results: {ok: false, specs: [], counts: {passed: 0, failed: 0, flaky: 0, skipped: 0}},
+            findings: [
+                {
+                    reviewer: 'e2e',
+                    severity: 'critical',
+                    blocking: true,
+                    quote: '(uncitable — e2e tooling failure, no per-spec citation available)',
+                    claim: 'the Playwright e2e run itself failed (tooling error, not a spec failure)',
+                    description: `e2e tooling error — the Playwright run itself failed: ${detail}`,
+                },
+            ],
+        }
+    }
 
-  const findings: Finding[] = results.specs
-    .filter((spec) => spec.status === "failed")
-    .map((spec) => ({
-      reviewer: "e2e",
-      severity: "critical",
-      blocking: true,
-      file: spec.file,
-      line: 1,
-      quote: spec.title,
-      // claim is schema-bounded to 300 chars; a Playwright title can exceed it.
-      claim: `e2e spec failed: ${spec.title}`.slice(0, 300),
-      description: `e2e spec failed: ${spec.title}`,
-    }));
+    const findings: Finding[] = results.specs
+        .filter((spec) => spec.status === 'failed')
+        .map((spec) => ({
+            reviewer: 'e2e',
+            severity: 'critical',
+            blocking: true,
+            file: spec.file,
+            line: 1,
+            quote: spec.title,
+            // claim is schema-bounded to 300 chars; a Playwright title can exceed it.
+            claim: `e2e spec failed: ${spec.title}`.slice(0, 300),
+            description: `e2e spec failed: ${spec.title}`,
+        }))
 
-  if (!results.ok && results.counts.failed === 0) {
-    findings.push({
-      reviewer: "e2e",
-      severity: "critical",
-      blocking: true,
-      quote: "(uncitable — e2e tooling failure, no per-spec citation available)",
-      claim: "the e2e run failed as a whole with no individually-failed spec",
-      description: "e2e tooling failed with no per-spec failures — investigate the Playwright run",
-    });
-  }
+    if (!results.ok && results.counts.failed === 0) {
+        findings.push({
+            reviewer: 'e2e',
+            severity: 'critical',
+            blocking: true,
+            quote: '(uncitable — e2e tooling failure, no per-spec citation available)',
+            claim: 'the e2e run failed as a whole with no individually-failed spec',
+            description: 'e2e tooling failed with no per-spec failures — investigate the Playwright run',
+        })
+    }
 
-  return { kind: "ran", results, findings };
+    return {kind: 'ran', results, findings}
 }
 
 /**
@@ -356,9 +344,6 @@ export async function runCommittedE2e(
  * e2e failures. A no-op (`confirmedBlockers` returned unchanged) when the
  * suite was skipped for missing config.
  */
-export function foldE2eIntoBlockers(
-  confirmedBlockers: readonly Finding[],
-  e2e: E2eFoldResult,
-): readonly Finding[] {
-  return e2e.kind === "skipped" ? confirmedBlockers : [...confirmedBlockers, ...e2e.findings];
+export function foldE2eIntoBlockers(confirmedBlockers: readonly Finding[], e2e: E2eFoldResult): readonly Finding[] {
+    return e2e.kind === 'skipped' ? confirmedBlockers : [...confirmedBlockers, ...e2e.findings]
 }

@@ -8,20 +8,22 @@
  * LOUD on truncated output (never judge a clipped run), else report observed =
  * `exit 0` with a `<label> exit=<code>` detail.
  */
-import { contractCommand } from "../gate-contract.js";
-import type { GateId } from "../gate-id.js";
-import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
-import { ran } from "../strategy.js";
-import type { GateTools, ProcResult, ToolRunOpts } from "../tools.js";
+import {contractCommand} from '../gate-contract.js'
+import type {GateId} from '../gate-id.js'
+import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
+import {ran} from '../strategy.js'
+import type {GateTools, ProcResult, ToolRunOpts} from '../tools.js'
 
 /** Cap for the stderr/stdout excerpt appended to a failing gate's detail (chars). */
-const EXCERPT_MAX_CHARS = 1000;
+const EXCERPT_MAX_CHARS = 1000
 
 /** Trim + cap raw process output for inclusion in a gate's detail (fix-forward channel). */
 export function excerpt(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
-  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`;
+    const trimmed = text.trim()
+    if (trimmed.length <= EXCERPT_MAX_CHARS) {
+        return trimmed
+    }
+    return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`
 }
 
 /**
@@ -35,37 +37,35 @@ export function excerpt(text: string): string {
  * pre-run applicability check (e.g. lint) reuses the exact same mapping for its run path.
  */
 export function procOutcome(id: GateId, label: string, result: ProcResult): GateOutcome {
-  if (result.truncated) {
-    throw new Error(`${id} gate: ${label} output truncated — refusing to judge a clipped run`);
-  }
-  const base = `${label} exit=${result.code ?? "null"}`;
-  if (result.code === 0) return ran(id, true, base);
-  const output = excerpt(result.stderr || result.stdout);
-  return ran(id, false, output ? `${base}: ${output}` : base);
+    if (result.truncated) {
+        throw new Error(`${id} gate: ${label} output truncated — refusing to judge a clipped run`)
+    }
+    const base = `${label} exit=${result.code ?? 'null'}`
+    if (result.code === 0) {
+        return ran(id, true, base)
+    }
+    const output = excerpt(result.stderr || result.stdout)
+    return ran(id, false, output ? `${base}: ${output}` : base)
 }
 
 /** Build a process-gate strategy from its id, label, and tool invocation. */
 export function procStrategy(
-  id: GateId,
-  label: string,
-  invoke: (tools: GateTools, opts: ToolRunOpts) => Promise<ProcResult>,
+    id: GateId,
+    label: string,
+    invoke: (tools: GateTools, opts: ToolRunOpts) => Promise<ProcResult>
 ): GateStrategy<GateTools> {
-  return {
-    id,
-    async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
-      const opts = { cwd: ctx.worktree };
-      // Gate contract (S7, Decision 46): a contracted `command` override replaces
-      // the built-in tool — `deno check .` instead of tsc, `deno task build`
-      // instead of npm run build.
-      const command = contractCommand(ctx.contract, id);
-      if (command !== undefined) {
-        return procOutcome(
-          id,
-          `contract:${command.join(" ")}`,
-          await ctx.tools.command.run(command, opts),
-        );
-      }
-      return procOutcome(id, label, await invoke(ctx.tools, opts));
-    },
-  };
+    return {
+        id,
+        async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
+            const opts = {cwd: ctx.worktree}
+            // Gate contract (S7, Decision 46): a contracted `command` override replaces
+            // the built-in tool — `deno check .` instead of tsc, `deno task build`
+            // instead of npm run build.
+            const command = contractCommand(ctx.contract, id)
+            if (command !== undefined) {
+                return procOutcome(id, `contract:${command.join(' ')}`, await ctx.tools.command.run(command, opts))
+            }
+            return procOutcome(id, label, await invoke(ctx.tools, opts))
+        },
+    }
 }

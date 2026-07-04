@@ -11,12 +11,12 @@
 
 /** Current time as an ISO-8601 UTC string, e.g. `2026-06-04T12:34:56.789Z`. */
 export function nowIso(): string {
-  return new Date().toISOString();
+    return new Date().toISOString()
 }
 
 /** Current time as epoch SECONDS (integer). */
 export function nowEpoch(): number {
-  return Math.floor(Date.now() / 1000);
+    return Math.floor(Date.now() / 1000)
 }
 
 /**
@@ -25,14 +25,14 @@ export function nowEpoch(): number {
  * contract that callers checked).
  */
 export function parseIso8601ToEpoch(iso: string): number {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) {
-    throw new RangeError(`parseIso8601ToEpoch: unparseable ISO-8601 timestamp: ${iso}`);
-  }
-  return Math.floor(ms / 1000);
+    const ms = Date.parse(iso)
+    if (Number.isNaN(ms)) {
+        throw new RangeError(`parseIso8601ToEpoch: unparseable ISO-8601 timestamp: ${iso}`)
+    }
+    return Math.floor(ms / 1000)
 }
 
 /** Convert epoch SECONDS to an ISO-8601 UTC string. */
 export function epochToIso(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString();
+    return new Date(epochSeconds * 1000).toISOString()
 }

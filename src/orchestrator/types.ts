@@ -25,17 +25,9 @@
  * orchestrator's {@link import("./orchestrator.js").OrchestratorDeps} extends it with the state manager +
  * the quota signal.
  */
-import type {
-  Config,
-  GhClient,
-  GitClient,
-  HoldoutStore,
-  ProvisionWorktreeFn,
-  SpecManifest,
-  VendorProbe,
-} from "./deps.js";
-import type { GateTools } from "../verifier/deterministic/index.js";
-import type { ArtifactStore } from "./artifacts.js";
+import type {Config, GhClient, GitClient, HoldoutStore, ProvisionWorktreeFn, SpecManifest, VendorProbe} from './deps.js'
+import type {GateTools} from '../verifier/deterministic/index.js'
+import type {ArtifactStore} from './artifacts.js'
 
 /**
  * Dry-run / cutover-safety mode (locked decision 5 / plan §Verification step 4).
@@ -47,8 +39,8 @@ import type { ArtifactStore } from "./artifacts.js";
  * Zod enum) and re-exported here so the orchestrator/CLI layers keep their existing
  * `from "../orchestrator/types.js"` import while the closed set is defined exactly once.
  */
-import type { ShipMode } from "../core/state/index.js";
-export type { ShipMode };
+import type {ShipMode} from '../core/state/index.js'
+export type {ShipMode}
 
 /**
  * The read-only inputs a REPORTER (handler) needs. Deliberately carries NO agent
@@ -59,41 +51,41 @@ export type { ShipMode };
  * addressed by the run's spec pointer and loaded once by the engine).
  */
 export interface HandlerDeps {
-  readonly config: Config;
-  /** The loaded spec for this run (resolved from the run's spec pointer). */
-  readonly spec: SpecManifest;
-  /** Injectable git client (worktree create in preflight). */
-  readonly git: GitClient;
-  /**
-   * Injectable worktree provisioner (installs deps after worktree create, before
-   * the command-gates). Optional — defaults to the real {@link import("../git/index.js").provisionWorktree}
-   * in {@link import("./handlers.js").makePhaseHandlers}; tests inject a spy.
-   */
-  readonly provision?: ProvisionWorktreeFn;
-  /** Injectable gh client (idempotent PR create in ship). */
-  readonly gh: GhClient;
-  /** Deterministic gate tools (the verify reporter runs the GateRunner). */
-  readonly tools: GateTools;
-  /** Persists producer prompt-context artifacts; references them via prompt_ref. */
-  readonly artifacts: ArtifactStore;
-  /**
-   * The Δ Y answer-key store. The tests/exec reporters split the spec criteria
-   * (deterministic) and persist the WITHHELD set here — the confined answer key
-   * the holdout-validator checks against at the verify phase.
-   */
-  readonly holdout: HoldoutStore;
-  /** Plugin data dir — roots the run store + per-task worktree paths. */
-  readonly dataDir: string;
-  /** Repo owner (PR base resolution / merge serializer). */
-  readonly owner: string;
-  /** Repo name (PR base resolution / merge serializer). */
-  readonly repo: string;
-  /** `live` serial-merges; `no-merge` opens PRs but never auto-merges. */
-  readonly shipMode: ShipMode;
-  /**
-   * S5/C — injectable cross-vendor probe (tests inject a fake). Optional: the
-   * verify reporter defaults to the real memoized `codex --version` probe. Never
-   * consulted when `codex.model` is unconfigured (deterministic absent, no exec).
-   */
-  readonly vendorProbe?: VendorProbe;
+    readonly config: Config
+    /** The loaded spec for this run (resolved from the run's spec pointer). */
+    readonly spec: SpecManifest
+    /** Injectable git client (worktree create in preflight). */
+    readonly git: GitClient
+    /**
+     * Injectable worktree provisioner (installs deps after worktree create, before
+     * the command-gates). Optional — defaults to the real {@link import("../git/index.js").provisionWorktree}
+     * in {@link import("./handlers.js").makePhaseHandlers}; tests inject a spy.
+     */
+    readonly provision?: ProvisionWorktreeFn
+    /** Injectable gh client (idempotent PR create in ship). */
+    readonly gh: GhClient
+    /** Deterministic gate tools (the verify reporter runs the GateRunner). */
+    readonly tools: GateTools
+    /** Persists producer prompt-context artifacts; references them via prompt_ref. */
+    readonly artifacts: ArtifactStore
+    /**
+     * The Δ Y answer-key store. The tests/exec reporters split the spec criteria
+     * (deterministic) and persist the WITHHELD set here — the confined answer key
+     * the holdout-validator checks against at the verify phase.
+     */
+    readonly holdout: HoldoutStore
+    /** Plugin data dir — roots the run store + per-task worktree paths. */
+    readonly dataDir: string
+    /** Repo owner (PR base resolution / merge serializer). */
+    readonly owner: string
+    /** Repo name (PR base resolution / merge serializer). */
+    readonly repo: string
+    /** `live` serial-merges; `no-merge` opens PRs but never auto-merges. */
+    readonly shipMode: ShipMode
+    /**
+     * S5/C — injectable cross-vendor probe (tests inject a fake). Optional: the
+     * verify reporter defaults to the real memoized `codex --version` probe. Never
+     * consulted when `codex.model` is unconfigured (deterministic absent, no exec).
+     */
+    readonly vendorProbe?: VendorProbe
 }

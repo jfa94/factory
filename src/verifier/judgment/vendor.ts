@@ -23,18 +23,18 @@
  * it as absent, so a missing binary is a clean "absent", not an exception.
  */
 export interface VendorProbe {
-  /** The vendor this probe checks, e.g. "codex". For the audit record. */
-  readonly vendor: string;
-  /** True iff the vendor executor is usable right now. May reject. */
-  available(): Promise<boolean>;
+    /** The vendor this probe checks, e.g. "codex". For the audit record. */
+    readonly vendor: string
+    /** True iff the vendor executor is usable right now. May reject. */
+    available(): Promise<boolean>
 }
 
 /** The resolved cross-vendor slot when a second vendor IS present. */
 export interface CrossVendorSlot {
-  /** The vendor id (e.g. "codex"). */
-  readonly vendor: string;
-  /** The model the cross-vendor executor runs (from config.codex.model). */
-  readonly model: string;
+    /** The vendor id (e.g. "codex"). */
+    readonly vendor: string
+    /** The model the cross-vendor executor runs (from config.codex.model). */
+    readonly model: string
 }
 
 /**
@@ -45,8 +45,8 @@ export interface CrossVendorSlot {
  *     this branch (Δ U) — it cannot be mistaken for `present`.
  */
 export type CrossVendorResolution =
-  | { readonly status: "present"; readonly slot: CrossVendorSlot }
-  | { readonly status: "absent"; readonly reason: string };
+    | {readonly status: 'present'; readonly slot: CrossVendorSlot}
+    | {readonly status: 'absent'; readonly reason: string}
 
 /**
  * Resolve the cross-vendor slot (Δ U). `present` ONLY when the probe reports the
@@ -60,33 +60,33 @@ export type CrossVendorResolution =
  *   (we will not invent a model).
  */
 export async function resolveCrossVendor(
-  codexModel: string | undefined,
-  probe: VendorProbe,
+    codexModel: string | undefined,
+    probe: VendorProbe
 ): Promise<CrossVendorResolution> {
-  let available: boolean;
-  try {
-    available = await probe.available();
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return {
-      status: "absent",
-      reason: `cross-vendor probe '${probe.vendor}' failed: ${detail}`,
-    };
-  }
+    let available: boolean
+    try {
+        available = await probe.available()
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        return {
+            status: 'absent',
+            reason: `cross-vendor probe '${probe.vendor}' failed: ${detail}`,
+        }
+    }
 
-  if (!available) {
-    return {
-      status: "absent",
-      reason: `cross-vendor executor '${probe.vendor}' is not available`,
-    };
-  }
+    if (!available) {
+        return {
+            status: 'absent',
+            reason: `cross-vendor executor '${probe.vendor}' is not available`,
+        }
+    }
 
-  if (codexModel === undefined || codexModel.trim().length === 0) {
-    return {
-      status: "absent",
-      reason: `cross-vendor executor '${probe.vendor}' is available but no model is configured (codex.model)`,
-    };
-  }
+    if (codexModel === undefined || codexModel.trim().length === 0) {
+        return {
+            status: 'absent',
+            reason: `cross-vendor executor '${probe.vendor}' is available but no model is configured (codex.model)`,
+        }
+    }
 
-  return { status: "present", slot: { vendor: probe.vendor, model: codexModel } };
+    return {status: 'present', slot: {vendor: probe.vendor, model: codexModel}}
 }

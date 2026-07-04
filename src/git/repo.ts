@@ -15,8 +15,9 @@
  *     insensitive on owner/name) when both present, trust an explicit override when
  *     origin is not derivable, and fail LOUD on a real conflict or a dead end.
  */
-import { UsageError } from "../shared/usage-error.js";
-import type { GitClient } from "./git-client.js";
+import {UsageError} from '../shared/usage-error.js'
+import {at, nonNull} from '../shared/assert.js'
+import type {GitClient} from './git-client.js'
 
 /**
  * Parse a git remote URL into a canonical `owner/name` slug, or `null` when it does
@@ -29,39 +30,49 @@ import type { GitClient } from "./git-client.js";
  * segments (`owner` = the immediate parent of the repo). Pure — no IO.
  */
 export function parseRemoteUrl(url: string): string | null {
-  const trimmed = url.trim();
-  if (trimmed.length === 0) return null;
-
-  // Extract the "path" portion (everything after host[:port]) for each form.
-  let path: string | undefined;
-
-  // scp-like SSH: user@host:owner/name  (no scheme, single colon before the path)
-  const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
-  if (scp && !trimmed.includes("://")) {
-    path = scp[1];
-  } else {
-    // URL forms with a scheme (https / ssh / git / http). Strip the scheme, any
-    // credentials, and host[:port], leaving the path.
-    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
-    if (withScheme) {
-      const afterScheme = withScheme[1]!;
-      const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path = afterScheme.slice(firstSlash + 1);
+    const trimmed = url.trim()
+    if (trimmed.length === 0) {
+        return null
     }
-  }
 
-  if (path === undefined) return null;
+    // Extract the "path" portion (everything after host[:port]) for each form.
+    let path: string | undefined
 
-  // Normalize: drop a trailing slash, drop a trailing `.git` (any case).
-  let p = path.replace(/\/+$/, "");
-  p = p.replace(/\.git$/i, "");
+    // scp-like SSH: user@host:owner/name  (no scheme, single colon before the path)
+    const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed)
+    if (scp && !trimmed.includes('://')) {
+        path = scp[1]
+    } else {
+        // URL forms with a scheme (https / ssh / git / http). Strip the scheme, any
+        // credentials, and host[:port], leaving the path.
+        const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed)
+        if (withScheme) {
+            const afterScheme = nonNull(withScheme[1])
+            const firstSlash = afterScheme.indexOf('/')
+            if (firstSlash >= 0) {
+                path = afterScheme.slice(firstSlash + 1)
+            }
+        }
+    }
 
-  const segments = p.split("/").filter((s) => s.length > 0);
-  if (segments.length < 2) return null;
-  const name = segments[segments.length - 1]!;
-  const owner = segments[segments.length - 2]!;
-  if (owner.length === 0 || name.length === 0) return null;
-  return `${owner}/${name}`;
+    if (path === undefined) {
+        return null
+    }
+
+    // Normalize: drop a trailing slash, drop a trailing `.git` (any case).
+    let p = path.replace(/\/+$/, '')
+    p = p.replace(/\.git$/i, '')
+
+    const segments = p.split('/').filter((s) => s.length > 0)
+    if (segments.length < 2) {
+        return null
+    }
+    const name = at(segments, segments.length - 1)
+    const owner = at(segments, segments.length - 2)
+    if (owner.length === 0 || name.length === 0) {
+        return null
+    }
+    return `${owner}/${name}`
 }
 
 /**
@@ -70,7 +81,7 @@ export function parseRemoteUrl(url: string): string | null {
  * `..` is rejected separately (below) — the char class admits dots, but a pure-dot
  * segment is a path-traversal token, never a real owner/name.
  */
-const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/
 
 /**
  * True iff `slug` is a well-formed `owner/name`: EXACTLY two segments that each
@@ -79,11 +90,8 @@ const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
  * UsageError gate) and the persisted-state gate in `src/cli/wiring.ts`.
  */
 export function isValidRepoSlug(slug: string): boolean {
-  const parts = slug.split("/");
-  return (
-    parts.length === 2 &&
-    parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== "." && seg !== "..")
-  );
+    const parts = slug.split('/')
+    return parts.length === 2 && parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== '.' && seg !== '..')
 }
 
 /**
@@ -96,13 +104,13 @@ export function isValidRepoSlug(slug: string): boolean {
  * slug derived from the `origin` remote (a malicious/typo'd remote is a real input).
  */
 export function validateRepoSlug(slug: string): string {
-  if (!isValidRepoSlug(slug)) {
-    throw new UsageError(
-      `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not ` +
-        `'.'/'..' (no slashes, spaces, or other characters), got '${slug}'`,
-    );
-  }
-  return slug;
+    if (!isValidRepoSlug(slug)) {
+        throw new UsageError(
+            `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not ` +
+                `'.'/'..' (no slashes, spaces, or other characters), got '${slug}'`
+        )
+    }
+    return slug
 }
 
 /**
@@ -113,21 +121,21 @@ export function validateRepoSlug(slug: string): string {
  * future caller that hands it an un-validated slug from leaking `..`/metacharacters
  * into the gh REST paths. The redundancy on the scaffold path is the price of that.
  */
-export function splitRepoSlug(slug: string): { owner: string; repo: string } {
-  const parts = validateRepoSlug(slug).split("/");
-  return { owner: parts[0]!, repo: parts[1]! };
+export function splitRepoSlug(slug: string): {owner: string; repo: string} {
+    const parts = validateRepoSlug(slug).split('/')
+    return {owner: at(parts, 0), repo: at(parts, 1)}
 }
 
 /** Inputs to {@link resolveRepo}. */
 export interface ResolveRepoArgs {
-  /** An explicit `--repo owner/name` override, when the user passed one. */
-  readonly explicit?: string | undefined;
-  /** The working dir the git probe runs in (the target repo checkout). */
-  readonly cwd: string;
-  /** The git seam (real {@link DefaultGitClient} in prod; a fake in tests). */
-  readonly gitClient: GitClient;
-  /** The remote to derive from (defaults to `origin`). */
-  readonly remote?: string;
+    /** An explicit `--repo owner/name` override, when the user passed one. */
+    readonly explicit?: string | undefined
+    /** The working dir the git probe runs in (the target repo checkout). */
+    readonly cwd: string
+    /** The git seam (real {@link DefaultGitClient} in prod; a fake in tests). */
+    readonly gitClient: GitClient
+    /** The remote to derive from (defaults to `origin`). */
+    readonly remote?: string
 }
 
 /**
@@ -145,35 +153,37 @@ export interface ResolveRepoArgs {
  * A malformed explicit slug always fails loud (via {@link validateRepoSlug}).
  */
 export async function resolveRepo(args: ResolveRepoArgs): Promise<string> {
-  const remote = args.remote ?? "origin";
-  const explicit =
-    typeof args.explicit === "string" && args.explicit.length > 0
-      ? validateRepoSlug(args.explicit)
-      : undefined;
+    const remote = args.remote ?? 'origin'
+    const explicit =
+        typeof args.explicit === 'string' && args.explicit.length > 0 ? validateRepoSlug(args.explicit) : undefined
 
-  const derived = await deriveRepo(args.gitClient, remote, args.cwd);
+    const derived = await deriveRepo(args.gitClient, remote, args.cwd)
 
-  if (explicit !== undefined) {
-    if (derived === null) return explicit; // override trusted; origin not derivable
-    if (explicit.toLowerCase() === derived.toLowerCase()) return derived; // canonical
-    throw new UsageError(
-      `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); ` +
-        `omit --repo to use the remote, or fix the value`,
-    );
-  }
+    if (explicit !== undefined) {
+        if (derived === null) {
+            return explicit
+        } // override trusted; origin not derivable
+        if (explicit.toLowerCase() === derived.toLowerCase()) {
+            return derived
+        } // canonical
+        throw new UsageError(
+            `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); ` +
+                `omit --repo to use the remote, or fix the value`
+        )
+    }
 
-  if (derived === null) {
-    throw new UsageError(
-      `--repo is required: could not derive it from the '${remote}' remote ` +
-        `(run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`,
-    );
-  }
-  // The derived slug reaches the gh REST paths exactly like an explicit one, so it
-  // is held to the SAME charset — a malformed/typo'd `origin` must not inject `..`
-  // or metacharacters into a `/repos/{owner}/{name}` path. (The explicit branch
-  // above validated already; a case-insensitive match means `derived` shares that
-  // charset, so this is the only unvalidated return that needed the gate.)
-  return validateRepoSlug(derived);
+    if (derived === null) {
+        throw new UsageError(
+            `--repo is required: could not derive it from the '${remote}' remote ` +
+                `(run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`
+        )
+    }
+    // The derived slug reaches the gh REST paths exactly like an explicit one, so it
+    // is held to the SAME charset — a malformed/typo'd `origin` must not inject `..`
+    // or metacharacters into a `/repos/{owner}/{name}` path. (The explicit branch
+    // above validated already; a case-insensitive match means `derived` shares that
+    // charset, so this is the only unvalidated return that needed the gate.)
+    return validateRepoSlug(derived)
 }
 
 /**
@@ -181,12 +191,10 @@ export async function resolveRepo(args: ResolveRepoArgs): Promise<string> {
  * (probe returns null) OR an unparseable URL yields `null` — a NORMAL answer the
  * caller branches on, never an exception.
  */
-async function deriveRepo(
-  gitClient: GitClient,
-  remote: string,
-  cwd: string,
-): Promise<string | null> {
-  const url = await gitClient.remoteUrl(remote, { cwd });
-  if (url === null) return null;
-  return parseRemoteUrl(url);
+async function deriveRepo(gitClient: GitClient, remote: string, cwd: string): Promise<string | null> {
+    const url = await gitClient.remoteUrl(remote, {cwd})
+    if (url === null) {
+        return null
+    }
+    return parseRemoteUrl(url)
 }

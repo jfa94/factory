@@ -18,45 +18,45 @@
  * tool. In-memory + per-instance only (no run-dir persistence) to avoid a
  * stale-cache derive-don't-store smell across runs.
  */
-import type { GateEvidence } from "../../types/index.js";
-import type { GateId } from "./gate-id.js";
-import type { TddVerdict } from "./tdd-classify.js";
+import type {GateEvidence} from '../../types/index.js'
+import type {GateId} from './gate-id.js'
+import type {TddVerdict} from './tdd-classify.js'
 
 /**
  * In-memory memo. Keyed by a content sha (tree or tip) so identical content yields
  * a cache hit. NOT persisted — lifetime is the cache instance.
  */
 export class GateMemo {
-  /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
-  private readonly evidence = new Map<string, GateEvidence>();
-  /** `${taskId}@${tipSha}` → the TDD verdict struct (re-derived by the runner). */
-  private readonly tdd = new Map<string, TddVerdict>();
+    /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
+    private readonly evidence = new Map<string, GateEvidence>()
+    /** `${taskId}@${tipSha}` → the TDD verdict struct (re-derived by the runner). */
+    private readonly tdd = new Map<string, TddVerdict>()
 
-  private evKey(gate: GateId, treeSha: string): string {
-    return `${gate}@${treeSha}`;
-  }
+    private evKey(gate: GateId, treeSha: string): string {
+        return `${gate}@${treeSha}`
+    }
 
-  private tddKey(taskId: string, tipSha: string): string {
-    return `${taskId}@${tipSha}`;
-  }
+    private tddKey(taskId: string, tipSha: string): string {
+        return `${taskId}@${tipSha}`
+    }
 
-  /** Look up cached evidence for a gate at a tree sha (undefined = miss). */
-  getEvidence(gate: GateId, treeSha: string): GateEvidence | undefined {
-    return this.evidence.get(this.evKey(gate, treeSha));
-  }
+    /** Look up cached evidence for a gate at a tree sha (undefined = miss). */
+    getEvidence(gate: GateId, treeSha: string): GateEvidence | undefined {
+        return this.evidence.get(this.evKey(gate, treeSha))
+    }
 
-  /** Cache a gate's evidence at a tree sha. */
-  putEvidence(gate: GateId, treeSha: string, ev: GateEvidence): void {
-    this.evidence.set(this.evKey(gate, treeSha), ev);
-  }
+    /** Cache a gate's evidence at a tree sha. */
+    putEvidence(gate: GateId, treeSha: string, ev: GateEvidence): void {
+        this.evidence.set(this.evKey(gate, treeSha), ev)
+    }
 
-  /** Look up the memoized TDD verdict for a task at a tip sha (undefined = miss). */
-  getTdd(taskId: string, tipSha: string): TddVerdict | undefined {
-    return this.tdd.get(this.tddKey(taskId, tipSha));
-  }
+    /** Look up the memoized TDD verdict for a task at a tip sha (undefined = miss). */
+    getTdd(taskId: string, tipSha: string): TddVerdict | undefined {
+        return this.tdd.get(this.tddKey(taskId, tipSha))
+    }
 
-  /** Memoize the TDD verdict for a task at a tip sha. */
-  putTdd(taskId: string, tipSha: string, verdict: TddVerdict): void {
-    this.tdd.set(this.tddKey(taskId, tipSha), verdict);
-  }
+    /** Memoize the TDD verdict for a task at a tip sha. */
+    putTdd(taskId: string, tipSha: string, verdict: TddVerdict): void {
+        this.tdd.set(this.tddKey(taskId, tipSha), verdict)
+    }
 }

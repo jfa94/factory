@@ -31,25 +31,26 @@
  *   - the staleness / relaunch-detection state machine: `ensure` always
  *     (re)materializes; relaunch detection is the caller's concern.
  */
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { homedir } from "node:os";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {existsSync} from 'node:fs'
+import {readFile} from 'node:fs/promises'
+import {join} from 'node:path'
+import {homedir} from 'node:os'
 
-import type { ExitCode } from "../../shared/exit-codes.js";
-import { EXIT } from "../../shared/exit-codes.js";
-import { parseArgs } from "../args.js";
-import { emitLine, emitError } from "../io.js";
-import { resolveDataDir, resolvePluginRoot } from "../../config/index.js";
-import { decideAutonomyPreflight, isAutonomous } from "../../autonomy/mode.js";
-import type { PreflightReason } from "../../autonomy/mode.js";
-import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { stringifyJson } from "../../shared/json.js";
-import { createLogger } from "../../shared/logging.js";
-import { tildeShorten } from "../../shared/paths.js";
-import { withUsageGuard, type Subcommand } from "../registry-types.js";
+import type {ExitCode} from '../../shared/exit-codes.js'
+import {EXIT} from '../../shared/exit-codes.js'
+import {parseArgs} from '../args.js'
+import {emitLine, emitError} from '../io.js'
+import {resolveDataDir, resolvePluginRoot} from '../../config/index.js'
+import {decideAutonomyPreflight, isAutonomous} from '../../autonomy/mode.js'
+import type {PreflightReason} from '../../autonomy/mode.js'
+import {atomicWriteFile} from '../../shared/atomic-write.js'
+import {stringifyJson} from '../../shared/json.js'
+import {createLogger} from '../../shared/logging.js'
+import {tildeShorten} from '../../shared/paths.js'
+import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
-const log = createLogger("autonomy");
+const log = createLogger('autonomy')
 
 const HELP = `factory autonomy <ensure|status|preflight> — manage / inspect autonomous mode
 
@@ -81,7 +82,7 @@ Usage:
 
 Options:
   --user-settings <path>   (ensure / preflight) Override the user-settings source (default: ~/.claude/settings.json)
-  --json                   (status) Emit machine-readable JSON`;
+  --json                   (status) Emit machine-readable JSON`
 
 /**
  * The `factory` bundle entrypoint (the PATH shim onto the CLI bundle). The
@@ -90,18 +91,20 @@ Options:
  * here (not by re-splitting a constructed command string) keeps the two in step.
  */
 function factoryBinPath(pluginRoot: string): string {
-  return `${pluginRoot}/bin/factory`;
+    return `${pluginRoot}/bin/factory`
 }
 
 /** Path of the materialized merged settings inside the data dir. */
 export function mergedSettingsPath(dataDir: string): string {
-  return join(dataDir, "merged-settings.json");
+    return join(dataDir, 'merged-settings.json')
 }
 
 /** Expand a leading `~` in a user command to the absolute `$HOME` path. */
 function tildeExpand(value: string, home: string): string {
-  if (value.startsWith("~")) return home + value.slice(1);
-  return value;
+    if (value.startsWith('~')) {
+        return home + value.slice(1)
+    }
+    return value
 }
 
 /**
@@ -110,57 +113,59 @@ function tildeExpand(value: string, home: string): string {
  * replaced before `_DATA` so the longer token is not partially consumed.
  */
 export function substitutePlaceholders(
-  value: unknown,
-  vars: { pluginRoot: string; dataDir: string; dataDirTilde: string },
+    value: unknown,
+    vars: {pluginRoot: string; dataDir: string; dataDirTilde: string}
 ): unknown {
-  if (typeof value === "string") {
-    return value
-      .split("${CLAUDE_PLUGIN_ROOT}")
-      .join(vars.pluginRoot)
-      .split("${CLAUDE_PLUGIN_DATA_TILDE}")
-      .join(vars.dataDirTilde)
-      .split("${CLAUDE_PLUGIN_DATA}")
-      .join(vars.dataDir);
-  }
-  if (Array.isArray(value)) {
-    return value.map((v) => substitutePlaceholders(v, vars));
-  }
-  if (typeof value === "object" && value !== null) {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = substitutePlaceholders(v, vars);
+    if (typeof value === 'string') {
+        return value
+            .split('${CLAUDE_PLUGIN_ROOT}')
+            .join(vars.pluginRoot)
+            .split('${CLAUDE_PLUGIN_DATA_TILDE}')
+            .join(vars.dataDirTilde)
+            .split('${CLAUDE_PLUGIN_DATA}')
+            .join(vars.dataDir)
     }
-    return out;
-  }
-  return value;
+    if (Array.isArray(value)) {
+        return value.map((v) => substitutePlaceholders(v, vars))
+    }
+    if (typeof value === 'object' && value !== null) {
+        const out: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(value)) {
+            out[k] = substitutePlaceholders(v, vars)
+        }
+        return out
+    }
+    return value
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+    return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 /** Read `.statusLine.command` from a settings object, if present and a string. */
 function statusLineCommandOf(settings: Record<string, unknown>): string | undefined {
-  const sl = settings.statusLine;
-  if (!isObject(sl)) return undefined;
-  const cmd = sl.command;
-  return typeof cmd === "string" && cmd.length > 0 ? cmd : undefined;
+    const sl = settings.statusLine
+    if (!isObject(sl)) {
+        return undefined
+    }
+    const cmd = sl.command
+    return typeof cmd === 'string' && cmd.length > 0 ? cmd : undefined
 }
 
 /** Inputs to {@link materializeMergedSettings}. */
 export interface MaterializeInput {
-  /** The raw `templates/settings.autonomous.json` text. */
-  readonly template: string;
-  /** The user's existing settings object (or `{}` when none / unparseable). */
-  readonly userSettings: Record<string, unknown>;
-  /** Resolved `$CLAUDE_PLUGIN_DATA` (real value). */
-  readonly dataDir: string;
-  /** Resolved `$CLAUDE_PLUGIN_ROOT` (real value). */
-  readonly pluginRoot: string;
-  /** `$HOME` for the `~`-shortened DATA_TILDE form + statusline expansion. */
-  readonly home: string;
-  /** Optional plugin version to stamp as `_factoryVersion`. */
-  readonly version?: string;
+    /** The raw `templates/settings.autonomous.json` text. */
+    readonly template: string
+    /** The user's existing settings object (or `{}` when none / unparseable). */
+    readonly userSettings: Record<string, unknown>
+    /** Resolved `$CLAUDE_PLUGIN_DATA` (real value). */
+    readonly dataDir: string
+    /** Resolved `$CLAUDE_PLUGIN_ROOT` (real value). */
+    readonly pluginRoot: string
+    /** `$HOME` for the `~`-shortened DATA_TILDE form + statusline expansion. */
+    readonly home: string
+    /** Optional plugin version to stamp as `_factoryVersion`. */
+    readonly version?: string | undefined
 }
 
 /**
@@ -170,122 +175,128 @@ export interface MaterializeInput {
  * `env.FACTORY_ORIGINAL_STATUSLINE`. Pure — no IO.
  */
 export function materializeMergedSettings(input: MaterializeInput): Record<string, unknown> {
-  const { dataDir, pluginRoot, home } = input;
+    const {dataDir, pluginRoot, home} = input
 
-  const parsedTemplate: unknown = JSON.parse(input.template);
-  if (!isObject(parsedTemplate)) {
-    throw new Error("autonomy: settings.autonomous.json is not a JSON object");
-  }
-  const template = substitutePlaceholders(parsedTemplate, {
-    pluginRoot,
-    dataDir,
-    dataDirTilde: tildeShorten(dataDir, home),
-  }) as Record<string, unknown>;
+    const parsedTemplate: unknown = JSON.parse(input.template)
+    if (!isObject(parsedTemplate)) {
+        throw new Error('autonomy: settings.autonomous.json is not a JSON object')
+    }
+    const template = substitutePlaceholders(parsedTemplate, {
+        pluginRoot,
+        dataDir,
+        dataDirTilde: tildeShorten(dataDir, home),
+    }) as Record<string, unknown>
 
-  // User settings is the base; template keys overlay it (template wins on
-  // conflicts — autonomous mode's permissions/hooks/statusLine must take effect).
-  // NOTE: a top-level `hooks` in the template REPLACES the user's `hooks` (object
-  // spread is shallow). That is intentional and NOT a security regression: the
-  // factory's enforcement hooks load independently via `hooks/hooks.json` (the
-  // plugin's own hook wiring), so the guard boundary holds regardless of what the
-  // merged-settings.json carries. The template's `hooks` here only configures the
-  // autonomous *session*, not the enforcement layer.
-  const merged: Record<string, unknown> = { ...input.userSettings, ...template };
+    // User settings is the base; template keys overlay it (template wins on
+    // conflicts — autonomous mode's permissions/hooks/statusLine must take effect).
+    // NOTE: a top-level `hooks` in the template REPLACES the user's `hooks` (object
+    // spread is shallow). That is intentional and NOT a security regression: the
+    // factory's enforcement hooks load independently via `hooks/hooks.json` (the
+    // plugin's own hook wiring), so the guard boundary holds regardless of what the
+    // merged-settings.json carries. The template's `hooks` here only configures the
+    // autonomous *session*, not the enforcement layer.
+    const merged: Record<string, unknown> = {...input.userSettings, ...template}
 
-  // env: union user + template, then bake CLAUDE_PLUGIN_DATA. Both user and
-  // template envs are preserved (template wins on key conflicts) so the pin and
-  // FACTORY_AUTONOMOUS_MODE always survive.
-  const userEnv = isObject(input.userSettings.env) ? input.userSettings.env : {};
-  const templateEnv = isObject(template.env) ? template.env : {};
-  const env: Record<string, unknown> = { ...userEnv, ...templateEnv };
-  env.CLAUDE_PLUGIN_DATA = dataDir;
+    // env: union user + template, then bake CLAUDE_PLUGIN_DATA. Both user and
+    // template envs are preserved (template wins on key conflicts) so the pin and
+    // FACTORY_AUTONOMOUS_MODE always survive.
+    const userEnv = isObject(input.userSettings.env) ? input.userSettings.env : {}
+    const templateEnv = isObject(template.env) ? template.env : {}
+    const env: Record<string, unknown> = {...userEnv, ...templateEnv}
+    env.CLAUDE_PLUGIN_DATA = dataDir
 
-  // permissions.allow: union user + template (deny/other keys: template wins).
-  const userPerms = isObject(input.userSettings.permissions) ? input.userSettings.permissions : {};
-  const templatePerms = isObject(template.permissions) ? template.permissions : {};
-  const userAllow = Array.isArray(userPerms.allow)
-    ? userPerms.allow.filter((e): e is string => typeof e === "string")
-    : [];
-  const templateAllow = Array.isArray(templatePerms.allow)
-    ? templatePerms.allow.filter((e): e is string => typeof e === "string")
-    : [];
-  const unionedAllow = [...userAllow, ...templateAllow.filter((e) => !userAllow.includes(e))];
-  merged.permissions = { ...userPerms, ...templatePerms, allow: unionedAllow };
+    // permissions.allow: union user + template (deny/other keys: template wins).
+    const userPerms = isObject(input.userSettings.permissions) ? input.userSettings.permissions : {}
+    const templatePerms = isObject(template.permissions) ? template.permissions : {}
+    const userAllow = Array.isArray(userPerms.allow)
+        ? userPerms.allow.filter((e): e is string => typeof e === 'string')
+        : []
+    const templateAllow = Array.isArray(templatePerms.allow)
+        ? templatePerms.allow.filter((e): e is string => typeof e === 'string')
+        : []
+    const unionedAllow = [...userAllow, ...templateAllow.filter((e) => !userAllow.includes(e))]
+    merged.permissions = {...userPerms, ...templatePerms, allow: unionedAllow}
 
-  // statusLine chaining: if the user has their OWN statusLine that is NOT the
-  // factory writer, preserve it via FACTORY_ORIGINAL_STATUSLINE (tilde-expanded)
-  // so `factory statusline` chains to it. The template's statusLine (the factory
-  // writer) always wins as the displayed command.
-  const ourPath = factoryBinPath(pluginRoot); // ".../bin/factory"
-  const userStatusLine = statusLineCommandOf(input.userSettings);
-  // Resolve the user's OWN (non-factory) statusLine to chain, if any.
-  const chained = ((): string | undefined => {
-    if (userStatusLine === undefined) return undefined;
-    const expanded = tildeExpand(userStatusLine, home);
-    const parts = expanded.split(/\s+/);
-    const expandedPath = parts[0] ?? expanded;
-    const expandedSub = parts[1];
-    // "Ours" = the factory statusline WRITER specifically: the `.../bin/factory`
-    // path with the `statusline` subcommand. TIGHTENED (was a path-only compare,
-    // which mis-claimed any `.../bin/factory <other-subcommand>` as ours): a user
-    // who wired some OTHER factory subcommand as their statusLine must still be
-    // chained — only the writer itself is skipped, to avoid a self-referential loop.
-    const isOurs = expandedPath === ourPath && expandedSub === "statusline";
-    return isOurs ? undefined : expanded;
-  })();
-  // Set the chained original, or DROP a stale one. The env block is seeded from the
-  // user's own env (`{...userEnv, ...templateEnv}`), so a FACTORY_ORIGINAL_STATUSLINE
-  // left over from a PRIOR autonomous relaunch can ride along; when there is nothing
-  // legitimate to chain (no user statusLine, or it IS our writer) it must be deleted,
-  // else `factory statusline` would chain to a phantom command — or to itself.
-  if (chained !== undefined) {
-    env.FACTORY_ORIGINAL_STATUSLINE = chained;
-  } else {
-    delete env.FACTORY_ORIGINAL_STATUSLINE;
-  }
+    // statusLine chaining: if the user has their OWN statusLine that is NOT the
+    // factory writer, preserve it via FACTORY_ORIGINAL_STATUSLINE (tilde-expanded)
+    // so `factory statusline` chains to it. The template's statusLine (the factory
+    // writer) always wins as the displayed command.
+    const ourPath = factoryBinPath(pluginRoot) // ".../bin/factory"
+    const userStatusLine = statusLineCommandOf(input.userSettings)
+    // Resolve the user's OWN (non-factory) statusLine to chain, if any.
+    const chained = ((): string | undefined => {
+        if (userStatusLine === undefined) {
+            return undefined
+        }
+        const expanded = tildeExpand(userStatusLine, home)
+        const parts = expanded.split(/\s+/)
+        const expandedPath = parts[0] ?? expanded
+        const expandedSub = parts[1]
+        // "Ours" = the factory statusline WRITER specifically: the `.../bin/factory`
+        // path with the `statusline` subcommand. TIGHTENED (was a path-only compare,
+        // which mis-claimed any `.../bin/factory <other-subcommand>` as ours): a user
+        // who wired some OTHER factory subcommand as their statusLine must still be
+        // chained — only the writer itself is skipped, to avoid a self-referential loop.
+        const isOurs = expandedPath === ourPath && expandedSub === 'statusline'
+        return isOurs ? undefined : expanded
+    })()
+    // Set the chained original, or DROP a stale one. The env block is seeded from the
+    // user's own env (`{...userEnv, ...templateEnv}`), so a FACTORY_ORIGINAL_STATUSLINE
+    // left over from a PRIOR autonomous relaunch can ride along; when there is nothing
+    // legitimate to chain (no user statusLine, or it IS our writer) it must be deleted,
+    // else `factory statusline` would chain to a phantom command — or to itself.
+    if (chained !== undefined) {
+        env.FACTORY_ORIGINAL_STATUSLINE = chained
+    } else {
+        delete env.FACTORY_ORIGINAL_STATUSLINE
+    }
 
-  merged.env = env;
+    merged.env = env
 
-  if (input.version !== undefined && input.version.length > 0) {
-    merged._factoryVersion = input.version;
-  }
+    if (input.version !== undefined && input.version.length > 0) {
+        merged._factoryVersion = input.version
+    }
 
-  return merged;
+    return merged
 }
 
 /** Read the plugin version from `<pluginRoot>/.claude-plugin/plugin.json`. */
 async function readPluginVersion(pluginRoot: string): Promise<string | undefined> {
-  const path = join(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync(path)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (isObject(parsed) && typeof parsed.version === "string") return parsed.version;
-  } catch {
-    /* unparseable plugin.json → no version stamp */
-  }
-  return undefined;
+    const path = join(pluginRoot, '.claude-plugin', 'plugin.json')
+    if (!existsSync(path)) {
+        return undefined
+    }
+    try {
+        const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
+        if (isObject(parsed) && typeof parsed.version === 'string') {
+            return parsed.version
+        }
+    } catch {
+        /* unparseable plugin.json → no version stamp */
+    }
+    return undefined
 }
 
 /** Options for {@link runAutonomyEnsure}; all paths injectable for tests. */
 export interface AutonomyEnsureOptions {
-  /** Resolved data dir (defaults to {@link resolveDataDir}). */
-  readonly dataDir?: string;
-  /** Resolved plugin root (defaults to {@link resolvePluginRoot}). */
-  readonly pluginRoot?: string;
-  /** User-settings source path (defaults to `~/.claude/settings.json`). */
-  readonly userSettingsPath?: string;
-  /** `$HOME` (defaults to os.homedir()). */
-  readonly home?: string;
-  /** stdout sink (defaults to process.stdout). */
-  readonly writeStdout?: (text: string) => void;
+    /** Resolved data dir (defaults to {@link resolveDataDir}). */
+    readonly dataDir?: string
+    /** Resolved plugin root (defaults to {@link resolvePluginRoot}). */
+    readonly pluginRoot?: string
+    /** User-settings source path (defaults to `~/.claude/settings.json`). */
+    readonly userSettingsPath?: string | undefined
+    /** `$HOME` (defaults to os.homedir()). */
+    readonly home?: string
+    /** stdout sink (defaults to process.stdout). */
+    readonly writeStdout?: (text: string) => void
 }
 
 /** Result of {@link runAutonomyEnsure}. */
 export interface AutonomyEnsureResult {
-  /** Absolute path to the written merged-settings.json. */
-  readonly path: string;
-  /** The relaunch command printed to stdout. */
-  readonly relaunchCommand: string;
+    /** Absolute path to the written merged-settings.json. */
+    readonly path: string
+    /** The relaunch command printed to stdout. */
+    readonly relaunchCommand: string
 }
 
 /**
@@ -293,72 +304,73 @@ export interface AutonomyEnsureResult {
  * Reads the user's settings (missing/unparseable → `{}`), the template, and the
  * plugin version, builds the merged object, and writes it atomically.
  */
-export async function runAutonomyEnsure(
-  opts: AutonomyEnsureOptions = {},
-): Promise<AutonomyEnsureResult> {
-  const home = opts.home ?? homedir();
-  const dataDir = opts.dataDir ?? resolveDataDir();
-  const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join(home, ".claude", "settings.json");
-  const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t));
+export async function runAutonomyEnsure(opts: AutonomyEnsureOptions = {}): Promise<AutonomyEnsureResult> {
+    const home = opts.home ?? homedir()
+    const dataDir = opts.dataDir ?? resolveDataDir()
+    const pluginRoot = opts.pluginRoot ?? resolvePluginRoot()
+    const userSettingsPath = opts.userSettingsPath ?? join(home, '.claude', 'settings.json')
+    const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t))
 
-  // Read user settings (best-effort: missing or unparseable → empty base).
-  let userSettings: Record<string, unknown> = {};
-  if (existsSync(userSettingsPath)) {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(userSettingsPath, "utf8"));
-      if (isObject(parsed)) userSettings = parsed;
-      else log.warn(`${userSettingsPath} is not a JSON object; ignoring`);
-    } catch (err) {
-      log.warn(`could not parse ${userSettingsPath} (${(err as Error).message}); ignoring`);
+    // Read user settings (best-effort: missing or unparseable → empty base).
+    let userSettings: Record<string, unknown> = {}
+    if (existsSync(userSettingsPath)) {
+        try {
+            const parsed: unknown = JSON.parse(await readFile(userSettingsPath, 'utf8'))
+            if (isObject(parsed)) {
+                userSettings = parsed
+            } else {
+                log.warn(`${userSettingsPath} is not a JSON object; ignoring`)
+            }
+        } catch (err) {
+            log.warn(`could not parse ${userSettingsPath} (${(err as Error).message}); ignoring`)
+        }
     }
-  }
 
-  // Read the template from the plugin install.
-  const templatePath = join(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile(templatePath, "utf8");
+    // Read the template from the plugin install.
+    const templatePath = join(pluginRoot, 'templates', 'settings.autonomous.json')
+    const template = await readFile(templatePath, 'utf8')
 
-  const version = await readPluginVersion(pluginRoot);
-  const merged = materializeMergedSettings({
-    template,
-    userSettings,
-    dataDir,
-    pluginRoot,
-    home,
-    version,
-  });
+    const version = await readPluginVersion(pluginRoot)
+    const merged = materializeMergedSettings({
+        template,
+        userSettings,
+        dataDir,
+        pluginRoot,
+        home,
+        version,
+    })
 
-  const path = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path, stringifyJson(merged));
+    const path = mergedSettingsPath(dataDir)
+    await atomicWriteFile(path, stringifyJson(merged))
 
-  const relaunchCommand = `claude --worktree --settings ${path}`;
-  write(
-    `Wrote autonomous settings → ${path}\n` +
-      `Relaunch the session in autonomous mode with:\n\n  ${relaunchCommand}\n\n` +
-      `(the first agent turn refreshes the usage cache → session-mode quota pacing.)\n`,
-  );
+    const relaunchCommand = `claude --worktree --settings ${path}`
+    write(
+        `Wrote autonomous settings → ${path}\n` +
+            `Relaunch the session in autonomous mode with:\n\n  ${relaunchCommand}\n\n` +
+            `(the first agent turn refreshes the usage cache → session-mode quota pacing.)\n`
+    )
 
-  return { path, relaunchCommand };
+    return {path, relaunchCommand}
 }
 
 /** Machine-readable autonomy status (the `--json` payload). */
 export interface AutonomyStatus {
-  /** The gate predicate: FACTORY_AUTONOMOUS_MODE === "1". */
-  readonly autonomous: boolean;
-  /** Whether the env var is present at all (distinguishes "unset" from "wrong value"). */
-  readonly envSet: boolean;
-  /** Whether the merged-settings.json the autonomous relaunch needs exists. */
-  readonly mergedSettingsPresent: boolean;
-  /** Where that file lives (empty when the data dir can't be resolved). */
-  readonly mergedSettingsPath: string;
+    /** The gate predicate: FACTORY_AUTONOMOUS_MODE === "1". */
+    readonly autonomous: boolean
+    /** Whether the env var is present at all (distinguishes "unset" from "wrong value"). */
+    readonly envSet: boolean
+    /** Whether the merged-settings.json the autonomous relaunch needs exists. */
+    readonly mergedSettingsPresent: boolean
+    /** Where that file lives (empty when the data dir can't be resolved). */
+    readonly mergedSettingsPath: string
 }
 
 /** Options for {@link runAutonomyStatus}; injectable for tests. */
 export interface AutonomyStatusOptions {
-  readonly dataDir?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly json?: boolean;
-  readonly writeStdout?: (text: string) => void;
+    readonly dataDir?: string
+    readonly env?: NodeJS.ProcessEnv
+    readonly json?: boolean
+    readonly writeStdout?: (text: string) => void
 }
 
 /**
@@ -367,43 +379,43 @@ export interface AutonomyStatusOptions {
  * exists. Exits 0 when autonomous, 1 when not — and NEVER throws, because this is
  * the diagnostic the user runs precisely WHEN the mandatory gate has halted them.
  */
-export async function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promise<ExitCode> {
-  const env = opts.env ?? process.env;
-  const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t));
+export function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promise<ExitCode> {
+    const env = opts.env ?? process.env
+    const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t))
 
-  let path = "";
-  try {
-    const dataDir = opts.dataDir ?? resolveDataDir();
-    path = mergedSettingsPath(dataDir);
-  } catch {
-    /* data dir unresolvable → report the env signal only (never throw) */
-  }
-  const status: AutonomyStatus = {
-    autonomous: isAutonomous(env),
-    envSet: env.FACTORY_AUTONOMOUS_MODE !== undefined,
-    mergedSettingsPresent: path.length > 0 && existsSync(path),
-    mergedSettingsPath: path,
-  };
+    let path = ''
+    try {
+        const dataDir = opts.dataDir ?? resolveDataDir()
+        path = mergedSettingsPath(dataDir)
+    } catch {
+        /* data dir unresolvable → report the env signal only (never throw) */
+    }
+    const status: AutonomyStatus = {
+        autonomous: isAutonomous(env),
+        envSet: env.FACTORY_AUTONOMOUS_MODE !== undefined,
+        mergedSettingsPresent: path.length > 0 && existsSync(path),
+        mergedSettingsPath: path,
+    }
 
-  if (opts.json === true) {
-    write(stringifyJson(status) + "\n");
-  } else if (status.autonomous) {
-    write(
-      `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)\n` +
-        `merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}` +
-        `${path.length > 0 ? ` at ${path}` : ""}\n`,
-    );
-  } else {
-    write(
-      `autonomous: NO — the pipeline will refuse to start or resume a run.\n` +
-        `merged-settings: ${status.mergedSettingsPresent ? `present at ${path}` : "absent"}\n` +
-        (status.mergedSettingsPresent
-          ? `Relaunch the session with:\n  claude --worktree --settings ${path}\n`
-          : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.\n`),
-    );
-  }
+    if (opts.json === true) {
+        write(stringifyJson(status) + '\n')
+    } else if (status.autonomous) {
+        write(
+            `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)\n` +
+                `merged-settings: ${status.mergedSettingsPresent ? 'present' : 'absent'}` +
+                `${path.length > 0 ? ` at ${path}` : ''}\n`
+        )
+    } else {
+        write(
+            `autonomous: NO — the pipeline will refuse to start or resume a run.\n` +
+                `merged-settings: ${status.mergedSettingsPresent ? `present at ${path}` : 'absent'}\n` +
+                (status.mergedSettingsPresent
+                    ? `Relaunch the session with:\n  claude --worktree --settings ${path}\n`
+                    : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.\n`)
+        )
+    }
 
-  return status.autonomous ? EXIT.OK : EXIT.ERROR;
+    return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR)
 }
 
 /**
@@ -412,50 +424,52 @@ export async function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promi
  * treats an absent stamp as a pre-versioning artifact = stale).
  */
 async function readOnDiskVersion(path: string): Promise<string | undefined> {
-  if (!existsSync(path)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (isObject(parsed) && typeof parsed._factoryVersion === "string") {
-      return parsed._factoryVersion;
+    if (!existsSync(path)) {
+        return undefined
     }
-  } catch {
-    /* unparseable merged-settings.json → treat as unstamped (stale) */
-  }
-  return undefined;
+    try {
+        const parsed: unknown = JSON.parse(await readFile(path, 'utf8'))
+        if (isObject(parsed) && typeof parsed._factoryVersion === 'string') {
+            return parsed._factoryVersion
+        }
+    } catch {
+        /* unparseable merged-settings.json → treat as unstamped (stale) */
+    }
+    return undefined
 }
 
 /** Human-facing one-liner explaining a preflight verdict (for the printed report). */
 function describePreflightReason(
-  reason: PreflightReason,
-  pluginVersion: string | undefined,
-  onDiskVersion: string | undefined,
+    reason: PreflightReason,
+    pluginVersion: string | undefined,
+    onDiskVersion: string | undefined
 ): string {
-  switch (reason) {
-    case "fresh":
-      return `merged settings are current (v${pluginVersion ?? "?"})`;
-    case "ci-raw-env":
-      return "autonomous via the environment directly; no merged-settings file needed";
-    case "version-unknowable":
-      return "plugin version is unreadable — leaving the existing merged settings untouched";
-    case "missing-settings":
-      return "no merged settings exist yet";
-    case "not-autonomous":
-      return "this session is not autonomous";
-    case "stale-version":
-      return `merged settings are stale (v${onDiskVersion ?? "?"} → v${pluginVersion ?? "?"})`;
-    case "unstamped":
-      return "merged settings predate version stamping (treated as stale)";
-  }
+    switch (reason) {
+        case 'fresh':
+            return `merged settings are current (v${pluginVersion ?? '?'})`
+        case 'ci-raw-env':
+            return 'autonomous via the environment directly; no merged-settings file needed'
+        case 'version-unknowable':
+            return 'plugin version is unreadable — leaving the existing merged settings untouched'
+        case 'missing-settings':
+            return 'no merged settings exist yet'
+        case 'not-autonomous':
+            return 'this session is not autonomous'
+        case 'stale-version':
+            return `merged settings are stale (v${onDiskVersion ?? '?'} → v${pluginVersion ?? '?'})`
+        case 'unstamped':
+            return 'merged settings predate version stamping (treated as stale)'
+    }
 }
 
 /** Options for {@link runAutonomyPreflight}; injectable for tests. */
 export interface AutonomyPreflightOptions {
-  readonly dataDir?: string;
-  readonly pluginRoot?: string;
-  readonly userSettingsPath?: string;
-  readonly home?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly writeStdout?: (text: string) => void;
+    readonly dataDir?: string
+    readonly pluginRoot?: string
+    readonly userSettingsPath?: string | undefined
+    readonly home?: string
+    readonly env?: NodeJS.ProcessEnv
+    readonly writeStdout?: (text: string) => void
 }
 
 /**
@@ -471,96 +485,96 @@ export interface AutonomyPreflightOptions {
  * `EXIT.ERROR` to halt.
  */
 export async function runAutonomyPreflight(opts: AutonomyPreflightOptions = {}): Promise<ExitCode> {
-  const env = opts.env ?? process.env;
-  const home = opts.home ?? homedir();
-  const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t));
+    const env = opts.env ?? process.env
+    const home = opts.home ?? homedir()
+    const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t))
 
-  // Resolve paths defensively — never throw while DECIDING (the throw budget
-  // belongs to the ensure write, below).
-  let dataDir: string | undefined;
-  let pluginRoot: string | undefined;
-  try {
-    dataDir = opts.dataDir ?? resolveDataDir();
-  } catch {
-    /* unresolvable data dir → handled as a degraded halt below */
-  }
-  try {
-    pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  } catch {
-    /* unresolvable plugin root → handled as a degraded halt below */
-  }
-
-  const path = dataDir !== undefined ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path.length > 0 && existsSync(path);
-  const pluginVersion = pluginRoot !== undefined ? await readPluginVersion(pluginRoot) : undefined;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path) : undefined;
-
-  const decision = decideAutonomyPreflight({
-    autonomous: isAutonomous(env),
-    mergedSettingsPresent,
-    pluginVersion,
-    onDiskVersion,
-  });
-  const verdict = describePreflightReason(decision.reason, pluginVersion, onDiskVersion);
-
-  if (decision.regenerate) {
-    // A regenerate always implies halt-for-relaunch (the PreflightDecision
-    // invariant). If we cannot resolve where to scaffold, degrade to a message.
-    if (dataDir === undefined || pluginRoot === undefined) {
-      write(
-        `HALT: ${verdict}.\n` +
-          `Cannot resolve the plugin data/root dir to scaffold autonomous settings here — ` +
-          "run `factory autonomy ensure` once the environment is set, then relaunch with the printed command.\n",
-      );
-      return EXIT.ERROR;
+    // Resolve paths defensively — never throw while DECIDING (the throw budget
+    // belongs to the ensure write, below).
+    let dataDir: string | undefined
+    let pluginRoot: string | undefined
+    try {
+        dataDir = opts.dataDir ?? resolveDataDir()
+    } catch {
+        /* unresolvable data dir → handled as a degraded halt below */
     }
-    await runAutonomyEnsure({
-      dataDir,
-      pluginRoot,
-      userSettingsPath: opts.userSettingsPath,
-      home,
-      writeStdout: write,
-    });
-    write(`\nHALT: ${verdict} — relaunch to continue (command above).\n`);
-    return EXIT.ERROR;
-  }
+    try {
+        pluginRoot = opts.pluginRoot ?? resolvePluginRoot()
+    } catch {
+        /* unresolvable plugin root → handled as a degraded halt below */
+    }
 
-  // proceed without regenerating (fresh / ci-raw-env / version-unknowable).
-  write(`OK: autonomous mode ready — ${verdict}.\n`);
-  return EXIT.OK;
+    const path = dataDir !== undefined ? mergedSettingsPath(dataDir) : ''
+    const mergedSettingsPresent = path.length > 0 && existsSync(path)
+    const pluginVersion = pluginRoot !== undefined ? await readPluginVersion(pluginRoot) : undefined
+    const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path) : undefined
+
+    const decision = decideAutonomyPreflight({
+        autonomous: isAutonomous(env),
+        mergedSettingsPresent,
+        pluginVersion,
+        onDiskVersion,
+    })
+    const verdict = describePreflightReason(decision.reason, pluginVersion, onDiskVersion)
+
+    if (decision.regenerate) {
+        // A regenerate always implies halt-for-relaunch (the PreflightDecision
+        // invariant). If we cannot resolve where to scaffold, degrade to a message.
+        if (dataDir === undefined || pluginRoot === undefined) {
+            write(
+                `HALT: ${verdict}.\n` +
+                    `Cannot resolve the plugin data/root dir to scaffold autonomous settings here — ` +
+                    'run `factory autonomy ensure` once the environment is set, then relaunch with the printed command.\n'
+            )
+            return EXIT.ERROR
+        }
+        await runAutonomyEnsure({
+            dataDir,
+            pluginRoot,
+            userSettingsPath: opts.userSettingsPath,
+            home,
+            writeStdout: write,
+        })
+        write(`\nHALT: ${verdict} — relaunch to continue (command above).\n`)
+        return EXIT.ERROR
+    }
+
+    // proceed without regenerating (fresh / ci-raw-env / version-unknowable).
+    write(`OK: autonomous mode ready — ${verdict}.\n`)
+    return EXIT.OK
 }
 
 async function run(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["json"] });
-  if (args.flag("help") === true) {
-    emitLine(HELP);
-    return EXIT.OK;
-  }
+    const args = parseArgs(argv, {booleans: ['json']})
+    if (args.flag('help') === true) {
+        emitLine(HELP)
+        return EXIT.OK
+    }
 
-  // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1;
-  // `preflight` decides + scaffolds-and-halts when needed (the run-entry call).
-  const verb = args.positionals[0];
-  if (verb === "status") {
-    return runAutonomyStatus({ json: args.flag("json") === true });
-  }
-  const userSettings = args.flag("user-settings");
-  if (verb === "preflight") {
-    return runAutonomyPreflight({
-      userSettingsPath: typeof userSettings === "string" ? userSettings : undefined,
-    });
-  }
-  if (verb !== undefined && verb !== "ensure") {
-    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status | preflight)`);
-    return EXIT.USAGE;
-  }
+    // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1;
+    // `preflight` decides + scaffolds-and-halts when needed (the run-entry call).
+    const verb = args.positionals[0]
+    if (verb === 'status') {
+        return runAutonomyStatus({json: args.flag('json') === true})
+    }
+    const userSettings = args.flag('user-settings')
+    if (verb === 'preflight') {
+        return runAutonomyPreflight({
+            userSettingsPath: typeof userSettings === 'string' ? userSettings : undefined,
+        })
+    }
+    if (verb !== undefined && verb !== 'ensure') {
+        emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status | preflight)`)
+        return EXIT.USAGE
+    }
 
-  await runAutonomyEnsure({
-    userSettingsPath: typeof userSettings === "string" ? userSettings : undefined,
-  });
-  return EXIT.OK;
+    await runAutonomyEnsure({
+        userSettingsPath: typeof userSettings === 'string' ? userSettings : undefined,
+    })
+    return EXIT.OK
 }
 
 export const autonomyCommand: Subcommand = {
-  describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
-  run: withUsageGuard("autonomy", run),
-};
+    describe: 'Materialize merged-settings.json for an autonomous relaunch + print the command',
+    run: withUsageGuard('autonomy', run),
+}

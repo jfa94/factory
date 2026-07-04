@@ -55,162 +55,162 @@ Structure to replicate:
 
 ```json
 {
-  "env": {
-    "FACTORY_AUTONOMOUS_MODE": "1",
-    "FACTORY_HOOK_LOG": "${CLAUDE_PLUGIN_DATA}/hooks.log"
-  },
-  "permissions": {
-    "allow": [
-      "Bash(pipeline-*)",
-      "Bash(git status)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(git show*)",
-      "Bash(git branch*)",
-      "Bash(git checkout*)",
-      "Bash(git add*)",
-      "Bash(git commit*)",
-      "Bash(git push origin staging/*)",
-      "Bash(git push origin task/*)",
-      "Bash(git fetch*)",
-      "Bash(git merge --ff-only*)",
-      "Bash(gh pr *)",
-      "Bash(gh issue *)",
-      "Bash(gh api*)",
-      "Bash(gh auth status)",
-      "Bash(jq *)",
-      "Bash(node --check *)",
-      "Bash(npm run *)",
-      "Bash(pnpm run *)",
-      "Read(*)",
-      "Grep(*)",
-      "Glob(*)",
-      "Edit(*)",
-      "Write(*)"
-    ],
-    "deny": [
-      "Bash(rm -rf /)",
-      "Bash(rm -rf /*)",
-      "Bash(rm -rf ~)",
-      "Bash(rm -rf ~/*)",
-      "Bash(rm -rf $HOME*)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)",
-      "Bash(git push *--force*)",
-      "Bash(git push origin main*)",
-      "Bash(git push origin master*)",
-      "Bash(git push origin develop*)",
-      "Bash(git reset --hard origin/main*)",
-      "Bash(git reset --hard origin/master*)",
-      "Bash(git reset --hard origin/develop*)",
-      "Bash(git branch -D main*)",
-      "Bash(git branch -D master*)",
-      "Bash(git branch -D develop*)",
-      "Bash(git checkout main)",
-      "Bash(git checkout master)",
-      "Bash(git checkout develop)",
-      "Bash(*--no-verify*)",
-      "Bash(*--no-gpg-sign*)",
-      "Bash(DROP TABLE*)",
-      "Bash(TRUNCATE*)",
-      "Bash(DELETE FROM*WHERE 1*)",
-      "Bash(chmod -R 777*)",
-      "Bash(sudo *)",
-      "Bash(npm publish*)",
-      "Bash(pnpm publish*)",
-      "Bash(gh release delete*)",
-      "Bash(gh repo delete*)",
-      "Write(.env)",
-      "Write(.env.*)",
-      "Write(**/secrets/**)",
-      "Write(**/migrations/**)",
-      "Edit(.env)",
-      "Edit(.env.*)",
-      "Edit(**/migrations/**)"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-protection.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/force-push-guard.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/env-migrations-guard.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rm-guard.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/git-push-audit.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/secret-scan.sh",
-            "timeout": 5000
-          }
+    "env": {
+        "FACTORY_AUTONOMOUS_MODE": "1",
+        "FACTORY_HOOK_LOG": "${CLAUDE_PLUGIN_DATA}/hooks.log"
+    },
+    "permissions": {
+        "allow": [
+            "Bash(pipeline-*)",
+            "Bash(git status)",
+            "Bash(git diff*)",
+            "Bash(git log*)",
+            "Bash(git show*)",
+            "Bash(git branch*)",
+            "Bash(git checkout*)",
+            "Bash(git add*)",
+            "Bash(git commit*)",
+            "Bash(git push origin staging/*)",
+            "Bash(git push origin task/*)",
+            "Bash(git fetch*)",
+            "Bash(git merge --ff-only*)",
+            "Bash(gh pr *)",
+            "Bash(gh issue *)",
+            "Bash(gh api*)",
+            "Bash(gh auth status)",
+            "Bash(jq *)",
+            "Bash(node --check *)",
+            "Bash(npm run *)",
+            "Bash(pnpm run *)",
+            "Read(*)",
+            "Grep(*)",
+            "Glob(*)",
+            "Edit(*)",
+            "Write(*)"
+        ],
+        "deny": [
+            "Bash(rm -rf /)",
+            "Bash(rm -rf /*)",
+            "Bash(rm -rf ~)",
+            "Bash(rm -rf ~/*)",
+            "Bash(rm -rf $HOME*)",
+            "Bash(git push --force*)",
+            "Bash(git push -f*)",
+            "Bash(git push *--force*)",
+            "Bash(git push origin main*)",
+            "Bash(git push origin master*)",
+            "Bash(git push origin develop*)",
+            "Bash(git reset --hard origin/main*)",
+            "Bash(git reset --hard origin/master*)",
+            "Bash(git reset --hard origin/develop*)",
+            "Bash(git branch -D main*)",
+            "Bash(git branch -D master*)",
+            "Bash(git branch -D develop*)",
+            "Bash(git checkout main)",
+            "Bash(git checkout master)",
+            "Bash(git checkout develop)",
+            "Bash(*--no-verify*)",
+            "Bash(*--no-gpg-sign*)",
+            "Bash(DROP TABLE*)",
+            "Bash(TRUNCATE*)",
+            "Bash(DELETE FROM*WHERE 1*)",
+            "Bash(chmod -R 777*)",
+            "Bash(sudo *)",
+            "Bash(npm publish*)",
+            "Bash(pnpm publish*)",
+            "Bash(gh release delete*)",
+            "Bash(gh repo delete*)",
+            "Write(.env)",
+            "Write(.env.*)",
+            "Write(**/secrets/**)",
+            "Write(**/migrations/**)",
+            "Edit(.env)",
+            "Edit(.env.*)",
+            "Edit(**/migrations/**)"
         ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/env-migrations-guard.sh",
-            "timeout": 5000
-          }
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-protection.sh",
+                        "timeout": 5000
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/force-push-guard.sh",
+                        "timeout": 5000
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/env-migrations-guard.sh",
+                        "timeout": 5000
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rm-guard.sh",
+                        "timeout": 5000
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/git-push-audit.sh",
+                        "timeout": 5000
+                    },
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/secret-scan.sh",
+                        "timeout": 5000
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/env-migrations-guard.sh",
+                        "timeout": 5000
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-tracker.sh",
+                        "timeout": 10000
+                    }
+                ]
+            },
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh",
+                        "timeout": 5000
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-gate.sh",
+                        "timeout": 30000
+                    }
+                ]
+            }
         ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run-tracker.sh",
-            "timeout": 10000
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-gate.sh",
-            "timeout": 30000
-          }
-        ]
-      }
-    ]
-  }
+    }
 }
 ```
 
@@ -241,15 +241,15 @@ Every `command` field currently starts with `hooks/` (a relative path). Rewrite 
 Before:
 
 ```json
-{ "type": "command", "command": "hooks/branch-protection.sh" }
+{"type": "command", "command": "hooks/branch-protection.sh"}
 ```
 
 After:
 
 ```json
 {
-  "type": "command",
-  "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-protection.sh"
+    "type": "command",
+    "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-protection.sh"
 }
 ```
 
@@ -315,11 +315,11 @@ Test in `bin/test-phase9.sh`:
 
 1. `bash bin/test-phase9.sh` — all new template/hooks assertions pass.
 2. Manual dry-run:
-   ```bash
-   plugin_root="$PWD"
-   jq --arg root "$plugin_root" 'walk(if type=="object" and has("command") then .command |= gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)' templates/settings.autonomous.json | jq '.hooks.PreToolUse[0].hooks[0].command'
-   ```
-   Expected: a fully qualified `/Users/Javier/Projects/factory-plugin/hooks/branch-protection.sh` path (no `${...}` literals).
+    ```bash
+    plugin_root="$PWD"
+    jq --arg root "$plugin_root" 'walk(if type=="object" and has("command") then .command |= gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)' templates/settings.autonomous.json | jq '.hooks.PreToolUse[0].hooks[0].command'
+    ```
+    Expected: a fully qualified `/Users/Javier/Projects/factory-plugin/hooks/branch-protection.sh` path (no `${...}` literals).
 3. `grep -c '${CLAUDE_PLUGIN_ROOT}' hooks/hooks.json` — matches the number of hook scripts referenced.
 4. `jq '.permissions.deny | length' templates/settings.autonomous.json` — at least 20.
 5. Diff against `~/Projects/factory/templates/settings.autonomous.json` — deny list is a superset or equivalent; no safety regression from the old pipeline.

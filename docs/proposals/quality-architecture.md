@@ -135,11 +135,11 @@ faithfully translates whatever PRD it is given.
   absent. (Decision 23.)
 - **Composition (two layers):** per-unit quality does not automatically compose
   into system quality.
-  - **Continuous** — each slice is built and verified against the _current
-    integrated HEAD_, never a stale base, so drift is caught as it is introduced.
-  - **Final** — an authoritative **rollup full-CI gate** over the whole completed
-    set before delivery, the coherence check per-task gates structurally can't
-    provide.
+    - **Continuous** — each slice is built and verified against the _current
+      integrated HEAD_, never a stale base, so drift is caught as it is introduced.
+    - **Final** — an authoritative **rollup full-CI gate** over the whole completed
+      set before delivery, the coherence check per-task gates structurally can't
+      provide.
 
 (Decisions 12, 16, 23.)
 

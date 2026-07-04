@@ -203,25 +203,25 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path6, at, mt, cb) {
+          fs2.lutimes = function(path6, at2, mt, cb) {
             fs2.open(path6, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
               }
-              fs2.futimes(fd, at, mt, function(er2) {
+              fs2.futimes(fd, at2, mt, function(er2) {
                 fs2.close(fd, function(er22) {
                   if (cb) cb(er2 || er22);
                 });
               });
             });
           };
-          fs2.lutimesSync = function(path6, at, mt) {
+          fs2.lutimesSync = function(path6, at2, mt) {
             var fd = fs2.openSync(path6, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
-              ret = fs2.futimesSync(fd, at, mt);
+              ret = fs2.futimesSync(fd, at2, mt);
               threw = false;
             } finally {
               if (threw) {
@@ -1627,8 +1627,8 @@ var EXIT = {
 };
 
 // src/config/load.ts
-import { existsSync, readFileSync } from "node:fs";
-import { basename as basename2, dirname as dirname2, join as join2, resolve, sep } from "node:path";
+import { existsSync as existsSync2, readFileSync } from "node:fs";
+import { basename as basename2, dirname as dirname3, join as join2, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 
 // src/shared/logging.ts
@@ -1644,18 +1644,24 @@ function activeThreshold() {
   if (raw && raw in LEVEL_RANK) {
     return LEVEL_RANK[raw];
   }
-  if (process.env.FACTORY_QUIET === "1") return LEVEL_RANK.error;
+  if (process.env.FACTORY_QUIET === "1") {
+    return LEVEL_RANK.error;
+  }
   return LEVEL_RANK.info;
 }
 function emit(level, scope, args) {
-  if (LEVEL_RANK[level] < activeThreshold()) return;
+  if (LEVEL_RANK[level] < activeThreshold()) {
+    return;
+  }
   const ts = (/* @__PURE__ */ new Date()).toISOString();
   const msg = args.map((a) => typeof a === "string" ? a : safeStringify(a)).join(" ");
   process.stderr.write(`[${ts}] [${level.toUpperCase()}] ${scope}: ${msg}
 `);
 }
 function safeStringify(value) {
-  if (value instanceof Error) return value.stack ?? value.message;
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
   try {
     return JSON.stringify(value);
   } catch {
@@ -1664,10 +1670,18 @@ function safeStringify(value) {
 }
 function createLogger(scope) {
   return {
-    debug: (...args) => emit("debug", scope, args),
-    info: (...args) => emit("info", scope, args),
-    warn: (...args) => emit("warn", scope, args),
-    error: (...args) => emit("error", scope, args),
+    debug: (...args) => {
+      emit("debug", scope, args);
+    },
+    info: (...args) => {
+      emit("info", scope, args);
+    },
+    warn: (...args) => {
+      emit("warn", scope, args);
+    },
+    error: (...args) => {
+      emit("error", scope, args);
+    },
     child: (subScope) => createLogger(`${scope}:${subScope}`)
   };
 }
@@ -1738,12 +1752,8 @@ function parseJson(text, sourcePath) {
   try {
     return JSON.parse(text);
   } catch (cause) {
-    const where = sourcePath ? ` (from ${sourcePath})` : "";
-    throw new JsonParseError(
-      `invalid JSON${where}: ${cause.message}`,
-      sourcePath,
-      cause
-    );
+    const where = sourcePath != null ? ` (from ${sourcePath})` : "";
+    throw new JsonParseError(`invalid JSON${where}: ${cause.message}`, sourcePath, cause);
   }
 }
 async function readJsonFile(path6) {
@@ -5797,6 +5807,294 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// src/shared/exec.ts
+import { spawn } from "node:child_process";
+var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
+function exec(command, args = [], opts = {}) {
+  const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
+  return new Promise((resolve2, reject) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
+      shell: opts.shell ?? false,
+      timeout: opts.timeoutMs,
+      killSignal: opts.killSignal ?? "SIGTERM"
+    });
+    const outChunks = [];
+    const errChunks = [];
+    let outLen = 0;
+    let errLen = 0;
+    let truncated = false;
+    let settled = false;
+    const settleReject = (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(err);
+    };
+    child.stdout.on("data", (c) => {
+      const remaining = maxBuffer - outLen;
+      if (remaining <= 0) {
+        truncated = true;
+        return;
+      }
+      if (c.length > remaining) {
+        outChunks.push(c.subarray(0, remaining));
+        outLen = maxBuffer;
+        truncated = true;
+      } else {
+        outChunks.push(c);
+        outLen += c.length;
+      }
+    });
+    child.stderr.on("data", (c) => {
+      const remaining = maxBuffer - errLen;
+      if (remaining <= 0) {
+        truncated = true;
+        return;
+      }
+      if (c.length > remaining) {
+        errChunks.push(c.subarray(0, remaining));
+        errLen = maxBuffer;
+        truncated = true;
+      } else {
+        errChunks.push(c);
+        errLen += c.length;
+      }
+    });
+    child.on("error", settleReject);
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve2({
+        stdout: Buffer.concat(outChunks).toString("utf8"),
+        stderr: Buffer.concat(errChunks).toString("utf8"),
+        code,
+        signal: signal ?? null,
+        truncated
+      });
+    });
+    if (opts.input !== void 0) {
+      child.stdin.on("error", (err) => {
+        if (err.code === "EPIPE") {
+          return;
+        }
+        settleReject(err);
+      });
+      child.stdin.end(opts.input);
+    }
+  });
+}
+var ExecError = class extends Error {
+  result;
+  command;
+  args;
+  constructor(command, args, result) {
+    const where = [command, ...args].join(" ");
+    super(
+      `command failed (code=${result.code ?? "null"}` + (result.signal ? `, signal=${result.signal}` : "") + `): ${where}
+${result.stderr.trim()}`
+    );
+    this.name = "ExecError";
+    this.command = command;
+    this.args = args;
+    this.result = result;
+  }
+};
+
+// src/shared/jsonl.ts
+import { appendFile, mkdir as mkdir2, readFile as readFile2 } from "node:fs/promises";
+import { dirname as dirname2 } from "node:path";
+
+// src/shared/assert.ts
+function nonNull(x, msg) {
+  if (x == null) {
+    throw new Error(msg ?? "unexpected nullish value");
+  }
+  return x;
+}
+function at(a, i) {
+  return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
+}
+function getOrThrow(m, k, msg) {
+  return nonNull(m.get(k), msg ?? "missing map key");
+}
+
+// src/shared/jsonl.ts
+async function appendJsonl(path6, record) {
+  await mkdir2(dirname2(path6), { recursive: true });
+  await appendFile(path6, JSON.stringify(record) + "\n", "utf8");
+}
+
+// src/shared/time.ts
+function nowIso() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function nowEpoch() {
+  return Math.floor(Date.now() / 1e3);
+}
+
+// src/shared/secret-patterns.ts
+var SECRET_CONTENT_PATTERNS = [
+  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
+  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
+  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
+  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
+  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
+  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
+  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
+  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
+  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
+  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
+  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
+  {
+    name: "jwt",
+    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
+  },
+  {
+    name: "aws-secret-access-key",
+    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
+  },
+  // Quote-anchored detector — EXCLUDED from redaction (see header note).
+  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
+  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
+  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
+  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
+  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
+  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
+];
+function hasLiteralQuote(p) {
+  return p.source.includes('"');
+}
+var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
+  (p) => !hasLiteralQuote(p)
+);
+var REDACTION_TOKEN = "[REDACTED]";
+function redactSecrets(text) {
+  if (SECRET_REDACTION_PATTERNS.length === 0) {
+    return text;
+  }
+  const combined = SECRET_REDACTION_PATTERNS.map((p) => p.source).join("|");
+  const re = new RegExp(combined, "g");
+  return text.replace(re, REDACTION_TOKEN);
+}
+var _KNOWN_PUBLIC_TOKEN_PARTS = [
+  // anon role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
+    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+  ],
+  // service_role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+  ]
+];
+var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map((p) => p.join("."));
+function detectSecrets(text) {
+  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
+  const hits = [];
+  for (const p of SECRET_CONTENT_PATTERNS) {
+    if (new RegExp(p.source).test(scrubbed)) {
+      hits.push(p.name);
+    }
+  }
+  return hits;
+}
+
+// src/shared/ids.ts
+var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+var SLUG_MAX_LENGTH = 50;
+function validateId(id, label = "id") {
+  if (id.length === 0) {
+    throw new Error(`${label}: empty`);
+  }
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
+  }
+  return id;
+}
+function makeRunId(now = /* @__PURE__ */ new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
+  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+  return `run-${date}-${time}`;
+}
+function slugify(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, SLUG_MAX_LENGTH);
+}
+
+// src/shared/paths.ts
+function tildeShorten(absPath, home) {
+  if (home.length === 0) {
+    return absPath;
+  }
+  if (absPath === home) {
+    return "~";
+  }
+  const base = home.endsWith("/") ? home.slice(0, -1) : home;
+  if (absPath.startsWith(base + "/")) {
+    return "~" + absPath.slice(base.length);
+  }
+  return absPath;
+}
+
+// src/shared/file-lock.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { existsSync } from "node:fs";
+var log2 = createLogger("lock");
+var DEFAULT_FILE_LOCK_TUNING = {
+  stale: 15e3,
+  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
+  retries: 50,
+  retryMinTimeout: 20,
+  retryMaxTimeout: 500
+};
+async function withFileLock(opts, fn) {
+  if (opts.dirPolicy === "create") {
+    await mkdir3(opts.dir, { recursive: true });
+  } else if (!existsSync(opts.dir)) {
+    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
+  }
+  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
+    realpath: false,
+    stale: opts.tuning.stale,
+    retries: {
+      retries: opts.tuning.retries,
+      minTimeout: opts.tuning.retryMinTimeout,
+      maxTimeout: opts.tuning.retryMaxTimeout,
+      factor: 1.5
+    },
+    onCompromised: (err) => {
+      log2.error(`lock for ${opts.label} was compromised: ${err.message}`);
+      throw err;
+    }
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
+// src/shared/usage-error.ts
+var UsageError = class extends Error {
+  isUsageError = true;
+  constructor(message) {
+    super(message);
+    this.name = "UsageError";
+  }
+};
+function isUsageError(err) {
+  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+}
+
 // src/config/schema.ts
 var EffortEnum = external_exports.enum(["low", "medium", "high", "xhigh", "max"]);
 var QualitySchema = external_exports.object({
@@ -5833,7 +6131,7 @@ var QualitySchema = external_exports.object({
   gateEnv: external_exports.record(external_exports.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), external_exports.string()).default({})
 }).default({});
 function nonDecreasing(xs) {
-  return xs.every((x, i) => i === 0 || x >= xs[i - 1]);
+  return xs.every((x, i) => i === 0 || x >= at(xs, i - 1));
 }
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
@@ -5991,33 +6289,35 @@ var ConfigSchema = external_exports.object({
 }).default({});
 
 // src/config/load.ts
-var log2 = createLogger("config");
+var log3 = createLogger("config");
 var PLUGIN_NAME = "factory";
 var warnedRedirects = /* @__PURE__ */ new Set();
 function expectedDataDir(opts) {
   const { current, home, pluginRoot, warn } = opts;
-  if (!current) return null;
+  if (current == null || current.length === 0) {
+    return null;
+  }
   const dataRoot = join2(home, ".claude", "plugins", "data");
-  if (!current.startsWith(dataRoot + sep)) return null;
+  if (!current.startsWith(dataRoot + sep)) {
+    return null;
+  }
   const currentBase = basename2(current);
   if (currentBase === PLUGIN_NAME || currentBase.startsWith(`${PLUGIN_NAME}-`)) {
     return null;
   }
-  const pluginFromPath = basename2(dirname2(pluginRoot));
-  const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
+  const pluginFromPath = basename2(dirname3(pluginRoot));
+  const marketplaceFromPath = basename2(dirname3(dirname3(pluginRoot)));
   const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
     return join2(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
   }
   const marketplaceJson = join2(pluginRoot, ".claude-plugin", "marketplace.json");
-  if (existsSync(marketplaceJson)) {
+  if (existsSync2(marketplaceJson)) {
     try {
-      const parsed = parseJson(
-        readFileSync(marketplaceJson, "utf8"),
-        marketplaceJson
-      );
-      const marketplaceName = typeof parsed.name === "string" ? parsed.name : "";
+      const parsed = parseJson(readFileSync(marketplaceJson, "utf8"), marketplaceJson);
+      const name = parsed !== null && typeof parsed === "object" ? parsed.name : void 0;
+      const marketplaceName = typeof name === "string" ? name : "";
       if (marketplaceName.length > 0) {
         return join2(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
       }
@@ -6034,29 +6334,37 @@ function inferPluginRoot() {
     const here = new URL(".", import.meta.url).pathname;
     let dir = here;
     for (let i = 0; i < 4; i++) {
-      if (existsSync(join2(dir, ".claude-plugin"))) return dir;
-      dir = dirname2(dir);
+      if (existsSync2(join2(dir, ".claude-plugin"))) {
+        return dir;
+      }
+      dir = dirname3(dir);
     }
     return resolve(here, "..");
   } catch (err) {
-    log2.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
+    log3.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
   }
 }
 function resolvePluginRoot(env = process.env) {
   const fromEnv = env.CLAUDE_PLUGIN_ROOT;
-  if (typeof fromEnv === "string" && fromEnv.length > 0) return resolve(fromEnv);
+  if (typeof fromEnv === "string" && fromEnv.length > 0) {
+    return resolve(fromEnv);
+  }
   return inferPluginRoot();
 }
 function resolveDataDir(opts = {}) {
-  if (opts.dataDir) return resolve(opts.dataDir);
+  if (opts.dataDir != null && opts.dataDir.length > 0) {
+    return resolve(opts.dataDir);
+  }
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
-  const warn = opts.warn ?? ((m) => log2.warn(m));
+  const warn = opts.warn ?? ((m) => {
+    log3.warn(m);
+  });
   const corrected = expectedDataDir({ current, home, pluginRoot, warn });
-  if (corrected && corrected !== current) {
+  if (corrected != null && corrected.length > 0 && corrected !== current) {
     const key = JSON.stringify([current ?? "", corrected]);
     if (!warnedRedirects.has(key)) {
       warnedRedirects.add(key);
@@ -6066,7 +6374,7 @@ function resolveDataDir(opts = {}) {
     }
     return resolve(corrected);
   }
-  if (!current) {
+  if (current == null || current.length === 0) {
     throw new Error(
       'CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>")'
     );
@@ -6084,7 +6392,7 @@ function loadConfig(opts = {}) {
     return ConfigSchema.parse({});
   }
   const file = configPath(dataDir);
-  if (!existsSync(file)) {
+  if (!existsSync2(file)) {
     return ConfigSchema.parse({});
   }
   const raw = parseJson(readFileSync(file, "utf8"), file);
@@ -6092,11 +6400,13 @@ function loadConfig(opts = {}) {
 }
 
 // src/config/save.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import { mkdir as mkdir2 } from "node:fs/promises";
+import { existsSync as existsSync3, readFileSync as readFileSync2 } from "node:fs";
+import { mkdir as mkdir4 } from "node:fs/promises";
 function readRawConfig(opts = {}) {
   const file = configPath(resolveDataDir(opts));
-  if (!existsSync2(file)) return {};
+  if (!existsSync3(file)) {
+    return {};
+  }
   const parsed = parseJson(readFileSync2(file, "utf8"), file);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`config: ${file} is not a JSON object`);
@@ -6106,7 +6416,7 @@ function readRawConfig(opts = {}) {
 async function saveRawConfig(raw, opts = {}) {
   const resolved = ConfigSchema.parse(raw);
   const dataDir = resolveDataDir(opts);
-  await mkdir2(dataDir, { recursive: true });
+  await mkdir4(dataDir, { recursive: true });
   await atomicWriteFile(configPath(dataDir), stringifyJson(raw));
   return resolved;
 }
@@ -6137,14 +6447,14 @@ function setAtPath(obj, path6, value) {
   const next = structuredClone(obj);
   let cursor = next;
   for (let i = 0; i < path6.length - 1; i++) {
-    const key = path6[i];
+    const key = at(path6, i);
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[path6[path6.length - 1]] = value;
+  cursor[at(path6, path6.length - 1)] = value;
   return next;
 }
 function unsetAtPath(obj, path6) {
@@ -6152,7 +6462,7 @@ function unsetAtPath(obj, path6) {
   const parents = [];
   let cursor = next;
   for (let i = 0; i < path6.length - 1; i++) {
-    const key = path6[i];
+    const key = at(path6, i);
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6160,12 +6470,12 @@ function unsetAtPath(obj, path6) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  delete cursor[path6[path6.length - 1]];
+  Reflect.deleteProperty(cursor, at(path6, path6.length - 1));
   for (let i = parents.length - 1; i >= 0; i--) {
-    const { container, key } = parents[i];
+    const { container, key } = at(parents, i);
     const child = container[key];
     if (Object.keys(child).length === 0) {
-      delete container[key];
+      Reflect.deleteProperty(container, key);
     } else {
       break;
     }
@@ -6186,52 +6496,22 @@ function getAtPath(config, path6) {
   return cursor;
 }
 
-// src/shared/usage-error.ts
-var UsageError = class extends Error {
-  isUsageError = true;
-  constructor(message) {
-    super(message);
-    this.name = "UsageError";
-  }
-};
-function isUsageError(err) {
-  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
-}
-
 // src/types/phases-vocab.ts
 var TASK_PHASES = ["preflight", "tests", "exec", "verify", "ship"];
 var SPAWN_PHASES = ["tests", "exec", "verify"];
 
 // src/core/state/schema.ts
-var RunStatusEnum = external_exports.enum([
-  "running",
-  "completed",
-  "superseded",
-  "paused",
-  "suspended",
-  "failed"
-]);
+var RunStatusEnum = external_exports.enum(["running", "completed", "superseded", "paused", "suspended", "failed"]);
 var TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"];
 function isTerminalRunStatus(s) {
   return TERMINAL_RUN_STATUSES.includes(s);
 }
-var TaskStatusEnum = external_exports.enum([
-  "pending",
-  "executing",
-  "reviewing",
-  "shipping",
-  "done",
-  "failed"
-]);
+var TaskStatusEnum = external_exports.enum(["pending", "executing", "reviewing", "shipping", "done", "failed"]);
 var TERMINAL_TASK_STATUSES = ["done", "failed"];
 function isTerminalTaskStatus(s) {
   return TERMINAL_TASK_STATUSES.includes(s);
 }
-var FailureClassEnum = external_exports.enum([
-  "capability-budget",
-  "spec-defect",
-  "blocked-environmental"
-]);
+var FailureClassEnum = external_exports.enum(["capability-budget", "spec-defect", "blocked-environmental"]);
 var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
 var EscalationRungSchema = external_exports.number().int().min(0);
 var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
@@ -6737,7 +7017,7 @@ function refineRunCrossFields(run11, ctx) {
       });
     }
   }
-  if (run11.e2e_phase !== void 0 && run11.e2e_phase.status !== void 0) {
+  if (run11.e2e_phase?.status !== void 0) {
     const isFailed = run11.e2e_phase.status === "failed";
     reasonIffFailed(ctx, {
       runId: run11.run_id,
@@ -6755,7 +7035,7 @@ function refineRunCrossFields(run11, ctx) {
       });
     }
   }
-  if (run11.e2e_assessment !== void 0 && run11.e2e_assessment.status !== void 0) {
+  if (run11.e2e_assessment?.status !== void 0) {
     reasonIffFailed(ctx, {
       runId: run11.run_id,
       path: ["e2e_assessment", "reason"],
@@ -6779,28 +7059,6 @@ function parseRunState(raw) {
   return RunStateChecked.parse(raw);
 }
 
-// src/shared/ids.ts
-var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-var SLUG_MAX_LENGTH = 50;
-function validateId(id, label = "id") {
-  if (id.length === 0) {
-    throw new Error(`${label}: empty`);
-  }
-  if (!ID_PATTERN.test(id)) {
-    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
-  }
-  return id;
-}
-function makeRunId(now = /* @__PURE__ */ new Date()) {
-  const p = (n) => String(n).padStart(2, "0");
-  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
-  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
-  return `run-${date}-${time}`;
-}
-function slugify(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, SLUG_MAX_LENGTH);
-}
-
 // src/core/state/seed.ts
 function seedTaskRows(specTasks, ctx, idOf = (id) => id) {
   const ids = new Set(specTasks.map((t) => idOf(t.task_id)));
@@ -6814,9 +7072,7 @@ function seedTaskRows(specTasks, ctx, idOf = (id) => id) {
     const dependsOn = t.depends_on.map(idOf);
     for (const [i, dep] of dependsOn.entries()) {
       if (dep === id) {
-        throw new Error(
-          `${ctx.context}: task '${t.task_id}' depends on itself in ${ctx.specLabel}`
-        );
+        throw new Error(`${ctx.context}: task '${t.task_id}' depends on itself in ${ctx.specLabel}`);
       }
       if (!ids.has(dep)) {
         throw new Error(
@@ -6845,11 +7101,11 @@ function assertAcyclic(tasks, ctx) {
   const state = /* @__PURE__ */ new Map();
   const visit = (id, trail) => {
     const mark = state.get(id);
-    if (mark === DONE) return;
+    if (mark === DONE) {
+      return;
+    }
     if (mark === VISITING) {
-      throw new Error(
-        `${ctx.context}: dependency cycle in ${ctx.specLabel}: ${[...trail, id].join(" \u2192 ")}`
-      );
+      throw new Error(`${ctx.context}: dependency cycle in ${ctx.specLabel}: ${[...trail, id].join(" \u2192 ")}`);
     }
     state.set(id, VISITING);
     for (const dep of tasks[id]?.depends_on ?? []) {
@@ -6857,7 +7113,9 @@ function assertAcyclic(tasks, ctx) {
     }
     state.set(id, DONE);
   };
-  for (const id of Object.keys(tasks)) visit(id, []);
+  for (const id of Object.keys(tasks)) {
+    visit(id, []);
+  }
 }
 
 // src/core/state/derive.ts
@@ -6865,7 +7123,7 @@ function mkVerdict(passed, gate, from) {
   return { passed, gate, __derived: true, from };
 }
 function deriveAllGatesVerdict(evidence) {
-  const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
+  const passed = evidence.length > 0 && evidence.every((e) => e.observed);
   return mkVerdict(passed, "all", [...evidence]);
 }
 function derivePanelVerdict(reviewersOrTask) {
@@ -6891,70 +7149,29 @@ function mergeGateBlockReason(reviewers, gateEvidence) {
   if (gateEvidence.length === 0) {
     parts.push("no deterministic gate evidence");
   } else {
-    const failed = gateEvidence.filter((g) => g.observed !== true);
+    const failed = gateEvidence.filter((g) => !g.observed);
     if (failed.length > 0) {
-      const named = failed.map((g) => g.detail ? `${g.gate} (${g.detail})` : g.gate);
+      const named = failed.map(
+        (g) => g.detail != null && g.detail.length > 0 ? `${g.gate} (${g.detail})` : g.gate
+      );
       parts.push(`failed gates: ${named.join(", ")}`);
     }
   }
   const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
   const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  if (blocked.length > 0) {
+    parts.push(`blocked by: ${blocked.join(", ")}`);
+  }
+  if (errored.length > 0) {
+    parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  }
   return parts.length > 0 ? parts.join("; ") : "merge gate not unanimous";
 }
 
 // src/core/state/manager.ts
-import { mkdir as mkdir4, readFile as readFile2, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir5, readFile as readFile3, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname3, join as join4 } from "node:path";
-
-// src/shared/file-lock.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir3 } from "node:fs/promises";
-import { existsSync as existsSync3 } from "node:fs";
-var log3 = createLogger("lock");
-var DEFAULT_FILE_LOCK_TUNING = {
-  stale: 15e3,
-  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
-  retries: 50,
-  retryMinTimeout: 20,
-  retryMaxTimeout: 500
-};
-async function withFileLock(opts, fn) {
-  if (opts.dirPolicy === "create") {
-    await mkdir3(opts.dir, { recursive: true });
-  } else if (!existsSync3(opts.dir)) {
-    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
-  }
-  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
-    realpath: false,
-    stale: opts.tuning.stale,
-    retries: {
-      retries: opts.tuning.retries,
-      minTimeout: opts.tuning.retryMinTimeout,
-      maxTimeout: opts.tuning.retryMaxTimeout,
-      factor: 1.5
-    },
-    onCompromised: (err) => {
-      log3.error(`lock for ${opts.label} was compromised: ${err.message}`);
-      throw err;
-    }
-  });
-  try {
-    return await fn();
-  } finally {
-    await release();
-  }
-}
-
-// src/shared/time.ts
-function nowIso() {
-  return (/* @__PURE__ */ new Date()).toISOString();
-}
-function nowEpoch() {
-  return Math.floor(Date.now() / 1e3);
-}
+import { dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
@@ -7057,7 +7274,7 @@ var StateManager = class _StateManager {
     const v = raw?.schema_version;
     if (v !== void 0 && v !== 2) {
       throw new UsageError(
-        `run state at '${context}' uses schema v${String(v)}; only v2 is supported \u2014 start a fresh run`
+        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported \u2014 start a fresh run`
       );
     }
     return parseRunState(raw);
@@ -7073,10 +7290,7 @@ var StateManager = class _StateManager {
    * `label` names the resource in the loud not-found + compromised errors.
    */
   async runWithLock(dir, lockfilePath, label, fn) {
-    return withFileLock(
-      { dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning },
-      fn
-    );
+    return withFileLock({ dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning }, fn);
   }
   /**
    * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
@@ -7084,12 +7298,7 @@ var StateManager = class _StateManager {
    * existing run.
    */
   async withLock(runId, fn) {
-    return this.runWithLock(
-      runDir(this.dataDir, runId),
-      this.lockfilePath(runId),
-      `run '${runId}'`,
-      fn
-    );
+    return this.runWithLock(runDir(this.dataDir, runId), this.lockfilePath(runId), `run '${runId}'`, fn);
   }
   /**
    * Run `fn` while holding the per-spec lock, keyed by `(repo, specId)`. The
@@ -7119,8 +7328,8 @@ var StateManager = class _StateManager {
     if (existsSync4(this.statePath(args.run_id))) {
       throw new Error(`state: run '${args.run_id}' already exists`);
     }
-    await mkdir4(join4(dir, "holdouts"), { recursive: true });
-    await mkdir4(join4(dir, "reviews"), { recursive: true });
+    await mkdir5(join4(dir, "holdouts"), { recursive: true });
+    await mkdir5(join4(dir, "reviews"), { recursive: true });
     const now = nowIso();
     const state = parseRunState({
       run_id: args.run_id,
@@ -7159,7 +7368,7 @@ var StateManager = class _StateManager {
    */
   async read(runId) {
     const path6 = this.statePath(runId);
-    const raw = await readFile2(path6, "utf8");
+    const raw = await readFile3(path6, "utf8");
     return _StateManager.guardedParse(parseJson(raw, path6), path6);
   }
   /**
@@ -7193,7 +7402,9 @@ var StateManager = class _StateManager {
    */
   async readCurrentForRepo(repo) {
     const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
-    if (viaRepo !== null) return viaRepo;
+    if (viaRepo !== null) {
+      return viaRepo;
+    }
     const legacy = await this.readCurrent();
     return legacy !== null && legacy.spec.repo === repo ? legacy : null;
   }
@@ -7206,13 +7417,17 @@ var StateManager = class _StateManager {
    * {@link readCurrentForRepo}.
    */
   async readThroughLink(link) {
-    if (!existsSync4(link)) return null;
+    if (!existsSync4(link)) {
+      return null;
+    }
     const statePath = join4(link, "state.json");
     let raw;
     try {
-      raw = await readFile2(statePath, "utf8");
+      raw = await readFile3(statePath, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") return null;
+      if (err.code === "ENOENT") {
+        return null;
+      }
       throw err;
     }
     return _StateManager.guardedParse(parseJson(raw, statePath), statePath);
@@ -7234,16 +7449,22 @@ var StateManager = class _StateManager {
     try {
       entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
     } catch (err) {
-      if (err.code === "ENOENT") return [];
+      if (err.code === "ENOENT") {
+        return [];
+      }
       throw err;
     }
     const runs = [];
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory()) {
+        continue;
+      }
       try {
         runs.push(await this.read(entry.name));
       } catch (err) {
-        if (err.code === "ENOENT") continue;
+        if (err.code === "ENOENT") {
+          continue;
+        }
         log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
@@ -7272,7 +7493,9 @@ var StateManager = class _StateManager {
    * on `.length`.
    */
   async findAllActiveByOwner(session) {
-    if (session.length === 0) return [];
+    if (session.length === 0) {
+      return [];
+    }
     const runs = await this.listRuns();
     return runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
   }
@@ -7287,7 +7510,7 @@ var StateManager = class _StateManager {
    */
   async findActiveByOwner(session) {
     const owned = await this.findAllActiveByOwner(session);
-    return owned.length === 1 ? owned[0] : null;
+    return owned.length === 1 ? at(owned, 0) : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
@@ -7339,9 +7562,7 @@ var StateManager = class _StateManager {
    */
   async finalize(runId, status) {
     if (!isTerminalRunStatus(status)) {
-      throw new Error(
-        `state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`
-      );
+      throw new Error(`state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`);
     }
     return this.update(runId, (state) => {
       if (isTerminalRunStatus(state.status) && state.status !== status) {
@@ -7376,10 +7597,7 @@ var StateManager = class _StateManager {
         `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
       );
     }
-    await this.repointSymlink(
-      currentRepoLinkPath(this.dataDir, repo),
-      join4("..", RUNS_DIR, state.run_id)
-    );
+    await this.repointSymlink(currentRepoLinkPath(this.dataDir, repo), join4("..", RUNS_DIR, state.run_id));
     await this.repointSymlink(currentLinkPath(this.dataDir), join4(state.run_id));
   }
   /**
@@ -7390,7 +7608,7 @@ var StateManager = class _StateManager {
   async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
-      await mkdir4(dirname3(link), { recursive: true });
+      await mkdir5(dirname4(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
       await symlink(target, tmp);
@@ -7398,9 +7616,7 @@ var StateManager = class _StateManager {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log4.warn(
-        `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
-      );
+      log4.warn(`state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`);
       await unlink2(tmp).catch(() => {
       });
     }
@@ -7420,7 +7636,7 @@ function parseArgs(argv, opts = {}) {
   let i = 0;
   let optionsEnded = false;
   while (i < argv.length) {
-    const tok = argv[i];
+    const tok = at(argv, i);
     if (optionsEnded || !tok.startsWith("-")) {
       positionals.push(tok);
       i += 1;
@@ -7471,12 +7687,14 @@ function parseArgs(argv, opts = {}) {
   };
 }
 function parseShipMode(raw) {
-  if (raw === void 0) return void 0;
+  if (raw === void 0) {
+    return void 0;
+  }
   const parsed = ShipModeEnum.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  throw new UsageError(
-    `unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`
-  );
+  if (parsed.success) {
+    return parsed.data;
+  }
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`);
 }
 function optionalString(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
@@ -7487,12 +7705,12 @@ async function parseResultsFlag(args, parse) {
     try {
       return await parse(path6);
     } catch (err) {
-      throw new UsageError(
-        `--results ${path6}: ${err instanceof Error ? err.message : String(err)}`
-      );
+      throw new UsageError(`--results ${path6}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (path6 !== void 0) throw new UsageError("--results requires a file path");
+  if (path6 !== void 0) {
+    throw new UsageError("--results requires a file path");
+  }
   return void 0;
 }
 
@@ -7510,76 +7728,6 @@ function emitError(line) {
 // src/ci/detect-gate-env.ts
 import { existsSync as existsSync5, readFileSync as readFileSync3, readdirSync } from "node:fs";
 import { join as join5 } from "node:path";
-
-// src/shared/secret-patterns.ts
-var SECRET_CONTENT_PATTERNS = [
-  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
-  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
-  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
-  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
-  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
-  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
-  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
-  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
-  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
-  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
-  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
-  {
-    name: "jwt",
-    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
-  },
-  {
-    name: "aws-secret-access-key",
-    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
-  },
-  // Quote-anchored detector — EXCLUDED from redaction (see header note).
-  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
-  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
-  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
-  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
-  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
-  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
-];
-function hasLiteralQuote(p) {
-  return p.source.includes('"');
-}
-var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
-  (p) => !hasLiteralQuote(p)
-);
-var REDACTION_TOKEN = "[REDACTED]";
-function redactSecrets(text) {
-  if (SECRET_REDACTION_PATTERNS.length === 0) return text;
-  const combined = SECRET_REDACTION_PATTERNS.map((p) => p.source).join("|");
-  const re = new RegExp(combined, "g");
-  return text.replace(re, REDACTION_TOKEN);
-}
-var _KNOWN_PUBLIC_TOKEN_PARTS = [
-  // anon role
-  [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
-    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-  ],
-  // service_role
-  [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
-    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
-  ]
-];
-var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map(
-  (p) => p.join(".")
-);
-function detectSecrets(text) {
-  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
-  const hits = [];
-  for (const p of SECRET_CONTENT_PATTERNS) {
-    if (new RegExp(p.source).test(scrubbed)) hits.push(p.name);
-  }
-  return hits;
-}
-
-// src/ci/detect-gate-env.ts
 var DefaultWorkflowSource = class {
   constructor(root) {
     this.root = root;
@@ -7589,7 +7737,9 @@ var DefaultWorkflowSource = class {
   }
   listWorkflows() {
     const d = this.dir();
-    if (!existsSync5(d)) return [];
+    if (!existsSync5(d)) {
+      return [];
+    }
     return readdirSync(d).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml")).sort();
   }
   readWorkflow(name) {
@@ -7601,14 +7751,16 @@ function parseScalar(raw) {
   if (s.startsWith('"')) {
     let out = "";
     for (let i = 1; i < s.length; i++) {
-      const c = s[i];
+      const c = nonNull(s[i]);
       if (c === "\\" && i + 1 < s.length) {
-        const n = s[i + 1];
+        const n = nonNull(s[i + 1]);
         out += n === "n" ? "\n" : n === "t" ? "	" : n;
         i++;
         continue;
       }
-      if (c === '"') return out;
+      if (c === '"') {
+        return out;
+      }
       out += c;
     }
     return out;
@@ -7616,7 +7768,7 @@ function parseScalar(raw) {
   if (s.startsWith("'")) {
     let out = "";
     for (let i = 1; i < s.length; i++) {
-      const c = s[i];
+      const c = nonNull(s[i]);
       if (c === "'") {
         if (s[i + 1] === "'") {
           out += "'";
@@ -7629,7 +7781,7 @@ function parseScalar(raw) {
     }
     return out;
   }
-  const m = s.match(/\s#/);
+  const m = /\s#/.exec(s);
   return (m ? s.slice(0, m.index) : s).trim();
 }
 var KEY_LINE = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
@@ -7639,16 +7791,20 @@ var isReservedEnvKey = (key) => RESERVED_ENV_KEYS.has(key) || key.startsWith("DY
 var POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 function isUndetectableScalar(rawValue) {
   const s = rawValue.trim();
-  if (s.startsWith('"') || s.startsWith("'")) return false;
+  if (s.startsWith('"') || s.startsWith("'")) {
+    return false;
+  }
   const first = s[0];
   return first !== void 0 && "&*!{[".includes(first);
 }
 var MalformedWorkflow = class extends Error {
 };
 function processKey(s, c, ind) {
-  const m = c.match(KEY_LINE);
-  if (!m) return;
-  const key = m[1];
+  const m = KEY_LINE.exec(c);
+  if (!m) {
+    return;
+  }
+  const key = nonNull(m[1]);
   const val = m[2];
   const empty = val === void 0 || val.trim() === "";
   if (s.jobsIndent === null && key === "jobs" && empty) {
@@ -7656,7 +7812,7 @@ function processKey(s, c, ind) {
     return;
   }
   if (s.jobsIndent !== null && ind > s.jobsIndent && empty) {
-    if (s.jobKeyIndent === null) s.jobKeyIndent = ind;
+    s.jobKeyIndent ??= ind;
     if (ind === s.jobKeyIndent) {
       s.currentJob = key;
       s.currentStep = "";
@@ -7672,8 +7828,11 @@ function processKey(s, c, ind) {
     return;
   }
   if (key === "run" && inStep) {
-    if (isBlockScalar(val)) s.blockIndent = ind;
-    else if (!s.stepLabelFromName && val !== void 0) s.currentStep = parseScalar(val);
+    if (isBlockScalar(val)) {
+      s.blockIndent = ind;
+    } else if (!s.stepLabelFromName && val !== void 0) {
+      s.currentStep = parseScalar(val);
+    }
     return;
   }
   if (key === "env" && empty) {
@@ -7681,7 +7840,9 @@ function processKey(s, c, ind) {
     s.envScope = inStep ? "step" : "job";
     return;
   }
-  if (isBlockScalar(val)) s.blockIndent = ind;
+  if (isBlockScalar(val)) {
+    s.blockIndent = ind;
+  }
 }
 function scanWorkflow(text) {
   const entries = [];
@@ -7697,19 +7858,27 @@ function scanWorkflow(text) {
     envScope: "step"
   };
   for (const rawLine of text.split("\n")) {
-    if (rawLine.trim() === "") continue;
-    const lead = rawLine.match(/^[ \t]*/)[0];
-    if (lead.includes("	")) throw new MalformedWorkflow("tab in indentation");
+    if (rawLine.trim() === "") {
+      continue;
+    }
+    const lead = rawLine.slice(0, rawLine.length - rawLine.trimStart().length);
+    if (lead.includes("	")) {
+      throw new MalformedWorkflow("tab in indentation");
+    }
     const indent = lead.length;
     const content = rawLine.slice(indent);
-    if (content.startsWith("#")) continue;
+    if (content.startsWith("#")) {
+      continue;
+    }
     if (s.blockIndent !== null) {
-      if (indent > s.blockIndent) continue;
+      if (indent > s.blockIndent) {
+        continue;
+      }
       s.blockIndent = null;
     }
     if (s.envIndent !== null) {
       if (indent > s.envIndent) {
-        const km = content.match(KEY_LINE);
+        const km = KEY_LINE.exec(content);
         if (km) {
           const inlineVal = km[2];
           if (isBlockScalar(inlineVal)) {
@@ -7718,7 +7887,7 @@ function scanWorkflow(text) {
           }
           if (inlineVal !== void 0 && inlineVal.trim() !== "" && !isUndetectableScalar(inlineVal)) {
             entries.push({
-              key: km[1],
+              key: nonNull(km[1]),
               value: parseScalar(inlineVal),
               job: s.currentJob,
               step: s.currentStep,
@@ -7730,9 +7899,9 @@ function scanWorkflow(text) {
       }
       s.envIndent = null;
     }
-    const listM = content.match(/^-\s+(.*)$/);
+    const listM = /^-\s+(.*)$/.exec(content);
     if (listM) {
-      const rest = listM[1];
+      const rest = nonNull(listM[1]);
       if (KEY_LINE.test(rest)) {
         s.stepKeyIndent = indent + 2;
         s.currentStep = "";
@@ -7801,7 +7970,7 @@ function mergeDetectedGateEnv(raw, current, detected, sources) {
   const skipped = [];
   const conflicts = [];
   for (const key of Object.keys(detected).sort()) {
-    const value = detected[key];
+    const value = nonNull(detected[key]);
     if (!(key in current)) {
       next = setAtPath(next, ["quality", "gateEnv", key], value);
       written.push(key);
@@ -7810,7 +7979,7 @@ function mergeDetectedGateEnv(raw, current, detected, sources) {
     } else {
       conflicts.push({
         key,
-        configured: current[key],
+        configured: nonNull(current[key]),
         detected: value,
         source: sources[key] ?? ""
       });
@@ -7821,12 +7990,18 @@ function mergeDetectedGateEnv(raw, current, detected, sources) {
 async function applyGateEnvDetection(root, dataOpts = {}) {
   const result = detectGateEnv(new DefaultWorkflowSource(root));
   const sources = {};
-  for (const v of result.detected) sources[v.key] = provenance(v);
+  for (const v of result.detected) {
+    sources[v.key] = provenance(v);
+  }
   const current = loadConfig(dataOpts).quality.gateEnv;
   const merge = mergeDetectedGateEnv(readRawConfig(dataOpts), current, result.gateEnv, sources);
-  if (merge.written.length > 0) await saveRawConfig(merge.raw, dataOpts);
+  if (merge.written.length > 0) {
+    await saveRawConfig(merge.raw, dataOpts);
+  }
   const gateEnv = { ...current };
-  for (const key of merge.written) gateEnv[key] = result.gateEnv[key];
+  for (const key of merge.written) {
+    gateEnv[key] = nonNull(result.gateEnv[key]);
+  }
   return {
     detected: result.gateEnv,
     written: merge.written,
@@ -7856,15 +8031,16 @@ async function applyGateEnvDetection(root, dataOpts = {}) {
 var SENTINEL = "# factory:gate-env";
 function injectGateEnvIntoWorkflow(text, gateEnv) {
   const keys = Object.keys(gateEnv).sort();
-  if (keys.length === 0) return text;
+  if (keys.length === 0) {
+    return text;
+  }
   const lines = text.split("\n");
   const idx = lines.findIndex((l) => l.trim() === SENTINEL);
-  if (idx === -1) return text;
-  const indent = lines[idx].match(/^[ \t]*/)[0];
-  const block = [
-    `${indent}env:`,
-    ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(gateEnv[k])}`)
-  ];
+  if (idx === -1) {
+    return text;
+  }
+  const indent = nonNull(/^[ \t]*/.exec(at(lines, idx)))[0];
+  const block = [`${indent}env:`, ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(nonNull(gateEnv[k]))}`)];
   lines.splice(idx, 1, ...block);
   return lines.join("\n");
 }
@@ -8019,14 +8195,12 @@ function parseSpawnRequest(raw) {
 
 // src/core/phase-machine/result.ts
 function assertNever(x) {
-  throw new Error(
-    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a PhaseResult.kind was not handled`
-  );
+  throw new Error(`assertNever: unhandled value ${JSON.stringify(x)} \u2014 a PhaseResult.kind was not handled`);
 }
 function advance(to) {
   return { kind: "advance", to };
 }
-function spawn(request) {
+function spawn2(request) {
   return { kind: "spawn-agents", request };
 }
 function waitRetry(phase, reason, attempt, max_attempts) {
@@ -8060,6 +8234,7 @@ async function dispatch(phase, ctx, handlers) {
   if (runParsed.success) {
     const runPhaseName = runParsed.data;
     switch (runPhaseName) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive switch over a currently-single-member enum; the assertNever default is intentional future-proofing (a new RunPhase member becomes a compile break here, not a silent mis-route)
       case "finalize":
         return handlers.finalize(ctx);
       default:
@@ -8068,7 +8243,7 @@ async function dispatch(phase, ctx, handlers) {
   }
   const parsed = TaskPhaseEnum.safeParse(phase);
   if (!parsed.success) {
-    throw new Error(`runPhase: unknown phase '${String(phase)}'`);
+    throw new Error(`runPhase: unknown phase ''`);
   }
   const taskPhase = parsed.data;
   switch (taskPhase) {
@@ -8090,7 +8265,7 @@ function checkResult(phase, result) {
   if (RunPhaseEnum.safeParse(phase).success) {
     if (result.kind !== "finalize-terminal") {
       throw new Error(
-        `runPhase: run-level phase '${String(phase)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
+        `runPhase: run-level phase '' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
       );
     }
     return result;
@@ -8111,7 +8286,7 @@ function checkResult(phase, result) {
     }
     case "finalize-terminal":
       throw new Error(
-        `runPhase: per-task phase '${String(phase)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize phase`
+        `runPhase: per-task phase '' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize phase`
       );
     default:
       return assertNever(result);
@@ -8128,117 +8303,6 @@ function decideFinalize(run11) {
   }
   const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
   return finalizeTerminal(allDone ? "completed" : "failed");
-}
-
-// src/shared/exec.ts
-import { spawn as spawn2 } from "node:child_process";
-var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
-function exec(command, args = [], opts = {}) {
-  const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  return new Promise((resolve2, reject) => {
-    const child = spawn2(command, args, {
-      cwd: opts.cwd,
-      env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
-      shell: opts.shell ?? false,
-      timeout: opts.timeoutMs,
-      killSignal: opts.killSignal ?? "SIGTERM"
-    });
-    const outChunks = [];
-    const errChunks = [];
-    let outLen = 0;
-    let errLen = 0;
-    let truncated = false;
-    let settled = false;
-    const settleReject = (err) => {
-      if (settled) return;
-      settled = true;
-      reject(err);
-    };
-    child.stdout?.on("data", (c) => {
-      const remaining = maxBuffer - outLen;
-      if (remaining <= 0) {
-        truncated = true;
-        return;
-      }
-      if (c.length > remaining) {
-        outChunks.push(c.subarray(0, remaining));
-        outLen = maxBuffer;
-        truncated = true;
-      } else {
-        outChunks.push(c);
-        outLen += c.length;
-      }
-    });
-    child.stderr?.on("data", (c) => {
-      const remaining = maxBuffer - errLen;
-      if (remaining <= 0) {
-        truncated = true;
-        return;
-      }
-      if (c.length > remaining) {
-        errChunks.push(c.subarray(0, remaining));
-        errLen = maxBuffer;
-        truncated = true;
-      } else {
-        errChunks.push(c);
-        errLen += c.length;
-      }
-    });
-    child.on("error", settleReject);
-    child.on("close", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      resolve2({
-        stdout: Buffer.concat(outChunks).toString("utf8"),
-        stderr: Buffer.concat(errChunks).toString("utf8"),
-        code,
-        signal: signal ?? null,
-        truncated
-      });
-    });
-    if (opts.input !== void 0 && child.stdin) {
-      child.stdin.on("error", (err) => {
-        if (err.code === "EPIPE") return;
-        settleReject(err);
-      });
-      child.stdin.end(opts.input);
-    }
-  });
-}
-var ExecError = class extends Error {
-  result;
-  command;
-  args;
-  constructor(command, args, result) {
-    const where = [command, ...args].join(" ");
-    super(
-      `command failed (code=${result.code ?? "null"}` + (result.signal ? `, signal=${result.signal}` : "") + `): ${where}
-${result.stderr.trim()}`
-    );
-    this.name = "ExecError";
-    this.command = command;
-    this.args = args;
-    this.result = result;
-  }
-};
-
-// src/shared/jsonl.ts
-import { appendFile, mkdir as mkdir5, readFile as readFile3 } from "node:fs/promises";
-import { dirname as dirname4 } from "node:path";
-async function appendJsonl(path6, record) {
-  await mkdir5(dirname4(path6), { recursive: true });
-  await appendFile(path6, JSON.stringify(record) + "\n", "utf8");
-}
-
-// src/shared/paths.ts
-function tildeShorten(absPath, home) {
-  if (home.length === 0) return absPath;
-  if (absPath === home) return "~";
-  const base = home.endsWith("/") ? home.slice(0, -1) : home;
-  if (absPath.startsWith(base + "/")) {
-    return "~" + absPath.slice(base.length);
-  }
-  return absPath;
 }
 
 // src/git/exec-tools.ts
@@ -8263,7 +8327,7 @@ var DefaultGitClient = class {
     this.runner = runner;
   }
   toExecOpts(opts) {
-    return opts?.cwd ? { cwd: opts.cwd } : {};
+    return opts?.cwd != null && opts.cwd.length > 0 ? { cwd: opts.cwd } : {};
   }
   exec(args, opts) {
     return this.runner(args, this.toExecOpts(opts));
@@ -8281,29 +8345,39 @@ var DefaultGitClient = class {
   async branchExists(ref, opts) {
     const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
     const r = await this.exec(["show-ref", "--verify", "--quiet", fullRef], opts);
-    if (r.code === 0) return true;
-    if (r.code === 1) return false;
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
     throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
   async refExists(ref, opts) {
     const r = await this.exec(["rev-parse", "--verify", "--quiet", ref], opts);
-    if (r.code === 0) return true;
-    if (r.code === 1) return false;
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
     throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
   async isTracked(relPath, opts) {
     const r = await this.exec(["ls-files", "--error-unmatch", "--", relPath], opts);
-    if (r.code === 0) return true;
-    if (r.code === 1) return false;
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
     throw new Error(`git ls-files failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
   async commitsAhead(base, branch, opts) {
     const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
     const n = Number.parseInt(r.stdout.trim(), 10);
     if (!Number.isFinite(n)) {
-      throw new Error(
-        `git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`
-      );
+      throw new Error(`git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`);
     }
     return n;
   }
@@ -8317,16 +8391,20 @@ var DefaultGitClient = class {
   }
   async remoteUrl(remote, opts) {
     const r = await this.exec(["remote", "get-url", remote], opts);
-    if (r.code !== 0) return null;
+    if (r.code !== 0) {
+      return null;
+    }
     const url = r.stdout.trim();
     return url.length > 0 ? url : null;
   }
   async lsRemoteHeads(remote, branch, opts) {
     const r = await this.execOrThrow(["ls-remote", "--heads", remote, branch], opts);
     const line = r.stdout.trim();
-    if (line.length === 0) return null;
+    if (line.length === 0) {
+      return null;
+    }
     const sha = line.split(/\s+/)[0];
-    return sha && sha.length > 0 ? sha : null;
+    return sha != null && sha.length > 0 ? sha : null;
   }
   async mergeBase(a, b, opts) {
     const r = await this.execOrThrow(["merge-base", a, b], opts);
@@ -8345,7 +8423,9 @@ var DefaultGitClient = class {
   }
   async push(remote, branch, opts) {
     const args = ["push"];
-    if (opts?.setUpstream) args.push("-u");
+    if (opts?.setUpstream === true) {
+      args.push("-u");
+    }
     args.push(remote, branch);
     await this.execOrThrow(args, opts);
   }
@@ -8368,7 +8448,9 @@ var DefaultGitClient = class {
 // src/git/repo.ts
 function parseRemoteUrl(url) {
   const trimmed = url.trim();
-  if (trimmed.length === 0) return null;
+  if (trimmed.length === 0) {
+    return null;
+  }
   let path6;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
@@ -8376,19 +8458,27 @@ function parseRemoteUrl(url) {
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
-      const afterScheme = withScheme[1];
+      const afterScheme = nonNull(withScheme[1]);
       const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path6 = afterScheme.slice(firstSlash + 1);
+      if (firstSlash >= 0) {
+        path6 = afterScheme.slice(firstSlash + 1);
+      }
     }
   }
-  if (path6 === void 0) return null;
+  if (path6 === void 0) {
+    return null;
+  }
   let p = path6.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
-  if (segments.length < 2) return null;
-  const name = segments[segments.length - 1];
-  const owner = segments[segments.length - 2];
-  if (owner.length === 0 || name.length === 0) return null;
+  if (segments.length < 2) {
+    return null;
+  }
+  const name = at(segments, segments.length - 1);
+  const owner = at(segments, segments.length - 2);
+  if (owner.length === 0 || name.length === 0) {
+    return null;
+  }
   return `${owner}/${name}`;
 }
 var REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
@@ -8406,15 +8496,19 @@ function validateRepoSlug(slug) {
 }
 function splitRepoSlug(slug) {
   const parts = validateRepoSlug(slug).split("/");
-  return { owner: parts[0], repo: parts[1] };
+  return { owner: at(parts, 0), repo: at(parts, 1) };
 }
 async function resolveRepo(args) {
   const remote = args.remote ?? "origin";
   const explicit = typeof args.explicit === "string" && args.explicit.length > 0 ? validateRepoSlug(args.explicit) : void 0;
   const derived = await deriveRepo(args.gitClient, remote, args.cwd);
   if (explicit !== void 0) {
-    if (derived === null) return explicit;
-    if (explicit.toLowerCase() === derived.toLowerCase()) return derived;
+    if (derived === null) {
+      return explicit;
+    }
+    if (explicit.toLowerCase() === derived.toLowerCase()) {
+      return derived;
+    }
     throw new UsageError(
       `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); omit --repo to use the remote, or fix the value`
     );
@@ -8428,7 +8522,9 @@ async function resolveRepo(args) {
 }
 async function deriveRepo(gitClient, remote, cwd) {
   const url = await gitClient.remoteUrl(remote, { cwd });
-  if (url === null) return null;
+  if (url === null) {
+    return null;
+  }
   return parseRemoteUrl(url);
 }
 
@@ -8445,12 +8541,23 @@ var PullRequestSchema = external_exports.object({
 });
 var REQUIRED_VIEW_FIELDS = Object.entries(PullRequestSchema.shape).filter(([, schema]) => !schema.isOptional()).map(([key]) => key);
 function aggregateChecks(rows) {
-  if (rows.length === 0) return "none";
+  if (rows.length === 0) {
+    return "none";
+  }
   const buckets = rows.map((r) => (r.bucket ?? "").toLowerCase());
-  if (buckets.some((b) => b === "fail" || b === "cancel")) return "failing";
-  if (buckets.some((b) => b === "pending")) return "pending";
+  if (buckets.some((b) => b === "fail" || b === "cancel")) {
+    return "failing";
+  }
+  if (buckets.some((b) => b === "pending")) {
+    return "pending";
+  }
   return "passing";
 }
+var GhChecksSchema = external_exports.array(external_exports.object({ bucket: external_exports.string().optional() }));
+var GhProtectionSchema = external_exports.object({
+  required_status_checks: external_exports.object({ strict: external_exports.boolean().optional(), contexts: external_exports.array(external_exports.string()).optional() }).nullish()
+});
+var GhRulesSchema = external_exports.array(external_exports.object({ type: external_exports.string().optional() }));
 function parseGhJson(result, schema, where) {
   if (result.truncated) {
     throw new Error(
@@ -8466,7 +8573,8 @@ var DefaultGhClient = class {
     this.runner = runner;
   }
   execOpts(opts) {
-    return opts?.cwd ? { cwd: opts.cwd } : {};
+    const cwd = opts?.cwd;
+    return cwd != null && cwd.length > 0 ? { cwd } : {};
   }
   async prList(args, opts) {
     const argv = [
@@ -8479,7 +8587,9 @@ var DefaultGhClient = class {
       "--json",
       "number,headRefName,baseRefName,state,mergeable,mergeStateStatus,url"
     ];
-    if (args.base) argv.push("--base", args.base);
+    if (args.base != null && args.base.length > 0) {
+      argv.push("--base", args.base);
+    }
     const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
     return parseGhJson(r, external_exports.array(PullRequestSchema), "gh pr list");
   }
@@ -8487,25 +8597,14 @@ var DefaultGhClient = class {
     const r = await runOrThrow(
       "gh",
       this.runner,
-      [
-        "pr",
-        "create",
-        "--base",
-        args.base,
-        "--head",
-        args.head,
-        "--title",
-        args.title,
-        "--body",
-        args.body
-      ],
+      ["pr", "create", "--base", args.base, "--head", args.head, "--title", args.title, "--body", args.body],
       this.execOpts(opts)
     );
     if (r.truncated) {
       throw new Error("gh pr create: output truncated \u2014 cannot trust the emitted PR URL");
     }
     const url = r.stdout.trim().split(/\s+/).pop() ?? "";
-    const m = url.match(/\/pull\/(\d+)\s*$/);
+    const m = /\/pull\/(\d+)\s*$/.exec(url);
     if (!m) {
       throw new Error(`gh pr create: could not parse PR number from output: ${r.stdout.trim()}`);
     }
@@ -8522,61 +8621,52 @@ var DefaultGhClient = class {
     return parseGhJson(r, PullRequestSchema, "gh pr view");
   }
   async prChecks(number, opts) {
-    const r = await this.runner(
-      ["pr", "checks", String(number), "--json", "bucket"],
-      this.execOpts(opts)
-    );
+    const r = await this.runner(["pr", "checks", String(number), "--json", "bucket"], this.execOpts(opts));
     if (r.truncated) {
       throw new Error("gh pr checks: output truncated \u2014 refusing to parse clipped checks JSON");
     }
     const stdout = r.stdout.trim();
     if (stdout === "" || stdout === "[]") {
       if (r.code !== 0 && !/no checks reported/i.test(r.stderr)) {
-        throw new Error(
-          `gh pr checks #${number} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
-        );
+        throw new Error(`gh pr checks #${number} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
       }
       return "none";
     }
-    const rows = parseJson(stdout, "gh pr checks");
+    const rows = GhChecksSchema.parse(parseJson(stdout, "gh pr checks"));
     return aggregateChecks(rows);
   }
   async prMergeSquash(number, opts) {
     const argv = ["pr", "merge", String(number), "--squash"];
-    if (opts?.auto) argv.push("--auto");
-    if (opts?.deleteBranch) argv.push("--delete-branch");
-    if (opts?.subject !== void 0) argv.push("--subject", opts.subject);
-    if (opts?.body !== void 0) argv.push("--body", opts.body);
+    if (opts?.auto === true) {
+      argv.push("--auto");
+    }
+    if (opts?.deleteBranch === true) {
+      argv.push("--delete-branch");
+    }
+    if (opts?.subject !== void 0) {
+      argv.push("--subject", opts.subject);
+    }
+    if (opts?.body !== void 0) {
+      argv.push("--body", opts.body);
+    }
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
     const path6 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
     const r = await this.runner(["api", "--method", "DELETE", path6], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
-      throw new Error(
-        `gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
-      );
+      throw new Error(`gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
   }
   async deleteProtection(owner, repo, branch, opts) {
     const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
     const r = await this.runner(argv, this.execOpts(opts));
     if (r.code !== 0 && !/404|Not Found|Branch not protected/i.test(r.stderr)) {
-      throw new Error(
-        `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`
-      );
+      throw new Error(`gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`);
     }
   }
   async issueComment(args, opts) {
-    const argv = [
-      "issue",
-      "comment",
-      String(args.number),
-      "--repo",
-      args.repo,
-      "--body",
-      args.body
-    ];
+    const argv = ["issue", "comment", String(args.number), "--repo", args.repo, "--body", args.body];
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async listIssueComments(args, opts) {
@@ -8595,7 +8685,9 @@ var DefaultGhClient = class {
   }
   async issueClose(args, opts) {
     const argv = ["issue", "close", String(args.number), "--repo", args.repo];
-    if (args.comment !== void 0) argv.push("--comment", args.comment);
+    if (args.comment !== void 0) {
+      argv.push("--comment", args.comment);
+    }
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
@@ -8613,11 +8705,9 @@ var DefaultGhClient = class {
       throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
-      throw new Error(
-        `gh api ${path6}: output truncated \u2014 refusing to parse clipped protection JSON`
-      );
+      throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped protection JSON`);
     }
-    const raw = parseJson(r.stdout, path6);
+    const raw = GhProtectionSchema.parse(parseJson(r.stdout, path6));
     const rsc = raw.required_status_checks ?? null;
     let mq = false;
     try {
@@ -8654,14 +8744,16 @@ var DefaultGhClient = class {
     const path6 = `repos/${owner}/${repo}/rules/branches/${branch}`;
     const r = await this.runner(["api", path6], this.execOpts(opts));
     if (r.code !== 0) {
-      if (/404|Not Found/i.test(r.stderr)) return false;
+      if (/404|Not Found/i.test(r.stderr)) {
+        return false;
+      }
       throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
       throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
     }
-    const rules = parseJson(r.stdout, path6);
-    return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
+    const rules = GhRulesSchema.safeParse(parseJson(r.stdout, path6));
+    return rules.success && rules.data.some((rule) => rule.type === "merge_queue");
   }
 };
 
@@ -8681,8 +8773,12 @@ async function waitForCi(gh, number, args) {
   let state = "pending";
   for (let i = 0; i < maxPolls; i++) {
     state = await gh.prChecks(number);
-    if (state !== "pending") return state;
-    if (i < maxPolls - 1) await sleep(interval);
+    if (state !== "pending") {
+      return state;
+    }
+    if (i < maxPolls - 1) {
+      await sleep(interval);
+    }
   }
   return state;
 }
@@ -8690,9 +8786,7 @@ async function rollup(args) {
   const staging = args.stagingBranch ?? GIT_DEFAULTS.stagingBranch;
   const base = args.baseBranch ?? GIT_DEFAULTS.baseBranch;
   if (base === "main") {
-    throw new Error(
-      "rollup: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
-    );
+    throw new Error("rollup: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)");
   }
   const subject = args.title;
   const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
@@ -8737,12 +8831,7 @@ async function rollup(args) {
     );
     return { number, url, resumed, merged: false, reason: "ci-timeout", ci };
   }
-  const view = await args.ghClient.prView(number, [
-    "number",
-    "state",
-    "mergeable",
-    "mergeStateStatus"
-  ]);
+  const view = await args.ghClient.prView(number, ["number", "state", "mergeable", "mergeStateStatus"]);
   if (view.state === "MERGED") {
     return { number, url, resumed, merged: true, subject, ci };
   }
@@ -8755,10 +8844,10 @@ async function rollup(args) {
     log7.info(`rollup PR #${number} squash-merged into ${base}`);
     return { number, url, resumed, merged: true, subject, ci };
   } catch (err) {
-    if (!isBranchPolicyBlock(err)) throw err;
-    log7.warn(
-      `rollup PR #${number}: base branch policy prohibits an immediate merge \u2014 arming --auto`
-    );
+    if (!isBranchPolicyBlock(err)) {
+      throw err;
+    }
+    log7.warn(`rollup PR #${number}: base branch policy prohibits an immediate merge \u2014 arming --auto`);
     await args.ghClient.prMergeSquash(number, { subject, body: args.body, auto: true });
     return { number, url, resumed, merged: false, reason: "auto-armed", ci };
   }
@@ -8840,9 +8929,13 @@ async function defaultRun(command, cwd) {
   return { code: r.code, stderr: r.stderr };
 }
 async function resolveSetupCommand(worktreePath, setupCommand, fileExists) {
-  if (setupCommand !== void 0 && setupCommand.trim().length > 0) return setupCommand;
+  if (setupCommand !== void 0 && setupCommand.trim().length > 0) {
+    return setupCommand;
+  }
   for (const [lockfile, command] of LOCKFILE_INSTALL) {
-    if (await fileExists(path.join(worktreePath, lockfile))) return command;
+    if (await fileExists(path.join(worktreePath, lockfile))) {
+      return command;
+    }
   }
   return null;
 }
@@ -8873,9 +8966,7 @@ async function createTaskPrIdempotent(args) {
   const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
   const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
   if (pr !== void 0) {
-    log10.info(
-      `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`
-    );
+    log10.info(`resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`);
     return { number: pr.number, url: pr.url ?? "", resumed: true };
   }
   const created = await args.ghClient.prCreate({
@@ -8959,9 +9050,7 @@ var MergeSerializer = class {
         return { merged: false, reason: "not-mergeable", number: prNumber };
       }
       if (pr.mergeStateStatus === "BEHIND") {
-        log11.warn(
-          `PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`
-        );
+        log11.warn(`PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`);
         return { merged: false, reason: "behind", number: prNumber };
       }
       let hasMergeQueue = false;
@@ -9023,11 +9112,7 @@ Re-run with --provision to provision protection, or configure it manually.`
 };
 async function probeProtection(args) {
   const branch = args.branch ?? GIT_DEFAULTS5.stagingBranch;
-  const result = await args.ghClient.repoProtection(
-    args.owner,
-    args.repo,
-    branch
-  );
+  const result = await args.ghClient.repoProtection(args.owner, args.repo, branch);
   return {
     enabled: result.enabled,
     requiredStatusChecks: result.requiredStatusChecks,
@@ -9056,9 +9141,7 @@ function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS5
 async function provisionProtection(args) {
   const branch = args.branch ?? GIT_DEFAULTS5.stagingBranch;
   if (!args.provision) {
-    throw new Error(
-      "provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection"
-    );
+    throw new Error("provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection");
   }
   log12.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
@@ -9081,18 +9164,14 @@ async function ensureStaging(args) {
   const staging = args.stagingBranch ?? GIT_DEFAULTS6.stagingBranch;
   const base = args.baseBranch ?? GIT_DEFAULTS6.baseBranch;
   if (base === "main") {
-    throw new Error(
-      "staging: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
-    );
+    throw new Error("staging: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)");
   }
   await args.gitClient.fetch(remote, base);
   const stagingHead = await args.gitClient.lsRemoteHeads(remote, staging);
   if (stagingHead === null) {
     const baseHead = await args.gitClient.lsRemoteHeads(remote, base);
     if (baseHead === null) {
-      throw new Error(
-        `staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`
-      );
+      throw new Error(`staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`);
     }
     log13.info(`creating ${staging} from ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
@@ -9162,8 +9241,8 @@ function buildPartialReport(run11, request, opts = {}) {
       failures.push({
         task_id: task.task_id,
         title: spec.title,
-        failure_class: task.failure_class,
-        failure_reason: task.failure_reason,
+        failure_class: nonNull(task.failure_class),
+        failure_reason: nonNull(task.failure_reason),
         unmet_criteria: [...spec.acceptance_criteria],
         branch: task.branch,
         pr_number: task.pr_number
@@ -9201,7 +9280,7 @@ function buildPartialReport(run11, request, opts = {}) {
   };
 }
 function buildCrossVendorAbsences(run11, bySpecOrder) {
-  const absences = Object.values(run11.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent.reason })).sort(bySpecOrder);
+  const absences = Object.values(run11.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: nonNull(t.cross_vendor_absent).reason })).sort(bySpecOrder);
   return absences.length > 0 ? { cross_vendor_absences: absences } : {};
 }
 function buildTraceability(run11) {
@@ -9246,12 +9325,16 @@ function renderFailureComment(report, selfHealEligible = false) {
   if (report.e2e_failure !== void 0) {
     const { plain, detail } = splitReason(report.e2e_failure);
     lines.push("", "### End-to-end verification failed", plain);
-    if (detail !== void 0) lines.push("```", detail, "```");
+    if (detail !== void 0) {
+      lines.push("```", detail, "```");
+    }
   }
   if (report.e2e_assessment_failure !== void 0) {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     lines.push("", "### End-to-end setup failed before any task ran", plain);
-    if (detail !== void 0) lines.push("```", detail, "```");
+    if (detail !== void 0) {
+      lines.push("```", detail, "```");
+    }
   }
   if (report.traceability_failure !== void 0) {
     lines.push("", "### Unmet PRD requirements", report.traceability_failure);
@@ -9263,10 +9346,16 @@ function renderFailureComment(report, selfHealEligible = false) {
     lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
     lines.push(`- **Class:** \`${failure.failure_class}\``);
     lines.push(`- **Reason:** ${failure.failure_reason}`);
-    if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
-    if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
+    if (failure.branch !== void 0) {
+      lines.push(`- **Branch:** \`${failure.branch}\``);
+    }
+    if (failure.pr_number !== void 0) {
+      lines.push(`- **PR:** #${failure.pr_number}`);
+    }
     lines.push("- **Unmet acceptance criteria:**");
-    for (const c of failure.unmet_criteria) lines.push(`  - [ ] ${c}`);
+    for (const c of failure.unmet_criteria) {
+      lines.push(`  - [ ] ${c}`);
+    }
   }
   return lines.join("\n");
 }
@@ -9299,7 +9388,9 @@ function renderPartialReportMarkdown(report) {
   out.push("");
   if (report.e2e_journeys !== void 0) {
     out.push(`## End-to-end journeys verified (${report.e2e_journeys.length})`);
-    for (const j of report.e2e_journeys) out.push(`- ${j}`);
+    for (const j of report.e2e_journeys) {
+      out.push(`- ${j}`);
+    }
     out.push("");
   }
   if (report.e2e_reopened !== void 0) {
@@ -9311,12 +9402,16 @@ function renderPartialReportMarkdown(report) {
   }
   if (report.e2e_warnings !== void 0) {
     out.push("## End-to-end warnings");
-    for (const w of report.e2e_warnings) out.push(`- ${w}`);
+    for (const w of report.e2e_warnings) {
+      out.push(`- ${w}`);
+    }
     out.push("");
   }
   if (report.warnings !== void 0) {
     out.push("## Warnings");
-    for (const w of report.warnings) out.push(`- ${w}`);
+    for (const w of report.warnings) {
+      out.push(`- ${w}`);
+    }
     out.push("");
   }
   if (report.cross_vendor_absences !== void 0) {
@@ -9333,14 +9428,18 @@ function renderPartialReportMarkdown(report) {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     out.push("## End-to-end setup failed before any task ran");
     out.push(plain);
-    if (detail !== void 0) out.push("```", detail, "```");
+    if (detail !== void 0) {
+      out.push("```", detail, "```");
+    }
     out.push("");
   }
   if (report.e2e_failure !== void 0) {
     const { plain, detail } = splitReason(report.e2e_failure);
     out.push("## End-to-end verification failed");
     out.push(plain);
-    if (detail !== void 0) out.push("```", detail, "```");
+    if (detail !== void 0) {
+      out.push("```", detail, "```");
+    }
     out.push("");
   }
   if (report.e2e_advisory !== void 0) {
@@ -9368,7 +9467,9 @@ function renderPartialReportMarkdown(report) {
       out.push(`- **Class:** \`${f.failure_class}\``);
       out.push(`- **Reason:** ${f.failure_reason}`);
       out.push("- **Unmet acceptance criteria:**");
-      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
+      for (const c of f.unmet_criteria) {
+        out.push(`  - ${c}`);
+      }
     }
     out.push("");
   }
@@ -9384,10 +9485,14 @@ function renderPartialReportMarkdown(report) {
 
 // src/scoring/summary.ts
 function durationSeconds(startedAt, endedAt) {
-  if (endedAt === null) return null;
+  if (endedAt === null) {
+    return null;
+  }
   const start = Date.parse(startedAt);
   const end = Date.parse(endedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
@@ -9466,7 +9571,9 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
     },
     { now }
   );
-  if (!finalized.written) dropped++;
+  if (!finalized.written) {
+    dropped++;
+  }
   for (const f of report.failures) {
     const r = await writeMetric(
       dataDir,
@@ -9475,7 +9582,9 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
       { task_id: f.task_id, failure_class: f.failure_class },
       { now }
     );
-    if (!r.written) dropped++;
+    if (!r.written) {
+      dropped++;
+    }
   }
   if (dropped > 0) {
     log14.warn(
@@ -9501,7 +9610,9 @@ var RawCacheSchema = external_exports.object({
   captured_at: external_exports.unknown().optional()
 }).passthrough();
 function asFiniteNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   return null;
 }
 function unavailable(reason) {
@@ -9552,7 +9663,10 @@ var StatuslineUsageSignal = class {
   constructor(opts = {}) {
     this.opts = opts;
   }
-  async read() {
+  read() {
+    return Promise.resolve(this.readSync());
+  }
+  readSync() {
     const now = (this.opts.now ?? nowEpoch)();
     let dataDir;
     try {
@@ -9588,8 +9702,12 @@ var MAX_HOUR = 5;
 var MIN_DAY = 1;
 var MAX_DAY = 7;
 function clamp(value, lo, hi) {
-  if (value < lo) return lo;
-  if (value > hi) return hi;
+  if (value < lo) {
+    return lo;
+  }
+  if (value > hi) {
+    return hi;
+  }
   return value;
 }
 function computeWindowHour(resetsAtEpoch, nowEpoch2) {
@@ -9615,7 +9733,7 @@ function curveValue(position, curve) {
     throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
   }
   const idx = clamp(position - 1, 0, curve.length - 1);
-  return curve[idx];
+  return at(curve, idx);
 }
 
 // src/quota/pacer.ts
@@ -9824,7 +9942,7 @@ var RealGhClient = class {
       throw new Error(`fetchPrd: issue number must be a positive integer, got ${issueNumber}`);
     }
     const args = ["issue", "view", String(issueNumber), "--json", "number,title,body,labels"];
-    if (opts.repo) {
+    if (opts.repo != null && opts.repo.length > 0) {
       args.push("--repo", opts.repo);
     }
     const result = await this.exec("gh", args, { timeoutMs: 3e4 });
@@ -9836,19 +9954,16 @@ var RealGhClient = class {
       if (NOT_FOUND_HINT.test(stderr)) {
         throw new IssueNotFoundError(
           issueNumber,
-          `issue #${issueNumber} not found${opts.repo ? ` in ${opts.repo}` : ""}: ${stderr}`
+          `issue #${issueNumber} not found${opts.repo != null && opts.repo.length > 0 ? ` in ${opts.repo}` : ""}: ${stderr}`
         );
       }
-      throw new Error(
-        `gh issue view #${issueNumber} failed (code=${result.code ?? "null"}): ${stderr}`
-      );
+      throw new Error(`gh issue view #${issueNumber} failed (code=${result.code ?? "null"}): ${stderr}`);
     }
     if (result.truncated) {
-      throw new Error(
-        `gh issue view #${issueNumber} output was truncated; cannot parse a clipped payload`
-      );
+      throw new Error(`gh issue view #${issueNumber} output was truncated; cannot parse a clipped payload`);
     }
-    const parsed = parseJson(result.stdout, `gh issue #${issueNumber}`);
+    const raw = parseJson(result.stdout, `gh issue #${issueNumber}`);
+    const parsed = raw !== null && typeof raw === "object" ? raw : {};
     const title = typeof parsed.title === "string" ? parsed.title : "";
     if (title.length === 0) {
       throw new Error(`gh issue view #${issueNumber}: missing or empty title in response`);
@@ -9859,7 +9974,7 @@ var RealGhClient = class {
       log16.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
-      (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
+      (l) => l != null && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
     ).filter((l) => l !== null) : [];
     return {
       issue_number: issueNumber,
@@ -9901,7 +10016,9 @@ function makeSpecId(issueNumber, slug) {
 }
 function issueOf(specId) {
   const m = /^(\d+)-/.exec(specId);
-  if (!m) return null;
+  if (!m) {
+    return null;
+  }
   const n = Number(m[1]);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
@@ -9923,27 +10040,29 @@ var SpecStore = class {
    */
   async resolveByIssue(repo, issueNumber) {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-      throw new Error(
-        `resolveByIssue: issue number must be a positive integer, got ${issueNumber}`
-      );
+      throw new Error(`resolveByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
     const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") return null;
+      if (err.code === "ENOENT") {
+        return null;
+      }
       throw err;
     }
     const prefix = `${issueNumber}-`;
     const matches = entries.filter((e) => issueOf(e) === issueNumber && e.startsWith(prefix));
-    if (matches.length === 0) return null;
+    if (matches.length === 0) {
+      return null;
+    }
     if (matches.length > 1) {
       throw new Error(
         `resolveByIssue: multiple specs for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`
       );
     }
-    const specId = matches[0];
+    const specId = at(matches, 0);
     return this.read(repo, specId);
   }
   /**
@@ -9967,11 +10086,15 @@ var SpecStore = class {
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") return false;
+      if (err.code === "ENOENT") {
+        return false;
+      }
       throw err;
     }
     const matches = entries.filter((e) => issueOf(e) === issueNumber);
-    if (matches.length === 0) return false;
+    if (matches.length === 0) {
+      return false;
+    }
     for (const specId of matches) {
       await rm2(specDir(this.dataDir, repo, specId), { recursive: true, force: true });
     }
@@ -10085,10 +10208,8 @@ var SpecStore = class {
   }
   async readMeta(dir) {
     const raw = await readFile4(join8(dir, META_FILE), "utf8");
-    const meta = parseJson(
-      raw,
-      join8(dir, META_FILE)
-    );
+    const parsed = parseJson(raw, join8(dir, META_FILE));
+    const meta = parsed !== null && typeof parsed === "object" ? parsed : {};
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
     if (generatedAt.length === 0) {
@@ -10172,7 +10293,7 @@ function specifiabilityGate(body) {
   }
   const hasAcSection = lines.some((l) => {
     const heading = /^#{1,6}\s+(.*)$/.exec(l);
-    return heading !== null && AC_SECTION_HEADING.test(heading[1].trim());
+    return heading !== null && AC_SECTION_HEADING.test(nonNull(heading[1]).trim());
   });
   if (!hasAcSection) {
     blockers.push(
@@ -10203,11 +10324,15 @@ var HORIZONTAL_MARKERS = [
 ];
 function looksHorizontal(title) {
   const t = title.trim().toLowerCase();
-  if (t.split(/\s+/).length > 4) return false;
+  if (t.split(/\s+/).length > 4) {
+    return false;
+  }
   return HORIZONTAL_MARKERS.some((m) => t === m || t.startsWith(m + " ") || t.endsWith(" " + m));
 }
 function verticalSliceGate(tasks) {
-  if (tasks.length <= 1) return { passed: true, blockers: [] };
+  if (tasks.length <= 1) {
+    return { passed: true, blockers: [] };
+  }
   const horizontal = tasks.filter((t) => looksHorizontal(t.title));
   if (horizontal.length === tasks.length) {
     return {
@@ -10245,15 +10370,23 @@ function keywords(text) {
 }
 function isVague(criterion) {
   const c = criterion.trim().toLowerCase();
-  if (c.length < 8) return true;
+  if (c.length < 8) {
+    return true;
+  }
   return VAGUE_MARKERS.some((m) => c.includes(m));
 }
 function hasCoveringTest(criterion, tests) {
   const ck = keywords(criterion);
-  if (ck.size === 0) return false;
+  if (ck.size === 0) {
+    return false;
+  }
   return tests.some((t) => {
     const tk = keywords(t);
-    for (const w of ck) if (tk.has(w)) return true;
+    for (const w of ck) {
+      if (tk.has(w)) {
+        return true;
+      }
+    }
     return false;
   });
 }
@@ -10262,9 +10395,7 @@ function testabilityGate(tasks) {
   for (const task of tasks) {
     for (const criterion of task.acceptance_criteria) {
       if (isVague(criterion)) {
-        blockers.push(
-          `testability: task ${task.task_id} has a vague/non-actionable criterion: "${criterion}"`
-        );
+        blockers.push(`testability: task ${task.task_id} has a vague/non-actionable criterion: "${criterion}"`);
         continue;
       }
       if (!hasCoveringTest(criterion, task.tests_to_write)) {
@@ -10283,18 +10414,27 @@ function extractPrdRequirements(body) {
   let skipLevel = null;
   for (const raw of lines) {
     const line = raw.trim();
-    if (line.length === 0) continue;
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (heading) {
-      const level = heading[1].length;
-      if (skipLevel !== null && level <= skipLevel) skipLevel = null;
-      if (EXCLUDED_SECTION_HEADING.test(heading[2].trim())) skipLevel = level;
+    if (line.length === 0) {
       continue;
     }
-    if (skipLevel !== null) continue;
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const level = nonNull(heading[1]).length;
+      if (skipLevel !== null && level <= skipLevel) {
+        skipLevel = null;
+      }
+      if (EXCLUDED_SECTION_HEADING.test(nonNull(heading[2]).trim())) {
+        skipLevel = level;
+      }
+      continue;
+    }
+    if (skipLevel !== null) {
+      continue;
+    }
     const bullet = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
-    if (bullet && bullet[1] && bullet[1].trim().length > 0) {
-      reqs.push(bullet[1].trim());
+    const bulletBody = bullet?.[1];
+    if (bulletBody != null && bulletBody.trim().length > 0) {
+      reqs.push(bulletBody.trim());
       continue;
     }
     if (/\b(must|shall|should|need to|required to)\b/i.test(line) && !line.startsWith("#")) {
@@ -10305,21 +10445,33 @@ function extractPrdRequirements(body) {
 }
 function requirementCovered(requirement, allCriteria) {
   const rk = keywords(requirement);
-  if (rk.size === 0) return true;
+  if (rk.size === 0) {
+    return true;
+  }
   return allCriteria.some((c) => {
     const ck = keywords(c);
     let shared = 0;
-    for (const w of rk) if (ck.has(w)) shared++;
+    for (const w of rk) {
+      if (ck.has(w)) {
+        shared++;
+      }
+    }
     return shared >= Math.min(2, rk.size);
   });
 }
 function taskLaddersToPrd(task, requirements) {
   const text = [task.title, task.description, ...task.acceptance_criteria].join(" ");
   const tk = keywords(text);
-  if (requirements.length === 0) return false;
+  if (requirements.length === 0) {
+    return false;
+  }
   return requirements.some((r) => {
     const rk = keywords(r);
-    for (const w of rk) if (tk.has(w)) return true;
+    for (const w of rk) {
+      if (tk.has(w)) {
+        return true;
+      }
+    }
     return false;
   });
 }
@@ -10340,19 +10492,13 @@ function traceabilityGate(prd, tasks) {
   }
   for (const task of tasks) {
     if (!taskLaddersToPrd(task, requirements)) {
-      blockers.push(
-        `traceability: task ${task.task_id} ("${task.title}") does not ladder to any PRD requirement`
-      );
+      blockers.push(`traceability: task ${task.task_id} ("${task.title}") does not ladder to any PRD requirement`);
     }
   }
   return { passed: blockers.length === 0, blockers };
 }
 function runSpecGates(prd, tasks) {
-  return combineGates(
-    verticalSliceGate(tasks),
-    testabilityGate(tasks),
-    traceabilityGate(prd, tasks)
-  );
+  return combineGates(verticalSliceGate(tasks), testabilityGate(tasks), traceabilityGate(prd, tasks));
 }
 
 // src/spec/review.ts
@@ -10704,13 +10850,7 @@ function validateCommand(command, isAllowedRunner) {
 // src/verifier/deterministic/gate-contract.ts
 var GATE_CONTRACT_REL = ".factory/gates.json";
 var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = [
-  "test",
-  "type",
-  "build",
-  "lint",
-  "coverage"
-];
+var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
 function isAllowedGateRunner(argv) {
   const runner = runnerName(argv);
   const a1 = argv[1];
@@ -10753,13 +10893,13 @@ var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedS
 var GateContractSchema = external_exports.object({
   version: external_exports.literal(1),
   stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(
-    Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))
-  ).strict()
+  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict()
 }).strict().superRefine((contract, issues) => {
   for (const id of GATE_IDS) {
     const entry = contract.gates[id];
-    if (!entry.contracted || entry.command === void 0) continue;
+    if (!entry.contracted || entry.command === void 0) {
+      continue;
+    }
     if (!COMMAND_GATES.includes(id)) {
       issues.addIssue({
         code: external_exports.ZodIssueCode.custom,
@@ -10783,7 +10923,9 @@ async function loadGateContract(rootAbs) {
   try {
     raw = await readFile5(join10(rootAbs, GATE_CONTRACT_REL), "utf8");
   } catch (err) {
-    if (err.code === "ENOENT") return { state: "absent" };
+    if (err.code === "ENOENT") {
+      return { state: "absent" };
+    }
     return { state: "invalid", error: `unreadable: ${err.message}` };
   }
   let parsed;
@@ -10799,16 +10941,15 @@ async function loadGateContract(rootAbs) {
   }
   return { state: "ok", contract: result.data };
 }
-var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set([
-  "no-vitest-runnable-tests-in-scope",
-  "no-mutable-changes"
-]);
+var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
 function classifySkip(reason) {
   return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
 }
 function contractCommand(contract, id) {
   const entry = contract?.gates[id];
-  if (entry === void 0 || !entry.contracted || entry.command === void 0) return void 0;
+  if (entry === void 0 || !entry.contracted || entry.command === void 0) {
+    return void 0;
+  }
   const v = validateGateCommand(entry.command);
   if (!v.ok) {
     throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
@@ -10848,26 +10989,54 @@ var GateMemo = class {
 
 // src/verifier/deterministic/scope.ts
 function isTestPath(file) {
-  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) return true;
-  if (/_test\.(go|py|rb|exs)$/.test(file)) return true;
-  if (/Test\.(java|kt|php)$/.test(file)) return true;
-  if (/Tests\.(swift|cs)$/.test(file)) return true;
-  if (/_spec\.rb$/.test(file)) return true;
-  if (/^(tests|test|spec|__tests__)\//.test(file)) return true;
-  if (/\/(tests|test|spec|__tests__)\//.test(file)) return true;
+  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
+    return true;
+  }
+  if (/_test\.(go|py|rb|exs)$/.test(file)) {
+    return true;
+  }
+  if (/Test\.(java|kt|php)$/.test(file)) {
+    return true;
+  }
+  if (/Tests\.(swift|cs)$/.test(file)) {
+    return true;
+  }
+  if (file.endsWith("_spec.rb")) {
+    return true;
+  }
+  if (/^(tests|test|spec|__tests__)\//.test(file)) {
+    return true;
+  }
+  if (/\/(tests|test|spec|__tests__)\//.test(file)) {
+    return true;
+  }
   return false;
 }
 function isDocsPath(file) {
-  if (/^docs\//.test(file)) return true;
-  if (file.endsWith(".md")) return true;
+  if (file.startsWith("docs/")) {
+    return true;
+  }
+  if (file.endsWith(".md")) {
+    return true;
+  }
   return false;
 }
 function isMutableSrc(file) {
-  if (!/^src\/.*\.ts$/.test(file)) return false;
-  if (/\.(test|spec|d)\.ts$/.test(file)) return false;
-  if (file.includes("/types/")) return false;
-  if (file.includes("/data/")) return false;
-  if (/(^|\/)index\.ts$/.test(file)) return false;
+  if (!/^src\/.*\.ts$/.test(file)) {
+    return false;
+  }
+  if (/\.(test|spec|d)\.ts$/.test(file)) {
+    return false;
+  }
+  if (file.includes("/types/")) {
+    return false;
+  }
+  if (file.includes("/data/")) {
+    return false;
+  }
+  if (/(^|\/)index\.ts$/.test(file)) {
+    return false;
+  }
   return true;
 }
 function mutationScope(changedFiles) {
@@ -10883,8 +11052,12 @@ function filterDedup(files, keep) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const f of files) {
-    if (!keep(f)) continue;
-    if (seen.has(f)) continue;
+    if (!keep(f)) {
+      continue;
+    }
+    if (seen.has(f)) {
+      continue;
+    }
     seen.add(f);
     out.push(f);
   }
@@ -10895,7 +11068,9 @@ function filterDedup(files, keep) {
 var EXCERPT_MAX_CHARS = 1e3;
 function excerpt(text) {
   const trimmed = text.trim();
-  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
+  if (trimmed.length <= EXCERPT_MAX_CHARS) {
+    return trimmed;
+  }
   return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)`;
 }
 function procOutcome(id, label, result) {
@@ -10903,7 +11078,9 @@ function procOutcome(id, label, result) {
     throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
   }
   const base = `${label} exit=${result.code ?? "null"}`;
-  if (result.code === 0) return ran(id, true, base);
+  if (result.code === 0) {
+    return ran(id, true, base);
+  }
   const output = excerpt(result.stderr || result.stdout);
   return ran(id, false, output ? `${base}: ${output}` : base);
 }
@@ -10914,11 +11091,7 @@ function procStrategy(id, label, invoke) {
       const opts = { cwd: ctx.worktree };
       const command = contractCommand(ctx.contract, id);
       if (command !== void 0) {
-        return procOutcome(
-          id,
-          `contract:${command.join(" ")}`,
-          await ctx.tools.command.run(command, opts)
-        );
+        return procOutcome(id, `contract:${command.join(" ")}`, await ctx.tools.command.run(command, opts));
       }
       return procOutcome(id, label, await invoke(ctx.tools, opts));
     }
@@ -10962,7 +11135,9 @@ var testStrategy = {
 // src/verifier/deterministic/tdd-classify.ts
 function classifyCommit(files) {
   const real = files.filter((f) => f.length > 0);
-  if (real.length === 0) return "empty";
+  if (real.length === 0) {
+    return "empty";
+  }
   let kind = "test-only";
   for (const f of real) {
     if (!isTestPath(f) && !isDocsPath(f)) {
@@ -11013,16 +11188,22 @@ function deriveTddVerdict(commits, exempt) {
 
 // src/verifier/deterministic/strategies/tdd.ts
 function isSquashedHistory(commitFiles) {
-  if (commitFiles.length !== 1) return false;
-  const files = commitFiles[0];
+  if (commitFiles.length !== 1) {
+    return false;
+  }
+  const files = at(commitFiles, 0);
   const hasTest = files.some((f) => isTestPath(f));
   const hasImpl = files.some((f) => !isTestPath(f) && !f.endsWith(".md") && !f.startsWith("docs/"));
   return hasTest && hasImpl;
 }
 async function resolveBase(tools, baseRef, opts) {
   const remote = `origin/${baseRef}`;
-  if (await tools.git.refExists(remote, opts)) return remote;
-  if (await tools.git.refExists(baseRef, opts)) return baseRef;
+  if (await tools.git.refExists(remote, opts)) {
+    return remote;
+  }
+  if (await tools.git.refExists(baseRef, opts)) {
+    return baseRef;
+  }
   return null;
 }
 function verdictToOutcome(verdict) {
@@ -11084,7 +11265,9 @@ var COVERAGE_FLAGS = [
 ];
 function resolveCoverageCommand(contract) {
   const override = contractCommand(contract, "coverage");
-  if (override !== void 0) return { ok: true, cmd: { kind: "argv", argv: override } };
+  if (override !== void 0) {
+    return { ok: true, cmd: { kind: "argv", argv: override } };
+  }
   const test = contractCommand(contract, "test");
   if (test === void 0) {
     return { ok: true, cmd: { kind: "vitest", args: ["run", ...COVERAGE_FLAGS] } };
@@ -11113,9 +11296,13 @@ function measurementFailure(which, m) {
 }
 async function summaryFor(ctx, which, treeSha, measure) {
   const cached = await ctx.coverageStore?.get(treeSha);
-  if (cached != null) return cached;
+  if (cached != null) {
+    return cached;
+  }
   const m = await measure();
-  if (m.kind !== "measured") return { failed: measurementFailure(which, m) };
+  if (m.kind !== "measured") {
+    return { failed: measurementFailure(which, m) };
+  }
   await ctx.coverageStore?.put(treeSha, m.summary);
   return m.summary;
 }
@@ -11127,7 +11314,9 @@ var coverageStrategy = {
       return skip("coverage", "no-gate-contract");
     }
     const resolution = resolveCoverageCommand(ctx.contract);
-    if (!resolution.ok) return ran("coverage", false, resolution.reason);
+    if (!resolution.ok) {
+      return ran("coverage", false, resolution.reason);
+    }
     const base = await resolveBase(ctx.tools, ctx.baseRef, opts);
     if (base === null) {
       return ran("coverage", false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`);
@@ -11135,13 +11324,10 @@ var coverageStrategy = {
     const headTree = await ctx.tools.git.treeSha(opts);
     const baseSha = await ctx.tools.git.revParse(base, opts);
     const baseTree = await ctx.tools.git.revParse(`${base}^{tree}`, opts);
-    const head = await summaryFor(
-      ctx,
-      "head",
-      headTree,
-      () => ctx.tools.coverage.measure(resolution.cmd, opts)
-    );
-    if ("failed" in head) return ran("coverage", false, head.failed);
+    const head = await summaryFor(ctx, "head", headTree, () => ctx.tools.coverage.measure(resolution.cmd, opts));
+    if ("failed" in head) {
+      return ran("coverage", false, head.failed);
+    }
     const before = await summaryFor(
       ctx,
       `base ${baseSha}`,
@@ -11214,9 +11400,7 @@ var mutationStrategy = {
     }
     const result = await ctx.tools.stryker.run(scope, opts);
     if (result.proc.truncated) {
-      throw new Error(
-        "mutation gate: stryker report truncated \u2014 refusing to parse a clipped payload"
-      );
+      throw new Error("mutation gate: stryker report truncated \u2014 refusing to parse a clipped payload");
     }
     const report = result.report;
     if (report.report === "present" && report.mutationScore !== null) {
@@ -11289,11 +11473,7 @@ ${result.stderr}`.trim();
       return ran("sast", true, `security ${detail}`);
     }
     if (ctx.config.quality.securityAllowFailures) {
-      return ran(
-        "sast",
-        true,
-        `security findings present but non-blocking (allowFailures) ${detail}`
-      );
+      return ran("sast", true, `security findings present but non-blocking (allowFailures) ${detail}`);
     }
     return ran("sast", false, `security findings present ${detail}`);
   }
@@ -11328,11 +11508,7 @@ var lintStrategy = {
     const opts = { cwd: ctx.worktree };
     const command = contractCommand(ctx.contract, "lint");
     if (command !== void 0) {
-      return procOutcome(
-        "lint",
-        `contract:${command.join(" ")}`,
-        await ctx.tools.command.run(command, opts)
-      );
+      return procOutcome("lint", `contract:${command.join(" ")}`, await ctx.tools.command.run(command, opts));
     }
     const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts);
     if (!hasBin) {
@@ -11440,7 +11616,7 @@ var GateRunner = class {
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
-        if (!outcome.evidence.detail?.startsWith("contracted-but-unrunnable")) {
+        if (outcome.evidence.detail?.startsWith("contracted-but-unrunnable") !== true) {
           memo.putEvidence(id, treeSha, outcome.evidence);
         }
       } else {
@@ -11470,7 +11646,9 @@ function isTddExempt(taskId, tasksJson, packageJson) {
   return false;
 }
 function extractTaskList(tasksJson) {
-  if (Array.isArray(tasksJson)) return tasksJson;
+  if (Array.isArray(tasksJson)) {
+    return tasksJson;
+  }
   if (typeof tasksJson === "object" && tasksJson !== null && Array.isArray(tasksJson.tasks)) {
     return tasksJson.tasks;
   }
@@ -11530,9 +11708,13 @@ async function resolveLocalBin(cwd, tool, exists = pathExists) {
   let dir = path3.resolve(cwd);
   for (; ; ) {
     const candidate = path3.join(dir, "node_modules", ".bin", tool);
-    if (await exists(candidate)) return candidate;
+    if (await exists(candidate)) {
+      return candidate;
+    }
     const parent = path3.dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) {
+      return null;
+    }
     dir = parent;
   }
 }
@@ -11548,7 +11730,9 @@ function missingBinResult(tool, cwd) {
 }
 async function runTool(resolve2, tool, toolArgs, opts, env = {}) {
   const localBin = await resolve2(tool, opts);
-  if (localBin === null) return missingBinResult(tool, opts.cwd);
+  if (localBin === null) {
+    return missingBinResult(tool, opts.cwd);
+  }
   return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
 }
 var DefaultVitestTool = class {
@@ -11620,9 +11804,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
   static REPORT_PATH = "reports/mutation/mutation.json";
   async run(mutate, opts) {
     const csv = mutate.map(escapeStrykerGlob).join(",");
-    const proc2 = toProc(
-      await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env)
-    );
+    const proc2 = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env));
     const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
@@ -11641,11 +11823,15 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
   }
 };
 function extractMutationScore(report) {
-  if (typeof report !== "object" || report === null) return null;
+  if (typeof report !== "object" || report === null) {
+    return null;
+  }
   const metrics = report.metrics;
   if (typeof metrics === "object" && metrics !== null) {
     const score = metrics.mutationScore;
-    if (typeof score === "number" && Number.isFinite(score)) return score;
+    if (typeof score === "number" && Number.isFinite(score)) {
+      return score;
+    }
   }
   return computeMutationScore(report);
 }
@@ -11653,15 +11839,21 @@ var DETECTED_STATUSES = /* @__PURE__ */ new Set(["killed", "timeout"]);
 var UNDETECTED_STATUSES = /* @__PURE__ */ new Set(["survived", "nocoverage"]);
 function computeMutationScore(report) {
   const files = report.files;
-  if (typeof files !== "object" || files === null) return null;
+  if (typeof files !== "object" || files === null) {
+    return null;
+  }
   let detected = 0;
   let valid = 0;
   for (const file of Object.values(files)) {
     const mutants = file.mutants;
-    if (!Array.isArray(mutants)) continue;
+    if (!Array.isArray(mutants)) {
+      continue;
+    }
     for (const mutant of mutants) {
       const rawStatus = mutant.status;
-      if (typeof rawStatus !== "string") continue;
+      if (typeof rawStatus !== "string") {
+        continue;
+      }
       const status = rawStatus.toLowerCase();
       if (DETECTED_STATUSES.has(status)) {
         detected += 1;
@@ -11693,7 +11885,9 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
       }
       result = await exec(bin, rest, { cwd: opts.cwd, env: this.env });
     }
-    if (result.code !== 0) return { kind: "command-failed", proc: toProc(result) };
+    if (result.code !== 0) {
+      return { kind: "command-failed", proc: toProc(result) };
+    }
     let raw;
     try {
       raw = await readFile7(summaryPath, "utf8");
@@ -11748,24 +11942,34 @@ var DefaultFsProbe = class {
   }
   async existsAny(relPaths, opts) {
     for (const rel of relPaths) {
-      if (await this.exists(rel, opts)) return true;
+      if (await this.exists(rel, opts)) {
+        return true;
+      }
     }
     return false;
   }
 };
 function readMetric(total, key) {
   const v = total[key];
-  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return v;
+  }
   if (typeof v === "object" && v !== null) {
     const pct = v.pct;
-    if (typeof pct === "number" && Number.isFinite(pct)) return pct;
+    if (typeof pct === "number" && Number.isFinite(pct)) {
+      return pct;
+    }
   }
   return null;
 }
 function parseCoverageSummary(report) {
-  if (typeof report !== "object" || report === null) return null;
+  if (typeof report !== "object" || report === null) {
+    return null;
+  }
   const total = report.total;
-  if (typeof total !== "object" || total === null) return null;
+  if (typeof total !== "object" || total === null) {
+    return null;
+  }
   const t = total;
   const lines = readMetric(t, "lines");
   const branches = readMetric(t, "branches");
@@ -11795,10 +11999,7 @@ var DefaultGitProbe = class {
     return this.revParse("HEAD^{tree}", opts);
   }
   async changedFiles(base, opts) {
-    const r = await this.git(
-      ["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`],
-      opts.cwd
-    );
+    const r = await this.git(["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`], opts.cwd);
     if (r.code !== 0) {
       throw new Error(`git diff vs ${base} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
@@ -11808,9 +12009,7 @@ var DefaultGitProbe = class {
   async commits(base, taskId, opts) {
     const log33 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
     if (log33.code !== 0) {
-      throw new Error(
-        `git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`
-      );
+      throw new Error(`git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`);
     }
     assertNotTruncated(log33, "git log (tdd classification)");
     const shas = splitLines(log33.stdout).reverse();
@@ -11825,7 +12024,7 @@ var DefaultGitProbe = class {
       const parentCount = parentShas.length;
       let files;
       if (parentCount > 1) {
-        const firstParent = parentShas[0];
+        const firstParent = at(parentShas, 0);
         const dt = await this.git(
           ["diff-tree", "--no-commit-id", "--name-only", "-r", firstParent, sha],
           opts.cwd
@@ -11836,10 +12035,7 @@ var DefaultGitProbe = class {
         assertNotTruncated(dt, `git diff-tree (merge) for ${sha}`);
         files = splitLines(dt.stdout);
       } else {
-        const dt = await this.git(
-          ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-          opts.cwd
-        );
+        const dt = await this.git(["diff-tree", "--no-commit-id", "--name-only", "-r", sha], opts.cwd);
         if (dt.code !== 0) {
           throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
         }
@@ -11880,7 +12076,9 @@ import { mkdir as mkdir6, readFile as readFile8, rename as rename3, writeFile } 
 import path4 from "node:path";
 var TREE_SHA_RE = /^[0-9a-f]{40,64}$/;
 function isSummary(v) {
-  if (typeof v !== "object" || v === null) return false;
+  if (typeof v !== "object" || v === null) {
+    return false;
+  }
   const o = v;
   return ["lines", "branches", "functions", "statements"].every(
     (k) => typeof o[k] === "number" && Number.isFinite(o[k])
@@ -11904,7 +12102,9 @@ var FsCoverageStore = class {
     try {
       raw = await readFile8(file, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") return null;
+      if (err.code === "ENOENT") {
+        return null;
+      }
       throw err;
     }
     let parsed;
@@ -11931,10 +12131,8 @@ var FsCoverageStore = class {
 var FALLBACK_REVIEW_MODEL = "opus";
 function resolveReviewModel(config) {
   const m = config.review.model;
-  if (m !== void 0 && m.trim().length === 0) {
-    throw new Error(
-      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
-    );
+  if (m?.trim().length === 0) {
+    throw new Error("review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it");
   }
   return m ?? FALLBACK_REVIEW_MODEL;
 }
@@ -11999,9 +12197,7 @@ function makeCodexProbe(run11 = exec) {
   return {
     vendor: "codex",
     available() {
-      memo ??= run11("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then(
-        (r) => r.code === 0
-      );
+      memo ??= run11("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then((r) => r.code === 0);
       return memo;
     }
   };
@@ -12093,14 +12289,18 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
   const findingUnknown = [];
   if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
     for (const k of Object.keys(topObj)) {
-      if (!topKnown.has(k)) topUnknown.push(k);
+      if (!topKnown.has(k)) {
+        topUnknown.push(k);
+      }
     }
   }
   if (Array.isArray(findingsArr)) {
     for (const f of findingsArr) {
       if (f !== null && typeof f === "object" && !Array.isArray(f)) {
         for (const k of Object.keys(f)) {
-          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
+          if (!findingKnown.has(k) && !findingUnknown.includes(k)) {
+            findingUnknown.push(k);
+          }
         }
       }
     }
@@ -12113,7 +12313,8 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
 }
 function parseRawReview(raw) {
   let result = RawReviewSchema.parse(raw);
-  const reviewerLabel = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? String(raw.reviewer ?? result.reviewer) : result.reviewer;
+  const rawReviewer = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.reviewer : void 0;
+  const reviewerLabel = typeof rawReviewer === "string" ? rawReviewer : result.reviewer;
   const rawFindings = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.findings : void 0;
   warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
   if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
@@ -12151,20 +12352,28 @@ function checkQuote(quote, line, lines) {
   }
   for (let n = lo; n <= hi; n++) {
     const text = lines[n - 1];
-    if (text !== void 0 && text.includes(quote)) return null;
+    if (text?.includes(quote) === true) {
+      return null;
+    }
   }
   return "quote-not-in-window";
 }
 function rescueLine(quote, reason, lines) {
-  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") return null;
+  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") {
+    return null;
+  }
   const needle = quote.trim();
-  if (needle === "" || needle.includes("\n")) return null;
+  if (needle === "" || needle.includes("\n")) {
+    return null;
+  }
   const matches = [];
   for (let n = 1; n <= lines.length; n++) {
     const text = lines[n - 1];
-    if (text !== void 0 && text.includes(needle)) matches.push(n);
+    if (text?.includes(needle) === true) {
+      matches.push(n);
+    }
   }
-  return matches.length === 1 ? matches[0] : null;
+  return matches.length === 1 ? at(matches, 0) : null;
 }
 function verifyCitations(findings, source, options = {}) {
   const redact = options.redact ?? true;
@@ -12239,7 +12448,9 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   const confirmed = [];
   let hadVerifierError = false;
   for (const { finding, citedLine } of kept) {
-    if (!isCitable(finding)) continue;
+    if (!isCitable(finding)) {
+      continue;
+    }
     const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine);
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
@@ -12281,17 +12492,12 @@ async function runPanel(input) {
   const demoted = input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === "absent";
   if (demoted) {
     const hasQuality = reviewerResults.some((r) => r.reviewer === "quality-reviewer");
-    reviewerResults = hasQuality ? reviewerResults.map(
-      (r) => r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" } : r
-    ) : [
-      ...reviewerResults,
-      { reviewer: "quality-reviewer", verdict: "error", confirmed_blockers: 0 }
-    ];
+    reviewerResults = hasQuality ? reviewerResults.map((r) => r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" } : r) : [...reviewerResults, { reviewer: "quality-reviewer", verdict: "error", confirmed_blockers: 0 }];
   }
   const mergeGate = deriveMergeGateVerdict({ reviewers: [...reviewerResults] }, input.gateEvidence);
   const result = mergeGate.passed ? advance(nextOrSelf(input.phase)) : waitRetry(
     input.phase,
-    demoted && input.crossVendor?.status === "absent" ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}` : mergeGateBlockReason(reviewerResults, input.gateEvidence),
+    demoted ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}` : mergeGateBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
   );
@@ -12343,8 +12549,8 @@ function buildHoldoutPrompt(record, worktree, baseRef) {
 }
 function extractCriteria(raw) {
   const candidates = [raw];
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
+  if (fenced?.[1] != null && fenced[1].length > 0) {
     candidates.push(fenced[1]);
   }
   const first = raw.indexOf("{");
@@ -12355,7 +12561,7 @@ function extractCriteria(raw) {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object" && Array.isArray(parsed.criteria)) {
+      if (parsed != null && typeof parsed === "object" && Array.isArray(parsed.criteria)) {
         return parsed.criteria;
       }
     } catch {
@@ -12377,7 +12583,7 @@ function checkHoldout(record, verdicts, rawThreshold) {
   const threshold = clampThreshold(rawThreshold);
   const criteria = record.withheld_criteria.map((criterion, i) => {
     const r = verdicts[i];
-    const satisfied2 = r !== void 0 && r.criterion === criterion && r.satisfied === true && r.evidence.trim().length > 0;
+    const satisfied2 = r?.criterion === criterion && r.satisfied && r.evidence.trim().length > 0;
     return { criterion, satisfied: satisfied2, evidence: r?.evidence ?? null };
   });
   const satisfied = criteria.filter((c) => c.satisfied).length;
@@ -12430,6 +12636,7 @@ function splitHoldout(criteria, percent, seed) {
   const visible = [];
   const withheld = [];
   criteria.forEach((c, i) => {
+    ;
     (withheldIdx.has(i) ? withheld : visible).push(c);
   });
   return { visible, withheld };
@@ -12449,7 +12656,7 @@ var HoldoutRecordSchema = external_exports.object({
 function parseHoldoutRecord(raw, source) {
   const result = HoldoutRecordSchema.safeParse(raw);
   if (!result.success) {
-    const where = source ? ` (${source})` : "";
+    const where = source != null && source.length > 0 ? ` (${source})` : "";
     throw new Error(`invalid holdout record${where}: ${result.error.message}`);
   }
   return result.data;
@@ -12529,7 +12736,9 @@ var FsHoldoutVerdictStore = class {
 
 // src/verifier/holdout/index.ts
 async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passRate) {
-  if (!await holdout.has(runId, taskId)) return void 0;
+  if (!await holdout.has(runId, taskId)) {
+    return void 0;
+  }
   const record = await holdout.get(runId, taskId);
   const verdicts = await verdictStore.get(runId, taskId);
   return holdoutEvidence(checkHoldout(record, verdicts, passRate));
@@ -12551,9 +12760,13 @@ async function resolveLocalPlaywrightBin(cwd, exists = pathExists2) {
   let dir = path5.resolve(cwd);
   for (; ; ) {
     const candidate = path5.join(dir, "node_modules", ".bin", "playwright");
-    if (await exists(candidate)) return candidate;
+    if (await exists(candidate)) {
+      return candidate;
+    }
     const parent = path5.dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) {
+      return null;
+    }
     dir = parent;
   }
 }
@@ -12571,19 +12784,23 @@ var DefaultPlaywrightTool = class {
   }
   async run(opts) {
     const bin = await this.resolve(opts.cwd);
-    if (bin === null) return missingBinResult2(opts.cwd);
+    if (bin === null) {
+      return missingBinResult2(opts.cwd);
+    }
     const args = ["test"];
-    if (opts.config) {
+    if (opts.config != null && opts.config.length > 0) {
       args.push("--config", opts.config);
-    } else if (opts.testDir) {
+    } else if (opts.testDir != null && opts.testDir.length > 0) {
       args.push(opts.testDir);
     }
-    if (opts.grep) args.push("--grep", opts.grep);
+    if (opts.grep != null && opts.grep.length > 0) {
+      args.push("--grep", opts.grep);
+    }
     args.push("--reporter=json");
     const result = await exec(bin, args, {
       cwd: opts.cwd,
       env: opts.env,
-      envMode: opts.replaceEnv ? "replace" : void 0
+      envMode: opts.replaceEnv === true ? "replace" : void 0
     });
     return {
       code: result.code,
@@ -12603,20 +12820,30 @@ function collectSpecs(suites) {
 }
 function specStatus(spec) {
   const statuses = spec.tests.map((t) => t.status);
-  if (statuses.includes("unexpected")) return "failed";
-  if (statuses.includes("flaky")) return "flaky";
-  if (statuses.length > 0 && statuses.every((s) => s === "skipped")) return "skipped";
+  if (statuses.includes("unexpected")) {
+    return "failed";
+  }
+  if (statuses.includes("flaky")) {
+    return "flaky";
+  }
+  if (statuses.length > 0 && statuses.every((s) => s === "skipped")) {
+    return "skipped";
+  }
   return "passed";
 }
 var ANSI_RE = /\x1b\[[0-9;]*m/g;
 function truncateBytes(s, max) {
-  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  if (Buffer.byteLength(s, "utf8") <= max) {
+    return s;
+  }
   const clipped = Buffer.from(s, "utf8").subarray(0, max).toString("utf8");
   return clipped.replace(/�+$/, "") + "\n\u2026 [error detail truncated]";
 }
 function specError(spec) {
-  const messages = spec.tests.flatMap((t) => t.results ?? []).flatMap((r) => r.errors?.length ? r.errors : r.error ? [r.error] : []).map((e) => e.message).filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.replace(ANSI_RE, "").trim());
-  if (messages.length === 0) return void 0;
+  const messages = spec.tests.flatMap((t) => t.results ?? []).flatMap((r) => r.errors != null && r.errors.length > 0 ? r.errors : r.error ? [r.error] : []).map((e) => e.message).filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.replace(ANSI_RE, "").trim());
+  if (messages.length === 0) {
+    return void 0;
+  }
   return truncateBytes([...new Set(messages)].join("\n---\n"), E2E_ERROR_DETAIL_MAX_BYTES);
 }
 function parseE2eReport(json, code = 0) {
@@ -12624,9 +12851,7 @@ function parseE2eReport(json, code = 0) {
   try {
     report = JSON.parse(json);
   } catch (err) {
-    throw new Error(
-      `e2e runner: could not parse Playwright JSON reporter output: ${err.message}`
-    );
+    throw new Error(`e2e runner: could not parse Playwright JSON reporter output: ${err.message}`);
   }
   const specs = collectSpecs(report.suites).map((s) => {
     const status = specStatus(s);
@@ -12650,17 +12875,19 @@ async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
     );
   }
   if (result.stdout.trim().length === 0) {
-    throw new Error(
-      `e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`
-    );
+    throw new Error(`e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`);
   }
   return parseE2eReport(result.stdout, result.code);
 }
 
 // src/rescue/scan.ts
 function dispositionOf(status, failureClass) {
-  if (status === "done") return "shipped";
-  if (status === "pending") return "runnable";
+  if (status === "done") {
+    return "shipped";
+  }
+  if (status === "pending") {
+    return "runnable";
+  }
   if (status === "failed") {
     return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
   }
@@ -12753,8 +12980,12 @@ async function assessWork(run11, probe) {
   const baseResolved = await probe.refExists(baseRef);
   const tasks = [];
   for (const t of Object.values(run11.tasks)) {
-    if (t.status === "done") continue;
-    if (t.branch === void 0) continue;
+    if (t.status === "done") {
+      continue;
+    }
+    if (t.branch === void 0) {
+      continue;
+    }
     const branchExists = await probe.refExists(t.branch);
     const pr = t.pr_number !== void 0 ? { pr_number: t.pr_number } : {};
     if (branchExists) {
@@ -12785,10 +13016,16 @@ function effectiveAutoResets(run11, scan) {
   const clean = /* @__PURE__ */ new Map();
   function closureClean(id, visiting) {
     const memoized = clean.get(id);
-    if (memoized !== void 0) return memoized;
-    if (visiting.has(id)) return true;
+    if (memoized !== void 0) {
+      return memoized;
+    }
+    if (visiting.has(id)) {
+      return true;
+    }
     const task = run11.tasks[id];
-    if (task === void 0) return false;
+    if (task === void 0) {
+      return false;
+    }
     const status = resets.has(id) ? "pending" : task.status;
     if (status === "failed") {
       clean.set(id, false);
@@ -12805,13 +13042,15 @@ function effectiveAutoResets(run11, scan) {
     return ok;
   }
   return scan.resettable.filter(
-    (id) => run11.tasks[id].depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
+    (id) => nonNull(run11.tasks[id]).depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
   );
 }
 
 // src/rescue/apply.ts
 function reopenE2ePhase(phase) {
-  if (phase.manifest.length === 0) return void 0;
+  if (phase.manifest.length === 0) {
+    return void 0;
+  }
   const {
     status: _status,
     reason: _reason,
@@ -12871,7 +13110,7 @@ function selectTargets(run11, opts) {
     return { targets: targets2, skipped };
   }
   const scan = scanRun(run11);
-  const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
+  const targets = opts.includeDeadEnds === true ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
@@ -12896,9 +13135,13 @@ async function applyRescue(state, runId, opts = {}) {
         };
         return run11;
       };
-      if (attempts > 0) return noop("attempts");
+      if (attempts > 0) {
+        return noop("attempts");
+      }
       const targets2 = effectiveAutoResets(run11, scanRun(run11));
-      if (targets2.length === 0) return noop("empty");
+      if (targets2.length === 0) {
+        return noop("empty");
+      }
       const reopen2 = isTerminalRunStatus(run11.status);
       result = {
         run_id: runId,
@@ -12912,7 +13155,7 @@ async function applyRescue(state, runId, opts = {}) {
       };
       const nextTasks2 = { ...run11.tasks };
       for (const id of targets2) {
-        nextTasks2[id] = resetTaskRow(run11.tasks[id]);
+        nextTasks2[id] = resetTaskRow(nonNull(run11.tasks[id]));
       }
       return {
         ...run11,
@@ -12941,17 +13184,14 @@ async function applyRescue(state, runId, opts = {}) {
     }
     const nextTasks = { ...run11.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run11.tasks[id]);
+      nextTasks[id] = resetTaskRow(nonNull(run11.tasks[id]));
     }
     return {
       ...run11,
       tasks: nextTasks,
       // S11: a manual apply that did work IS a human touch.
-      human_touches: [
-        ...run11.human_touches ?? [],
-        { kind: "recover", at: opts.at ?? nowIso() }
-      ],
-      ...e2eReset ? { e2e_phase: reopenE2ePhase(run11.e2e_phase) } : {},
+      human_touches: [...run11.human_touches ?? [], { kind: "recover", at: opts.at ?? nowIso() }],
+      ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run11.e2e_phase)) } : {},
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
       ...assessReset ? { e2e_assessment: void 0 } : {},
@@ -12960,7 +13200,7 @@ async function applyRescue(state, runId, opts = {}) {
       ...reopen ? { status: "running", ended_at: null } : {}
     };
   });
-  return { ...result, run_status: updated.status };
+  return { ...nonNull(result), run_status: updated.status };
 }
 
 // src/orchestrator/finalize.ts
@@ -13024,6 +13264,7 @@ async function finalizeRun(deps, runId) {
       merge: deps.shipMode === "live",
       ...deps.rollup ?? {}
     });
+    const rr = rollupResult;
     if (rollupResult.merged) {
       if (!run11.debug) {
         if (!rollupResult.resumed) {
@@ -13043,10 +13284,10 @@ async function finalizeRun(deps, runId) {
     }
     await deps.state.update(runId, (s) => ({
       ...s,
-      rollup: rollupResult.merged ? void 0 : {
-        number: rollupResult.number,
+      rollup: rr.merged ? void 0 : {
+        number: rr.number,
         merged: false,
-        ...rollupResult.reason ? { reason: rollupResult.reason } : {}
+        ...rr.reason ? { reason: rr.reason } : {}
       }
     }));
   } else {
@@ -13055,7 +13296,7 @@ async function finalizeRun(deps, runId) {
   const finalized = await deps.state.finalize(runId, terminal);
   const rollupNote = rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` + (rollupResult.merged ? "" : ` (${rollupResult.reason})`) : ", no rollup";
   log21.info(
-    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}` + rollupNote + `)`
+    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed` + (failureCommentPosted ? ", PRD failure comment posted" : "") + rollupNote + `)`
   );
   return {
     run: finalized,
@@ -13132,9 +13373,7 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log22.info(
-    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`
-  );
+  log22.info(`task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`);
   return { done: false, phase: resumePhase };
 }
 function classifyProducerFailure(outcome) {
@@ -13214,11 +13453,7 @@ function makePhaseHandlers(deps) {
     return ctx.task;
   }
   function splitFor(config, runId, specTask) {
-    return splitHoldout(
-      specTask.acceptance_criteria,
-      config.quality.holdoutPercent,
-      `${runId}:${specTask.task_id}`
-    );
+    return splitHoldout(specTask.acceptance_criteria, config.quality.holdoutPercent, `${runId}:${specTask.task_id}`);
   }
   function priorFailureNote(rung) {
     const prior = Math.max(0, rung - 1);
@@ -13248,21 +13483,13 @@ function makePhaseHandlers(deps) {
       // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
       // the rung dial — a defective RED test must be steered away from on the very
       // first regeneration (rung 1), where the generic dial note is still off.
-      priorFailures: [
-        ...extraPriorFailures,
-        ...dial.injectsPriorFailure ? [priorFailureNote(rung)] : []
-      ],
+      priorFailures: [...extraPriorFailures, ...dial.injectsPriorFailure ? [priorFailureNote(rung)] : []],
       // D5 fix-forward: a blocked verify's confirmed reviewer blockers ∪ gate-stderr
       // record (record.ts persisted it as `task.fix_findings`), recorded in as
       // concrete PATCH instructions rather than re-nuking the implementation.
       ...confirmedBlockers !== void 0 ? { confirmedBlockers } : {}
     });
-    const promptRef = await deps.artifacts.putProducerContext(
-      runId,
-      specTask.task_id,
-      `${role}-r${rung}`,
-      context
-    );
+    const promptRef = await deps.artifacts.putProducerContext(runId, specTask.task_id, `${role}-r${rung}`, context);
     const request = parseSpawnRequest({
       resume_phase: resumePhase,
       agents: [
@@ -13280,7 +13507,7 @@ function makePhaseHandlers(deps) {
         }
       ]
     });
-    return spawn(request);
+    return spawn2(request);
   }
   return {
     /**
@@ -13388,10 +13615,7 @@ function makePhaseHandlers(deps) {
       };
       const gate = await new GateRunner().run(gateCtx);
       const panelSpawn = async () => {
-        const crossVendor = await resolveCodexCrossVendor(
-          deps.config.codex.model,
-          deps.vendorProbe
-        );
+        const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
         if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
           return waitRetry(
             "verify",
@@ -13400,7 +13624,7 @@ function makePhaseHandlers(deps) {
             ESCALATION_CAP + 1
           );
         }
-        return spawn(
+        return spawn2(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
@@ -13427,7 +13651,9 @@ function makePhaseHandlers(deps) {
           task.task_id,
           deps.config.quality.holdoutPassRate
         );
-        if (holdoutGate !== void 0) fastPathEvidence.push(holdoutGate);
+        if (holdoutGate !== void 0) {
+          fastPathEvidence.push(holdoutGate);
+        }
       }
       const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, fastPathEvidence);
       if (mergeGate.passed) {
@@ -13470,9 +13696,7 @@ function makePhaseHandlers(deps) {
 function specTaskOf(spec, taskId) {
   const found = spec.tasks.find((t) => t.task_id === taskId);
   if (found === void 0) {
-    throw new Error(
-      `handlers: task '${taskId}' is not present in spec '${spec.spec_id}' \u2014 run/spec drift`
-    );
+    throw new Error(`handlers: task '${taskId}' is not present in spec '${spec.spec_id}' \u2014 run/spec drift`);
   }
   return found;
 }
@@ -13537,7 +13761,9 @@ function docsEnabled(packageJson) {
 async function isDocsApplicable(repoRoot) {
   try {
     const s = await stat(join16(repoRoot, "docs"));
-    if (!s.isDirectory()) return false;
+    if (!s.isDirectory()) {
+      return false;
+    }
   } catch {
     return false;
   }
@@ -13558,16 +13784,18 @@ async function readJsonInput(path6) {
   return parseJson(raw, path6);
 }
 function producerPhaseInfo(phase) {
-  if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
-  if (phase === "exec") return { role: "implementer", phase: "exec", after: "verify" };
+  if (phase === "tests") {
+    return { role: "test-writer", phase: "tests", after: "exec" };
+  }
+  if (phase === "exec") {
+    return { role: "implementer", phase: "exec", after: "verify" };
+  }
   throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
 }
 async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
   const info = producerPhaseInfo(phase);
   if (nextPhase(info.phase) !== info.after) {
-    throw new Error(
-      `record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`
-    );
+    throw new Error(`record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`);
   }
   const run11 = await state.read(runId);
   if (run11.tasks[taskId] === void 0) {
@@ -13610,7 +13838,9 @@ async function buildWorktreeSource(worktree, reviews) {
   const files = /* @__PURE__ */ new Set();
   for (const review of reviews) {
     for (const finding of review.findings) {
-      if (finding.file !== void 0) files.add(finding.file);
+      if (finding.file !== void 0) {
+        files.add(finding.file);
+      }
     }
   }
   const lines = /* @__PURE__ */ new Map();
@@ -13619,7 +13849,9 @@ async function buildWorktreeSource(worktree, reviews) {
       const text = await readFile13(join17(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
-      if (err?.code !== "ENOENT") throw err;
+      if (err.code !== "ENOENT") {
+        throw err;
+      }
       lines.set(file, null);
     }
   }
@@ -13627,7 +13859,9 @@ async function buildWorktreeSource(worktree, reviews) {
 }
 function makeReplayRunnerFactory(input) {
   const byReviewer = /* @__PURE__ */ new Map();
-  for (const v of input.verifications) byReviewer.set(v.reviewer, v.verdicts);
+  for (const v of input.verifications) {
+    byReviewer.set(v.reviewer, v.verdicts);
+  }
   return (review) => {
     const queues = /* @__PURE__ */ new Map();
     for (const v of byReviewer.get(review.reviewer) ?? []) {
@@ -13668,7 +13902,9 @@ function composeFixFindings(adjudicated, gateEvidence) {
 var PANEL_ROLE_SET = new Set(PANEL_ROLES);
 function enforcePanelRoster(reviews) {
   const out = reviews.map((r) => {
-    if (PANEL_ROLE_SET.has(r.reviewer)) return r;
+    if (PANEL_ROLE_SET.has(r.reviewer)) {
+      return r;
+    }
     log23.warn(
       `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${PANEL_ROLES.length} fixed panel roles may gate)`
     );
@@ -13712,7 +13948,9 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     taskId,
     deps.config.quality.holdoutPassRate
   );
-  if (holdoutGate !== void 0) gateEvidence.push(holdoutGate);
+  if (holdoutGate !== void 0) {
+    gateEvidence.push(holdoutGate);
+  }
   const panel = await runPanel({
     reviews,
     source,
@@ -13809,7 +14047,9 @@ function isSpawnPhase(phase) {
 // src/orchestrator/quota-gate.ts
 var log24 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, ignoreQuota = false) {
-  if (ignoreQuota) return null;
+  if (ignoreQuota) {
+    return null;
+  }
   const reading = await deps.usage.read();
   const decision = evaluate(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {
@@ -13872,7 +14112,9 @@ async function shipTask(deps, ctx) {
     await deps.git.push("origin", branch, { setUpstream: true, cwd });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) throw err;
+    if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) {
+      throw err;
+    }
     log25.warn(
       `task '${task.task_id}' push of '${branch}' rejected non-fast-forward \u2014 deleting the stale remote ref and retrying once`
     );
@@ -13928,7 +14170,9 @@ function requireTask2(run11, taskId) {
   return task;
 }
 function terminalOutcome(task) {
-  if (task.status === "done") return { outcome: "done" };
+  if (task.status === "done") {
+    return { outcome: "done" };
+  }
   if (task.failure_class === void 0) {
     throw new Error(
       `orchestrator: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
@@ -13949,9 +14193,7 @@ function asSpawnPhase(phase) {
   if (isSpawnPhase(phase)) {
     return phase;
   }
-  throw new Error(
-    `orchestrator: phase '${phase}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
-  );
+  throw new Error(`orchestrator: phase '${phase}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`);
 }
 async function holdoutSidecar(deps, runId, taskId, baseRef) {
   if (!await deps.holdout.has(runId, taskId)) {
@@ -13984,13 +14226,7 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
     if (results.producer === void 0) {
       throw new Error(`drive: phase '${phase}' expects producer-status results`);
     }
-    const env2 = await applyRecordProducer(
-      deps.state,
-      runId,
-      taskId,
-      phase,
-      results.producer.status
-    );
+    const env2 = await applyRecordProducer(deps.state, runId, taskId, phase, results.producer.status);
     return env2.step;
   }
   if (results.reviews === void 0) {
@@ -14050,7 +14286,7 @@ async function nextAction(deps, runId, taskId, results) {
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
           const inFlight = task.spawn_in_flight;
-          if (inFlight !== void 0 && inFlight.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
+          if (inFlight?.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
             await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
           } else {
             const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
@@ -14076,17 +14312,15 @@ async function nextAction(deps, runId, taskId, results) {
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step2 = await completeTask(deps, runId, taskId);
-          if (!step2.done) throw new Error("orchestrator: completeTask returned non-terminal step");
+          if (!step2.done) {
+            throw new Error("orchestrator: completeTask returned non-terminal step");
+          }
           return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
         }
-        const step = await failStep(
-          deps,
-          runId,
-          taskId,
-          result.outcome.failure_class,
-          result.outcome.reason
-        );
-        if (!step.done) throw new Error("orchestrator: failStep returned non-terminal step");
+        const step = await failStep(deps, runId, taskId, result.outcome.failure_class, result.outcome.reason);
+        if (!step.done) {
+          throw new Error("orchestrator: failStep returned non-terminal step");
+        }
         return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
@@ -14096,7 +14330,9 @@ async function nextAction(deps, runId, taskId, results) {
           await deps.state.updateTask(runId, taskId, (t) => {
             newResyncs = t.merge_resyncs + 1;
             overCap = newResyncs > MERGE_RESYNC_CAP;
-            if (overCap) return { ...t, merge_resyncs: newResyncs };
+            if (overCap) {
+              return { ...t, merge_resyncs: newResyncs };
+            }
             return {
               ...t,
               merge_resyncs: newResyncs,
@@ -14112,7 +14348,9 @@ async function nextAction(deps, runId, taskId, results) {
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
             );
-            if (!step2.done) throw new Error("orchestrator: failStep returned non-terminal step");
+            if (!step2.done) {
+              throw new Error("orchestrator: failStep returned non-terminal step");
+            }
             return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
           log26.info(
@@ -14252,10 +14490,7 @@ function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
 }
 async function readRequirements(deps, runId) {
   const run11 = await deps.state.read(runId);
-  const prd = await new SpecStore({ dataDir: deps.dataDir }).readPrd(
-    run11.spec.repo,
-    run11.spec.spec_id
-  );
+  const prd = await new SpecStore({ dataDir: deps.dataDir }).readPrd(run11.spec.repo, run11.spec.spec_id);
   const requirements = extractPrdRequirements(prd.body);
   if (requirements.length === 0) {
     throw new Error(
@@ -14313,7 +14548,7 @@ async function runTraceabilityRecord(deps, runId, results) {
       );
     }
     const rows = requirements.map((requirement, i) => {
-      const v = byIndex.get(i + 1);
+      const v = getOrThrow(byIndex, i + 1);
       return { requirement, verdict: v.verdict, evidence: v.evidence };
     });
     const unmet = rows.filter((r) => r.verdict === "unmet");
@@ -14376,34 +14611,68 @@ function isUnsatisfiableDep(run11, depId) {
   return dep === void 0 || dep.status === "failed";
 }
 async function wantsDocs(deps, run11) {
-  if (run11.docs?.status === "done") return false;
-  if ((run11.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
-  if (run11.e2e_phase?.status === "failed") return false;
-  if (run11.e2e_assessment?.status === "failed") return false;
-  if (run11.traceability?.status === "failed") return false;
-  if (decideFinalize(run11).run_status !== "completed") return false;
+  if (run11.docs?.status === "done") {
+    return false;
+  }
+  if ((run11.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) {
+    return false;
+  }
+  if (run11.e2e_phase?.status === "failed") {
+    return false;
+  }
+  if (run11.e2e_assessment?.status === "failed") {
+    return false;
+  }
+  if (run11.traceability?.status === "failed") {
+    return false;
+  }
+  if (decideFinalize(run11).run_status !== "completed") {
+    return false;
+  }
   return deps.docsApplicable();
 }
 function wantsTraceability(run11) {
-  if (run11.debug) return false;
-  if (run11.traceability?.status === "done") return false;
-  if (run11.traceability?.status === "failed") {
-    if (run11.traceability.verdicts.length > 0) return false;
-    if ((run11.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) return false;
+  if (run11.debug) {
+    return false;
   }
-  if (run11.e2e_phase?.status === "failed") return false;
-  if (run11.e2e_assessment?.status === "failed") return false;
+  if (run11.traceability?.status === "done") {
+    return false;
+  }
+  if (run11.traceability?.status === "failed") {
+    if (run11.traceability.verdicts.length > 0) {
+      return false;
+    }
+    if ((run11.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) {
+      return false;
+    }
+  }
+  if (run11.e2e_phase?.status === "failed") {
+    return false;
+  }
+  if (run11.e2e_assessment?.status === "failed") {
+    return false;
+  }
   return decideFinalize(run11).run_status === "completed";
 }
 function wantsE2e(run11) {
-  if (!run11.e2e) return false;
-  if (run11.e2e_phase?.status !== void 0) return false;
-  if (run11.e2e_assessment?.status === "failed") return false;
+  if (!run11.e2e) {
+    return false;
+  }
+  if (run11.e2e_phase?.status !== void 0) {
+    return false;
+  }
+  if (run11.e2e_assessment?.status === "failed") {
+    return false;
+  }
   return decideFinalize(run11).run_status === "completed";
 }
 function wantsE2eAssessment(run11, allTerminal, needsE2e) {
-  if (!run11.e2e) return false;
-  if (run11.e2e_assessment?.status !== void 0) return false;
+  if (!run11.e2e) {
+    return false;
+  }
+  if (run11.e2e_assessment?.status !== void 0) {
+    return false;
+  }
   return !allTerminal || needsE2e;
 }
 async function nextTask(deps, runId) {
@@ -14454,7 +14723,9 @@ async function nextTask(deps, runId) {
     const blocked = Object.values(run11.tasks).filter(
       (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run11, d))
     );
-    if (blocked.length === 0) break;
+    if (blocked.length === 0) {
+      break;
+    }
     for (const t of blocked) {
       const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run11, d));
       if (unsatisfied === void 0) {
@@ -14479,13 +14750,7 @@ async function nextTask(deps, runId) {
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
-      await failTask(
-        deps,
-        runId,
-        t.task_id,
-        "capability-budget",
-        `circuit breaker tripped: ${breaker.reason}`
-      );
+      await failTask(deps, runId, t.task_id, "capability-budget", `circuit breaker tripped: ${breaker.reason}`);
       cascadeFailed.push(t.task_id);
     }
     run11 = await deps.state.read(runId);
@@ -14607,7 +14872,9 @@ function scrubbedE2eEnv(cfg, boot) {
   const env = e2eEnv(cfg, boot);
   for (const key of ["PATH", "HOME"]) {
     const v = process.env[key];
-    if (v !== void 0) env[key] = v;
+    if (v !== void 0) {
+      env[key] = v;
+    }
   }
   return env;
 }
@@ -14781,9 +15048,7 @@ async function retryAuthorOrFail(deps, runId, worktree, reason) {
       author_attempts: attempts
     }
   }));
-  log27.warn(
-    `run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`
-  );
+  log27.warn(`run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`);
   return runE2eEmit(deps, runId);
 }
 async function runE2eRecord(deps, runId, results) {
@@ -14815,9 +15080,7 @@ async function runE2eRecord(deps, runId, results) {
   const run11 = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run11.staging_branch);
   const critical = results.manifest.filter((e) => e.kind === "critical");
-  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter(
-    (id) => !(id in run11.tasks)
-  );
+  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run11.tasks));
   if (unknownTaskIds.length > 0) {
     const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
     return failWithCleanup(deps, runId, worktree, reason);
@@ -14903,7 +15166,8 @@ async function retryAdjudicatorOrFail(deps, runId, worktree, reason) {
 }
 async function recordAdjudication(deps, runId, run11, results) {
   const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
-  const cursor = run11.e2e_phase.adjudication;
+  const phase = nonNull(run11.e2e_phase);
+  const cursor = nonNull(phase.adjudication);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "error") {
     return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${outcome.reason}`);
@@ -14923,9 +15187,7 @@ async function recordAdjudication(deps, runId, run11, results) {
   if (unruled.length > 0 || unknown.length > 0 || uncited.length > 0) {
     const parts = [
       ...unruled.length > 0 ? [`missing verdict(s) for: ${unruled.map((s) => s.spec_path).join(", ")}`] : [],
-      ...unknown.length > 0 ? [
-        `verdict(s) for spec(s) not under adjudication: ${unknown.map((v) => v.spec_path).join(", ")}`
-      ] : [],
+      ...unknown.length > 0 ? [`verdict(s) for spec(s) not under adjudication: ${unknown.map((v) => v.spec_path).join(", ")}`] : [],
       ...uncited.length > 0 ? [
         `intentional-change verdict(s) missing the required citation: ${uncited.map((v) => v.spec_path).join(", ")}`
       ] : []
@@ -14978,17 +15240,19 @@ async function recordAdjudication(deps, runId, run11, results) {
   await deps.git.push("origin", staging);
   await deps.git.worktreeRemove([worktree, "--force"]);
   await deps.state.update(runId, (s) => {
-    if (s.e2e_phase === void 0) return s;
+    if (s.e2e_phase === void 0) {
+      return s;
+    }
     const counts = { ...s.e2e_phase.adjudication_counts ?? {} };
-    for (const spec of cursor.specs) counts[spec.spec_path] = (counts[spec.spec_path] ?? 0) + 1;
+    for (const spec of cursor.specs) {
+      counts[spec.spec_path] = (counts[spec.spec_path] ?? 0) + 1;
+    }
     return {
       ...s,
       e2e_phase: { ...s.e2e_phase, adjudication: void 0, adjudication_counts: counts }
     };
   });
-  log27.info(
-    `run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`
-  );
+  log27.info(`run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`);
   return runSuiteAndDecide(deps, runId);
 }
 function classifyBaseRun(specs) {
@@ -15181,10 +15445,7 @@ async function runSuiteAndDecide(deps, runId) {
   if (throwaway.length > 0) {
     const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
     const configPath2 = throwawayConfigPath(worktree);
-    await (deps.files ?? new DefaultE2eFileOps()).writeConfig(
-      configPath2,
-      throwawayConfigContents(throwawayDir)
-    );
+    await (deps.files ?? new DefaultE2eFileOps()).writeConfig(configPath2, throwawayConfigContents(throwawayDir));
     try {
       throwawayResult = await runE2e(
         { cwd: worktree, env: scrubbedE2eEnv(cfg, boot), replaceEnv: true, config: configPath2 },
@@ -15205,9 +15466,7 @@ async function runSuiteAndDecide(deps, runId) {
     spec: criticalResult.specs.find(
       (s) => s.file === entry.spec_path || s.file.endsWith(`/${entry.spec_path}`)
     )
-  })).filter(
-    (m) => m.spec === void 0 || m.spec.status !== "passed" && m.spec.status !== "flaky"
-  );
+  })).filter((m) => m.spec === void 0 || m.spec.status !== "passed" && m.spec.status !== "flaky");
   if (!criticalResult.ok && criticalResult.specs.every((s) => s.status !== "failed")) {
     const reason = "e2e critical suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
     await markFailed(deps, runId, reason, attempts);
@@ -15220,9 +15479,7 @@ async function runSuiteAndDecide(deps, runId) {
   }
   const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === "failed");
   const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
-  const unmappableCritical = criticalSpecFailures.filter(
-    (s) => findEntry(manifest, s) === void 0
-  );
+  const unmappableCritical = criticalSpecFailures.filter((s) => findEntry(manifest, s) === void 0);
   const stillPass = [];
   if (unmappableCritical.length > 0) {
     const affected = run11.e2e_assessment?.affected_specs ?? [];
@@ -15261,9 +15518,7 @@ async function runSuiteAndDecide(deps, runId) {
           adjudication: { specs: cursorSpecs, attempts: 0, requested_at: nowIso() }
         }
       }));
-      log27.info(
-        `run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`
-      );
+      log27.info(`run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`);
       return prepareAdjudicatorSpawn(deps, await deps.state.read(runId), runId, boot);
     }
   }
@@ -15289,11 +15544,13 @@ async function runSuiteAndDecide(deps, runId) {
   }
   const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map((m) => {
     const title = m.spec ? m.spec.title : "did not run (missing from results)";
-    const detail = m.spec?.error ? `
+    const detail = m.spec?.error != null && m.spec.error.length > 0 ? `
   ${m.spec.error.replace(/\n/g, "\n  ")}` : "";
     return `- ${m.entry.spec_path} \u2014 "${title}"${detail}`;
   }).join("\n");
-  for (const id of taskIds) reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
+  for (const id of taskIds) {
+    reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
+  }
   await deps.state.update(runId, (s) => ({
     ...s,
     tasks: Object.fromEntries(
@@ -15343,7 +15600,8 @@ var AssessmentResultsSchema = external_exports.object({
 }).strict();
 function buildAssessorPrompt(args) {
   const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
-  const overrides = args.cfg.startCommand || args.cfg.baseURL ? `Operator config overrides exist \u2014 treat them as authoritative: startCommand=${args.cfg.startCommand ?? "(unset)"}, baseURL=${args.cfg.baseURL ?? "(unset)"}.` : "No operator overrides \u2014 resolve the boot config yourself.";
+  const hasOverride = args.cfg.startCommand != null && args.cfg.startCommand.length > 0 || args.cfg.baseURL != null && args.cfg.baseURL.length > 0;
+  const overrides = hasOverride ? `Operator config overrides exist \u2014 treat them as authoritative: startCommand=${args.cfg.startCommand ?? "(unset)"}, baseURL=${args.cfg.baseURL ?? "(unset)"}.` : "No operator overrides \u2014 resolve the boot config yourself.";
   return [
     "You are the factory e2e-assessor running the pipeline's run-start assessment phase (Decision 40).",
     `1. cd into your worktree: ${args.worktree} (checked out on the assessment branch off the staging tip).`,
@@ -15511,12 +15769,10 @@ async function runAssessmentRecord(deps, runId, results) {
 // src/cli/wiring.ts
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
-    throw new Error(
-      `wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`
-    );
+    throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
   }
   const parts = slug.split("/");
-  return { owner: parts[0], repo: parts[1] };
+  return { owner: at(parts, 0), repo: at(parts, 1) };
 }
 async function loadOrchestratorDeps(opts) {
   const deps = await loadCliDeps(opts);
@@ -15585,7 +15841,9 @@ var NotAutonomousError = class extends Error {
   }
 };
 function requireAutonomousMode(env = process.env) {
-  if (!isAutonomous(env)) throw new NotAutonomousError();
+  if (!isAutonomous(env)) {
+    throw new NotAutonomousError();
+  }
 }
 function decideAutonomyPreflight(input) {
   const { autonomous, mergedSettingsPresent, pluginVersion, onDiskVersion } = input;
@@ -15728,9 +15986,7 @@ function seedTasksFromSpec(request) {
 async function resolveSpec2(specStore, opts) {
   const request = opts.specId !== void 0 ? await specStore.read(opts.repo, opts.specId) : await specStore.resolveByIssue(opts.repo, opts.issue);
   if (request === null) {
-    throw new Error(
-      `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
-    );
+    throw new Error(`run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`);
   }
   if (!await specStore.hasPrd(request.repo, request.spec_id)) {
     throw new Error(
@@ -15801,7 +16057,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
       const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
-      if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
+      if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== "resume") {
         return { kind: "pause", existing };
       }
       if (opts.intent === "supersede") {
@@ -15813,10 +16069,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
         const run11 = await state.update(created.run_id, (s) => ({
           ...s,
-          human_touches: [
-            ...s.human_touches ?? [],
-            { kind: "conflict", at: s.started_at }
-          ]
+          human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
         }));
         return { kind: "superseded", run: run11, supersededId };
       }
@@ -15841,12 +16094,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
     case "not-resumable":
       return { kind: "resumed", run: run11 };
     case "resume": {
-      const at = new Date(nowEpochSec * 1e3).toISOString();
+      const at2 = new Date(nowEpochSec * 1e3).toISOString();
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
-        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at }] }
+        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at: at2 }] }
       }));
       return { kind: "resumed", run: updated, cleared: true };
     }
@@ -15866,8 +16119,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
   }
 }
 function parseIssue(raw) {
-  if (raw === void 0) return void 0;
-  if (typeof raw !== "string") throw new UsageError("--issue requires a value");
+  if (raw === void 0) {
+    return void 0;
+  }
+  if (typeof raw !== "string") {
+    throw new UsageError("--issue requires a value");
+  }
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) {
     throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
@@ -15892,7 +16149,9 @@ async function assertE2ePrereqs(cwd) {
       hasDep2 = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
     } catch {
     }
-    if (!hasDep2) missing.push("@playwright/test (dependencies or devDependencies)");
+    if (!hasDep2) {
+      missing.push("@playwright/test (dependencies or devDependencies)");
+    }
   }
   try {
     await access5(join22(cwd, "playwright.config.ts"));
@@ -15984,8 +16243,12 @@ async function runCreate(argv, overrides = {}) {
   const intent = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
-  if (e2e) await assertE2ePrereqs(cwd);
-  if (intent !== "resume") await assertGateContract(cwd, gitClient);
+  if (e2e) {
+    await assertE2ePrereqs(cwd);
+  }
+  if (intent !== "resume") {
+    await assertGateContract(cwd, gitClient);
+  }
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
@@ -16009,7 +16272,7 @@ async function runCreate(argv, overrides = {}) {
       runId,
       ...selector,
       shipMode,
-      ...ownerSession !== void 0 ? { ownerSession } : {},
+      ownerSession,
       ...ignoreQuota ? { ignoreQuota } : {},
       ...e2e ? { e2e } : {},
       intent
@@ -16095,7 +16358,9 @@ async function runResume(argv) {
 }
 async function resolveRunId(state, args, action, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
-  if (explicit !== void 0) return explicit;
+  if (explicit !== void 0) {
+    return explicit;
+  }
   const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`run ${action}: no --run given and no current run`);
@@ -16143,13 +16408,8 @@ function phaseCommand(opts) {
     const state = new StateManager({ dataDir });
     const runId = await resolveRunId(state, args, opts.phase);
     const deps = await loadCliDeps({ dataDir, runId });
-    const results = await parseResultsFlag(
-      args,
-      async (path6) => opts.parse(await readJsonInput(path6))
-    );
-    emitJson(
-      results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId)
-    );
+    const results = await parseResultsFlag(args, async (path6) => opts.parse(await readJsonInput(path6)));
+    emitJson(results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId));
     return EXIT.OK;
   };
 }
@@ -16205,10 +16465,14 @@ var runE2eAssess = phaseCommand({
 });
 async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
-  if (explicit !== void 0) return explicit;
+  if (explicit !== void 0) {
+    return explicit;
+  }
   if (sessionId !== void 0) {
     const owned = await state.findAllActiveByOwner(sessionId);
-    if (owned.length === 1) return owned[0].run_id;
+    if (owned.length === 1) {
+      return nonNull(owned[0]).run_id;
+    }
     if (owned.length >= 2) {
       const ids = owned.map((r) => r.run_id).join(", ");
       throw new UsageError(
@@ -16228,9 +16492,7 @@ async function runCancel(argv, overrides = {}) {
     emitLine(CANCEL_HELP);
     return EXIT.OK;
   }
-  const dataDir = resolveDataDir(
-    overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
-  );
+  const dataDir = resolveDataDir(overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {});
   const state = new StateManager({ dataDir });
   const sessionId = resolveOwnerSession(args.flag("session-id"));
   const currentOverrides = {
@@ -16396,12 +16658,7 @@ var specCommand = {
 
 // src/debug/review.ts
 function buildReviewManifest(opts) {
-  const manifest = buildPanelManifest(
-    opts.resumePhase,
-    opts.model,
-    opts.maxTurns,
-    opts.crossVendor
-  );
+  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns, opts.crossVendor);
   return {
     manifest,
     base: opts.base,
@@ -16441,8 +16698,8 @@ async function adjudicateWholeScope(input) {
 }
 function debugE2eEnv(cfg) {
   return {
-    BASE_URL: cfg.baseURL,
-    FACTORY_E2E_START_COMMAND: cfg.startCommand,
+    BASE_URL: nonNull(cfg.baseURL),
+    FACTORY_E2E_START_COMMAND: nonNull(cfg.startCommand),
     FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
     FACTORY_E2E: "1"
   };
@@ -16451,13 +16708,15 @@ function scrubbedDebugE2eEnv(cfg) {
   const env = debugE2eEnv(cfg);
   for (const key of ["PATH", "HOME"]) {
     const v = process.env[key];
-    if (v !== void 0) env[key] = v;
+    if (v !== void 0) {
+      env[key] = v;
+    }
   }
   return env;
 }
 async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
   const { config } = input;
-  if (!config.startCommand || !config.baseURL) {
+  if (config.startCommand == null || config.startCommand.length === 0 || config.baseURL == null || config.baseURL.length === 0) {
     return {
       kind: "skipped",
       reason: "e2e.startCommand/e2e.baseURL not configured \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`"
@@ -16530,25 +16789,19 @@ var ReportGhClient = class {
   constructor(report) {
     this.report = report;
   }
-  async fetchPrd(issueNumber, _opts) {
-    return {
+  fetchPrd(issueNumber, _opts) {
+    return Promise.resolve({
       issue_number: issueNumber,
       title: this.report.title,
       body: this.report.body,
       labels: ["factory-debug"],
       body_truncated: false
-    };
+    });
   }
 };
 function renderFinding(finding) {
   const citation = finding.file !== void 0 && finding.line !== void 0 ? `${finding.file}:${finding.line}` : "(no citation)";
-  return [
-    `### [${finding.severity}] ${citation}`,
-    "",
-    `> ${finding.quote}`,
-    "",
-    finding.description
-  ].join("\n");
+  return [`### [${finding.severity}] ${citation}`, "", `> ${finding.quote}`, "", finding.description].join("\n");
 }
 function renderFindingsBody(confirmedBlockers) {
   const byReviewer = /* @__PURE__ */ new Map();
@@ -16716,9 +16969,7 @@ async function debugStart(deps, opts = {}) {
   const base = opts.full === true ? EMPTY_TREE_SHA : opts.base ?? "HEAD~1";
   const maxPasses = opts.maxPasses ?? DEFAULT_MAX_PASSES;
   if (!Number.isInteger(maxPasses) || maxPasses <= 0) {
-    throw new UsageError(
-      `--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`
-    );
+    throw new UsageError(`--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`);
   }
   const runId = makeRunId();
   validateId(runId, "run-id");
@@ -16795,10 +17046,12 @@ async function debugReviewRecord(deps, runId, input) {
     e2e: e2eStatus
   };
 }
-async function specDepsFor(deps, session) {
+function specDepsFor(deps, session) {
   if (session.confirmedBlockers === void 0) {
-    throw new Error(
-      `debug spec: run '${session.runId}' pass ${session.pass} has no recorded review \u2014 run 'debug review --record' first`
+    return Promise.reject(
+      new Error(
+        `debug spec: run '${session.runId}' pass ${session.pass} has no recorded review \u2014 run 'debug review --record' first`
+      )
     );
   }
   const report = buildDebugReport({
@@ -16806,7 +17059,7 @@ async function specDepsFor(deps, session) {
     passNumber: session.pass,
     base: session.base
   });
-  return wireDebugSpecDeps(report, deps.dataDir);
+  return Promise.resolve(wireDebugSpecDeps(report, deps.dataDir));
 }
 async function debugRepo(deps) {
   return resolveRepo({ cwd: deps.cwd, gitClient: deps.gitClient });
@@ -16824,11 +17077,7 @@ async function debugSpecGate(deps, runId) {
 async function debugSpecStore(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
   const repo = await debugRepo(deps);
-  const envelope = await storeSpec(
-    await specDepsFor(deps, session),
-    repo,
-    debugIssueNumber(session.pass)
-  );
+  const envelope = await storeSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
   if (envelope.kind === "stored") {
     await writeSession(deps.dataDir, { ...session, specId: envelope.pointer.spec_id });
   }
@@ -16956,9 +17205,7 @@ async function runDebugSpec(argv, overrides = {}) {
   }
   const handler = SPEC_ACTIONS[subAction];
   if (handler === void 0) {
-    throw new UsageError(
-      `unknown debug spec action '${subAction}' (expected resolve | gate | store)`
-    );
+    throw new UsageError(`unknown debug spec action '${subAction}' (expected resolve | gate | store)`);
   }
   const args = parseArgs(argv.slice(1), {});
   if (args.flag("help") === true) {
@@ -17009,9 +17256,7 @@ async function run4(argv, overrides = {}) {
   }
   const handler = ACTIONS2[action];
   if (handler === void 0) {
-    throw new UsageError(
-      `unknown debug action '${action}' (expected start | review | spec | seed | finalize)`
-    );
+    throw new UsageError(`unknown debug action '${action}' (expected start | review | spec | seed | finalize)`);
   }
   return handler(argv.slice(1), overrides);
 }
@@ -17037,9 +17282,15 @@ function summarize2(run11) {
   ];
   for (const t of Object.values(run11.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
-    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
-    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
-    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
+    if (t.escalation_rung > 0) {
+      bits.push(`rung=${t.escalation_rung}`);
+    }
+    if (t.pr_number !== void 0) {
+      bits.push(`pr=#${t.pr_number}`);
+    }
+    if (t.failure_class !== void 0) {
+      bits.push(`class=${t.failure_class}`);
+    }
     lines.push(bits.join("  "));
   }
   return lines.join("\n");
@@ -17122,10 +17373,7 @@ function mergeTargetSettings(existing, dataDirRules) {
   const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
   const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
   const removedStaleAllow = strippedAllow.length !== currentAllow.length;
-  const targetAllow = [
-    ...FACTORY_TARGET_BASE_ALLOWLIST,
-    ...dataDirAllowRules(dataDirRules.allowGlobBase)
-  ];
+  const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)];
   const have = new Set(strippedAllow);
   const additions = targetAllow.filter((e) => !have.has(e));
   if (removedStaleAllow || additions.length > 0) {
@@ -17183,7 +17431,9 @@ function detectStack(targetRoot) {
   if (existsSync8(join25(targetRoot, "deno.json")) || existsSync8(join25(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync8(join25(targetRoot, "package.json"))) return "npm";
+  if (existsSync8(join25(targetRoot, "package.json"))) {
+    return "npm";
+  }
   return "custom";
 }
 async function readPackageJson(targetRoot) {
@@ -17218,7 +17468,9 @@ var no = (reason) => ({ contracted: false, reason });
 async function resolveNpm(opts) {
   const pkg = await readPackageJson(opts.targetRoot);
   const floor = [];
-  if (!hasDep(pkg, "vitest")) floor.push("test gate: no vitest dependency \u2014 install vitest");
+  if (!hasDep(pkg, "vitest")) {
+    floor.push("test gate: no vitest dependency \u2014 install vitest");
+  }
   if (!existsSync8(join25(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
@@ -17226,10 +17478,8 @@ async function resolveNpm(opts) {
     floor.push("build gate: no scripts.build \u2014 add a build script");
   }
   if (floor.length > 0) {
-    throw new Error(
-      `scaffold: gate contract below floor for stack 'npm':
-  - ${floor.join("\n  - ")}`
-    );
+    throw new Error(`scaffold: gate contract below floor for stack 'npm':
+  - ${floor.join("\n  - ")}`);
   }
   const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join25(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
@@ -17270,7 +17520,7 @@ async function resolveNpm(opts) {
       tdd: yes,
       coverage,
       mutation,
-      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      sast: opts.securityCommand != null && opts.securityCommand.length > 0 ? yes : no("no quality.securityCommand configured"),
       type: yes,
       lint,
       build: yes
@@ -17289,7 +17539,7 @@ async function resolveDeno(opts) {
         "waived-by-stack: deno coverage emits lcov, no json-summary \u2014 contract a coverage command that writes coverage/coverage-summary.json or keep waived"
       ),
       mutation: no("waived-by-stack: stryker does not support deno"),
-      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      sast: opts.securityCommand != null && opts.securityCommand.length > 0 ? yes : no("no quality.securityCommand configured"),
       type: { contracted: true, command: "deno check ." },
       lint: { contracted: true, command: "deno lint" },
       build
@@ -17307,7 +17557,9 @@ async function resolveGateContract(opts) {
   return GateContractSchema.parse(contract);
 }
 async function recommendFastCheck(targetRoot) {
-  if (detectStack(targetRoot) !== "npm") return false;
+  if (detectStack(targetRoot) !== "npm") {
+    return false;
+  }
   return !hasDep(await readPackageJson(targetRoot), "fast-check");
 }
 async function ensureGateContract(opts) {
@@ -17392,7 +17644,9 @@ function resolveTemplatesDir() {
       return candidate;
     }
     const parent = dirname10(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
   throw new Error("scaffold: could not locate the plugin templates/ directory");
@@ -17471,14 +17725,14 @@ async function runScaffold(opts) {
   }
   const isNodePackage = existsSync9(join26(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
-    if (entry.nodeOnly && !isNodePackage) continue;
+    if (entry.nodeOnly === true && !isNodePackage) {
+      continue;
+    }
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
-    log30.info(
-      `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
-    );
+    log30.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -17505,8 +17759,11 @@ async function runScaffold(opts) {
     dataDirRules: opts.dataDirRules
   });
   const settingsRel = relative(opts.targetRoot, settings.path);
-  if (settings.created) lists.created.push(settingsRel);
-  else lists.present.push(settingsRel);
+  if (settings.created) {
+    lists.created.push(settingsRel);
+  } else {
+    lists.present.push(settingsRel);
+  }
   const branch = opts.config.git.baseBranch;
   const required = opts.config.git.requiredStatusChecks;
   let state = await probeProtection({
@@ -17620,28 +17877,38 @@ Routes (resolved in order from the run's state + scan):
              deduped PRD comment \u2192 {kind:"page"}. Never touches dead-ends, e2e
              verdicts, or rollups. Both envelopes exit 0.`;
 function deriveAwaiting(run11) {
-  if (run11.quota !== void 0) return "quota";
-  if (run11.e2e_assessment?.status === "failed" || run11.e2e_phase?.status === "failed") return "e2e";
-  if (run11.traceability?.status === "failed") return "traceability";
-  if (run11.docs?.status === "failed") return "docs";
-  const untouched = Object.values(run11.tasks).every(
-    (t) => t.status === "pending" && t.started_at === void 0
-  );
+  if (run11.quota !== void 0) {
+    return "quota";
+  }
+  if (run11.e2e_assessment?.status === "failed" || run11.e2e_phase?.status === "failed") {
+    return "e2e";
+  }
+  if (run11.traceability?.status === "failed") {
+    return "traceability";
+  }
+  if (run11.docs?.status === "failed") {
+    return "docs";
+  }
+  const untouched = Object.values(run11.tasks).every((t) => t.status === "pending" && t.started_at === void 0);
   return untouched ? "spec-approval" : "unknown";
 }
 function chooseRoute(run11, scan) {
-  if (run11.status === "completed" || run11.status === "superseded") return "nothing";
+  if (run11.status === "completed" || run11.status === "superseded") {
+    return "nothing";
+  }
   if ((run11.status === "paused" || run11.status === "suspended") && !scan.needs_rescue) {
     return "resume";
   }
-  if (scan.resettable.length > 0) return "rescue";
-  if (!scan.needs_rescue && scan.dead_ends.length === 0) return "nothing";
+  if (scan.resettable.length > 0) {
+    return "rescue";
+  }
+  if (!scan.needs_rescue && scan.dead_ends.length === 0) {
+    return "nothing";
+  }
   return "page";
 }
 function pageHints(runId, scan) {
-  const hints = scan.dead_ends.map(
-    (id) => `factory rescue apply --run ${runId} --task ${id} --include-dead-ends`
-  );
+  const hints = scan.dead_ends.map((id) => `factory rescue apply --run ${runId} --task ${id} --include-dead-ends`);
   if (scan.e2e_failed || scan.e2e_assessment_failed) {
     hints.push(`factory rescue apply --run ${runId} --reset-e2e`);
   }
@@ -17659,7 +17926,9 @@ async function run6(argv, overrides = {}) {
   }
   const auto = args.flag("auto") === true;
   const dryRun = args.flag("dry-run") === true;
-  if (auto && dryRun) throw new UsageError("recover: --auto and --dry-run are mutually exclusive");
+  if (auto && dryRun) {
+    throw new UsageError("recover: --auto and --dry-run are mutually exclusive");
+  }
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const explicit = args.flag("run");
@@ -17670,7 +17939,9 @@ async function run6(argv, overrides = {}) {
   }
   const runId = current.run_id;
   const scan = scanRun(current);
-  if (auto) return runAuto(state, current, scan, overrides);
+  if (auto) {
+    return runAuto(state, current, scan, overrides);
+  }
   const route = chooseRoute(current, scan);
   if (dryRun) {
     const work = await assessWork(current, probeFrom(overrides));
@@ -17729,8 +18000,8 @@ async function run6(argv, overrides = {}) {
 }
 async function runAuto(state, current, scan, overrides) {
   requireAutonomousMode();
-  const at = overrides.now?.() ?? nowIso();
-  const applied = await applyRescue(state, current.run_id, { auto: { at } });
+  const at2 = overrides.now?.() ?? nowIso();
+  const applied = await applyRescue(state, current.run_id, { auto: { at: at2 } });
   if (applied.auto_blocked === void 0) {
     emitJson({
       kind: "recovered",
@@ -17749,13 +18020,12 @@ async function runAuto(state, current, scan, overrides) {
   const existing = await gh.listIssueComments(target);
   let commented = false;
   if (!existing.some((body) => body.includes(marker))) {
-    const lines = [
-      marker,
-      `Factory self-heal for run \`${current.run_id}\` did not proceed \u2014 ${reason}.`
-    ];
+    const lines = [marker, `Factory self-heal for run \`${current.run_id}\` did not proceed \u2014 ${reason}.`];
     if (scan.dead_ends.length > 0) {
       lines.push("", "Dead-end task(s) needing a human fix:");
-      for (const id of scan.dead_ends) lines.push(`- \`${id}\``);
+      for (const id of scan.dead_ends) {
+        lines.push(`- \`${id}\``);
+      }
     }
     lines.push("", `Triage with \`factory recover --run ${current.run_id} --dry-run\`.`);
     await gh.issueComment({ ...target, body: lines.join("\n") });
@@ -17841,7 +18111,9 @@ Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
 async function resolveRunId2(state, args, action, overrides) {
   const explicit = args.flag("run");
-  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  if (typeof explicit === "string" && explicit.length > 0) {
+    return explicit;
+  }
   const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`rescue ${action}: no --run given and no current run`);
@@ -17918,7 +18190,9 @@ Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
 function touchMetricOf(run11) {
   const touches = run11.human_touches?.length;
-  if (touches === void 0 || touches === 0) return null;
+  if (touches === void 0 || touches === 0) {
+    return null;
+  }
   return (run11.status === "completed" ? 1 : 0) / touches;
 }
 async function runFleet(state) {
@@ -17930,7 +18204,7 @@ async function runFleet(state) {
     metric: touchMetricOf(r)
   }));
   const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0);
-  const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0);
+  const totalTouches = withLedger.reduce((n, r) => n + nonNull(r.human_touches).length, 0);
   const completed = withLedger.filter((r) => r.status === "completed").length;
   const aggregate = totalTouches === 0 ? null : completed / totalTouches;
   emitJson({ kind: "fleet-score", runs, aggregate });
@@ -17944,7 +18218,9 @@ async function runScore(argv, overrides = {}) {
   }
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
-  if (args.flag("fleet") === true) return runFleet(state);
+  if (args.flag("fleet") === true) {
+    return runFleet(state);
+  }
   const explicitRun = optionalString(args.flag("run"));
   const runState2 = explicitRun !== void 0 ? await state.read(explicitRun) : await readCurrentForCwd(state, overrides);
   if (runState2 === null) {
@@ -17992,10 +18268,7 @@ async function run8(argv) {
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
   const shipMode = parseShipMode(args.flag("ship-mode"));
-  const results = await parseResultsFlag(
-    args,
-    async (path6) => parseDriveResults(await readJsonInput(path6))
-  );
+  const results = await parseResultsFlag(args, async (path6) => parseDriveResults(await readJsonInput(path6)));
   const deps = await loadOrchestratorDeps({
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
@@ -18029,9 +18302,13 @@ Ready tasks are ordered in-flight first (crash resume), then pending (spec order
 Throws LOUD on a dependency deadlock.`;
 function assertCurrentOwner(current, assertOwner) {
   const expected = typeof assertOwner === "string" ? assertOwner.trim() : "";
-  if (expected.length === 0) return;
+  if (expected.length === 0) {
+    return;
+  }
   const actual = current.owner_session;
-  if (actual === void 0) return;
+  if (actual === void 0) {
+    return;
+  }
   if (actual !== expected) {
     throw new Error(
       `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Pass --run <id> explicitly.`
@@ -18051,7 +18328,9 @@ async function run9(argv) {
   } else {
     const dataDir = resolveDataDir({});
     const current = await new StateManager({ dataDir }).readCurrent();
-    if (current === null) throw new UsageError("no --run given and no current run");
+    if (current === null) {
+      throw new UsageError("no --run given and no current run");
+    }
     assertCurrentOwner(current, args.flag("assert-owner"));
     runId = current.run_id;
   }
@@ -18098,15 +18377,21 @@ function progressEnabled(env = process.env) {
 var TERMINAL_LINGER_SEC = 30 * 60;
 async function renderProgress(deps) {
   try {
-    if (!progressEnabled(deps.env ?? process.env)) return "";
+    if (!progressEnabled(deps.env ?? process.env)) {
+      return "";
+    }
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
     const run11 = JSON.parse(raw);
-    if (typeof run11.run_id !== "string" || typeof run11.status !== "string") return "";
+    if (typeof run11.run_id !== "string" || typeof run11.status !== "string") {
+      return "";
+    }
     if (run11.status === "completed" || run11.status === "failed" || run11.status === "superseded") {
       const endedMs = typeof run11.ended_at === "string" ? Date.parse(run11.ended_at) : NaN;
       const nowSec = (deps.now ?? nowEpoch)();
-      if (!Number.isFinite(endedMs) || nowSec - endedMs / 1e3 > TERMINAL_LINGER_SEC) return "";
+      if (!Number.isFinite(endedMs) || nowSec - endedMs / 1e3 > TERMINAL_LINGER_SEC) {
+        return "";
+      }
     }
     const tasks = Object.values(run11.tasks ?? {});
     const done = tasks.filter((t) => t?.status === "done").length;
@@ -18120,9 +18405,13 @@ async function renderProgress(deps) {
   }
 }
 function rateLimitsOf(payload) {
-  if (typeof payload !== "object" || payload === null) return null;
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
   const rl = payload.rate_limits;
-  if (typeof rl !== "object" || rl === null) return null;
+  if (typeof rl !== "object" || rl === null) {
+    return null;
+  }
   return rl;
 }
 async function writeCache(rateLimits, deps) {
@@ -18145,7 +18434,9 @@ async function writeCache(rateLimits, deps) {
 }
 async function passthrough(payload, deps) {
   const original = deps.originalStatusline ?? process.env.FACTORY_ORIGINAL_STATUSLINE ?? "";
-  if (original.trim().length === 0) return "";
+  if (original.trim().length === 0) {
+    return "";
+  }
   try {
     const run11 = deps.exec ?? exec;
     const result = await run11(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
@@ -18231,7 +18522,9 @@ function mergedSettingsPath(dataDir) {
   return join28(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
-  if (value.startsWith("~")) return home + value.slice(1);
+  if (value.startsWith("~")) {
+    return home + value.slice(1);
+  }
   return value;
 }
 function substitutePlaceholders(value, vars) {
@@ -18255,7 +18548,9 @@ function isObject2(v) {
 }
 function statusLineCommandOf(settings) {
   const sl = settings.statusLine;
-  if (!isObject2(sl)) return void 0;
+  if (!isObject2(sl)) {
+    return void 0;
+  }
   const cmd = sl.command;
   return typeof cmd === "string" && cmd.length > 0 ? cmd : void 0;
 }
@@ -18284,7 +18579,9 @@ function materializeMergedSettings(input) {
   const ourPath = factoryBinPath(pluginRoot);
   const userStatusLine = statusLineCommandOf(input.userSettings);
   const chained = (() => {
-    if (userStatusLine === void 0) return void 0;
+    if (userStatusLine === void 0) {
+      return void 0;
+    }
     const expanded = tildeExpand(userStatusLine, home);
     const parts = expanded.split(/\s+/);
     const expandedPath = parts[0] ?? expanded;
@@ -18305,10 +18602,14 @@ function materializeMergedSettings(input) {
 }
 async function readPluginVersion(pluginRoot) {
   const path6 = join28(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync10(path6)) return void 0;
+  if (!existsSync10(path6)) {
+    return void 0;
+  }
   try {
     const parsed = JSON.parse(await readFile19(path6, "utf8"));
-    if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
+    if (isObject2(parsed) && typeof parsed.version === "string") {
+      return parsed.version;
+    }
   } catch {
   }
   return void 0;
@@ -18323,8 +18624,11 @@ async function runAutonomyEnsure(opts = {}) {
   if (existsSync10(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
-      if (isObject2(parsed)) userSettings = parsed;
-      else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      if (isObject2(parsed)) {
+        userSettings = parsed;
+      } else {
+        log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      }
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
@@ -18354,7 +18658,7 @@ Relaunch the session in autonomous mode with:
   );
   return { path: path6, relaunchCommand };
 }
-async function runAutonomyStatus(opts = {}) {
+function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let path6 = "";
@@ -18387,10 +18691,12 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
 `)
     );
   }
-  return status.autonomous ? EXIT.OK : EXIT.ERROR;
+  return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
 async function readOnDiskVersion(path6) {
-  if (!existsSync10(path6)) return void 0;
+  if (!existsSync10(path6)) {
+    return void 0;
+  }
   try {
     const parsed = JSON.parse(await readFile19(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
@@ -18532,7 +18838,7 @@ function printHelp() {
     "Usage: factory <subcommand> [options]",
     "",
     "Subcommands:",
-    ...names.map((n) => `  ${n.padEnd(width)}  ${cliRegistry[n].describe}`),
+    ...names.map((n) => `  ${n.padEnd(width)}  ${nonNull(cliRegistry[n]).describe}`),
     "",
     "Run `factory <subcommand> --help` for subcommand-specific help."
   ];
@@ -18546,10 +18852,8 @@ async function dispatch2(argv) {
   }
   const cmd = cliRegistry[name];
   if (!cmd) {
-    process.stderr.write(
-      `factory: unknown subcommand '${name}'. Run \`factory --help\` for usage.
-`
-    );
+    process.stderr.write(`factory: unknown subcommand '${name}'. Run \`factory --help\` for usage.
+`);
     return EXIT.USAGE;
   }
   return cmd.run(rest);

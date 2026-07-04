@@ -8,53 +8,49 @@
  * (excluded from the conjunction), mirroring the sast "no-security-command"
  * precedent. When applicable and eslint reports problems (exit≠0), it fail-closes.
  */
-import { contractCommand } from "../gate-contract.js";
-import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
-import { skip } from "../strategy.js";
-import type { GateTools } from "../tools.js";
-import { procOutcome } from "./proc-strategy.js";
+import {contractCommand} from '../gate-contract.js'
+import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
+import {skip} from '../strategy.js'
+import type {GateTools} from '../tools.js'
+import {procOutcome} from './proc-strategy.js'
 
 /** eslint config filenames (flat + legacy) that mark lint as opted-in. */
 export const ESLINT_CONFIGS = [
-  "eslint.config.js",
-  "eslint.config.mjs",
-  "eslint.config.cjs",
-  "eslint.config.ts",
-  "eslint.config.mts",
-  "eslint.config.cts",
-  ".eslintrc.js",
-  ".eslintrc.cjs",
-  ".eslintrc.yaml",
-  ".eslintrc.yml",
-  ".eslintrc.json",
-  ".eslintrc",
-] as const;
+    'eslint.config.js',
+    'eslint.config.mjs',
+    'eslint.config.cjs',
+    'eslint.config.ts',
+    'eslint.config.mts',
+    'eslint.config.cts',
+    '.eslintrc.js',
+    '.eslintrc.cjs',
+    '.eslintrc.yaml',
+    '.eslintrc.yml',
+    '.eslintrc.json',
+    '.eslintrc',
+] as const
 
 /** Worktree-relative path the eslint binary resolves to after `npm install`. */
-export const ESLINT_BIN = "node_modules/.bin/eslint";
+export const ESLINT_BIN = 'node_modules/.bin/eslint'
 
 export const lintStrategy: GateStrategy<GateTools> = {
-  id: "lint",
-  async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
-    const opts = { cwd: ctx.worktree };
-    // Gate contract (S7, Decision 46): a contracted `command` override (e.g.
-    // `deno lint`) replaces eslint entirely — the bin/config probes are moot.
-    const command = contractCommand(ctx.contract, "lint");
-    if (command !== undefined) {
-      return procOutcome(
-        "lint",
-        `contract:${command.join(" ")}`,
-        await ctx.tools.command.run(command, opts),
-      );
-    }
-    const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts);
-    if (!hasBin) {
-      return skip("lint", "no-eslint-binary");
-    }
-    const hasConfig = await ctx.tools.fs.existsAny(ESLINT_CONFIGS, opts);
-    if (!hasConfig) {
-      return skip("lint", "no-eslint-config");
-    }
-    return procOutcome("lint", "eslint", await ctx.tools.eslint.lint(opts));
-  },
-};
+    id: 'lint',
+    async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
+        const opts = {cwd: ctx.worktree}
+        // Gate contract (S7, Decision 46): a contracted `command` override (e.g.
+        // `deno lint`) replaces eslint entirely — the bin/config probes are moot.
+        const command = contractCommand(ctx.contract, 'lint')
+        if (command !== undefined) {
+            return procOutcome('lint', `contract:${command.join(' ')}`, await ctx.tools.command.run(command, opts))
+        }
+        const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts)
+        if (!hasBin) {
+            return skip('lint', 'no-eslint-binary')
+        }
+        const hasConfig = await ctx.tools.fs.existsAny(ESLINT_CONFIGS, opts)
+        if (!hasConfig) {
+            return skip('lint', 'no-eslint-config')
+        }
+        return procOutcome('lint', 'eslint', await ctx.tools.eslint.lint(opts))
+    },
+}

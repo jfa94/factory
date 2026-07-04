@@ -6,47 +6,43 @@
  * score → a {@link GateEvidence} recorded into the risk-invariant merge gate. Deep-
  * importing `src/verifier/holdout/*` is a smell; import here.
  */
-import type { GateEvidence } from "../../types/index.js";
-import { checkHoldout, holdoutEvidence } from "./validate.js";
-import type { HoldoutStore } from "./store.js";
-import type { HoldoutVerdictStore } from "./verdict-store.js";
+import type {GateEvidence} from '../../types/index.js'
+import {checkHoldout, holdoutEvidence} from './validate.js'
+import type {HoldoutStore} from './store.js'
+import type {HoldoutVerdictStore} from './verdict-store.js'
 
 // The deterministic criteria split.
-export { splitHoldout, holdoutCount, type HoldoutSplit } from "./split.js";
+export {splitHoldout, holdoutCount, type HoldoutSplit} from './split.js'
 
 // The answer-key store (runs/<run>/holdouts/<task>.json — Δ Y confined subtree).
 export {
-  HoldoutRecordSchema,
-  parseHoldoutRecord,
-  makeHoldoutRecord,
-  InMemoryHoldoutStore,
-  FsHoldoutStore,
-  type HoldoutRecord,
-  type HoldoutStore,
-} from "./store.js";
+    HoldoutRecordSchema,
+    parseHoldoutRecord,
+    makeHoldoutRecord,
+    InMemoryHoldoutStore,
+    FsHoldoutStore,
+    type HoldoutRecord,
+    type HoldoutStore,
+} from './store.js'
 
 // Agent validation + deterministic scoring → gate evidence.
 export {
-  buildHoldoutPrompt,
-  parseHoldoutVerdicts,
-  checkHoldout,
-  holdoutEvidence,
-  type HoldoutVerdict,
-  type HoldoutCriterionResult,
-  type HoldoutCheckResult,
-  type HoldoutValidateInput,
-  type HoldoutValidatorRunner,
-} from "./validate.js";
+    buildHoldoutPrompt,
+    parseHoldoutVerdicts,
+    checkHoldout,
+    holdoutEvidence,
+    type HoldoutVerdict,
+    type HoldoutCriterionResult,
+    type HoldoutCheckResult,
+    type HoldoutValidateInput,
+    type HoldoutValidatorRunner,
+} from './validate.js'
 
 // The holdout-VERDICT store (the orchestrator's holdout → review record hand-off).
-export {
-  InMemoryHoldoutVerdictStore,
-  FsHoldoutVerdictStore,
-  type HoldoutVerdictStore,
-} from "./verdict-store.js";
+export {InMemoryHoldoutVerdictStore, FsHoldoutVerdictStore, type HoldoutVerdictStore} from './verdict-store.js'
 
 // Exported fakes for downstream + own unit tests.
-export { FakeHoldoutValidatorRunner, type FakeHoldoutMode } from "./fakes.js";
+export {FakeHoldoutValidatorRunner, type FakeHoldoutMode} from './fakes.js'
 
 /**
  * Re-derive holdout gate evidence from persisted verdicts. Returns `undefined` if no
@@ -57,14 +53,16 @@ export { FakeHoldoutValidatorRunner, type FakeHoldoutMode } from "./fakes.js";
  * to avoid the validate.ts → verdict-store.ts → validate.ts import cycle.
  */
 export async function deriveHoldoutEvidence(
-  holdout: HoldoutStore,
-  verdictStore: HoldoutVerdictStore,
-  runId: string,
-  taskId: string,
-  passRate: number,
+    holdout: HoldoutStore,
+    verdictStore: HoldoutVerdictStore,
+    runId: string,
+    taskId: string,
+    passRate: number
 ): Promise<GateEvidence | undefined> {
-  if (!(await holdout.has(runId, taskId))) return undefined;
-  const record = await holdout.get(runId, taskId);
-  const verdicts = await verdictStore.get(runId, taskId);
-  return holdoutEvidence(checkHoldout(record, verdicts, passRate));
+    if (!(await holdout.has(runId, taskId))) {
+        return undefined
+    }
+    const record = await holdout.get(runId, taskId)
+    const verdicts = await verdictStore.get(runId, taskId)
+    return holdoutEvidence(checkHoldout(record, verdicts, passRate))
 }

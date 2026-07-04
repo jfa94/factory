@@ -136,14 +136,13 @@ prd_path, generated_path, max_iterations}`). Before emitting `generate`, a
   spawn, so an unspecifiable PRD costs zero agent turns. `resolve` also persists a
   **durable PRD snapshot** (`prd.json`) beside the spec: `reuse` backfills it once via
   `gh` when a pre-Decision-47 spec lacks it, and `store` writes it on first
-  generation. The traceability phase audits this snapshot, never a re-fetch.
-  - `--supersede` — delete the durable spec dir for the issue (`SpecStore.deleteByIssue`,
-    idempotent) **before** the reuse check, so resolve always falls through to
-    `generate` and the runner regenerates the spec from the PRD. The runner's
-    `/factory:run --supersede` forwards this flag into Phase 1 so a superseding run
-    does not inherit the same broken spec it is trying to escape. Deletion is
-    mandatory — regenerating without deleting risks two dirs for one issue, which
-    `resolveByIssue` treats as a store-integrity error.
+  generation. The traceability phase audits this snapshot, never a re-fetch. - `--supersede` — delete the durable spec dir for the issue (`SpecStore.deleteByIssue`,
+  idempotent) **before** the reuse check, so resolve always falls through to
+  `generate` and the runner regenerates the spec from the PRD. The runner's
+  `/factory:run --supersede` forwards this flag into Phase 1 so a superseding run
+  does not inherit the same broken spec it is trying to escape. Deletion is
+  mandatory — regenerating without deleting risks two dirs for one issue, which
+  `resolveByIssue` treats as a store-integrity error.
 - **gate** — run the deterministic spec gates over the generator output; emit
   `{kind:"revise", source:"gate", blockers, spawn, …}` on a block, else the review spawn
   (`{kind:"review", spawn, verdict_path, …}`).
@@ -230,7 +229,7 @@ run already exists for this `(repo, spec_id)`, it exits `3` (CONFLICT) and emits
 `{kind:"exists", existing:{run_id, status}}`. Two escapes resolve the conflict:
 
 - `--supersede` — mark the old run `superseded`, delete its `staging-<run-id>` branch
-  - PRs, and create a fresh run (`{kind:"superseded", run, supersededId}`).
+    - PRs, and create a fresh run (`{kind:"superseded", run, supersededId}`).
 - `--resume` — return the conflict so the caller hands off to [`resume`](#resume).
 
 `--new` (or an explicit `--run-id`) bypasses the conflict scan and forces a fresh
@@ -320,16 +319,16 @@ factory run traceability [--run <id>] [--results <path>]
   requirement `1..n`, LOUD on a gap/dup), persists one row per requirement (keyed by
   requirement **text**, not index) in the run-state `traceability` phase marker, removes the
   worktree, then concludes:
-  - `{kind:"done", run_id}` — no `unmet` verdict (a `partial` **passes** the gate but
-    surfaces as a `traceability_gaps` row in the report). The run proceeds to docs.
-  - `{kind:"failed", run_id, reason}` — any `unmet` verdict. A verdict is judgment, **not
-    retried**; finalize condemns the run (rollup blocked), and the report/PRD comment carry
-    the unmet requirements.
+    - `{kind:"done", run_id}` — no `unmet` verdict (a `partial` **passes** the gate but
+      surfaces as a `traceability_gaps` row in the report). The run proceeds to docs.
+    - `{kind:"failed", run_id, reason}` — any `unmet` verdict. A verdict is judgment, **not
+      retried**; finalize condemns the run (rollup blocked), and the report/PRD comment carry
+      the unmet requirements.
 
-  A **crashed/non-`DONE` auditor** increments `attempts` and, below `MAX_TRACE_ATTEMPTS` (2),
-  suspends the run for a retry (`{kind:"suspend", …}`) **without** a quota checkpoint (resumable
-  via `/factory:resume`); at the cap it concludes `{kind:"failed", …}` — the **anti-docs delta**:
-  docs at cap degrades to best-effort-done, but the delivery gate never ships an unaudited run.
+    A **crashed/non-`DONE` auditor** increments `attempts` and, below `MAX_TRACE_ATTEMPTS` (2),
+    suspends the run for a retry (`{kind:"suspend", …}`) **without** a quota checkpoint (resumable
+    via `/factory:resume`); at the cap it concludes `{kind:"failed", …}` — the **anti-docs delta**:
+    docs at cap degrades to best-effort-done, but the delivery gate never ships an unaudited run.
 
 `next-task` schedules `traceability` after e2e and before docs, so a failed audit never
 reaches the docs or rollup steps. Debug runs skip the phase (their review⇄fix loop IS their

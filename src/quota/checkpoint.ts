@@ -17,23 +17,23 @@
  * from a non-quota suspend (docs/e2e phase park), which carries no checkpoint
  * and clears unconditionally.
  */
-import { QuotaCheckpointSchema } from "../types/index.js";
-import type { QuotaCheckpoint, RunStatus } from "../types/index.js";
-import type { QuotaDecision } from "./pacer.js";
+import {QuotaCheckpointSchema} from '../types/index.js'
+import type {QuotaCheckpoint, RunStatus} from '../types/index.js'
+import type {QuotaDecision} from './pacer.js'
 
 /** The two decisions that produce a persisted quota checkpoint. */
-export type CheckpointableDecision = Extract<QuotaDecision, { kind: "pause-5h" | "suspend-7d" }>;
+export type CheckpointableDecision = Extract<QuotaDecision, {kind: 'pause-5h' | 'suspend-7d'}>
 
 /** A typed state patch the orchestrator merges into a run via StateManager.update. */
 export interface CheckpointPatch {
-  status: RunStatus;
-  quota: QuotaCheckpoint;
+    status: RunStatus
+    quota: QuotaCheckpoint
 }
 
 /** A typed patch that clears the checkpoint on resume. */
 export interface ClearCheckpointPatch {
-  status: RunStatus;
-  quota: undefined;
+    status: RunStatus
+    quota: undefined
 }
 
 /**
@@ -44,24 +44,24 @@ export interface ClearCheckpointPatch {
  * not a deferred failure when the orchestrator persists it.
  */
 export function buildCheckpoint(decision: CheckpointableDecision): CheckpointPatch {
-  switch (decision.kind) {
-    case "pause-5h":
-      return {
-        status: "paused",
-        quota: QuotaCheckpointSchema.parse({
-          binding_window: "5h",
-          resets_at_epoch: decision.resetsAtEpoch,
-        }),
-      };
-    case "suspend-7d":
-      return {
-        status: "suspended",
-        quota: QuotaCheckpointSchema.parse({
-          binding_window: "7d",
-          resets_at_epoch: decision.resetsAtEpoch,
-        }),
-      };
-  }
+    switch (decision.kind) {
+        case 'pause-5h':
+            return {
+                status: 'paused',
+                quota: QuotaCheckpointSchema.parse({
+                    binding_window: '5h',
+                    resets_at_epoch: decision.resetsAtEpoch,
+                }),
+            }
+        case 'suspend-7d':
+            return {
+                status: 'suspended',
+                quota: QuotaCheckpointSchema.parse({
+                    binding_window: '7d',
+                    resets_at_epoch: decision.resetsAtEpoch,
+                }),
+            }
+    }
 }
 
 /**
@@ -70,10 +70,10 @@ export function buildCheckpoint(decision: CheckpointableDecision): CheckpointPat
  * the live signal like any window).
  */
 export function buildUnavailableCheckpoint(): CheckpointPatch {
-  return {
-    status: "suspended",
-    quota: QuotaCheckpointSchema.parse({ binding_window: "unavailable" }),
-  };
+    return {
+        status: 'suspended',
+        quota: QuotaCheckpointSchema.parse({binding_window: 'unavailable'}),
+    }
 }
 
 /**
@@ -82,5 +82,5 @@ export function buildUnavailableCheckpoint(): CheckpointPatch {
  * after resume. The orchestrator merges this into the persisted run.
  */
 export function clearCheckpoint(): ClearCheckpointPatch {
-  return { status: "running", quota: undefined };
+    return {status: 'running', quota: undefined}
 }

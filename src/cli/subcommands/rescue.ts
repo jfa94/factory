@@ -11,16 +11,16 @@
  * scan (its input) + apply (the consumer of its decisions); it does NOT run the
  * diagnostic itself.
  */
-import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, UsageError } from "../args.js";
-import { emitJson, emitLine } from "../io.js";
-import { resolveDataDir } from "../../config/index.js";
-import { StateManager } from "../../core/state/index.js";
-import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
-import { applyRescue } from "../../rescue/index.js";
-import { emitMetric } from "../../scoring/index.js";
-import { runRecover } from "./recover.js";
-import { withUsageGuard, type Subcommand } from "../registry-types.js";
+import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {parseArgs, UsageError} from '../args.js'
+import {emitJson, emitLine} from '../io.js'
+import {resolveDataDir} from '../../config/index.js'
+import {StateManager} from '../../core/state/index.js'
+import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
+import {applyRescue} from '../../rescue/index.js'
+import {emitMetric} from '../../scoring/index.js'
+import {runRecover} from './recover.js'
+import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 const RESCUE_HELP = `factory rescue — scan or recover a stalled run
 
@@ -30,7 +30,7 @@ Usage:
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
-  apply   Reset the resettable tasks to pending; reopen a terminal run.`;
+  apply   Reset the resettable tasks to pending; reopen a terminal run.`
 
 const SCAN_HELP = `factory rescue scan — classify a stalled run (read-only)
 
@@ -42,7 +42,7 @@ Usage:
 Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
 RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
 rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
-survey (\`work\`) + the recover \`route\`. Writes nothing.`;
+survey (\`work\`) + the recover \`route\`. Writes nothing.`
 
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
@@ -74,91 +74,87 @@ to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, 
 --recheck-rollup targets an armed-not-landed rollup). Idempotent.
 
 Emits ONE JSON document:
-  { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
+  { run_id, run_status, reset:[...], reopened, skipped:[...] }`
 
 /**
  * Resolve `runId` from `--run`, falling back to `runs/current` (LOUD if neither is
  * available). Mirrors the run-lifecycle commands' default-to-active-run behavior.
  */
 async function resolveRunId(
-  state: StateManager,
-  args: ReturnType<typeof parseArgs>,
-  action: string,
-  overrides: CurrentRunOverrides,
+    state: StateManager,
+    args: ReturnType<typeof parseArgs>,
+    action: string,
+    overrides: CurrentRunOverrides
 ): Promise<string> {
-  const explicit = args.flag("run");
-  if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`rescue ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
+    const explicit = args.flag('run')
+    if (typeof explicit === 'string' && explicit.length > 0) {
+        return explicit
+    }
+    const current = await readCurrentForCwd(state, overrides)
+    if (current === null) {
+        throw new UsageError(`rescue ${action}: no --run given and no current run`)
+    }
+    return current.run_id
 }
 
-export async function runScan(
-  argv: string[],
-  overrides: CurrentRunOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv);
-  if (args.flag("help") === true) {
-    emitLine(SCAN_HELP);
-    return EXIT.OK;
-  }
-  // S10 (Decision 48): scan IS `recover --dry-run` — one envelope, one code path.
-  // The recover path additionally reports the chosen `route`, and a missing
-  // current run is a routed {kind:"nothing"} answer instead of a usage error.
-  return runRecover([...argv, "--dry-run"], overrides);
+export async function runScan(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv)
+    if (args.flag('help') === true) {
+        emitLine(SCAN_HELP)
+        return EXIT.OK
+    }
+    // S10 (Decision 48): scan IS `recover --dry-run` — one envelope, one code path.
+    // The recover path additionally reports the chosen `route`, and a missing
+    // current run is a routed {kind:"nothing"} answer instead of a usage error.
+    return runRecover([...argv, '--dry-run'], overrides)
 }
 
-export async function runApply(
-  argv: string[],
-  overrides: CurrentRunOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup"] });
-  if (args.flag("help") === true) {
-    emitLine(APPLY_HELP);
-    return EXIT.OK;
-  }
+export async function runApply(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {booleans: ['include-dead-ends', 'reset-e2e', 'recheck-rollup']})
+    if (args.flag('help') === true) {
+        emitLine(APPLY_HELP)
+        return EXIT.OK
+    }
 
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "apply", overrides);
-  const tasks = args.all("task");
-  const includeDeadEnds = args.flag("include-dead-ends") === true;
-  const resetE2e = args.flag("reset-e2e") === true;
-  const recheckRollup = args.flag("recheck-rollup") === true;
+    const dataDir = resolveDataDir({})
+    const state = new StateManager({dataDir})
+    const runId = await resolveRunId(state, args, 'apply', overrides)
+    const tasks = args.all('task')
+    const includeDeadEnds = args.flag('include-dead-ends') === true
+    const resetE2e = args.flag('reset-e2e') === true
+    const recheckRollup = args.flag('recheck-rollup') === true
 
-  const result = await applyRescue(state, runId, {
-    ...(tasks.length > 0 ? { tasks } : {}),
-    includeDeadEnds,
-    resetE2e,
-    recheckRollup,
-  });
-  if (result.touched) {
-    await emitMetric(dataDir, runId, "human_touch", { kind: "recover" }); // S11 mirror
-  }
-  emitJson(result);
-  return EXIT.OK;
+    const result = await applyRescue(state, runId, {
+        ...(tasks.length > 0 ? {tasks} : {}),
+        includeDeadEnds,
+        resetE2e,
+        recheckRollup,
+    })
+    if (result.touched) {
+        await emitMetric(dataDir, runId, 'human_touch', {kind: 'recover'}) // S11 mirror
+    }
+    emitJson(result)
+    return EXIT.OK
 }
 
 async function run(argv: string[]): Promise<ExitCode> {
-  const action = argv[0];
-  if (action === undefined || action === "--help" || action === "-h") {
-    emitLine(RESCUE_HELP);
-    return EXIT.OK;
-  }
-  const rest = argv.slice(1);
-  switch (action) {
-    case "scan":
-      return runScan(rest);
-    case "apply":
-      return runApply(rest);
-    default:
-      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`);
-  }
+    const action = argv[0]
+    if (action === undefined || action === '--help' || action === '-h') {
+        emitLine(RESCUE_HELP)
+        return EXIT.OK
+    }
+    const rest = argv.slice(1)
+    switch (action) {
+        case 'scan':
+            return runScan(rest)
+        case 'apply':
+            return runApply(rest)
+        default:
+            throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`)
+    }
 }
 
 export const rescueCommand: Subcommand = {
-  describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
-  run: withUsageGuard("rescue", run),
-};
+    describe: 'Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)',
+    run: withUsageGuard('rescue', run),
+}

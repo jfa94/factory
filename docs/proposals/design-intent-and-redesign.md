@@ -150,11 +150,11 @@ useless and quota-draining on a deterministic/spec failure. So:
   exit. Re-decomposition is a spec problem, left to rescue/future capability, **not** done inline
   (never mutate the live DAG).
 - **Each rung must change a variable, not re-roll identically:**
-  - **Rung 1** — nuke branch + worktree, same model tier, fresh context. Kills flakiness / poisoned
-    trajectory.
-  - **Rung 2** — nuke, **escalate the model** (e.g. sonnet→opus) **+ inject the prior failure as
-    explicit "don't do this" context.** Kills capability + repeated-mistake.
-  - **Cap = 2 extra attempts.** Then graceful partial exit.
+    - **Rung 1** — nuke branch + worktree, same model tier, fresh context. Kills flakiness / poisoned
+      trajectory.
+    - **Rung 2** — nuke, **escalate the model** (e.g. sonnet→opus) **+ inject the prior failure as
+      explicit "don't do this" context.** Kills capability + repeated-mistake.
+    - **Cap = 2 extra attempts.** Then graceful partial exit.
 - **Nuke leaves no orphan** — squash-merge means a task is all-merged or not-merged; an unmerged
   failed branch nukes cleanly. Persist spec + failure classification + attempts tried so rescue
   resumes without repeating dead ends.
@@ -393,18 +393,18 @@ Priority order:
    impl-classified commit). The gate is meaningful only on the per-task branch; it must **never** be
    naively re-run on squashed history (staging or the rollup). Memoize the per-task verdict.
 5. **Testing scopes that don't waste _and_ don't blind:**
-   - per-PR CI diff-scopes **unit** tests + scoped mutation (already done), but **never** proximity-
-     scopes **integration/snapshot** tests, and **force-fulls** on changes to declared
-     global-coupling / config / lockfile paths;
-   - **rollup mutation scoped to blobs changed since `develop`** (not a full re-run);
-   - **coverage baseline snapshotted per-layer** (not per-task);
-   - **tree-SHA memoization** so review fix-loops don't re-run gates on unchanged trees (kills the
-     O(K·R·M) flaky-amplification).
-   - **Dropped as unsound:** the first-draft "skip re-test when changed files don't overlap" —
-     file-set intersection ≠ semantic dependence (misses type ripple, DI/global wiring, integration
-     tests, config, lockfiles). Quality-first = always re-validate against current staging (the
-     merge queue does exactly this). Non-waste comes from _scoping by dependency reality + full
-     suite once at rollup_, never from skip-by-guess.
+    - per-PR CI diff-scopes **unit** tests + scoped mutation (already done), but **never** proximity-
+      scopes **integration/snapshot** tests, and **force-fulls** on changes to declared
+      global-coupling / config / lockfile paths;
+    - **rollup mutation scoped to blobs changed since `develop`** (not a full re-run);
+    - **coverage baseline snapshotted per-layer** (not per-task);
+    - **tree-SHA memoization** so review fix-loops don't re-run gates on unchanged trees (kills the
+      O(K·R·M) flaky-amplification).
+    - **Dropped as unsound:** the first-draft "skip re-test when changed files don't overlap" —
+      file-set intersection ≠ semantic dependence (misses type ripple, DI/global wiring, integration
+      tests, config, lockfiles). Quality-first = always re-validate against current staging (the
+      merge queue does exactly this). Non-waste comes from _scoping by dependency reality + full
+      suite once at rollup_, never from skip-by-guess.
 6. **Quota lives entirely behind exit codes in `bin/` scripts** — so both drivers share one quota
    implementation (consistent with deterministic-first; §6 states have one home).
 

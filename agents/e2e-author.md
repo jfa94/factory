@@ -100,10 +100,10 @@ manifest row per spec you authored:
 
 ```json
 {
-  "task_ids": ["task-07"],
-  "spec_path": "e2e/checkout.spec.ts",
-  "kind": "critical",
-  "title": "Buy an item and reach order confirmation"
+    "task_ids": ["task-07"],
+    "spec_path": "e2e/checkout.spec.ts",
+    "kind": "critical",
+    "title": "Buy an item and reach order confirmation"
 }
 ```
 

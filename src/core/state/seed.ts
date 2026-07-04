@@ -12,21 +12,21 @@
  * never re-check it. Takes a structural task shape, not a SpecManifest:
  * `src/spec` imports core/state (paths), so the reverse import would cycle.
  */
-import { validateId } from "../../shared/ids.js";
-import type { TaskState } from "./schema.js";
+import {validateId} from '../../shared/ids.js'
+import type {TaskState} from './schema.js'
 
 /** The slice of a spec task the seeder reads — structurally satisfied by SpecTask. */
 export interface SeedableTask {
-  readonly task_id: string;
-  readonly depends_on: readonly string[];
+    readonly task_id: string
+    readonly depends_on: readonly string[]
 }
 
 /** Error-message parameterization: `<context>: … in <specLabel>`. */
 export interface SeedContext {
-  /** The calling operation, e.g. "run create" or "appendTasksFromSpec". */
-  readonly context: string;
-  /** The spec being seeded, e.g. "spec 42-checkout" or "spec 42-x (pass 2)". */
-  readonly specLabel: string;
+    /** The calling operation, e.g. "run create" or "appendTasksFromSpec". */
+    readonly context: string
+    /** The spec being seeded, e.g. "spec 42-checkout" or "spec 42-x (pass 2)". */
+    readonly specLabel: string
 }
 
 /**
@@ -40,47 +40,45 @@ export interface SeedContext {
  * whichever task set is authoritative (the batch itself, or a merged union).
  */
 export function seedTaskRows(
-  specTasks: readonly SeedableTask[],
-  ctx: SeedContext,
-  idOf: (taskId: string) => string = (id) => id,
+    specTasks: readonly SeedableTask[],
+    ctx: SeedContext,
+    idOf: (taskId: string) => string = (id) => id
 ): Record<string, TaskState> {
-  const ids = new Set(specTasks.map((t) => idOf(t.task_id)));
-  const tasks: Record<string, TaskState> = {};
+    const ids = new Set(specTasks.map((t) => idOf(t.task_id)))
+    const tasks: Record<string, TaskState> = {}
 
-  for (const t of specTasks) {
-    const id = idOf(t.task_id);
-    validateId(id, "task-id");
-    if (tasks[id] !== undefined) {
-      throw new Error(`${ctx.context}: duplicate task id '${t.task_id}' in ${ctx.specLabel}`);
+    for (const t of specTasks) {
+        const id = idOf(t.task_id)
+        validateId(id, 'task-id')
+        if (tasks[id] !== undefined) {
+            throw new Error(`${ctx.context}: duplicate task id '${t.task_id}' in ${ctx.specLabel}`)
+        }
+        const dependsOn = t.depends_on.map(idOf)
+        for (const [i, dep] of dependsOn.entries()) {
+            if (dep === id) {
+                throw new Error(`${ctx.context}: task '${t.task_id}' depends on itself in ${ctx.specLabel}`)
+            }
+            if (!ids.has(dep)) {
+                throw new Error(
+                    `${ctx.context}: task '${t.task_id}' depends on unknown task '${t.depends_on[i]}' in ${ctx.specLabel}`
+                )
+            }
+        }
+        tasks[id] = {
+            task_id: id,
+            status: 'pending',
+            // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
+            // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
+            // checks in this module. The risk_tier dial is NOT copied — it is read live
+            // from the SpecTask via specTaskOf (derive-don't-store, Decision 25).
+            depends_on: dependsOn,
+            escalation_rung: 0,
+            reviewers: [],
+            merge_resyncs: 0,
+        }
     }
-    const dependsOn = t.depends_on.map(idOf);
-    for (const [i, dep] of dependsOn.entries()) {
-      if (dep === id) {
-        throw new Error(
-          `${ctx.context}: task '${t.task_id}' depends on itself in ${ctx.specLabel}`,
-        );
-      }
-      if (!ids.has(dep)) {
-        throw new Error(
-          `${ctx.context}: task '${t.task_id}' depends on unknown task '${t.depends_on[i]}' in ${ctx.specLabel}`,
-        );
-      }
-    }
-    tasks[id] = {
-      task_id: id,
-      status: "pending",
-      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
-      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
-      // checks in this module. The risk_tier dial is NOT copied — it is read live
-      // from the SpecTask via specTaskOf (derive-don't-store, Decision 25).
-      depends_on: dependsOn,
-      escalation_rung: 0,
-      reviewers: [],
-      merge_resyncs: 0,
-    };
-  }
 
-  return tasks;
+    return tasks
 }
 
 /**
@@ -89,24 +87,26 @@ export function seedTaskRows(
  * throw at drive time; catching it at seed time names the offending trail.
  */
 export function assertAcyclic(tasks: Record<string, TaskState>, ctx: SeedContext): void {
-  const VISITING = 1;
-  const DONE = 2;
-  const state = new Map<string, number>();
+    const VISITING = 1
+    const DONE = 2
+    const state = new Map<string, number>()
 
-  const visit = (id: string, trail: string[]): void => {
-    const mark = state.get(id);
-    if (mark === DONE) return;
-    if (mark === VISITING) {
-      throw new Error(
-        `${ctx.context}: dependency cycle in ${ctx.specLabel}: ${[...trail, id].join(" → ")}`,
-      );
+    const visit = (id: string, trail: string[]): void => {
+        const mark = state.get(id)
+        if (mark === DONE) {
+            return
+        }
+        if (mark === VISITING) {
+            throw new Error(`${ctx.context}: dependency cycle in ${ctx.specLabel}: ${[...trail, id].join(' → ')}`)
+        }
+        state.set(id, VISITING)
+        for (const dep of tasks[id]?.depends_on ?? []) {
+            visit(dep, [...trail, id])
+        }
+        state.set(id, DONE)
     }
-    state.set(id, VISITING);
-    for (const dep of tasks[id]?.depends_on ?? []) {
-      visit(dep, [...trail, id]);
-    }
-    state.set(id, DONE);
-  };
 
-  for (const id of Object.keys(tasks)) visit(id, []);
+    for (const id of Object.keys(tasks)) {
+        visit(id, [])
+    }
 }

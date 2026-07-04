@@ -7,67 +7,68 @@
  * flag is `undefined` (not a default — `loadCliDeps` falls back to the run's
  * persisted `ship_mode`).
  */
-import { describe, it, expect } from "vitest";
+import {describe, it, expect} from 'vitest'
 
-import { parseShipMode, optionalString, isUsageError } from "./args.js";
-import { ShipModeEnum } from "../core/state/index.js";
+import {parseShipMode, optionalString, isUsageError} from './args.js'
+import {ShipModeEnum} from '../core/state/index.js'
 
-describe("parseShipMode", () => {
-  it("accepts every member of ShipModeEnum (CLI set tracks the enum)", () => {
-    for (const mode of ShipModeEnum.options) {
-      expect(parseShipMode(mode)).toBe(mode);
-    }
-  });
+describe('parseShipMode', () => {
+    it('accepts every member of ShipModeEnum (CLI set tracks the enum)', () => {
+        for (const mode of ShipModeEnum.options) {
+            expect(parseShipMode(mode)).toBe(mode)
+        }
+    })
 
-  it("returns undefined for an absent flag (no hard-coded default here)", () => {
-    expect(parseShipMode(undefined)).toBeUndefined();
-  });
+    it('returns undefined for an absent flag (no hard-coded default here)', () => {
+        expect(parseShipMode(undefined)).toBeUndefined()
+    })
 
-  it("throws a UsageError for an unknown value, naming the accepted set", () => {
-    try {
-      parseShipMode("merge-everything");
-      throw new Error("expected parseShipMode to throw");
-    } catch (err) {
-      expect(isUsageError(err)).toBe(true);
-      expect((err as Error).message).toContain("merge-everything");
-      for (const mode of ShipModeEnum.options) {
-        expect((err as Error).message).toContain(mode);
-      }
-    }
-  });
+    it('throws a UsageError for an unknown value, naming the accepted set', () => {
+        try {
+            parseShipMode('merge-everything')
+            throw new Error('expected parseShipMode to throw')
+        } catch (err) {
+            expect(isUsageError(err)).toBe(true)
+            expect((err as Error).message).toContain('merge-everything')
+            for (const mode of ShipModeEnum.options) {
+                expect((err as Error).message).toContain(mode)
+            }
+        }
+    })
 
-  it("throws a UsageError when the flag is passed bare (boolean true)", () => {
-    expect(() => parseShipMode(true)).toThrow();
-    expect(
-      isUsageError(
-        (() => {
-          try {
-            parseShipMode(true);
-          } catch (e) {
-            return e;
-          }
-        })(),
-      ),
-    ).toBe(true);
-  });
-});
+    it('throws a UsageError when the flag is passed bare (boolean true)', () => {
+        expect(() => parseShipMode(true)).toThrow()
+        expect(
+            isUsageError(
+                (() => {
+                    try {
+                        parseShipMode(true)
+                        return undefined
+                    } catch (e) {
+                        return e
+                    }
+                })()
+            )
+        ).toBe(true)
+    })
+})
 
-describe("optionalString", () => {
-  it("returns a non-empty string flag unchanged", () => {
-    expect(optionalString("owner/name")).toBe("owner/name");
-  });
+describe('optionalString', () => {
+    it('returns a non-empty string flag unchanged', () => {
+        expect(optionalString('owner/name')).toBe('owner/name')
+    })
 
-  it("treats an empty string as absent (→ undefined)", () => {
-    expect(optionalString("")).toBeUndefined();
-  });
+    it('treats an empty string as absent (→ undefined)', () => {
+        expect(optionalString('')).toBeUndefined()
+    })
 
-  it("treats a bare boolean flag as absent (→ undefined)", () => {
-    // `--repo` with no value parses to `true`; that is NOT a usable string.
-    expect(optionalString(true)).toBeUndefined();
-    expect(optionalString(false)).toBeUndefined();
-  });
+    it('treats a bare boolean flag as absent (→ undefined)', () => {
+        // `--repo` with no value parses to `true`; that is NOT a usable string.
+        expect(optionalString(true)).toBeUndefined()
+        expect(optionalString(false)).toBeUndefined()
+    })
 
-  it("treats a missing flag as absent (→ undefined)", () => {
-    expect(optionalString(undefined)).toBeUndefined();
-  });
-});
+    it('treats a missing flag as absent (→ undefined)', () => {
+        expect(optionalString(undefined)).toBeUndefined()
+    })
+})

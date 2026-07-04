@@ -14,13 +14,13 @@
  * test-writer phase was skipped commits impl-only history, which the TDD gate would
  * otherwise classify as a violation and block forever.
  */
-import { DefaultExemptReader, type ExemptReader } from "../verifier/deterministic/index.js";
-import { specDir } from "../core/state/index.js";
+import {DefaultExemptReader, type ExemptReader} from '../verifier/deterministic/index.js'
+import {specDir} from '../core/state/index.js'
 
 /** The fields {@link taskExemptReader} needs from the reporter dep bundle. */
 export interface ExemptReaderDeps {
-  readonly dataDir: string;
-  readonly spec: { readonly repo: string; readonly spec_id: string };
+    readonly dataDir: string
+    readonly spec: {readonly repo: string; readonly spec_id: string}
 }
 
 /**
@@ -28,8 +28,8 @@ export interface ExemptReaderDeps {
  * run's durable spec dir, package.json from the per-task `worktree`.
  */
 export function taskExemptReader(deps: ExemptReaderDeps, worktree: string): ExemptReader {
-  return new DefaultExemptReader({
-    specDir: specDir(deps.dataDir, deps.spec.repo, deps.spec.spec_id),
-    worktree,
-  });
+    return new DefaultExemptReader({
+        specDir: specDir(deps.dataDir, deps.spec.repo, deps.spec.spec_id),
+        worktree,
+    })
 }

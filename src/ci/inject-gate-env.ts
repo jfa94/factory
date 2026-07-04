@@ -11,8 +11,10 @@
  * so an injected file stays byte-identical across re-runs).
  */
 
+import {at, nonNull} from '../shared/index.js'
+
 /** The marker line the build step carries; replaced in place by the `env:` block. */
-const SENTINEL = "# factory:gate-env";
+const SENTINEL = '# factory:gate-env'
 
 /**
  * Replace the `# factory:gate-env` marker line in `text` with a real `env:` block
@@ -26,18 +28,19 @@ const SENTINEL = "# factory:gate-env";
  * holds; exotic YAML chars in a value aren't a real concern for CI placeholders.
  */
 export function injectGateEnvIntoWorkflow(text: string, gateEnv: Record<string, string>): string {
-  const keys = Object.keys(gateEnv).sort();
-  if (keys.length === 0) return text;
+    const keys = Object.keys(gateEnv).sort()
+    if (keys.length === 0) {
+        return text
+    }
 
-  const lines = text.split("\n");
-  const idx = lines.findIndex((l) => l.trim() === SENTINEL);
-  if (idx === -1) return text;
+    const lines = text.split('\n')
+    const idx = lines.findIndex((l) => l.trim() === SENTINEL)
+    if (idx === -1) {
+        return text
+    }
 
-  const indent = lines[idx]!.match(/^[ \t]*/)![0];
-  const block = [
-    `${indent}env:`,
-    ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(gateEnv[k]!)}`),
-  ];
-  lines.splice(idx, 1, ...block);
-  return lines.join("\n");
+    const indent = nonNull(/^[ \t]*/.exec(at(lines, idx)))[0]
+    const block = [`${indent}env:`, ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(nonNull(gateEnv[k]))}`)]
+    lines.splice(idx, 1, ...block)
+    return lines.join('\n')
 }

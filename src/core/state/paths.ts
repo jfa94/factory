@@ -16,13 +16,13 @@
  * (the slash and any unsafe char recorded to '-') so the spec store is one flat,
  * inspectable directory level per repo.
  */
-import { join } from "node:path";
-import { validateId } from "../../shared/ids.js";
+import {join} from 'node:path'
+import {validateId} from '../../shared/ids.js'
 
 /** Subdir name for the durable spec store. */
-export const SPECS_DIR = "specs";
+export const SPECS_DIR = 'specs'
 /** Subdir name for the TRANSIENT spec-build scratch area. */
-export const SPEC_BUILD_DIR = "spec-build";
+export const SPEC_BUILD_DIR = 'spec-build'
 /**
  * Subdir under a target repo's `docs/` for the IN-REPO reviewable spec copy
  * (F-specloc). The durable spec's canonical home stays the out-of-repo dataDir
@@ -30,18 +30,18 @@ export const SPEC_BUILD_DIR = "spec-build";
  * alongside it. It is implementer-immutable — the TCB write-deny protects
  * `docs/factory/**` exactly as it does `.github/workflows/**`.
  */
-export const DOCS_FACTORY_DIR = "factory";
+export const DOCS_FACTORY_DIR = 'factory'
 /** Subdir name for the ephemeral run store. */
-export const RUNS_DIR = "runs";
+export const RUNS_DIR = 'runs'
 /**
  * Subdir name for per-task worktrees. A worktree lives at
  * `<dataDir>/worktrees/<run-id>/<task-id>` — a SIBLING of the TCB-write-denied
  * `runs/`/`specs/` trees, so an implementer CAN write inside its own worktree while
  * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
  */
-export const WORKTREES_DIR = "worktrees";
+export const WORKTREES_DIR = 'worktrees'
 /** Symlink name pointing at the active run (legacy GLOBAL "most-recent" pointer). */
-export const CURRENT_LINK = "current";
+export const CURRENT_LINK = 'current'
 /**
  * Subdir name for the PER-REPO current pointers (run-isolation L2.7). A pointer
  * lives at `<dataDir>/current/<repo-key>` → `../runs/<run-id>`, in a tree SEPARATE
@@ -50,15 +50,15 @@ export const CURRENT_LINK = "current";
  * human CLI resolves per checkout; the legacy global `runs/current` stays as the
  * repo-less "most-recent" fallback.
  */
-export const CURRENT_DIR = "current";
+export const CURRENT_DIR = 'current'
 /** The per-run state file name. */
-export const STATE_FILE = "state.json";
+export const STATE_FILE = 'state.json'
 /** The per-run append-only metrics log (WS12 telemetry sink). */
-export const METRICS_FILE = "metrics.jsonl";
+export const METRICS_FILE = 'metrics.jsonl'
 /** The per-run append-only audit log (WS12). */
-export const AUDIT_FILE = "audit.jsonl";
+export const AUDIT_FILE = 'audit.jsonl'
 /** The per-run persisted partial/finalize report (WS12). */
-export const REPORT_FILE = "report.md";
+export const REPORT_FILE = 'report.md'
 
 /**
  * Sanitize a repo id (e.g. "owner/name") into a single safe path segment.
@@ -68,73 +68,73 @@ export const REPORT_FILE = "report.md";
  * keeps case and dots and does not truncate.
  */
 export function repoKey(repo: string): string {
-  const key = repo
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "");
-  if (key.length === 0) {
-    throw new Error(`repoKey: repo '${repo}' has no usable characters`);
-  }
-  // Dots are kept for addressability (e.g. "My.Repo"), but a PURE-dot segment is
-  // a path-traversal escape: `repoKey("..")` would yield ".." and let specDir()
-  // climb out of the spec store. validateId already rejects this for run-id and
-  // spec-id; repo is the one segment that bypasses it, so reject it loudly here.
-  if (/^\.+$/.test(key)) {
-    throw new Error(`repoKey: repo '${repo}' resolves to a path-traversal segment '${key}'`);
-  }
-  return key;
+    const key = repo
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+/, '')
+        .replace(/-+$/, '')
+    if (key.length === 0) {
+        throw new Error(`repoKey: repo '${repo}' has no usable characters`)
+    }
+    // Dots are kept for addressability (e.g. "My.Repo"), but a PURE-dot segment is
+    // a path-traversal escape: `repoKey("..")` would yield ".." and let specDir()
+    // climb out of the spec store. validateId already rejects this for run-id and
+    // spec-id; repo is the one segment that bypasses it, so reject it loudly here.
+    if (/^\.+$/.test(key)) {
+        throw new Error(`repoKey: repo '${repo}' resolves to a path-traversal segment '${key}'`)
+    }
+    return key
 }
 
 /** `<dataDir>/runs`. */
 export function runsRoot(dataDir: string): string {
-  return join(dataDir, RUNS_DIR);
+    return join(dataDir, RUNS_DIR)
 }
 
 /** `<dataDir>/worktrees` — the per-task worktree root (sibling of `runs/`/`specs/`). */
 export function worktreesRoot(dataDir: string): string {
-  return join(dataDir, WORKTREES_DIR);
+    return join(dataDir, WORKTREES_DIR)
 }
 
 /** `<dataDir>/runs/<run-id>`. Validates run-id charset. */
 export function runDir(dataDir: string, runId: string): string {
-  validateId(runId, "run-id");
-  return join(runsRoot(dataDir), runId);
+    validateId(runId, 'run-id')
+    return join(runsRoot(dataDir), runId)
 }
 
 /** `<dataDir>/runs/<run-id>/state.json`. */
 export function runStatePath(dataDir: string, runId: string): string {
-  return join(runDir(dataDir, runId), STATE_FILE);
+    return join(runDir(dataDir, runId), STATE_FILE)
 }
 
 /** `<dataDir>/runs/<run-id>/metrics.jsonl` — the append-only telemetry sink (WS12). */
 export function runMetricsPath(dataDir: string, runId: string): string {
-  return join(runDir(dataDir, runId), METRICS_FILE);
+    return join(runDir(dataDir, runId), METRICS_FILE)
 }
 
 /** `<dataDir>/runs/<run-id>/audit.jsonl` — the append-only audit log (WS12). */
 export function runAuditPath(dataDir: string, runId: string): string {
-  return join(runDir(dataDir, runId), AUDIT_FILE);
+    return join(runDir(dataDir, runId), AUDIT_FILE)
 }
 
 /** `<dataDir>/runs/<run-id>/report.md` — the persisted finalize/partial report (WS12). */
 export function runReportPath(dataDir: string, runId: string): string {
-  return join(runDir(dataDir, runId), REPORT_FILE);
+    return join(runDir(dataDir, runId), REPORT_FILE)
 }
 
 /** `<dataDir>/runs/<run-id>/coverage` — the per-tree-SHA coverage summary store (S8). */
 export function runCoverageDir(dataDir: string, runId: string): string {
-  return join(runDir(dataDir, runId), "coverage");
+    return join(runDir(dataDir, runId), 'coverage')
 }
 
 /** `<dataDir>/runs/current` symlink path — the legacy GLOBAL "most-recent" pointer. */
 export function currentLinkPath(dataDir: string): string {
-  return join(runsRoot(dataDir), CURRENT_LINK);
+    return join(runsRoot(dataDir), CURRENT_LINK)
 }
 
 /** `<dataDir>/current` — the per-repo pointer tree (sibling of `runs/`, L2.7). */
 export function currentRepoRoot(dataDir: string): string {
-  return join(dataDir, CURRENT_DIR);
+    return join(dataDir, CURRENT_DIR)
 }
 
 /**
@@ -143,12 +143,12 @@ export function currentRepoRoot(dataDir: string): string {
  * pure-dot traversal segment), so a hostile repo id cannot escape the pointer tree.
  */
 export function currentRepoLinkPath(dataDir: string, repo: string): string {
-  return join(currentRepoRoot(dataDir), repoKey(repo));
+    return join(currentRepoRoot(dataDir), repoKey(repo))
 }
 
 /** `<dataDir>/specs`. */
 export function specsRoot(dataDir: string): string {
-  return join(dataDir, SPECS_DIR);
+    return join(dataDir, SPECS_DIR)
 }
 
 /**
@@ -156,8 +156,8 @@ export function specsRoot(dataDir: string): string {
  * Keyed by (repo, spec-id), reused across runs. `spec-id` charset is validated.
  */
 export function specDir(dataDir: string, repo: string, specId: string): string {
-  validateId(specId, "spec-id");
-  return join(specsRoot(dataDir), repoKey(repo), specId);
+    validateId(specId, 'spec-id')
+    return join(specsRoot(dataDir), repoKey(repo), specId)
 }
 
 /**
@@ -174,13 +174,13 @@ export function specDir(dataDir: string, repo: string, specId: string): string {
  * an implementer cannot weaken its own acceptance criteria via the in-repo copy.
  */
 export function docsFactoryDir(docsRoot: string, specId: string): string {
-  validateId(specId, "spec-id");
-  return join(docsRoot, DOCS_FACTORY_DIR, specId);
+    validateId(specId, 'spec-id')
+    return join(docsRoot, DOCS_FACTORY_DIR, specId)
 }
 
 /** `<dataDir>/spec-build`. */
 export function specBuildRoot(dataDir: string): string {
-  return join(dataDir, SPEC_BUILD_DIR);
+    return join(dataDir, SPEC_BUILD_DIR)
 }
 
 /**
@@ -192,8 +192,8 @@ export function specBuildRoot(dataDir: string): string {
  * for one generate/review loop.
  */
 export function specBuildDir(dataDir: string, repo: string, issueNumber: number): string {
-  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-    throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`);
-  }
-  return join(specBuildRoot(dataDir), repoKey(repo), String(issueNumber));
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+        throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`)
+    }
+    return join(specBuildRoot(dataDir), repoKey(repo), String(issueNumber))
 }

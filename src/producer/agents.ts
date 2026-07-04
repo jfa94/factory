@@ -21,11 +21,11 @@
  * (classify.ts) reads this union to decide whether a failure burns a rung or fails
  * immediately (Δ D).
  */
-import type { ProducerRole } from "../types/index.js";
-import type { ProducerContext } from "./prompt-context.js";
+import type {ProducerRole} from '../types/index.js'
+import type {ProducerContext} from './prompt-context.js'
 
 /** The producer roles, re-exported as the WS8 vocabulary (TDD order: tests first). */
-export type { ProducerRole } from "../types/index.js";
+export type {ProducerRole} from '../types/index.js'
 
 /**
  * A producer spawn request the WS10 runner consumes to launch the agent. `model`
@@ -33,17 +33,17 @@ export type { ProducerRole } from "../types/index.js";
  * carries the rung-2 prior-failure "don't do this" summary (empty on rung 0/1).
  */
 export interface ProducerSpawn {
-  /** Which producer role to spawn (test-writer first, then implementer). */
-  readonly role: ProducerRole;
-  /**
-   * The model to spawn on — the WS5/WS4 dial output for the current rung
-   * (model-dial.ts). NEVER a hardcoded model id.
-   */
-  readonly model: string;
-  /** Max agent turns (config.testWriter.maxTurns / a producer cap). */
-  readonly maxTurns: number;
-  /** Structured prompt context (prompt-context.ts assembles it). */
-  readonly context: ProducerContext;
+    /** Which producer role to spawn (test-writer first, then implementer). */
+    readonly role: ProducerRole
+    /**
+     * The model to spawn on — the WS5/WS4 dial output for the current rung
+     * (model-dial.ts). NEVER a hardcoded model id.
+     */
+    readonly model: string
+    /** Max agent turns (config.testWriter.maxTurns / a producer cap). */
+    readonly maxTurns: number
+    /** Structured prompt context (prompt-context.ts assembles it). */
+    readonly context: ProducerContext
 }
 
 /**
@@ -70,11 +70,11 @@ export interface ProducerSpawn {
  *                          retryable producer failure, never an auto-advance.
  */
 export type ProducerOutcome =
-  | { readonly status: "done" }
-  | { readonly status: "blocked-escalate"; readonly reason: string }
-  | { readonly status: "test-defective"; readonly reason: string }
-  | { readonly status: "needs-context"; readonly reason: string }
-  | { readonly status: "error"; readonly reason: string };
+    | {readonly status: 'done'}
+    | {readonly status: 'blocked-escalate'; readonly reason: string}
+    | {readonly status: 'test-defective'; readonly reason: string}
+    | {readonly status: 'needs-context'; readonly reason: string}
+    | {readonly status: 'error'; readonly reason: string}
 
 /**
  * The injectable producer-agent boundary. The real impl (WS10) drives a live
@@ -82,8 +82,8 @@ export type ProducerOutcome =
  * line via {@link parseProducerStatus}; units inject a fake.
  */
 export interface ProducerAgentRunner {
-  /** Run one producer spawn (test-writer or implementer) and return its outcome. */
-  run(spawn: ProducerSpawn): Promise<ProducerOutcome>;
+    /** Run one producer spawn (test-writer or implementer) and return its outcome. */
+    run(spawn: ProducerSpawn): Promise<ProducerOutcome>
 }
 
 /**
@@ -100,36 +100,37 @@ export interface ProducerAgentRunner {
  * silently `done` — a producer must not advance on an unparseable status.
  */
 export function parseProducerStatus(raw: string): ProducerOutcome {
-  const line = raw.trim();
-  const upper = line.toUpperCase();
+    const line = raw.trim()
+    const upper = line.toUpperCase()
 
-  // BLOCKED must be checked before DONE: a "BLOCKED — escalate" line could
-  // otherwise be mis-read if the keywords co-occur. The escalate signal wins.
-  if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
-    // The CONTIGUOUS phrase "test requires revision" distinguishes a wrong RED
-    // test (recoverable — regenerate the test) from a genuine spec contradiction
-    // (terminal spec-defect). Contiguity is deliberate: a non-contiguous mention
-    // like "the criterion for the test requires revision" stays a spec-defect.
-    if (upper.includes("TEST REQUIRES REVISION")) {
-      return { status: "test-defective", reason: line };
+    // BLOCKED must be checked before DONE: a "BLOCKED — escalate" line could
+    // otherwise be mis-read if the keywords co-occur. The escalate signal wins.
+    if (upper.includes('BLOCKED') && upper.includes('ESCALATE')) {
+        // The CONTIGUOUS phrase "test requires revision" distinguishes a wrong RED
+        // test (recoverable — regenerate the test) from a genuine spec contradiction
+        // (terminal spec-defect). Contiguity is deliberate: a non-contiguous mention
+        // like "the criterion for the test requires revision" stays a spec-defect.
+        if (upper.includes('TEST REQUIRES REVISION')) {
+            return {status: 'test-defective', reason: line}
+        }
+        return {status: 'blocked-escalate', reason: line}
     }
-    return { status: "blocked-escalate", reason: line };
-  }
-  if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
-    return { status: "needs-context", reason: line };
-  }
-  // Leading-keyword anchor: must start with (optional "STATUS:") then "DONE" as a
-  // whole word, OR the scribe's documented `DONE_WITH_CONCERNS` success-with-note
-  // variant (agents/scribe.md) — `_` is a word char, so a bare `DONE\b` rejects it
-  // and would suspend a docs stage the scribe actually finished (S12 smoke defect).
-  // A bare includes("DONE") silently matches "NOT DONE" and "ABANDONED" (contains
-  // "done" in "aban-DONE-d"). The strict direction is correct: a false-negative is a
-  // loud producer error retry; a false-positive is a silent wrong success.
-  if (/^(?:STATUS\s*:\s*)?DONE(?:_WITH_CONCERNS)?\b/.test(upper)) {
-    return { status: "done" };
-  }
-  return {
-    status: "error",
-    reason: line.length > 0 ? `unparseable producer status: ${line}` : "empty producer status",
-  };
+    if (upper.includes('NEEDS_CONTEXT') || upper.includes('NEEDS CONTEXT')) {
+        return {status: 'needs-context', reason: line}
+    }
+    // Leading-keyword anchor: must start with (optional "STATUS:") then "DONE" as a
+    // whole word, OR the scribe's documented `DONE_WITH_CONCERNS` success-with-note
+    // variant (agents/scribe.md) — `_` is a word char, so a bare `DONE\b` rejects it
+    // and would suspend a docs stage the scribe actually finished (S12 smoke defect).
+    // A bare includes("DONE") silently matches "NOT DONE" and "ABANDONED" (contains
+    // "done" in "aban-DONE-d"). The strict direction is correct: a false-negative is a
+    // loud producer error retry; a false-positive is a silent wrong success.
+    // eslint-disable-next-line security/detect-unsafe-regex -- safe-regex false positive: bounded `?` groups, the two `\s*` separated by a literal `:`; ReDoS-audited linear
+    if (/^(?:STATUS\s*:\s*)?DONE(?:_WITH_CONCERNS)?\b/.test(upper)) {
+        return {status: 'done'}
+    }
+    return {
+        status: 'error',
+        reason: line.length > 0 ? `unparseable producer status: ${line}` : 'empty producer status',
+    }
 }

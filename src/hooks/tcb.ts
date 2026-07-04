@@ -40,24 +40,24 @@
  * on disk, realpath-resolved before matching, so `./`, `..`, and symlink
  * escapes all collapse to the same canonical path the rule matches.
  */
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, normalize, resolve, sep } from "node:path";
-import {
-  STRYKER_CONFIG_BASENAMES,
-  DEPENDENCY_CRUISER_CONFIG_BASENAMES,
-} from "../shared/gate-config-names.js";
-import type { TcbCategory, TcbRule, TcbMatch, TcbContext } from "../types/tcb.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- read-only path canonicalization (realpath/exists) for the TCB guard's own decision; no writes, the paths are the ones under evaluation */
+import {existsSync, realpathSync} from 'node:fs'
+import {isAbsolute, normalize, resolve, sep} from 'node:path'
+import {STRYKER_CONFIG_BASENAMES, DEPENDENCY_CRUISER_CONFIG_BASENAMES} from '../shared/gate-config-names.js'
+import type {TcbCategory, TcbRule, TcbMatch, TcbContext} from '../types/tcb.js'
 
 // The TCB structural types (TcbCategory, TcbRule, TcbMatch, TcbContext) now live
 // in the foundational `src/types/tcb.ts` leaf — imported above and re-exported
 // here so the type facade points DOWN (hooks → types) while existing consumers
 // (write-protection, hooks/index, types/index) still resolve them from `./tcb.js`.
-export type { TcbCategory, TcbRule, TcbMatch, TcbContext };
+export type {TcbCategory, TcbRule, TcbMatch, TcbContext}
 
 /** Normalize a path segment test: is `p` equal to `base` or under `base/`? */
 function isAtOrUnder(p: string, base: string): boolean {
-  if (p === base) return true;
-  return p.startsWith(base.endsWith(sep) ? base : base + sep);
+    if (p === base) {
+        return true
+    }
+    return p.startsWith(base.endsWith(sep) ? base : base + sep)
 }
 
 /**
@@ -70,46 +70,50 @@ function isAtOrUnder(p: string, base: string): boolean {
  * canonical prefix.
  */
 function canonicalizeAnchor(dir: string): string {
-  const normalized = normalize(resolve(dir));
-  try {
-    if (existsSync(normalized)) return realpathSync(normalized);
-  } catch {
-    /* fall through */
-  }
-  const parts = normalized.split(sep);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep) || sep;
+    const normalized = normalize(resolve(dir))
     try {
-      if (existsSync(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep);
-        return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor;
-      }
+        if (existsSync(normalized)) {
+            return realpathSync(normalized)
+        }
     } catch {
-      /* keep walking up */
+        /* fall through */
     }
-  }
-  return normalized;
+    const parts = normalized.split(sep)
+    for (let cut = parts.length - 1; cut > 0; cut--) {
+        const ancestor = parts.slice(0, cut).join(sep) || sep
+        try {
+            if (existsSync(ancestor)) {
+                const realAncestor = realpathSync(ancestor)
+                const tail = parts.slice(cut).join(sep)
+                return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor
+            }
+        } catch {
+            /* keep walking up */
+        }
+    }
+    return normalized
 }
 
 /** Does the absolute path contain the given path component (e.g. ".github")? */
 function hasComponent(absPath: string, component: string): boolean {
-  return absPath.split(sep).includes(component);
+    return absPath.split(sep).includes(component)
 }
 
 /** Does the absolute path contain `parent/child` as adjacent components? */
 function hasAdjacentComponents(absPath: string, parent: string, child: string): boolean {
-  const parts = absPath.split(sep);
-  for (let i = 0; i + 1 < parts.length; i++) {
-    if (parts[i] === parent && parts[i + 1] === child) return true;
-  }
-  return false;
+    const parts = absPath.split(sep)
+    for (let i = 0; i + 1 < parts.length; i++) {
+        if (parts[i] === parent && parts[i + 1] === child) {
+            return true
+        }
+    }
+    return false
 }
 
 /** The basename of an absolute path (last non-empty component). */
 function baseName(absPath: string): string {
-  const parts = absPath.split(sep).filter((s) => s.length > 0);
-  return parts[parts.length - 1] ?? "";
+    const parts = absPath.split(sep).filter((s) => s.length > 0)
+    return parts[parts.length - 1] ?? ''
 }
 
 /**
@@ -125,10 +129,7 @@ function baseName(absPath: string): string {
  * `tcb-stryker-discovery` and `tcb-depcruise-discovery` drift-guard tests pin
  * this set ⊇ each discovery list.
  */
-const GATE_CONFIG_BASENAMES = new Set<string>([
-  ...STRYKER_CONFIG_BASENAMES,
-  ...DEPENDENCY_CRUISER_CONFIG_BASENAMES,
-]);
+const GATE_CONFIG_BASENAMES = new Set<string>([...STRYKER_CONFIG_BASENAMES, ...DEPENDENCY_CRUISER_CONFIG_BASENAMES])
 
 /**
  * Build the rule set. Pure function of {@link TcbContext} (path resolution only).
@@ -140,123 +141,122 @@ const GATE_CONFIG_BASENAMES = new Set<string>([
  * influence the denylist.
  */
 export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
-  const rules: TcbRule[] = [];
+    const rules: TcbRule[] = []
 
-  // 1. CI workflows: any `.github/workflows/**` path, anchored to a component so
-  //    a benign `my.github/workflows` dir is not protected by accident. We match
-  //    on the component pair so it fires for both in-repo and absolute forms.
-  rules.push({
-    category: "ci-workflows",
-    describe: ".github/workflows/** (CI / quality-gate machinery)",
-    test: (p) => hasAdjacentComponents(p, ".github", "workflows"),
-  });
+    // 1. CI workflows: any `.github/workflows/**` path, anchored to a component so
+    //    a benign `my.github/workflows` dir is not protected by accident. We match
+    //    on the component pair so it fires for both in-repo and absolute forms.
+    rules.push({
+        category: 'ci-workflows',
+        describe: '.github/workflows/** (CI / quality-gate machinery)',
+        test: (p) => hasAdjacentComponents(p, '.github', 'workflows'),
+    })
 
-  // 1b. In-repo reviewable spec copy: any `docs/factory/**` path (F-specloc).
-  //     Anchored to the component pair so a benign `mydocs/factory` is not caught
-  //     by accident and so it fires for both in-repo and absolute forms — exactly
-  //     like the .github/workflows rule. Context-free: the in-repo mirror's
-  //     acceptance criteria are implementer-immutable regardless of where the data
-  //     dir resolves.
-  rules.push({
-    category: "docs-factory",
-    describe: "docs/factory/** (in-repo reviewable spec copy — F-specloc)",
-    test: (p) => hasAdjacentComponents(p, "docs", "factory"),
-  });
+    // 1b. In-repo reviewable spec copy: any `docs/factory/**` path (F-specloc).
+    //     Anchored to the component pair so a benign `mydocs/factory` is not caught
+    //     by accident and so it fires for both in-repo and absolute forms — exactly
+    //     like the .github/workflows rule. Context-free: the in-repo mirror's
+    //     acceptance criteria are implementer-immutable regardless of where the data
+    //     dir resolves.
+    rules.push({
+        category: 'docs-factory',
+        describe: 'docs/factory/** (in-repo reviewable spec copy — F-specloc)',
+        test: (p) => hasAdjacentComponents(p, 'docs', 'factory'),
+    })
 
-  // 1c. The gate contract (S7, Decision 46): `.factory/gates.json`. The committed
-  //     scaffold-time agreement on which gates apply — a producer that could edit
-  //     it could waive its own gates (the exact silent-skip the contract kills).
-  //     Component-pair anchored like docs/factory so a benign `my.factory/gates.json`
-  //     is not caught and both in-repo and absolute forms fire.
-  rules.push({
-    category: "gate-contract",
-    describe: ".factory/gates.json (the committed gate contract — Decision 46)",
-    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json"),
-  });
+    // 1c. The gate contract (S7, Decision 46): `.factory/gates.json`. The committed
+    //     scaffold-time agreement on which gates apply — a producer that could edit
+    //     it could waive its own gates (the exact silent-skip the contract kills).
+    //     Component-pair anchored like docs/factory so a benign `my.factory/gates.json`
+    //     is not caught and both in-repo and absolute forms fire.
+    rules.push({
+        category: 'gate-contract',
+        describe: '.factory/gates.json (the committed gate contract — Decision 46)',
+        test: (p) => hasAdjacentComponents(p, '.factory', 'gates.json'),
+    })
 
-  // 2. Gate/CI config files at the repo root (matched by basename so the rule is
-  //    location-tolerant; an implementer cannot dodge it by passing an absolute
-  //    path). The scaffold templates that seed these live under templates/.
-  rules.push({
-    category: "gate-config",
-    describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
-    test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p)),
-  });
+    // 2. Gate/CI config files at the repo root (matched by basename so the rule is
+    //    location-tolerant; an implementer cannot dodge it by passing an absolute
+    //    path). The scaffold templates that seed these live under templates/.
+    rules.push({
+        category: 'gate-config',
+        describe: 'gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)',
+        test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p)),
+    })
 
-  // 3. The guard hooks themselves: `hooks/**`. Anchored to the repoRoot when
-  //    known (so only THIS repo's hooks dir is protected), else component-based.
-  if (ctx.repoRoot) {
-    const hooksDir = canonicalizeAnchor(resolve(ctx.repoRoot, "hooks"));
-    rules.push({
-      category: "hooks",
-      describe: "hooks/** (the guard hooks — editing one disables the boundary)",
-      test: (p) => isAtOrUnder(p, hooksDir),
-    });
-  } else {
-    rules.push({
-      category: "hooks",
-      describe: "hooks/** (the guard hooks — editing one disables the boundary)",
-      test: (p) => hasComponent(p, "hooks"),
-    });
-  }
+    // 3. The guard hooks themselves: `hooks/**`. Anchored to the repoRoot when
+    //    known (so only THIS repo's hooks dir is protected), else component-based.
+    if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
+        const hooksDir = canonicalizeAnchor(resolve(ctx.repoRoot, 'hooks'))
+        rules.push({
+            category: 'hooks',
+            describe: 'hooks/** (the guard hooks — editing one disables the boundary)',
+            test: (p) => isAtOrUnder(p, hooksDir),
+        })
+    } else {
+        rules.push({
+            category: 'hooks',
+            describe: 'hooks/** (the guard hooks — editing one disables the boundary)',
+            test: (p) => hasComponent(p, 'hooks'),
+        })
+    }
 
-  // 3b. The committed critical e2e suite: `e2e/**` (Decision 39). Persistence IS
-  //     the criticality signal — an implementer that could edit a committed spec
-  //     could make its own feature's failing journey pass without fixing the bug.
-  //     Only the e2e-author agent (never the implementer/test-writer) writes here.
-  //     Hardcoded to the literal "e2e" component per the Δ W invariant above (no
-  //     config parameter) — a repo that customizes `e2e.testDir` away from the
-  //     default is NOT covered by this rule; a known limitation, not a bypass path
-  //     an implementer can reach (it can't set config either).
-  if (ctx.repoRoot) {
-    const e2eDir = canonicalizeAnchor(resolve(ctx.repoRoot, "e2e"));
-    rules.push({
-      category: "e2e-suite",
-      describe: "e2e/** (committed critical e2e suite — Decision 39)",
-      test: (p) => isAtOrUnder(p, e2eDir),
-    });
-  } else {
-    rules.push({
-      category: "e2e-suite",
-      describe: "e2e/** (committed critical e2e suite — Decision 39)",
-      test: (p) => hasComponent(p, "e2e"),
-    });
-  }
+    // 3b. The committed critical e2e suite: `e2e/**` (Decision 39). Persistence IS
+    //     the criticality signal — an implementer that could edit a committed spec
+    //     could make its own feature's failing journey pass without fixing the bug.
+    //     Only the e2e-author agent (never the implementer/test-writer) writes here.
+    //     Hardcoded to the literal "e2e" component per the Δ W invariant above (no
+    //     config parameter) — a repo that customizes `e2e.testDir` away from the
+    //     default is NOT covered by this rule; a known limitation, not a bypass path
+    //     an implementer can reach (it can't set config either).
+    if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
+        const e2eDir = canonicalizeAnchor(resolve(ctx.repoRoot, 'e2e'))
+        rules.push({
+            category: 'e2e-suite',
+            describe: 'e2e/** (committed critical e2e suite — Decision 39)',
+            test: (p) => isAtOrUnder(p, e2eDir),
+        })
+    } else {
+        rules.push({
+            category: 'e2e-suite',
+            describe: 'e2e/** (committed critical e2e suite — Decision 39)',
+            test: (p) => hasComponent(p, 'e2e'),
+        })
+    }
 
-  // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
-  //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
-  if (ctx.dataDir) {
-    const runsDir = canonicalizeAnchor(resolve(ctx.dataDir, "runs"));
-    const specsDir = canonicalizeAnchor(resolve(ctx.dataDir, "specs"));
-    rules.push({
-      category: "data-runs",
-      describe: "<dataDir>/runs/** (run state, holdouts, reviews — Δ Y)",
-      test: (p) => isAtOrUnder(p, runsDir),
-    });
-    rules.push({
-      category: "data-specs",
-      describe: "<dataDir>/specs/** (durable spec store)",
-      test: (p) => isAtOrUnder(p, specsDir),
-    });
-    const configFile = canonicalizeAnchor(resolve(ctx.dataDir, "config.json"));
-    rules.push({
-      category: "data-config",
-      describe:
-        "<dataDir>/config.json (operator config — writing it enables arbitrary shell via setupCommand)",
-      test: (p) => p === configFile,
-    });
-  } else {
-    // No data dir resolved: still protect by the canonical store component pair
-    // so a Bash absolute-path write to a known data dir layout is denied even
-    // before the dir is wired into ctx (defense-in-depth).
-    rules.push({
-      category: "data-runs",
-      describe: "**/runs/{holdouts,reviews,state} (run store, dataDir unresolved)",
-      test: (p) => hasComponent(p, "holdouts") || hasComponent(p, "reviews"),
-    });
-  }
+    // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
+    //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
+    if (ctx.dataDir != null && ctx.dataDir.length > 0) {
+        const runsDir = canonicalizeAnchor(resolve(ctx.dataDir, 'runs'))
+        const specsDir = canonicalizeAnchor(resolve(ctx.dataDir, 'specs'))
+        rules.push({
+            category: 'data-runs',
+            describe: '<dataDir>/runs/** (run state, holdouts, reviews — Δ Y)',
+            test: (p) => isAtOrUnder(p, runsDir),
+        })
+        rules.push({
+            category: 'data-specs',
+            describe: '<dataDir>/specs/** (durable spec store)',
+            test: (p) => isAtOrUnder(p, specsDir),
+        })
+        const configFile = canonicalizeAnchor(resolve(ctx.dataDir, 'config.json'))
+        rules.push({
+            category: 'data-config',
+            describe: '<dataDir>/config.json (operator config — writing it enables arbitrary shell via setupCommand)',
+            test: (p) => p === configFile,
+        })
+    } else {
+        // No data dir resolved: still protect by the canonical store component pair
+        // so a Bash absolute-path write to a known data dir layout is denied even
+        // before the dir is wired into ctx (defense-in-depth).
+        rules.push({
+            category: 'data-runs',
+            describe: '**/runs/{holdouts,reviews,state} (run store, dataDir unresolved)',
+            test: (p) => hasComponent(p, 'holdouts') || hasComponent(p, 'reviews'),
+        })
+    }
 
-  return rules;
+    return rules
 }
 
 /**
@@ -264,7 +264,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
  * component-anchored rules even without a wired repo/data dir. Production callers
  * pass a context via {@link isTcbProtected} so the absolute store paths match.
  */
-export const TCB_DENY: readonly TcbRule[] = buildTcbRules();
+export const TCB_DENY: readonly TcbRule[] = buildTcbRules()
 
 /**
  * Canonicalize a candidate path for matching: resolve to absolute (relative to
@@ -273,32 +273,32 @@ export const TCB_DENY: readonly TcbRule[] = buildTcbRules();
  * path falls back to its normalized absolute form (the write may be a create).
  */
 export function canonicalizePath(candidate: string, cwd: string = process.cwd()): string {
-  const abs = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
-  const normalized = normalize(abs);
-  // Realpath the deepest existing ancestor so a symlinked parent dir is resolved
-  // even when the leaf file does not yet exist (a create through a symlink).
-  try {
-    if (existsSync(normalized)) {
-      return realpathSync(normalized);
-    }
-  } catch {
-    /* realpath can race; fall through to the normalized form */
-  }
-  // Walk up to the nearest existing ancestor, realpath it, re-append the tail.
-  const parts = normalized.split(sep);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep) || sep;
+    const abs = isAbsolute(candidate) ? candidate : resolve(cwd, candidate)
+    const normalized = normalize(abs)
+    // Realpath the deepest existing ancestor so a symlinked parent dir is resolved
+    // even when the leaf file does not yet exist (a create through a symlink).
     try {
-      if (existsSync(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep);
-        return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor;
-      }
+        if (existsSync(normalized)) {
+            return realpathSync(normalized)
+        }
     } catch {
-      /* keep walking up */
+        /* realpath can race; fall through to the normalized form */
     }
-  }
-  return normalized;
+    // Walk up to the nearest existing ancestor, realpath it, re-append the tail.
+    const parts = normalized.split(sep)
+    for (let cut = parts.length - 1; cut > 0; cut--) {
+        const ancestor = parts.slice(0, cut).join(sep) || sep
+        try {
+            if (existsSync(ancestor)) {
+                const realAncestor = realpathSync(ancestor)
+                const tail = parts.slice(cut).join(sep)
+                return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor
+            }
+        } catch {
+            /* keep walking up */
+        }
+    }
+    return normalized
 }
 
 /**
@@ -309,16 +309,18 @@ export function canonicalizePath(candidate: string, cwd: string = process.cwd())
  * `..`/`./`/symlink evasions resolve to the same deny as the direct path.
  */
 export function isTcbProtected(
-  candidatePath: string,
-  ctx: TcbContext = {},
-  cwd: string = process.cwd(),
+    candidatePath: string,
+    ctx: TcbContext = {},
+    cwd: string = process.cwd()
 ): TcbMatch | null {
-  if (candidatePath.length === 0) return null;
-  const canonical = canonicalizePath(candidatePath, cwd);
-  for (const rule of buildTcbRules(ctx)) {
-    if (rule.test(canonical)) {
-      return { rule, canonical };
+    if (candidatePath.length === 0) {
+        return null
     }
-  }
-  return null;
+    const canonical = canonicalizePath(candidatePath, cwd)
+    for (const rule of buildTcbRules(ctx)) {
+        if (rule.test(canonical)) {
+            return {rule, canonical}
+        }
+    }
+    return null
 }

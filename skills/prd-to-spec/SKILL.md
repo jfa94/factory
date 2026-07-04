@@ -109,50 +109,50 @@ empty or >3 `files` array, a dangling/cyclic `depends_on`, or any legacy field
 
 ```json
 {
-  "specMd": "# <feature> spec\n\n…architecture, decisions & assumptions, vertical slices, out-of-scope…",
-  "slug": "short-kebab-slug",
-  "tasks": [
-    {
-      "task_id": "auth-001",
-      "title": "Auth domain types and password hashing",
-      "description": "Create auth type definitions and bcrypt-based password hashing utilities",
-      "files": ["src/domain/auth/types.ts", "src/domain/auth/password.ts"],
-      "acceptance_criteria": [
-        "Password hash uses bcrypt with min 12 rounds",
-        "Hash and verify functions are pure — no side effects",
-        "Types cover User, Session, AuthError"
-      ],
-      "tests_to_write": [
-        "password.test.ts: hash produces a valid bcrypt string",
-        "password.test.ts: verify returns true for the correct password",
-        "password.test.ts: verify returns false for a wrong password",
-        "password.test.ts: hash with <12 rounds throws"
-      ],
-      "depends_on": [],
-      "risk_tier": "high",
-      "risk_rationale": "Credential handling — a hashing flaw is a security/data-loss risk"
-    },
-    {
-      "task_id": "auth-002",
-      "title": "Email validation and registration logic",
-      "description": "Create email validation in the domain layer and a registration service",
-      "files": ["src/domain/auth/validation.ts", "src/services/auth.service.ts"],
-      "acceptance_criteria": [
-        "Email validation rejects malformed addresses",
-        "Registration creates a user with a hashed password",
-        "Duplicate email returns a typed AuthError"
-      ],
-      "tests_to_write": [
-        "validation.test.ts: valid emails pass",
-        "validation.test.ts: malformed emails fail",
-        "auth.service.test.ts: register creates a user",
-        "auth.service.test.ts: duplicate email returns an error result"
-      ],
-      "depends_on": ["auth-001"],
-      "risk_tier": "medium",
-      "risk_rationale": "Core registration path; contained blast radius, well-covered by tests"
-    }
-  ]
+    "specMd": "# <feature> spec\n\n…architecture, decisions & assumptions, vertical slices, out-of-scope…",
+    "slug": "short-kebab-slug",
+    "tasks": [
+        {
+            "task_id": "auth-001",
+            "title": "Auth domain types and password hashing",
+            "description": "Create auth type definitions and bcrypt-based password hashing utilities",
+            "files": ["src/domain/auth/types.ts", "src/domain/auth/password.ts"],
+            "acceptance_criteria": [
+                "Password hash uses bcrypt with min 12 rounds",
+                "Hash and verify functions are pure — no side effects",
+                "Types cover User, Session, AuthError"
+            ],
+            "tests_to_write": [
+                "password.test.ts: hash produces a valid bcrypt string",
+                "password.test.ts: verify returns true for the correct password",
+                "password.test.ts: verify returns false for a wrong password",
+                "password.test.ts: hash with <12 rounds throws"
+            ],
+            "depends_on": [],
+            "risk_tier": "high",
+            "risk_rationale": "Credential handling — a hashing flaw is a security/data-loss risk"
+        },
+        {
+            "task_id": "auth-002",
+            "title": "Email validation and registration logic",
+            "description": "Create email validation in the domain layer and a registration service",
+            "files": ["src/domain/auth/validation.ts", "src/services/auth.service.ts"],
+            "acceptance_criteria": [
+                "Email validation rejects malformed addresses",
+                "Registration creates a user with a hashed password",
+                "Duplicate email returns a typed AuthError"
+            ],
+            "tests_to_write": [
+                "validation.test.ts: valid emails pass",
+                "validation.test.ts: malformed emails fail",
+                "auth.service.test.ts: register creates a user",
+                "auth.service.test.ts: duplicate email returns an error result"
+            ],
+            "depends_on": ["auth-001"],
+            "risk_tier": "medium",
+            "risk_rationale": "Core registration path; contained blast radius, well-covered by tests"
+        }
+    ]
 }
 ```
 

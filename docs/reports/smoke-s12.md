@@ -102,18 +102,18 @@ echo '{"model":{"display_name":"x"},"workspace":{"current_dir":"'"$PWD"'"},"sess
 
 Fill each row with **PASS/FAIL + evidence** during the run.
 
-| #   | Check                                                                                                                                                                                                     | Result     | Evidence                                                          |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
-| 1   | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run                                                                                      | 🟡 partial | Junk #2 **PASS** (see below); healthy-#1 spec-gen pending the run |
-| 2   | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips)                                         | ⬜         |                                                                   |
-| 3   | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues                                                                                          | ⬜         |                                                                   |
-| 4   | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1`                                                 | ⬜         |                                                                   |
-| 5   | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent                                                              | ⬜         |                                                                   |
-| 6   | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked                                                    | ⬜         |                                                                   |
-| 7   | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete                                                                                                                                    | ⬜         |                                                                   |
-| 8   | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch)                                                                                   | ⬜         |                                                                   |
-| 9   | **Statusline** — suffix live during the run; gone >30 min after terminal                                                                                                                                  | ⬜         |                                                                   |
-| 10  | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now) | ⬜         |                                                                   |
+| #   | Check                                                                                                                                                                                                                                  | Result     | Evidence                                                          |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| 1   | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run                                                                                                                   | 🟡 partial | Junk #2 **PASS** (see below); healthy-#1 spec-gen pending the run |
+| 2   | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips)                                                                      | ⬜         |                                                                   |
+| 3   | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues                                                                                                                       | ⬜         |                                                                   |
+| 4   | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1`                                                                              | ⬜         |                                                                   |
+| 5   | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent                                                                                           | ⬜         |                                                                   |
+| 6   | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked                                                                                 | ⬜         |                                                                   |
+| 7   | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete                                                                                                                                                                 | ⬜         |                                                                   |
+| 8   | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch). ⚠️ First run scored ~2.0 — docs-suspend defect **D1** forced a `resume`; fixed v1.19.2, clean re-run pending. | ⬜         |                                                                   |
+| 9   | **Statusline** — suffix live during the run; gone >30 min after terminal                                                                                                                                                               | ⬜         |                                                                   |
+| 10  | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now)                              | ⬜         |                                                                   |
 
 ---
 
@@ -125,13 +125,13 @@ deterministic and runs before generation, Decision 47):
 
 ```json
 {
-  "kind": "unspecifiable",
-  "repo": "jfa94/tipsplit-factory-smoke",
-  "issue": 2,
-  "blockers": [
-    "specifiability: PRD body is trivial (154 chars of content, minimum 200) — …",
-    "specifiability: no acceptance-criteria-shaped section — add an \"## Acceptance Criteria\" … section"
-  ]
+    "kind": "unspecifiable",
+    "repo": "jfa94/tipsplit-factory-smoke",
+    "issue": 2,
+    "blockers": [
+        "specifiability: PRD body is trivial (154 chars of content, minimum 200) — …",
+        "specifiability: no acceptance-criteria-shaped section — add an \"## Acceptance Criteria\" … section"
+    ]
 }
 ```
 
@@ -140,7 +140,26 @@ issues were filed: healthy #1 `passed: true`, junk #2 `passed: false`.
 
 ## Defects found
 
-_None yet — populated during the run. Each: symptom, root cause, fixed-vs-deferred, commit._
+**D1 — docs stage suspended on the scribe's own documented `DONE_WITH_CONCERNS` status (fixed, v1.19.2).**
+
+- **Symptom.** Phase A drove PRD #1 to merged PRs #5–#10 and passed traceability (13/13 met),
+  then the docs stage **suspended** instead of completing. The run only finished after a human
+  `factory resume` — a second `human_touches` entry, so the touch metric landed at **~2.0**, not
+  the lights-out **1.0**. (Run `run-20260704-134253`: `status: completed`, `human_touches:
+[launch, resume]`.)
+- **Root cause.** Internal contract mismatch. `agents/scribe.md` documents
+  `STATUS: DONE_WITH_CONCERNS` as a valid success-with-note, but `parseProducerStatus`
+  (`src/producer/agents.ts`) matched DONE with `/^…DONE\b/` — and `_` is a word char, so the
+  `\b` anchor misses `DONE_WITH_CONCERNS` → `error` → the docs handler (`src/orchestrator/docs.ts`)
+  suspends. The scribe followed its contract exactly; the parser never implemented the token.
+  **Not** caused by the concurrent strict-typecheck/lint sweep (runtime string-match in the
+  built dist; tsconfig strictness has no effect on it).
+- **Fix.** Anchor now also accepts the one documented variant
+  (`/^…DONE(?:_WITH_CONCERNS)?\b/`); `DONE_SOMETHING_ELSE`, `NOT DONE`, `ABANDONED` still error.
+  RED→GREEN unit test added. Commit `a3cba09`, merged `674a548` (`redesign/s12-smoke-fixes`,
+  `--no-ff`), v1.19.2.
+- **Re-run needed.** The affected run already completed via resume; a fresh Phase A run on
+  ≥v1.19.2 is required to confirm the docs stage completes lights-out and check 8 scores 1.0.
 
 ## Quota-spend observations
 

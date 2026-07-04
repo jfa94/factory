@@ -50,27 +50,27 @@ pointers it gathered. Treat any field as possibly absent:
 
 ```jsonc
 {
-  "run_id": "<run-id>",
-  "task": {
-    "task_id": "<task-id>",
-    "status": "dropped",
-    "disposition": "dead-end", // why you were called
-    "failure_class": "spec-defect | capability-budget",
-    "failure_reason": "<string>",
-    "branch": "<branch-or-absent>",
-    "pr_number": 42, // or absent
-    "work": {
-      // From `rescue scan`'s git-grounded survey. Read-only EVIDENCE, never an action.
-      "branch_exists": true, // the task branch still resolves
-      "commits_ahead": 4, // commits above the run's staging base, or null if uncountable
+    "run_id": "<run-id>",
+    "task": {
+        "task_id": "<task-id>",
+        "status": "dropped",
+        "disposition": "dead-end", // why you were called
+        "failure_class": "spec-defect | capability-budget",
+        "failure_reason": "<string>",
+        "branch": "<branch-or-absent>",
+        "pr_number": 42, // or absent
+        "work": {
+            // From `rescue scan`'s git-grounded survey. Read-only EVIDENCE, never an action.
+            "branch_exists": true, // the task branch still resolves
+            "commits_ahead": 4, // commits above the run's staging base, or null if uncountable
+        },
     },
-  },
-  "context": {
-    "worktree_path": "<abs-path-or-null>",
-    "review_files": ["<path>", "..."], // panel verdicts / finding-verifier output
-    "ci_logs_path": "<path-or-null>",
-    "spec_path": "<abs-path-or-null>", // the durable spec.md / tasks.json
-  },
+    "context": {
+        "worktree_path": "<abs-path-or-null>",
+        "review_files": ["<path>", "..."], // panel verdicts / finding-verifier output
+        "ci_logs_path": "<path-or-null>",
+        "spec_path": "<abs-path-or-null>", // the durable spec.md / tasks.json
+    },
 }
 ```
 
@@ -81,16 +81,16 @@ required):
 
 ```jsonc
 {
-  "decision": "reset | leave-dropped | no-action",
-  "reason": "<one paragraph: the root cause, and why it has or has not cleared>",
-  "evidence": ["<file:line>", "<log excerpt>", "..."],
-  "confidence": "high | medium | low",
+    "decision": "reset | leave-dropped | no-action",
+    "reason": "<one paragraph: the root cause, and why it has or has not cleared>",
+    "evidence": ["<file:line>", "<log excerpt>", "..."],
+    "confidence": "high | medium | low",
 }
 ```
 
 ## Decision semantics
 
-| decision        | when to choose                                                                                                                                                                                                                 | runner maps to                                                             |
+| decision        | when to choose                                                                                                                                                                                                                 | runner maps to                                                                   |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `reset`         | Ground truth shows the cause was environmental/transient and has plausibly cleared (a dep task has since shipped, a flaky tool/network failure, a spec ambiguity the PRD has since clarified). Re-attempting is worth a cycle. | `factory rescue apply --task <id>` (resets this one)                             |
 | `leave-dropped` | The drop is a determined failure: the spec genuinely cannot satisfy a criterion, or the model exhausted the escalation ladder on a real capability ceiling. Re-running repeats it.                                             | nothing — the task stays dropped; the run finalizes `failed` (develop untouched) |

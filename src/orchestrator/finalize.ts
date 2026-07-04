@@ -32,96 +32,94 @@
  * comment is still posted (the failures are real regardless of merge).
  */
 import {
-  decideFinalize,
-  rollup,
-  loadGateContract,
-  buildPartialReport,
-  renderPartialReportMarkdown,
-  renderFailureComment,
-  failureCommentMarker,
-  recordRunFinalized,
-  resolveStagingBranch,
-  scanRun,
-  effectiveAutoResets,
-  type Config,
-  type GhClient,
-  type GitClient,
-  type RunState,
-  type SpecManifest,
-  type StateManager,
-  type PartialRunReport,
-  type RollupArgs,
-  type RollupResult,
-} from "./deps.js";
-import type { ShipMode } from "./types.js";
-import { atomicWriteFile, createLogger, nowIso } from "../shared/index.js";
-import { runReportPath } from "../core/state/paths.js";
+    decideFinalize,
+    rollup,
+    loadGateContract,
+    buildPartialReport,
+    renderPartialReportMarkdown,
+    renderFailureComment,
+    failureCommentMarker,
+    recordRunFinalized,
+    resolveStagingBranch,
+    scanRun,
+    effectiveAutoResets,
+    type Config,
+    type GhClient,
+    type GitClient,
+    type RunState,
+    type SpecManifest,
+    type StateManager,
+    type PartialRunReport,
+    type RollupArgs,
+    type RollupResult,
+} from './deps.js'
+import type {ShipMode} from './types.js'
+import {atomicWriteFile, createLogger, nowIso} from '../shared/index.js'
+import {runReportPath} from '../core/state/paths.js'
 
-const log = createLogger("finalize");
+const log = createLogger('finalize')
 
 /** Comment body posted to the PRD issue when the rollup merges (Decision 34). */
 export function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
-  const prRef = rollupResult.url
-    ? `[#${rollupResult.number}](${rollupResult.url})`
-    : `#${rollupResult.number}`;
-  return (
-    `PRD delivered — all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.\n\n` +
-    `Spec: \`${report.spec_id}\` · Run: \`${report.run_id}\``
-  );
+    const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`
+    return (
+        `PRD delivered — all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.\n\n` +
+        `Spec: \`${report.spec_id}\` · Run: \`${report.run_id}\``
+    )
 }
 
 /** The deps the finalize coordinator needs — a subset of {@link import("./orchestrator.js").OrchestratorDeps} + CLI deps. */
 export interface FinalizeRunDeps {
-  /** The only sanctioned state read/write path. */
-  readonly state: StateManager;
-  /** gh client for the rollup PR + the deduped PRD failure comment. */
-  readonly gh: GhClient;
-  /**
-   * git client for the forward-reconcile (fetch + merge + push) before the rollup.
-   * Operates on the target repo working tree (process.cwd() by default).
-   */
-  readonly git: GitClient;
-  /** The run's durable spec (source of the unmet acceptance criteria). */
-  readonly spec: SpecManifest;
-  /**
-   * Resolved plugin config (provides `git.baseBranch` for the forward-reconcile +
-   * rollup `baseBranch` arg).
-   */
-  readonly config: Config;
-  /** Plugin data dir (roots the run store — report.md, metrics.jsonl). */
-  readonly dataDir: string;
-  /** Repo owner — used for the per-run staging-branch GC (deleteProtection / deleteRemoteBranch). */
-  readonly owner: string;
-  /** Repo name. */
-  readonly repo: string;
-  /** `live` merges the rollup; `no-merge` opens it but never auto-merges. */
-  readonly shipMode: ShipMode;
-  /**
-   * ISO stamp for the report + telemetry (tests pin this). Defaults to nowIso().
-   * Named `nowIso` (not `now`) so {@link import("./orchestrator.js").OrchestratorDeps} — whose
-   * `now: () => number` is the quota epoch-seconds clock — assigns structurally to
-   * this deps subset.
-   */
-  readonly nowIso?: string;
-  /** Rollup CI-poll tuning (tests inject a no-op sleep + a tiny budget). */
-  readonly rollup?: Pick<RollupArgs, "pollIntervalMs" | "maxPolls" | "sleep">;
+    /** The only sanctioned state read/write path. */
+    readonly state: StateManager
+    /** gh client for the rollup PR + the deduped PRD failure comment. */
+    readonly gh: GhClient
+    /**
+     * git client for the forward-reconcile (fetch + merge + push) before the rollup.
+     * Operates on the target repo working tree (process.cwd() by default).
+     */
+    readonly git: GitClient
+    /** The run's durable spec (source of the unmet acceptance criteria). */
+    readonly spec: SpecManifest
+    /**
+     * Resolved plugin config (provides `git.baseBranch` for the forward-reconcile +
+     * rollup `baseBranch` arg).
+     */
+    readonly config: Config
+    /** Plugin data dir (roots the run store — report.md, metrics.jsonl). */
+    readonly dataDir: string
+    /** Repo owner — used for the per-run staging-branch GC (deleteProtection / deleteRemoteBranch). */
+    readonly owner: string
+    /** Repo name. */
+    readonly repo: string
+    /** `live` merges the rollup; `no-merge` opens it but never auto-merges. */
+    readonly shipMode: ShipMode
+    /**
+     * ISO stamp for the report + telemetry (tests pin this). Defaults to nowIso().
+     * Named `nowIso` (not `now`) so {@link import("./orchestrator.js").OrchestratorDeps} — whose
+     * `now: () => number` is the quota epoch-seconds clock — assigns structurally to
+     * this deps subset.
+     */
+    readonly nowIso?: string
+    /** Rollup CI-poll tuning (tests inject a no-op sleep + a tiny budget). */
+    readonly rollup?: Pick<RollupArgs, 'pollIntervalMs' | 'maxPolls' | 'sleep'>
 }
 
 /** The outcome of {@link finalizeRun}. */
 export interface FinalizeRunResult {
-  /** The run AFTER it was flipped to its terminal status. */
-  readonly run: RunState;
-  /** The deterministic report (also persisted to report.md + used as the rollup body). */
-  readonly report: PartialRunReport;
-  /** The rollup outcome, or undefined when nothing shipped (no rollup attempted). */
-  readonly rollup?: RollupResult;
-  /** Whether a NEW failure comment was posted to the PRD (deduped — a resume posts none). */
-  readonly failureCommentPosted: boolean;
+    /** The run AFTER it was flipped to its terminal status. */
+    readonly run: RunState
+    /** The deterministic report (also persisted to report.md + used as the rollup body). */
+    readonly report: PartialRunReport
+    /** The rollup outcome, or undefined when nothing shipped (no rollup attempted). */
+    readonly rollup?: RollupResult
+    /** Whether a NEW failure comment was posted to the PRD (deduped — a resume posts none). */
+    readonly failureCommentPosted: boolean
 }
 
 /** The rollup PR title — names the spec + originating PRD issue. */
 function rollupTitle(report: PartialRunReport): string {
-  return `factory: ${report.spec_id} → develop (PRD #${report.issue_number})`;
+    return `factory: ${report.spec_id} → develop (PRD #${report.issue_number})`
 }
 
 /**
@@ -136,44 +134,35 @@ function rollupTitle(report: PartialRunReport): string {
  * resume posts none). A `completed` run has no failures → no comment here (its PRD
  * comment + close happens in the rollup step).
  */
-async function commentFailuresOnPrd(
-  deps: FinalizeRunDeps,
-  run: RunState,
-  report: PartialRunReport,
-): Promise<boolean> {
-  // Decision 39: a `failed` run with zero task failures (an e2e-only veto — every
-  // task shipped) still needs the PRD comment, or "never ship silently" is broken.
-  // S9 (Decision 47): same for a traceability-only veto.
-  if (
-    report.failures.length === 0 &&
-    report.e2e_failure === undefined &&
-    report.traceability_failure === undefined
-  ) {
-    return false;
-  }
+async function commentFailuresOnPrd(deps: FinalizeRunDeps, run: RunState, report: PartialRunReport): Promise<boolean> {
+    // Decision 39: a `failed` run with zero task failures (an e2e-only veto — every
+    // task shipped) still needs the PRD comment, or "never ship silently" is broken.
+    // S9 (Decision 47): same for a traceability-only veto.
+    if (report.failures.length === 0 && report.e2e_failure === undefined && report.traceability_failure === undefined) {
+        return false
+    }
 
-  const marker = failureCommentMarker(report.run_id);
-  const existing = await deps.gh.listIssueComments({
-    repo: report.repo,
-    number: report.issue_number,
-  });
-  if (existing.some((body) => body.includes(marker))) {
-    log.info(`failure comment already posted for run '${report.run_id}' — skipping duplicate`);
-    return false;
-  }
+    const marker = failureCommentMarker(report.run_id)
+    const existing = await deps.gh.listIssueComments({
+        repo: report.repo,
+        number: report.issue_number,
+    })
+    if (existing.some((body) => body.includes(marker))) {
+        log.info(`failure comment already posted for run '${report.run_id}' — skipping duplicate`)
+        return false
+    }
 
-  // S10 (Decision 48): tell the PRD reader whether the runner's ONE bounded
-  // self-heal cycle (`factory recover --auto`) fires next — eligible iff it has
-  // not already run and the auto-safe reset set is non-empty.
-  const selfHealEligible =
-    (run.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run, scanRun(run)).length > 0;
+    // S10 (Decision 48): tell the PRD reader whether the runner's ONE bounded
+    // self-heal cycle (`factory recover --auto`) fires next — eligible iff it has
+    // not already run and the auto-safe reset set is non-empty.
+    const selfHealEligible = (run.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run, scanRun(run)).length > 0
 
-  await deps.gh.issueComment({
-    repo: report.repo,
-    number: report.issue_number,
-    body: renderFailureComment(report, selfHealEligible),
-  });
-  return true;
+    await deps.gh.issueComment({
+        repo: report.repo,
+        number: report.issue_number,
+        body: renderFailureComment(report, selfHealEligible),
+    })
+    return true
 }
 
 /**
@@ -181,158 +170,159 @@ async function commentFailuresOnPrd(
  * telemetry, post the deduped PRD failure comment, ship the rollup, then flip the run terminal.
  * See the module header for the resume-safe ordering + idempotency contract.
  */
-export async function finalizeRun(
-  deps: FinalizeRunDeps,
-  runId: string,
-): Promise<FinalizeRunResult> {
-  const now = deps.nowIso ?? nowIso();
-  const run = await deps.state.read(runId);
+export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise<FinalizeRunResult> {
+    const now = deps.nowIso ?? nowIso()
+    const run = await deps.state.read(runId)
 
-  // 1. terminal status (throws loud if any task is non-terminal — anti-spin).
-  // Decision 39: a `failed` e2e phase overrides the task-based verdict to `failed`
-  // even when every task individually shipped — decideFinalize (WS2, pure
-  // task-status) has no visibility into the e2e phase (residual critical red, an
-  // unmappable critical regression, or a cap-exhausted critical), so the override
-  // lives here, the run's finalize coordinator.
-  // Decision 40: a `failed` ASSESSMENT likewise condemns the run — normally the
-  // record leg's task sweep already makes taskTerminal `failed`, but a resumed run
-  // whose tasks were ALL done before the assessment fired has nothing to sweep.
-  // S9 (Decision 47): a `failed` PRD-traceability audit condemns the run the same
-  // way — unmet PRD intent (or an auditor crash at cap) blocks the rollup.
-  const taskTerminal = decideFinalize(run).run_status;
-  const terminal =
-    run.e2e_phase?.status === "failed" ||
-    run.e2e_assessment?.status === "failed" ||
-    run.traceability?.status === "failed"
-      ? "failed"
-      : taskTerminal;
+    // 1. terminal status (throws loud if any task is non-terminal — anti-spin).
+    // Decision 39: a `failed` e2e phase overrides the task-based verdict to `failed`
+    // even when every task individually shipped — decideFinalize (WS2, pure
+    // task-status) has no visibility into the e2e phase (residual critical red, an
+    // unmappable critical regression, or a cap-exhausted critical), so the override
+    // lives here, the run's finalize coordinator.
+    // Decision 40: a `failed` ASSESSMENT likewise condemns the run — normally the
+    // record leg's task sweep already makes taskTerminal `failed`, but a resumed run
+    // whose tasks were ALL done before the assessment fired has nothing to sweep.
+    // S9 (Decision 47): a `failed` PRD-traceability audit condemns the run the same
+    // way — unmet PRD intent (or an auditor crash at cap) blocks the rollup.
+    const taskTerminal = decideFinalize(run).run_status
+    const terminal =
+        run.e2e_phase?.status === 'failed' ||
+        run.e2e_assessment?.status === 'failed' ||
+        run.traceability?.status === 'failed'
+            ? 'failed'
+            : taskTerminal
 
-  // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
-  // TODO(remove after one release): legacy pre-contract fallback warning (S7,
-  // Decision 46). Derived at finalize from the contract's absence at the target
-  // root (derive-don't-store) — mirrors GateRunner's per-sweep legacy path.
-  const contract = await loadGateContract(process.cwd());
-  const warnings =
-    contract.state === "absent"
-      ? [
-          "gates ran without a .factory/gates.json contract (legacy pre-contract run) — " +
-            "run `factory scaffold` and commit the contract",
-        ]
-      : [];
-  const report = buildPartialReport({ ...run, status: terminal }, deps.spec, { now, warnings });
-  const markdown = renderPartialReportMarkdown(report);
+    // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
+    // TODO(remove after one release): legacy pre-contract fallback warning (S7,
+    // Decision 46). Derived at finalize from the contract's absence at the target
+    // root (derive-don't-store) — mirrors GateRunner's per-sweep legacy path.
+    const contract = await loadGateContract(process.cwd())
+    const warnings =
+        contract.state === 'absent'
+            ? [
+                  'gates ran without a .factory/gates.json contract (legacy pre-contract run) — ' +
+                      'run `factory scaffold` and commit the contract',
+              ]
+            : []
+    const report = buildPartialReport({...run, status: terminal}, deps.spec, {now, warnings})
+    const markdown = renderPartialReportMarkdown(report)
 
-  // 3. persist report.md (atomic full-file replace).
-  await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
+    // 3. persist report.md (atomic full-file replace).
+    await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown)
 
-  // 4. telemetry (swallows its own IO errors — never fatal).
-  await recordRunFinalized(deps.dataDir, report, { now });
+    // 4. telemetry (swallows its own IO errors — never fatal).
+    await recordRunFinalized(deps.dataDir, report, {now})
 
-  // 5. on a failed run, one PRD comment summarizing the failures (deduped by run-id marker).
-  // Decision 39 (debug driver, forward decl): a debug run isn't a whole-PRD delivery —
-  // it loops review⇄fix passes on the debug session's OWN staging branch/PR, so the PRD
-  // issue is never touched from finalize (the debug driver owns any PRD-facing comms).
-  const failureCommentPosted = run.debug ? false : await commentFailuresOnPrd(deps, run, report);
+    // 5. on a failed run, one PRD comment summarizing the failures (deduped by run-id marker).
+    // Decision 39 (debug driver, forward decl): a debug run isn't a whole-PRD delivery —
+    // it loops review⇄fix passes on the debug session's OWN staging branch/PR, so the PRD
+    // issue is never touched from finalize (the debug driver owns any PRD-facing comms).
+    const failureCommentPosted = run.debug ? false : await commentFailuresOnPrd(deps, run, report)
 
-  // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
-  //    On failed, develop is untouched (the PRD failure comment is already posted above).
-  let rollupResult: RollupResult | undefined;
-  if (terminal === "completed") {
-    const stagingBranch = resolveStagingBranch(runId, run.staging_branch);
-    // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
-    // (no force-push) so the rollup PR is up-to-date. A conflict here is
-    // non-auto-recoverable → surfaces for rescue.
-    await deps.git.fetch("origin", deps.config.git.baseBranch);
-    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
-    await deps.git.push("origin", stagingBranch);
+    // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
+    //    On failed, develop is untouched (the PRD failure comment is already posted above).
+    let rollupResult: RollupResult | undefined
+    if (terminal === 'completed') {
+        const stagingBranch = resolveStagingBranch(runId, run.staging_branch)
+        // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
+        // (no force-push) so the rollup PR is up-to-date. A conflict here is
+        // non-auto-recoverable → surfaces for rescue.
+        await deps.git.fetch('origin', deps.config.git.baseBranch)
+        await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`)
+        await deps.git.push('origin', stagingBranch)
 
-    rollupResult = await rollup({
-      ghClient: deps.gh,
-      stagingBranch,
-      baseBranch: deps.config.git.baseBranch,
-      title: rollupTitle(report),
-      body: markdown,
-      merge: deps.shipMode === "live",
-      ...(deps.rollup ?? {}),
-    });
+        rollupResult = await rollup({
+            ghClient: deps.gh,
+            stagingBranch,
+            baseBranch: deps.config.git.baseBranch,
+            title: rollupTitle(report),
+            body: markdown,
+            merge: deps.shipMode === 'live',
+            ...(deps.rollup ?? {}),
+        })
+        // Capture in a const so the state.update mutator closure below sees the
+        // definitely-assigned RollupResult without a non-null assertion (a `let`
+        // widens back to `| undefined` when captured in a closure).
+        const rr = rollupResult
 
-    if (rollupResult.merged) {
-      // PRD-delivered comment + close. issueComment is NOT idempotent (a re-posted
-      // comment is a visible duplicate), so fire it ONLY on the first finalize — a
-      // resumed finalize hits rollup()'s already-merged short-circuit (resumed === true)
-      // and must not double-post. issueClose is naturally idempotent (closing a closed
-      // issue is a no-op), so it stays unconditional. issue_number is a required field
-      // (always ≥1), so there is no presence guard to make.
-      // Decision 39 (debug driver, forward decl): a debug run's rollup targets the
-      // debug session's own staging branch/PR, not a PRD delivery — the PRD comment +
-      // close are skipped, but the branch GC below stays unconditional (it operates on
-      // the debug run's real branch/PR regardless of PRD linkage).
-      if (!run.debug) {
-        if (!rollupResult.resumed) {
-          await deps.gh.issueComment({
-            repo: report.repo,
-            number: report.issue_number,
-            body: prdDoneComment(report, rollupResult),
-          });
+        if (rollupResult.merged) {
+            // PRD-delivered comment + close. issueComment is NOT idempotent (a re-posted
+            // comment is a visible duplicate), so fire it ONLY on the first finalize — a
+            // resumed finalize hits rollup()'s already-merged short-circuit (resumed === true)
+            // and must not double-post. issueClose is naturally idempotent (closing a closed
+            // issue is a no-op), so it stays unconditional. issue_number is a required field
+            // (always ≥1), so there is no presence guard to make.
+            // Decision 39 (debug driver, forward decl): a debug run's rollup targets the
+            // debug session's own staging branch/PR, not a PRD delivery — the PRD comment +
+            // close are skipped, but the branch GC below stays unconditional (it operates on
+            // the debug run's real branch/PR regardless of PRD linkage).
+            if (!run.debug) {
+                if (!rollupResult.resumed) {
+                    await deps.gh.issueComment({
+                        repo: report.repo,
+                        number: report.issue_number,
+                        body: prdDoneComment(report, rollupResult),
+                    })
+                }
+                await deps.gh.issueClose({
+                    repo: report.repo,
+                    number: report.issue_number,
+                })
+            }
+            // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
+            // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
+            // protected ref. Both ops are idempotent (404-tolerant), so a resumed finalize safely
+            // repeats them. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
+            // banked for rescue / inspection.
+            await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch)
+            await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch)
         }
-        await deps.gh.issueClose({
-          repo: report.repo,
-          number: report.issue_number,
-        });
-      }
-      // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
-      // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
-      // protected ref. Both ops are idempotent (404-tolerant), so a resumed finalize safely
-      // repeats them. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
-      // banked for rescue / inspection.
-      await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
-      await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
+
+        // Persist the rollup outcome (finding #5, minimal surface): a not-yet-landed
+        // rollup (e.g. the "auto-armed" branch-policy fallback) needs a durable pointer
+        // so `rescue scan` can flag it (`rollup_pending`) without a live GitHub call, and
+        // `rescue apply --recheck-rollup` can reopen the run for a re-drive to re-check
+        // it. Written BEFORE the terminal flip (step 7) so a crash in between still
+        // leaves the pointer durable. Cleared (set undefined, dropped on persistence)
+        // once merged — a resumed finalize that now finds the PR merged has nothing
+        // left to recover.
+        await deps.state.update(runId, (s) => ({
+            ...s,
+            rollup: rr.merged
+                ? undefined
+                : {
+                      number: rr.number,
+                      merged: false,
+                      ...(rr.reason ? {reason: rr.reason} : {}),
+                  },
+        }))
+    } else {
+        log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`)
     }
 
-    // Persist the rollup outcome (finding #5, minimal surface): a not-yet-landed
-    // rollup (e.g. the "auto-armed" branch-policy fallback) needs a durable pointer
-    // so `rescue scan` can flag it (`rollup_pending`) without a live GitHub call, and
-    // `rescue apply --recheck-rollup` can reopen the run for a re-drive to re-check
-    // it. Written BEFORE the terminal flip (step 7) so a crash in between still
-    // leaves the pointer durable. Cleared (set undefined, dropped on persistence)
-    // once merged — a resumed finalize that now finds the PR merged has nothing
-    // left to recover.
-    await deps.state.update(runId, (s) => ({
-      ...s,
-      rollup: rollupResult!.merged
-        ? undefined
-        : {
-            number: rollupResult!.number,
-            merged: false,
-            ...(rollupResult!.reason ? { reason: rollupResult!.reason } : {}),
-          },
-    }));
-  } else {
-    log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`);
-  }
+    // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).
+    const finalized = await deps.state.finalize(runId, terminal)
+    // D3: a not-merged rollup (incl. the new "auto-armed" branch-policy fallback) names
+    // its reason here — "visible, not silent" for the completed-but-not-yet-landed gap
+    // (the `completed` verdict is DECIDED at step 1, before the rollup runs; it is only
+    // persisted here at step 7).
+    const rollupNote = rollupResult
+        ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` +
+          (rollupResult.merged ? '' : ` (${rollupResult.reason})`)
+        : ', no rollup'
+    log.info(
+        `run '${runId}' finalized: ${terminal} ` +
+            `(${report.totals.shipped} shipped, ${report.totals.failed} failed` +
+            (failureCommentPosted ? ', PRD failure comment posted' : '') +
+            rollupNote +
+            `)`
+    )
 
-  // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).
-  const finalized = await deps.state.finalize(runId, terminal);
-  // D3: a not-merged rollup (incl. the new "auto-armed" branch-policy fallback) names
-  // its reason here — "visible, not silent" for the completed-but-not-yet-landed gap
-  // (the `completed` verdict is DECIDED at step 1, before the rollup runs; it is only
-  // persisted here at step 7).
-  const rollupNote = rollupResult
-    ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` +
-      (rollupResult.merged ? "" : ` (${rollupResult.reason})`)
-    : ", no rollup";
-  log.info(
-    `run '${runId}' finalized: ${terminal} ` +
-      `(${report.totals.shipped} shipped, ${report.totals.failed} failed` +
-      `${failureCommentPosted ? ", PRD failure comment posted" : ""}` +
-      rollupNote +
-      `)`,
-  );
-
-  return {
-    run: finalized,
-    report,
-    ...(rollupResult ? { rollup: rollupResult } : {}),
-    failureCommentPosted,
-  };
+    return {
+        run: finalized,
+        report,
+        ...(rollupResult ? {rollup: rollupResult} : {}),
+        failureCommentPosted,
+    }
 }

@@ -7,12 +7,12 @@
  * `main.ts ↔ guard` cycle that the CLI registry suffered. `madge --circular`
  * enforces the no-cycle bar in `npm run verify`.
  */
-import type { ExitCode } from "../shared/exit-codes.js";
+import type {ExitCode} from '../shared/exit-codes.js'
 
 /** A single hook entry. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Hook {
-  /** One-line description shown in `--help`. */
-  describe: string;
-  /** Execute the hook with its remaining argv (after the hook name). */
-  run: (argv: string[]) => Promise<ExitCode> | ExitCode;
+    /** One-line description shown in `--help`. */
+    describe: string
+    /** Execute the hook with its remaining argv (after the hook name). */
+    run: (argv: string[]) => Promise<ExitCode> | ExitCode
 }

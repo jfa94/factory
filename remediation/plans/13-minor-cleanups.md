@@ -41,7 +41,7 @@ File: `bin/pipeline-classify-risk`
 Current output:
 
 ```json
-{ "risk": "security" }
+{"risk": "security"}
 ```
 
 Add a `reasoning` field listing the signals that contributed:

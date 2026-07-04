@@ -6,22 +6,22 @@
 // until then the gate skips as "not applicable". Extend it for your project
 // (e.g. add `typescript-eslint` for TS-aware rules) as needed.
 export default [
-  {
-    ignores: ["dist/**", "build/**", "coverage/**", "node_modules/**", "reports/**"],
-  },
-  {
-    files: ["**/*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
-    languageOptions: {
-      ecmaVersion: "latest",
-      sourceType: "module",
+    {
+        ignores: ['dist/**', 'build/**', 'coverage/**', 'node_modules/**', 'reports/**'],
     },
-    linterOptions: {
-      reportUnusedDisableDirectives: "error",
+    {
+        files: ['**/*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'module',
+        },
+        linterOptions: {
+            reportUnusedDisableDirectives: 'error',
+        },
+        rules: {
+            'no-debugger': 'error',
+            'no-var': 'error',
+            'prefer-const': 'warn',
+        },
     },
-    rules: {
-      "no-debugger": "error",
-      "no-var": "error",
-      "prefer-const": "warn",
-    },
-  },
-];
+]

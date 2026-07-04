@@ -106,9 +106,9 @@ Findings below the threshold are surfaced in the final summary but do not trigge
 2. Prints to stdout (single line, parseable by skill): `ESCALATED path=<absolute path>`
 3. The skill's final user-facing output MUST include the line:
 
-   ```
-   Escalated to human review. Audit trail: <absolute path>
-   ```
+    ```
+    Escalated to human review. Audit trail: <absolute path>
+    ```
 
 ## Iron Law placement (root-cause / escalation rule)
 
@@ -119,14 +119,14 @@ Two-level placement:
 **Level 1 — `agents/task-executor.md`** (canonical; applies to ALL invocations: initial GREEN, postreview executor-fix, debug loop). New `## Iron Laws` section after the EI block:
 
 1. **Verify findings before planning a fix.** When you receive review feedback, validate each finding before designing the fix:
-   - _Technically_: read the code at the cited `file:line`; reproduce the failure or trace the execution path that produces the bug. If you cannot reproduce or trace it, the finding is unverified.
-   - _Against the task intent_: when running under a spec (pipeline mode), cross-check the finding against the task's acceptance criteria. When running standalone (`/debug`), cross-check against the commit message and the surrounding code's intent. A finding that contradicts the intent is invalid even if technically correct.
+    - _Technically_: read the code at the cited `file:line`; reproduce the failure or trace the execution path that produces the bug. If you cannot reproduce or trace it, the finding is unverified.
+    - _Against the task intent_: when running under a spec (pipeline mode), cross-check the finding against the task's acceptance criteria. When running standalone (`/debug`), cross-check against the commit message and the surrounding code's intent. A finding that contradicts the intent is invalid even if technically correct.
 
-   For each finding record one of: `confirmed` (proceed to fix), `dismissed: <one-line reason>` (do NOT fix; report in STATUS line), `uncertain: <question>` (STATUS: NEEDS_CONTEXT).
+    For each finding record one of: `confirmed` (proceed to fix), `dismissed: <one-line reason>` (do NOT fix; report in STATUS line), `uncertain: <question>` (STATUS: NEEDS_CONTEXT).
 
 2. **Fix root causes; escalate fundamental flaws.** Fix the underlying cause — do not add layers around the symptom. Favour simplifying existing code over patching it. If a finding's root cause is a fundamental design or architecture flaw outside this task's scope, end with `STATUS: BLOCKED — escalate: <one-line description>` rather than working around it. This is the only sanctioned escalation path; in every other situation, finish the task.
 
-   Violating the letter of these rules violates the spirit. No exceptions.
+    Violating the letter of these rules violates the spirit. No exceptions.
 
 **Level 2 — fix-mode prompts** — one-line reminder appended only when fixing review findings:
 
@@ -159,16 +159,16 @@ Reminder text:
 ## Testing
 
 - Unit tests for `pipeline-debug-review`:
-  - Severity normalization (`important` → `high`, `minor` → `low`).
-  - Threshold filtering at each level (critical/high/medium/all).
-  - Empty findings → exit 0 / blocking_count = 0.
+    - Severity normalization (`important` → `high`, `minor` → `low`).
+    - Threshold filtering at each level (critical/high/medium/all).
+    - Empty findings → exit 0 / blocking_count = 0.
 - Unit tests for `pipeline-debug-escalate`:
-  - Escalation file contents (timestamp, base, reason, findings, executor message).
-  - Stdout format `ESCALATED path=<abs>` exact match.
+    - Escalation file contents (timestamp, base, reason, findings, executor message).
+    - Stdout format `ESCALATED path=<abs>` exact match.
 - Integration test for skill loop:
-  - Round 1 review returns finding, executor fixes, round 2 returns clean → CLEAN.
-  - Executor returns escalate → escalation file written, summary references path.
-  - `--limit 1` with slow review → TIME_LIMIT after at most one round.
+    - Round 1 review returns finding, executor fixes, round 2 returns clean → CLEAN.
+    - Executor returns escalate → escalation file written, summary references path.
+    - `--limit 1` with slow review → TIME_LIMIT after at most one round.
 - `bin/tests/debug.sh` — covers severity normalization, threshold filtering, escalation file shape, skill loop happy-path / escalate / time-limit (matches the existing `bin/tests/*.sh` pattern).
 
 ## Migration / compatibility

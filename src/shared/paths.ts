@@ -16,13 +16,17 @@
  * no-op so an unresolved `$HOME` never collapses every path to a bare `~`.
  */
 export function tildeShorten(absPath: string, home: string): string {
-  if (home.length === 0) return absPath;
-  if (absPath === home) return "~";
-  // Tolerate a trailing slash on `home` (homedir() omits it, but be defensive)
-  // so the boundary check is "home + separator", never a bare substring match.
-  const base = home.endsWith("/") ? home.slice(0, -1) : home;
-  if (absPath.startsWith(base + "/")) {
-    return "~" + absPath.slice(base.length);
-  }
-  return absPath;
+    if (home.length === 0) {
+        return absPath
+    }
+    if (absPath === home) {
+        return '~'
+    }
+    // Tolerate a trailing slash on `home` (homedir() omits it, but be defensive)
+    // so the boundary check is "home + separator", never a bare substring match.
+    const base = home.endsWith('/') ? home.slice(0, -1) : home
+    if (absPath.startsWith(base + '/')) {
+        return '~' + absPath.slice(base.length)
+    }
+    return absPath
 }

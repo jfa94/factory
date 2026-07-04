@@ -22,53 +22,42 @@
  *     now (deps: RecordDeps, runId, taskId, verdictStore, raw).  The body reads runId
  *     from the explicit parameter instead of deps.run.run_id.
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { parseJson } from "../shared/json.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {readFile} from 'node:fs/promises'
+import {join} from 'node:path'
+import {parseJson} from '../shared/json.js'
+import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
+import {taskWorktreePath} from './paths.js'
+import {taskExemptReader} from './exempt.js'
+import {runCoverageDir} from '../core/state/index.js'
+import {classifyFailure, ESCALATION_CAP, parseProducerStatus} from '../producer/index.js'
+import {nextPhase, phaseToInFlightStatus} from '../types/index.js'
+import {GateRunner, FsCoverageStore, type GateContext} from '../verifier/deterministic/index.js'
 import {
-  markInFlight,
-  escalateOrFail,
-  applyProducerOutcome,
-  type TaskStep,
-} from "./transitions.js";
-import { taskWorktreePath } from "./paths.js";
-import { taskExemptReader } from "./exempt.js";
-import { runCoverageDir } from "../core/state/index.js";
-import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
-import { nextPhase, phaseToInFlightStatus } from "../types/index.js";
-import { GateRunner, FsCoverageStore, type GateContext } from "../verifier/deterministic/index.js";
+    runPanel,
+    parseRawReview,
+    PANEL_ROLES,
+    type RawReview,
+    type SourceReader,
+    type FindingVerifierRunner,
+    type AdjudicatedReviewer,
+} from '../verifier/judgment/index.js'
 import {
-  runPanel,
-  parseRawReview,
-  PANEL_ROLES,
-  type RawReview,
-  type SourceReader,
-  type FindingVerifierRunner,
-  type AdjudicatedReviewer,
-} from "../verifier/judgment/index.js";
-import {
-  checkHoldout,
-  holdoutEvidence,
-  deriveHoldoutEvidence,
-  parseHoldoutVerdicts,
-  type HoldoutVerdict,
-  type HoldoutVerdictStore,
-  type HoldoutCheckResult,
-} from "../verifier/holdout/index.js";
-import { createLogger, UsageError } from "../shared/index.js";
-import type {
-  GateEvidence,
-  GateVerdict,
-  ReviewerResult,
-  ProducerRole,
-  TaskPhase,
-  FixFinding,
-} from "../types/index.js";
-import type { HandlerDeps } from "./types.js";
-import { resolveStagingBranch } from "./deps.js";
-import type { StateManager } from "./deps.js";
+    checkHoldout,
+    holdoutEvidence,
+    deriveHoldoutEvidence,
+    parseHoldoutVerdicts,
+    type HoldoutVerdict,
+    type HoldoutVerdictStore,
+    type HoldoutCheckResult,
+} from '../verifier/holdout/index.js'
+import {createLogger, UsageError} from '../shared/index.js'
+import type {GateEvidence, GateVerdict, ReviewerResult, ProducerRole, TaskPhase, FixFinding} from '../types/index.js'
+import type {HandlerDeps} from './types.js'
+import {resolveStagingBranch} from './deps.js'
+import type {StateManager} from './deps.js'
 
-const log = createLogger("record");
+const log = createLogger('record')
 
 // ---------------------------------------------------------------------------
 // RecordDeps
@@ -79,7 +68,7 @@ const log = createLogger("record");
  * state write path.  A strict subset of {@link import("./orchestrator.js").OrchestratorDeps}.
  */
 export interface RecordDeps extends HandlerDeps {
-  readonly state: StateManager;
+    readonly state: StateManager
 }
 
 // ---------------------------------------------------------------------------
@@ -88,10 +77,10 @@ export interface RecordDeps extends HandlerDeps {
 
 /** The envelope a record core emits — the next loop step for run/task. */
 export interface TransitionEnvelope {
-  readonly run_id: string;
-  readonly task_id: string;
-  /** Keep going at `step.phase`, or stop with `step.outcome` (done/failed). */
-  readonly step: TaskStep;
+    readonly run_id: string
+    readonly task_id: string
+    /** Keep going at `step.phase`, or stop with `step.outcome` (done/failed). */
+    readonly step: TaskStep
 }
 
 /**
@@ -100,20 +89,25 @@ export interface TransitionEnvelope {
  * its own status — nothing to mark. Used by the record paths in this module.
  */
 async function persistStepCursor(
-  deps: { readonly state: StateManager },
-  runId: string,
-  taskId: string,
-  step: TaskStep,
+    deps: {readonly state: StateManager},
+    runId: string,
+    taskId: string,
+    step: TaskStep
 ): Promise<void> {
-  if (!step.done) {
-    await markInFlight(deps, runId, taskId, step.phase);
-  }
+    if (!step.done) {
+        await markInFlight(deps, runId, taskId, step.phase)
+    }
 }
 
-/** Read + parse a JSON input file (the runner's collected agent output). */
+/**
+ * Read + parse a JSON input file (the runner's collected agent output). The `<T>`
+ * is a caller-asserted shape for OUR OWN serialized envelopes; the actual JSON is
+ * re-validated downstream (Zod) before any field is trusted — this cast only names
+ * the expected shape at the read boundary.
+ */
 export async function readJsonInput<T>(path: string): Promise<T> {
-  const raw = await readFile(path, "utf8");
-  return parseJson<T>(raw, path);
+    const raw = await readFile(path, 'utf8')
+    return parseJson(raw, path) as T
 }
 
 // ---------------------------------------------------------------------------
@@ -122,45 +116,47 @@ export async function readJsonInput<T>(path: string): Promise<T> {
 
 /** The producer role + resume target for a producer phase (LOUD on a non-producer phase). */
 function producerPhaseInfo(phase: string): {
-  role: ProducerRole;
-  phase: TaskPhase;
-  after: TaskPhase;
+    role: ProducerRole
+    phase: TaskPhase
+    after: TaskPhase
 } {
-  if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
-  if (phase === "exec") return { role: "implementer", phase: "exec", after: "verify" };
-  throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
+    if (phase === 'tests') {
+        return {role: 'test-writer', phase: 'tests', after: 'exec'}
+    }
+    if (phase === 'exec') {
+        return {role: 'implementer', phase: 'exec', after: 'verify'}
+    }
+    throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`)
 }
 
 /** Record the producer status into state and return the next-step envelope. */
 export async function applyRecordProducer(
-  state: StateManager,
-  runId: string,
-  taskId: string,
-  phase: string,
-  statusLine: string,
+    state: StateManager,
+    runId: string,
+    taskId: string,
+    phase: string,
+    statusLine: string
 ): Promise<TransitionEnvelope> {
-  const info = producerPhaseInfo(phase);
-  // Defensive: nextPhase(phase) must equal the hardcoded resume target — keeps the
-  // mapping honest if the phase order ever changes (LOUD on drift, never silent).
-  if (nextPhase(info.phase) !== info.after) {
-    throw new Error(
-      `record-producer: phase order drift — nextPhase('${info.phase}') !== '${info.after}'`,
-    );
-  }
-  const run = await state.read(runId);
-  if (run.tasks[taskId] === undefined) {
-    throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
-  }
-  const outcome = parseProducerStatus(statusLine);
-  const step = await applyProducerOutcome(
-    { state },
-    runId,
-    taskId,
-    { role: info.role, phase: info.phase, resumePhase: info.after },
-    outcome,
-  );
-  await persistStepCursor({ state }, runId, taskId, step);
-  return { run_id: runId, task_id: taskId, step };
+    const info = producerPhaseInfo(phase)
+    // Defensive: nextPhase(phase) must equal the hardcoded resume target — keeps the
+    // mapping honest if the phase order ever changes (LOUD on drift, never silent).
+    if (nextPhase(info.phase) !== info.after) {
+        throw new Error(`record-producer: phase order drift — nextPhase('${info.phase}') !== '${info.after}'`)
+    }
+    const run = await state.read(runId)
+    if (run.tasks[taskId] === undefined) {
+        throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`)
+    }
+    const outcome = parseProducerStatus(statusLine)
+    const step = await applyProducerOutcome(
+        {state},
+        runId,
+        taskId,
+        {role: info.role, phase: info.phase, resumePhase: info.after},
+        outcome
+    )
+    await persistStepCursor({state}, runId, taskId, step)
+    return {run_id: runId, task_id: taskId, step}
 }
 
 // ---------------------------------------------------------------------------
@@ -169,17 +165,17 @@ export async function applyRecordProducer(
 
 /** The input file shape: the raw holdout-validator agent output. */
 export interface RecordHoldoutInput {
-  readonly raw: string;
+    readonly raw: string
 }
 
 /** The holdout-validation evidence document `applyRecordHoldout` records. */
 export interface RecordHoldoutEnvelope {
-  readonly run_id: string;
-  readonly task_id: string;
-  /** The DERIVED holdout gate evidence (recorded into the merge gate by record-reviews). */
-  readonly evidence: GateEvidence;
-  /** The scored detail (audit). */
-  readonly check: HoldoutCheckResult;
+    readonly run_id: string
+    readonly task_id: string
+    /** The DERIVED holdout gate evidence (recorded into the merge gate by record-reviews). */
+    readonly evidence: GateEvidence
+    /** The scored detail (audit). */
+    readonly check: HoldoutCheckResult
 }
 
 /**
@@ -188,35 +184,35 @@ export interface RecordHoldoutEnvelope {
  * validate.ts — never throws a pass through on garbage.
  */
 function parseVerdictsFailClosed(raw: string): readonly HoldoutVerdict[] {
-  try {
-    return parseHoldoutVerdicts(raw);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    log.warn(`holdout validator output unparseable — failing closed (0 satisfied): ${detail}`);
-    return [];
-  }
+    try {
+        return parseHoldoutVerdicts(raw)
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        log.warn(`holdout validator output unparseable — failing closed (0 satisfied): ${detail}`)
+        return []
+    }
 }
 
 /** Record the holdout-validator output: persist raw verdicts + emit derived evidence. */
 export async function applyRecordHoldout(
-  deps: RecordDeps,
-  runId: string,
-  taskId: string,
-  verdictStore: HoldoutVerdictStore,
-  raw: string,
+    deps: RecordDeps,
+    runId: string,
+    taskId: string,
+    verdictStore: HoldoutVerdictStore,
+    raw: string
 ): Promise<RecordHoldoutEnvelope> {
-  if (!(await deps.holdout.has(runId, taskId))) {
-    throw new Error(
-      `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(applyRecordHoldout must only record when the orchestrator surfaced a holdout holdout)`,
-    );
-  }
-  const record = await deps.holdout.get(runId, taskId);
-  const verdicts = parseVerdictsFailClosed(raw);
-  await verdictStore.put(runId, taskId, verdicts);
+    if (!(await deps.holdout.has(runId, taskId))) {
+        throw new Error(
+            `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
+                `(applyRecordHoldout must only record when the orchestrator surfaced a holdout holdout)`
+        )
+    }
+    const record = await deps.holdout.get(runId, taskId)
+    const verdicts = parseVerdictsFailClosed(raw)
+    await verdictStore.put(runId, taskId, verdicts)
 
-  const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate);
-  return { run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check };
+    const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate)
+    return {run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check}
 }
 
 // ---------------------------------------------------------------------------
@@ -224,48 +220,48 @@ export async function applyRecordHoldout(
 // ---------------------------------------------------------------------------
 
 /** A fixed, reviewer-independent identity for the replay verifier (D27 independence). */
-export const REPLAY_IDENTITY = "runner-replay";
+export const REPLAY_IDENTITY = 'runner-replay'
 
 /** One pre-recorded finding-verifier verdict (runner-collected, out-of-band). */
 export interface VerifierVerdictInput {
-  readonly file: string;
-  readonly line: number;
-  /** True iff the finding holds against the code (confirmed). */
-  readonly holds: boolean;
-  readonly note: string;
+    readonly file: string
+    readonly line: number
+    /** True iff the finding holds against the code (confirmed). */
+    readonly holds: boolean
+    readonly note: string
 }
 
 /** A reviewer's pre-recorded finding-verifier verdicts. */
 export interface ReviewerVerifications {
-  readonly reviewer: string;
-  readonly verdicts: readonly VerifierVerdictInput[];
+    readonly reviewer: string
+    readonly verdicts: readonly VerifierVerdictInput[]
 }
 
 /** The input file shape (runner-collected panel + verify-then-fix output). */
 export interface RecordReviewsInput {
-  /** The raw reviewer payloads (one per panel reviewer) — parsed LOUD. */
-  readonly reviews: readonly unknown[];
-  /** Per-reviewer pre-recorded finding-verifier verdicts (the replay source). */
-  readonly verifications: readonly ReviewerVerifications[];
-  /** Δ U — a recorded second-vendor absence (surfaced loudly by runPanel). */
-  readonly crossVendorAbsent?: { readonly reason: string };
+    /** The raw reviewer payloads (one per panel reviewer) — parsed LOUD. */
+    readonly reviews: readonly unknown[]
+    /** Per-reviewer pre-recorded finding-verifier verdicts (the replay source). */
+    readonly verifications: readonly ReviewerVerifications[]
+    /** Δ U — a recorded second-vendor absence (surfaced loudly by runPanel). */
+    readonly crossVendorAbsent?: {readonly reason: string} | undefined
 }
 
 /** The verify-record envelope `applyRecordReviews` produces. */
 export interface RecordReviewsEnvelope extends TransitionEnvelope {
-  /** The per-reviewer results this round derived (audit; state may clear them on retry). */
-  readonly reviewers: readonly ReviewerResult[];
-  /** The DERIVED merge gate verdict (never stored; recomputed here). */
-  readonly mergeGate: GateVerdict;
-  /**
-   * Δ U — a SECOND-VENDOR ABSENCE surfaced from {@link runPanel}. Present (with a
-   * reason) IFF this verify pass ran WITHOUT an independent cross-vendor reviewer;
-   * the record also emits a LOUD `log.warn` so the absence is never silently swallowed
-   * (runPanel records it on the panel result, but the record is the last hop that can
-   * drop it). An audit/strength signal only — it NEVER gates the merge gate. Left absent
-   * when a second vendor was present.
-   */
-  readonly crossVendorAbsence?: { readonly reason: string };
+    /** The per-reviewer results this round derived (audit; state may clear them on retry). */
+    readonly reviewers: readonly ReviewerResult[]
+    /** The DERIVED merge gate verdict (never stored; recomputed here). */
+    readonly mergeGate: GateVerdict
+    /**
+     * Δ U — a SECOND-VENDOR ABSENCE surfaced from {@link runPanel}. Present (with a
+     * reason) IFF this verify pass ran WITHOUT an independent cross-vendor reviewer;
+     * the record also emits a LOUD `log.warn` so the absence is never silently swallowed
+     * (runPanel records it on the panel result, but the record is the last hop that can
+     * drop it). An audit/strength signal only — it NEVER gates the merge gate. Left absent
+     * when a second vendor was present.
+     */
+    readonly crossVendorAbsence?: {readonly reason: string}
 }
 
 /**
@@ -278,27 +274,28 @@ export interface RecordReviewsEnvelope extends TransitionEnvelope {
  * "missing" would silently drop a citation that may back a real blocker, turning a
  * read fault into a false merge-gate-pass. Fail loud instead.
  */
-export async function buildWorktreeSource(
-  worktree: string,
-  reviews: readonly RawReview[],
-): Promise<SourceReader> {
-  const files = new Set<string>();
-  for (const review of reviews) {
-    for (const finding of review.findings) {
-      if (finding.file !== undefined) files.add(finding.file);
+export async function buildWorktreeSource(worktree: string, reviews: readonly RawReview[]): Promise<SourceReader> {
+    const files = new Set<string>()
+    for (const review of reviews) {
+        for (const finding of review.findings) {
+            if (finding.file !== undefined) {
+                files.add(finding.file)
+            }
+        }
     }
-  }
-  const lines = new Map<string, readonly string[] | null>();
-  for (const file of files) {
-    try {
-      const text = await readFile(join(worktree, file), "utf8");
-      lines.set(file, text.split("\n"));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
-      lines.set(file, null); // genuinely absent → unverifiable → dropped
+    const lines = new Map<string, readonly string[] | null>()
+    for (const file of files) {
+        try {
+            const text = await readFile(join(worktree, file), 'utf8')
+            lines.set(file, text.split('\n'))
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+                throw err
+            }
+            lines.set(file, null) // genuinely absent → unverifiable → dropped
+        }
     }
-  }
-  return { readLines: (file) => lines.get(file) ?? null };
+    return {readLines: (file) => lines.get(file) ?? null}
 }
 
 /**
@@ -308,39 +305,39 @@ export async function buildWorktreeSource(
  * with NO recorded verdict REJECTS — `confirmBlocker` turns that into a LOUD `error`
  * (fail-closed: the merge gate blocks, never a silent pass).
  */
-export function makeReplayRunnerFactory(
-  input: RecordReviewsInput,
-): (review: RawReview) => FindingVerifierRunner {
-  const byReviewer = new Map<string, readonly VerifierVerdictInput[]>();
-  for (const v of input.verifications) byReviewer.set(v.reviewer, v.verdicts);
-
-  return (review) => {
-    // Fresh shiftable queues per call so repeated factory calls never share state.
-    const queues = new Map<string, VerifierVerdictInput[]>();
-    for (const v of byReviewer.get(review.reviewer) ?? []) {
-      const key = `${v.file}:${v.line}`;
-      const arr = queues.get(key) ?? [];
-      arr.push(v);
-      queues.set(key, arr);
+export function makeReplayRunnerFactory(input: RecordReviewsInput): (review: RawReview) => FindingVerifierRunner {
+    const byReviewer = new Map<string, readonly VerifierVerdictInput[]>()
+    for (const v of input.verifications) {
+        byReviewer.set(v.reviewer, v.verdicts)
     }
-    return {
-      identity: REPLAY_IDENTITY,
-      confirm(finding) {
-        const key = `${finding.file}:${finding.line}`;
-        const next = queues.get(key)?.shift();
-        if (next === undefined) {
-          return Promise.reject(
-            new Error(
-              `record-reviews: no pre-recorded finding-verifier verdict for reviewer ` +
-                `'${review.reviewer}' finding at ${key} — every citation-verified blocking ` +
-                `finding must carry an runner-collected verdict`,
-            ),
-          );
+
+    return (review) => {
+        // Fresh shiftable queues per call so repeated factory calls never share state.
+        const queues = new Map<string, VerifierVerdictInput[]>()
+        for (const v of byReviewer.get(review.reviewer) ?? []) {
+            const key = `${v.file}:${v.line}`
+            const arr = queues.get(key) ?? []
+            arr.push(v)
+            queues.set(key, arr)
         }
-        return Promise.resolve({ holds: next.holds, note: next.note });
-      },
-    };
-  };
+        return {
+            identity: REPLAY_IDENTITY,
+            confirm(finding) {
+                const key = `${finding.file}:${finding.line}`
+                const next = queues.get(key)?.shift()
+                if (next === undefined) {
+                    return Promise.reject(
+                        new Error(
+                            `record-reviews: no pre-recorded finding-verifier verdict for reviewer ` +
+                                `'${review.reviewer}' finding at ${key} — every citation-verified blocking ` +
+                                `finding must carry an runner-collected verdict`
+                        )
+                    )
+                }
+                return Promise.resolve({holds: next.holds, note: next.note})
+            },
+        }
+    }
 }
 
 /**
@@ -354,24 +351,24 @@ export function makeReplayRunnerFactory(
  * never reach the producer's fix-forward prompt.
  */
 function composeFixFindings(
-  adjudicated: readonly AdjudicatedReviewer[],
-  gateEvidence: readonly GateEvidence[],
+    adjudicated: readonly AdjudicatedReviewer[],
+    gateEvidence: readonly GateEvidence[]
 ): FixFinding[] {
-  const fromReviewers: FixFinding[] = adjudicated.flatMap((a) =>
-    a.confirmedBlockers.map((f) => ({
-      reviewer: f.reviewer,
-      ...(f.file !== undefined ? { file: f.file } : {}),
-      ...(f.line !== undefined ? { line: f.line } : {}),
-      description: f.description,
-    })),
-  );
-  const fromGates: FixFinding[] = gateEvidence
-    .filter((g) => g.gate !== "holdout" && !g.observed)
-    .map((g) => ({ reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed` }));
-  return [...fromReviewers, ...fromGates];
+    const fromReviewers: FixFinding[] = adjudicated.flatMap((a) =>
+        a.confirmedBlockers.map((f) => ({
+            reviewer: f.reviewer,
+            ...(f.file !== undefined ? {file: f.file} : {}),
+            ...(f.line !== undefined ? {line: f.line} : {}),
+            description: f.description,
+        }))
+    )
+    const fromGates: FixFinding[] = gateEvidence
+        .filter((g) => g.gate !== 'holdout' && !g.observed)
+        .map((g) => ({reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed`}))
+    return [...fromReviewers, ...fromGates]
 }
 
-const PANEL_ROLE_SET: ReadonlySet<string> = new Set(PANEL_ROLES);
+const PANEL_ROLE_SET: ReadonlySet<string> = new Set(PANEL_ROLES)
 
 /**
  * Roster enforcement (D26): `derivePanelVerdict` is unanimity over WHATEVER
@@ -385,22 +382,24 @@ const PANEL_ROLE_SET: ReadonlySet<string> = new Set(PANEL_ROLES);
  * deliberately outside this check (whole-scope review, not the task merge gate).
  */
 export function enforcePanelRoster(reviews: readonly RawReview[]): RawReview[] {
-  const out: RawReview[] = reviews.map((r) => {
-    if (PANEL_ROLE_SET.has(r.reviewer)) return r;
-    log.warn(
-      `panel roster: unknown reviewer '${r.reviewer}' — verdict demoted to error ` +
-        `(only the ${PANEL_ROLES.length} fixed panel roles may gate)`,
-    );
-    return { ...r, verdict: "error" };
-  });
-  const present = new Set(reviews.map((r) => r.reviewer));
-  for (const role of PANEL_ROLES) {
-    if (!present.has(role)) {
-      log.warn(`panel roster: reviewer '${role}' missing from results — synthesized error verdict`);
-      out.push({ reviewer: role, verdict: "error", findings: [] });
+    const out: RawReview[] = reviews.map((r) => {
+        if (PANEL_ROLE_SET.has(r.reviewer)) {
+            return r
+        }
+        log.warn(
+            `panel roster: unknown reviewer '${r.reviewer}' — verdict demoted to error ` +
+                `(only the ${PANEL_ROLES.length} fixed panel roles may gate)`
+        )
+        return {...r, verdict: 'error'}
+    })
+    const present = new Set(reviews.map((r) => r.reviewer))
+    for (const role of PANEL_ROLES) {
+        if (!present.has(role)) {
+            log.warn(`panel roster: reviewer '${role}' missing from results — synthesized error verdict`)
+            out.push({reviewer: role, verdict: 'error', findings: []})
+        }
     }
-  }
-  return out;
+    return out
 }
 
 /**
@@ -408,135 +407,135 @@ export function enforcePanelRoster(reviews: readonly RawReview[]): RawReview[] {
  * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
  */
 export async function applyRecordReviews(
-  deps: RecordDeps,
-  runId: string,
-  taskId: string,
-  verdictStore: HoldoutVerdictStore,
-  input: RecordReviewsInput,
+    deps: RecordDeps,
+    runId: string,
+    taskId: string,
+    verdictStore: HoldoutVerdictStore,
+    input: RecordReviewsInput
 ): Promise<RecordReviewsEnvelope> {
-  const run = await deps.state.read(runId);
-  const task = run.tasks[taskId];
-  if (task === undefined) {
-    throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
-  }
-  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+    const run = await deps.state.read(runId)
+    const task = run.tasks[taskId]
+    if (task === undefined) {
+        throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`)
+    }
+    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
 
-  // 1. parse reviews + build the worktree source and the replay verifier factory
-  //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
-  //    fast rather than burning a full deterministic gate sweep first).
-  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview));
-  const source = await buildWorktreeSource(worktree, reviews);
-  const makeRunner = makeReplayRunnerFactory(input);
+    // 1. parse reviews + build the worktree source and the replay verifier factory
+    //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
+    //    fast rather than burning a full deterministic gate sweep first).
+    const reviews = enforcePanelRoster(input.reviews.map(parseRawReview))
+    const source = await buildWorktreeSource(worktree, reviews)
+    const makeRunner = makeReplayRunnerFactory(input)
 
-  // 2. deterministic gates (re-run, never read back — Δ V).
-  const gateCtx: GateContext = {
-    runId,
-    taskId,
-    worktree,
-    baseRef: resolveStagingBranch(runId, run.staging_branch),
-    config: deps.config,
-    tools: deps.tools,
-    exemptReader: taskExemptReader(deps, worktree),
-    coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
-  };
-  const gate = await new GateRunner().run(gateCtx);
-  const gateEvidence: GateEvidence[] = [...gate.evidence];
+    // 2. deterministic gates (re-run, never read back — Δ V).
+    const gateCtx: GateContext = {
+        runId,
+        taskId,
+        worktree,
+        baseRef: resolveStagingBranch(runId, run.staging_branch),
+        config: deps.config,
+        tools: deps.tools,
+        exemptReader: taskExemptReader(deps, worktree),
+        coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
+    }
+    const gate = await new GateRunner().run(gateCtx)
+    const gateEvidence: GateEvidence[] = [...gate.evidence]
 
-  // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
-  //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
-  //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
-  const holdoutGate = await deriveHoldoutEvidence(
-    deps.holdout,
-    verdictStore,
-    runId,
-    taskId,
-    deps.config.quality.holdoutPassRate,
-  );
-  if (holdoutGate !== undefined) gateEvidence.push(holdoutGate);
+    // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
+    //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
+    //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
+    const holdoutGate = await deriveHoldoutEvidence(
+        deps.holdout,
+        verdictStore,
+        runId,
+        taskId,
+        deps.config.quality.holdoutPassRate
+    )
+    if (holdoutGate !== undefined) {
+        gateEvidence.push(holdoutGate)
+    }
 
-  // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
-  const panel = await runPanel({
-    reviews,
-    source,
-    makeRunner,
-    gateEvidence,
-    phase: "verify",
-    attempt: task.escalation_rung + 1,
-    maxAttempts: ESCALATION_CAP + 1,
-    blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === "block",
-    ...(input.crossVendorAbsent !== undefined
-      ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } as const }
-      : {}),
-  });
+    // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
+    const panel = await runPanel({
+        reviews,
+        source,
+        makeRunner,
+        gateEvidence,
+        phase: 'verify',
+        attempt: task.escalation_rung + 1,
+        maxAttempts: ESCALATION_CAP + 1,
+        blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === 'block',
+        ...(input.crossVendorAbsent !== undefined
+            ? {crossVendor: {status: 'absent', reason: input.crossVendorAbsent.reason} as const}
+            : {}),
+    })
 
-  // Δ U: a second-vendor absence must be LOUD, never silently dropped. runPanel
-  // records it on the result; this record (the last hop) surfaces it as a warn line
-  // AND threads it onto the envelope below. It is a strength signal — it does NOT
-  // gate the merge gate.
-  if (panel.crossVendorAbsence !== undefined) {
-    log.warn(
-      `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` +
-        panel.crossVendorAbsence.reason,
-    );
-  }
+    // Δ U: a second-vendor absence must be LOUD, never silently dropped. runPanel
+    // records it on the result; this record (the last hop) surfaces it as a warn line
+    // AND threads it onto the envelope below. It is a strength signal — it does NOT
+    // gate the merge gate.
+    if (panel.crossVendorAbsence !== undefined) {
+        log.warn(
+            `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` +
+                panel.crossVendorAbsence.reason
+        )
+    }
 
-  // 5+6. Act on the derived result through the SHARED ladder.
-  //
-  // Crash-safety invariant (fail-closed): reviewers are persisted ONLY on the
-  // advance branch, in the SAME updateTask call that stamps the cursor. On the
-  // escalate/fail branch we do NOT persist reviewers — escalateOrFail owns its
-  // own state write. A crash before the single advance-write means a no-results
-  // re-invoke at verify finds no reviewers → fresh panel spawn (fail-closed);
-  // holdout evidence cannot be bypassed by replaying without holdout results.
-  // (The wait-retry branch's extra fix_findings write, below, is a best-effort
-  // ADDITION to that fresh re-spawn, not a substitute for it — a crash before it
-  // lands just means the next producer rung gets no fix instructions, same as
-  // today's behavior; it can never leak stale reviewer state.)
+    // 5+6. Act on the derived result through the SHARED ladder.
+    //
+    // Crash-safety invariant (fail-closed): reviewers are persisted ONLY on the
+    // advance branch, in the SAME updateTask call that stamps the cursor. On the
+    // escalate/fail branch we do NOT persist reviewers — escalateOrFail owns its
+    // own state write. A crash before the single advance-write means a no-results
+    // re-invoke at verify finds no reviewers → fresh panel spawn (fail-closed);
+    // holdout evidence cannot be bypassed by replaying without holdout results.
+    // (The wait-retry branch's extra fix_findings write, below, is a best-effort
+    // ADDITION to that fresh re-spawn, not a substitute for it — a crash before it
+    // lands just means the next producer rung gets no fix instructions, same as
+    // today's behavior; it can never leak stale reviewer state.)
 
-  let step: TaskStep;
-  if (panel.result.kind === "advance") {
-    // Persist reviewers + stamp the cursor in ONE locked write (advance branch only).
-    // phaseToInFlightStatus is the same mapping markInFlight would apply.
-    const nextPhaseVal = panel.result.to;
-    const nextStatus = phaseToInFlightStatus(nextPhaseVal);
-    await deps.state.updateTask(runId, taskId, (t) => ({
-      ...t,
-      reviewers: [...panel.reviewerResults],
-      phase: nextPhaseVal,
-      status: nextStatus,
-      // A passing verify clears any stale fix-forward record from a prior blocked round.
-      fix_findings: undefined,
-      // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
-      cross_vendor_absent: panel.crossVendorAbsence,
-    }));
-    step = { done: false, phase: nextPhaseVal };
-  } else if (panel.result.kind === "wait-retry") {
-    // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
-    // escalating — the same "separate write ahead of the ladder transition"
-    // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
-    // `{...t}` spread then carries it across the rung bump while it clears reviewers.
-    const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
-    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
-    step = await escalateOrFail(
-      deps,
-      runId,
-      taskId,
-      classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
-      "exec",
-    );
-    await persistStepCursor(deps, runId, taskId, step);
-  } else {
-    throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
-  }
+    let step: TaskStep
+    if (panel.result.kind === 'advance') {
+        // Persist reviewers + stamp the cursor in ONE locked write (advance branch only).
+        // phaseToInFlightStatus is the same mapping markInFlight would apply.
+        const nextPhaseVal = panel.result.to
+        const nextStatus = phaseToInFlightStatus(nextPhaseVal)
+        await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            reviewers: [...panel.reviewerResults],
+            phase: nextPhaseVal,
+            status: nextStatus,
+            // A passing verify clears any stale fix-forward record from a prior blocked round.
+            fix_findings: undefined,
+            // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
+            cross_vendor_absent: panel.crossVendorAbsence,
+        }))
+        step = {done: false, phase: nextPhaseVal}
+    } else if (panel.result.kind === 'wait-retry') {
+        // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
+        // escalating — the same "separate write ahead of the ladder transition"
+        // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
+        // `{...t}` spread then carries it across the rung bump while it clears reviewers.
+        const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
+        await deps.state.updateTask(runId, taskId, (t) => ({...t, fix_findings: fixFindings}))
+        step = await escalateOrFail(
+            deps,
+            runId,
+            taskId,
+            classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
+            'exec'
+        )
+        await persistStepCursor(deps, runId, taskId, step)
+    } else {
+        throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`)
+    }
 
-  return {
-    run_id: runId,
-    task_id: taskId,
-    step,
-    reviewers: panel.reviewerResults,
-    mergeGate: panel.mergeGate,
-    ...(panel.crossVendorAbsence !== undefined
-      ? { crossVendorAbsence: panel.crossVendorAbsence }
-      : {}),
-  };
+    return {
+        run_id: runId,
+        task_id: taskId,
+        step,
+        reviewers: panel.reviewerResults,
+        mergeGate: panel.mergeGate,
+        ...(panel.crossVendorAbsence !== undefined ? {crossVendorAbsence: panel.crossVendorAbsence} : {}),
+    }
 }

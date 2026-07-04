@@ -19,22 +19,22 @@ ground-truth pointers it can gather. Any field may be absent.
 
 ```jsonc
 {
-  "run_id": "<run-id>",
-  "task": {
-    "task_id": "<task-id>",
-    "status": "dropped",
-    "disposition": "dead-end",
-    "failure_class": "spec-defect | capability-budget",
-    "failure_reason": "<string>",
-    "branch": "<branch-or-absent>",
-    "pr_number": 42,
-  },
-  "context": {
-    "worktree_path": "<abs-path-or-null>",
-    "review_files": ["<path>", "..."],
-    "ci_logs_path": "<path-or-null>",
-    "spec_path": "<abs-path-or-null>",
-  },
+    "run_id": "<run-id>",
+    "task": {
+        "task_id": "<task-id>",
+        "status": "dropped",
+        "disposition": "dead-end",
+        "failure_class": "spec-defect | capability-budget",
+        "failure_reason": "<string>",
+        "branch": "<branch-or-absent>",
+        "pr_number": 42,
+    },
+    "context": {
+        "worktree_path": "<abs-path-or-null>",
+        "review_files": ["<path>", "..."],
+        "ci_logs_path": "<path-or-null>",
+        "spec_path": "<abs-path-or-null>",
+    },
 }
 ```
 
@@ -44,10 +44,10 @@ ONE JSON object, the entire final message (the Agent tool returns it to the orch
 
 ```jsonc
 {
-  "decision": "reset | leave-dropped | no-action",
-  "reason": "<one paragraph: root cause + whether it has cleared>",
-  "evidence": ["<file:line or log excerpt>", "..."],
-  "confidence": "high | medium | low",
+    "decision": "reset | leave-dropped | no-action",
+    "reason": "<one paragraph: root cause + whether it has cleared>",
+    "evidence": ["<file:line or log excerpt>", "..."],
+    "confidence": "high | medium | low",
 }
 ```
 
@@ -80,21 +80,21 @@ Input (in the prompt):
 
 ```json
 {
-  "run_id": "run-20260608-101500",
-  "task": {
-    "task_id": "T3",
-    "status": "dropped",
-    "disposition": "dead-end",
-    "failure_class": "capability-budget",
-    "failure_reason": "implementer could not satisfy criterion 2: integration with T1's exporter (module absent)",
-    "branch": "factory/run-20260608-101500/T3"
-  },
-  "context": {
-    "worktree_path": "/repo/.worktrees/factory/run-20260608-101500/T3",
-    "review_files": ["/data/runs/run-20260608-101500/reviews/T3-architecture.json"],
-    "ci_logs_path": null,
-    "spec_path": "/data/specs/acme__widgets/14-exporter/spec.md"
-  }
+    "run_id": "run-20260608-101500",
+    "task": {
+        "task_id": "T3",
+        "status": "dropped",
+        "disposition": "dead-end",
+        "failure_class": "capability-budget",
+        "failure_reason": "implementer could not satisfy criterion 2: integration with T1's exporter (module absent)",
+        "branch": "factory/run-20260608-101500/T3"
+    },
+    "context": {
+        "worktree_path": "/repo/.worktrees/factory/run-20260608-101500/T3",
+        "review_files": ["/data/runs/run-20260608-101500/reviews/T3-architecture.json"],
+        "ci_logs_path": null,
+        "spec_path": "/data/specs/acme__widgets/14-exporter/spec.md"
+    }
 }
 ```
 
@@ -102,13 +102,13 @@ Final message:
 
 ```json
 {
-  "decision": "reset",
-  "reason": "T3 exhausted the ladder because T1's exporter module did not exist at attempt time — every rung failed on the same missing import, not on a capability ceiling. T1 has since shipped (its module is now on staging), so the blocker has cleared and a fresh attempt can satisfy criterion 2. The drop was misclassified capability-budget; resetting is worth one cycle.",
-  "evidence": [
-    "failure_reason: 'integration with T1's exporter (module absent)'",
-    "reviews/T3-architecture.json:12 — 'cannot import ../exporter; T1 not yet merged'",
-    "spec.md:41 — criterion 2 requires T1's exporter, which is a separate shipped task"
-  ],
-  "confidence": "high"
+    "decision": "reset",
+    "reason": "T3 exhausted the ladder because T1's exporter module did not exist at attempt time — every rung failed on the same missing import, not on a capability ceiling. T1 has since shipped (its module is now on staging), so the blocker has cleared and a fresh attempt can satisfy criterion 2. The drop was misclassified capability-budget; resetting is worth one cycle.",
+    "evidence": [
+        "failure_reason: 'integration with T1's exporter (module absent)'",
+        "reviews/T3-architecture.json:12 — 'cannot import ../exporter; T1 not yet merged'",
+        "spec.md:41 — criterion 2 requires T1's exporter, which is a separate shipped task"
+    ],
+    "confidence": "high"
 }
 ```

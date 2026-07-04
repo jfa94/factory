@@ -30,7 +30,7 @@
  * (its reasoning chain). A verifier that reads the finder's reasoning tends to
  * be led by it; a bare checkable claim must stand against the code on its own.
  */
-import type { Finding, FindingSeverity } from "./finding.js";
+import type {Finding, FindingSeverity} from './finding.js'
 
 /**
  * The projection of a finding the independent verifier is allowed to see (S5/B2).
@@ -40,20 +40,20 @@ import type { Finding, FindingSeverity } from "./finding.js";
  * S5/A2), not a grep-relocated one.
  */
 export interface ClaimOnlyFinding {
-  readonly reviewer: string;
-  readonly severity: FindingSeverity;
-  readonly claim: string;
-  readonly file: string;
-  readonly line: number;
-  readonly quote: string;
-  /** Type-level leak guard: an object carrying the reviewer's reasoning fails to compile. */
-  readonly description?: never;
+    readonly reviewer: string
+    readonly severity: FindingSeverity
+    readonly claim: string
+    readonly file: string
+    readonly line: number
+    readonly quote: string
+    /** Type-level leak guard: an object carrying the reviewer's reasoning fails to compile. */
+    readonly description?: never
 }
 
 /** Ground-truth evidence the verifier inspected (audit trail). */
 export interface VerifierEvidence {
-  /** Free-form evidence the verifier cites (e.g. the matched source span). */
-  readonly note: string;
+    /** Free-form evidence the verifier cites (e.g. the matched source span). */
+    readonly note: string
 }
 
 /**
@@ -64,9 +64,9 @@ export interface VerifierEvidence {
  *     UNRESOLVED). Never treated as confirm or refute.
  */
 export type VerifierOutcome =
-  | { readonly status: "confirmed"; readonly evidence: VerifierEvidence }
-  | { readonly status: "refuted"; readonly reason: string }
-  | { readonly status: "error"; readonly reason: string };
+    | {readonly status: 'confirmed'; readonly evidence: VerifierEvidence}
+    | {readonly status: 'refuted'; readonly reason: string}
+    | {readonly status: 'error'; readonly reason: string}
 
 /**
  * What a runner returns for a confirmation request. The runner answers the fixed
@@ -76,10 +76,10 @@ export type VerifierOutcome =
  * unresolved state through as a verdict).
  */
 export interface VerifierVerdict {
-  /** True iff the finding holds against the code (confirmed). */
-  readonly holds: boolean;
-  /** Evidence/reason backing the verdict. */
-  readonly note: string;
+    /** True iff the finding holds against the code (confirmed). */
+    readonly holds: boolean
+    /** Evidence/reason backing the verdict. */
+    readonly note: string
 }
 
 /**
@@ -89,13 +89,13 @@ export interface VerifierVerdict {
  * rejection becomes the `error` outcome, never an auto-confirm.
  */
 export interface FindingVerifierRunner {
-  /**
-   * A STABLE identity for this verifier (e.g. "codex" or "claude:fresh"). Used to
-   * assert the verifier is independent of the finder (different identity).
-   */
-  readonly identity: string;
-  /** Run the single bounded confirmation pass on the claim-only projection. */
-  confirm(finding: ClaimOnlyFinding): Promise<VerifierVerdict>;
+    /**
+     * A STABLE identity for this verifier (e.g. "codex" or "claude:fresh"). Used to
+     * assert the verifier is independent of the finder (different identity).
+     */
+    readonly identity: string
+    /** Run the single bounded confirmation pass on the claim-only projection. */
+    confirm(finding: ClaimOnlyFinding): Promise<VerifierVerdict>
 }
 
 /**
@@ -110,38 +110,38 @@ export interface FindingVerifierRunner {
  *   downgrade.
  */
 export async function confirmBlocker(
-  finding: Finding & { file: string; line: number },
-  runner: FindingVerifierRunner,
-  finderIdentity: string,
-  citedLine?: number,
+    finding: Finding & {file: string; line: number},
+    runner: FindingVerifierRunner,
+    finderIdentity: string,
+    citedLine?: number
 ): Promise<VerifierOutcome> {
-  if (runner.identity === finderIdentity) {
-    throw new Error(
-      `finding-verifier identity '${runner.identity}' equals the finder's — the verifier must be INDEPENDENT (D27)`,
-    );
-  }
+    if (runner.identity === finderIdentity) {
+        throw new Error(
+            `finding-verifier identity '${runner.identity}' equals the finder's — the verifier must be INDEPENDENT (D27)`
+        )
+    }
 
-  // Explicit field-picking — never `...finding`, which would leak `description`.
-  const projection: ClaimOnlyFinding = {
-    reviewer: finding.reviewer,
-    severity: finding.severity,
-    claim: finding.claim,
-    file: finding.file,
-    line: citedLine ?? finding.line,
-    quote: finding.quote,
-  };
+    // Explicit field-picking — never `...finding`, which would leak `description`.
+    const projection: ClaimOnlyFinding = {
+        reviewer: finding.reviewer,
+        severity: finding.severity,
+        claim: finding.claim,
+        file: finding.file,
+        line: citedLine ?? finding.line,
+        quote: finding.quote,
+    }
 
-  let verdict: VerifierVerdict;
-  try {
-    verdict = await runner.confirm(projection);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    // LOUD + UNRESOLVED: a verifier error never auto-confirms and never silently
-    // drops the finding. The caller must decide (and must not ship past it).
-    return { status: "error", reason: `finding-verifier errored: ${detail}` };
-  }
+    let verdict: VerifierVerdict
+    try {
+        verdict = await runner.confirm(projection)
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        // LOUD + UNRESOLVED: a verifier error never auto-confirms and never silently
+        // drops the finding. The caller must decide (and must not ship past it).
+        return {status: 'error', reason: `finding-verifier errored: ${detail}`}
+    }
 
-  return verdict.holds
-    ? { status: "confirmed", evidence: { note: verdict.note } }
-    : { status: "refuted", reason: verdict.note };
+    return verdict.holds
+        ? {status: 'confirmed', evidence: {note: verdict.note}}
+        : {status: 'refuted', reason: verdict.note}
 }

@@ -22,53 +22,54 @@
  * self, cyclic, and duplicate dependency edges are caught LOUDLY at seed time rather
  * than surfacing later as a orchestrator deadlock.
  */
-import { access, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, UsageError, optionalString, parseResultsFlag } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
-import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { StateManager, seedTaskRows, assertAcyclic, specDir } from "../../core/state/index.js";
-import { SpecStore, type SpecManifest } from "../../spec/index.js";
-import { makeRunId, validateId } from "../../shared/ids.js";
-import { nowEpoch } from "../../shared/time.js";
-import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
-import { isTerminalRunStatus } from "../../types/index.js";
-import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
+import {access, readFile} from 'node:fs/promises'
+import {join} from 'node:path'
+import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {parseArgs, UsageError, optionalString, parseResultsFlag} from '../args.js'
+import {emitJson, emitLine, emitError} from '../io.js'
+import {loadConfig, resolveDataDir} from '../../config/index.js'
+import {StateManager, seedTaskRows, assertAcyclic, specDir} from '../../core/state/index.js'
+import {SpecStore, type SpecManifest} from '../../spec/index.js'
+import {makeRunId, validateId} from '../../shared/ids.js'
+import {nowEpoch} from '../../shared/time.js'
+import {nonNull} from '../../shared/index.js'
+import {planResume, StatuslineUsageSignal, type UsageReading} from '../../quota/index.js'
+import {isTerminalRunStatus} from '../../types/index.js'
+import type {Config, RunState, RunStatus, TaskState} from '../../types/index.js'
 import {
-  finalizeRun,
-  runDocsEmit,
-  runDocsRecord,
-  DocsResultsSchema,
-  runE2eEmit,
-  runE2eRecord,
-  E2eResultsSchema,
-  runAssessmentEmit,
-  runAssessmentRecord,
-  AssessmentResultsSchema,
-  runTraceabilityEmit,
-  runTraceabilityRecord,
-  TraceabilityResultsSchema,
-  readJsonInput,
-} from "../../orchestrator/index.js";
-import { loadCliDeps, type CliDeps } from "../wiring.js";
-import { emitMetric } from "../../scoring/index.js";
+    finalizeRun,
+    runDocsEmit,
+    runDocsRecord,
+    DocsResultsSchema,
+    runE2eEmit,
+    runE2eRecord,
+    E2eResultsSchema,
+    runAssessmentEmit,
+    runAssessmentRecord,
+    AssessmentResultsSchema,
+    runTraceabilityEmit,
+    runTraceabilityRecord,
+    TraceabilityResultsSchema,
+    readJsonInput,
+} from '../../orchestrator/index.js'
+import {loadCliDeps, type CliDeps} from '../wiring.js'
+import {emitMetric} from '../../scoring/index.js'
 import {
-  DefaultGitClient,
-  DefaultGhClient,
-  ensureStaging,
-  provisionProtection,
-  runStagingBranch,
-  resolveStagingBranch,
-  resolveRepo,
-  splitRepoSlug,
-  type GitClient,
-  type GhClient,
-} from "../../git/index.js";
-import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
-import { requireAutonomousMode } from "../../autonomy/mode.js";
-import { withUsageGuard, type Subcommand } from "../registry-types.js";
-import { loadGateContract, GATE_CONTRACT_REL } from "../../verifier/deterministic/index.js";
+    DefaultGitClient,
+    DefaultGhClient,
+    ensureStaging,
+    provisionProtection,
+    runStagingBranch,
+    resolveStagingBranch,
+    resolveRepo,
+    splitRepoSlug,
+    type GitClient,
+    type GhClient,
+} from '../../git/index.js'
+import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
+import {requireAutonomousMode} from '../../autonomy/mode.js'
+import {withUsageGuard, type Subcommand} from '../registry-types.js'
+import {loadGateContract, GATE_CONTRACT_REL} from '../../verifier/deterministic/index.js'
 
 const RUN_HELP = `factory run — create or resume a run
 
@@ -90,7 +91,7 @@ Actions:
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
-  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
+  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
@@ -126,7 +127,7 @@ Resolves the spec via the durable store (LOUD if none exists — generate one fi
 On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it — pass
 --resume to continue it or --supersede to replace it; --new (or an explicit --run-id)
 forces a fresh run regardless. Seeds one pending task per spec task and emits the
-RunState JSON (run_id is the top-level field).`;
+RunState JSON (run_id is the top-level field).`
 
 const RESUME_HELP = `factory run resume — re-check quota and resume a paused/suspended run
 
@@ -140,7 +141,7 @@ Emits ONE JSON envelope:
   { kind:"pause", run_id, status, reason, … }  — window has not recovered (state untouched)
   { kind:"debug-resume", run_id, run }         — a /factory:debug run; resume it via factory debug
 
-A terminal run is a loud error (nothing to resume).`;
+A terminal run is a loud error (nothing to resume).`
 
 const FINALIZE_HELP = `factory run finalize — turn an all-terminal run into its shipped outcome
 
@@ -159,7 +160,7 @@ then flips the run terminal — in that resume-safe order. LOUD if any task is s
 non-terminal.
 
 Emits ONE JSON envelope:
-  { kind:"finalized", run, report, rollup?, failure_comment_posted }`;
+  { kind:"finalized", run, report, rollup?, failure_comment_posted }`
 
 const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed; not resumable)
 
@@ -180,7 +181,7 @@ start a fresh run instead. (A session no longer needs this to stop: the Stop hoo
 session end and leaves the run resumable; cancel is for deliberately discarding a run.)
 
 Emits ONE JSON envelope:
-  { kind:"cancelled", run, cleaned_up }`;
+  { kind:"cancelled", run, cleaned_up }`
 
 // ---------------------------------------------------------------------------
 // Seeding (pure)
@@ -194,10 +195,10 @@ Emits ONE JSON envelope:
  * that would otherwise deadlock the orchestrator.
  */
 export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
-  const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
-  const tasks = seedTaskRows(request.tasks, ctx);
-  assertAcyclic(tasks, ctx);
-  return tasks;
+    const ctx = {context: 'run create', specLabel: `spec ${request.spec_id}`}
+    const tasks = seedTaskRows(request.tasks, ctx)
+    assertAcyclic(tasks, ctx)
+    return tasks
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +212,12 @@ export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskSta
  * call `createRun` directly continue to work without fakes.
  */
 export interface RunStagingDeps {
-  readonly gitClient: GitClient;
-  readonly ghClient: GhClient;
-  readonly config: Config;
-  readonly targetRoot: string;
-  readonly owner: string;
-  readonly repo: string;
+    readonly gitClient: GitClient
+    readonly ghClient: GhClient
+    readonly config: Config
+    readonly targetRoot: string
+    readonly owner: string
+    readonly repo: string
 }
 
 /**
@@ -230,8 +231,8 @@ export interface RunStagingDeps {
  * the unused key structurally present, so the `in` test would not discriminate cleanly.
  */
 export type SpecSelector =
-  | { readonly issue: number; readonly specId?: never }
-  | { readonly specId: string; readonly issue?: never };
+    | {readonly issue: number; readonly specId?: never}
+    | {readonly specId: string; readonly issue?: never}
 
 /**
  * The run-creation intent — exactly one of the mutually-exclusive lifecycle modes
@@ -248,34 +249,34 @@ export type SpecSelector =
  *                    kind:"exists" (the caller hand-off is Task 4.2).
  */
 export type RunIntent =
-  | { readonly intent?: "default" }
-  | { readonly intent: "fresh" }
-  | { readonly intent: "supersede" }
-  | { readonly intent: "resume" };
+    | {readonly intent?: 'default'}
+    | {readonly intent: 'fresh'}
+    | {readonly intent: 'supersede'}
+    | {readonly intent: 'resume'}
 
 /** Resolved options for {@link createRun} — {@link SpecSelector} + {@link RunIntent} + run metadata. */
 export type CreateRunOptions = SpecSelector &
-  RunIntent & {
-    readonly repo: string;
-    readonly runId: string;
-    readonly shipMode?: RunState["ship_mode"];
-    /**
-     * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
-     * stamped once onto the run so the Stop hook can session-scope its block. Absent
-     * when the launching session id could not be resolved (best-effort).
-     */
-    readonly ownerSession?: RunState["owner_session"];
-    /** When true, persist `ignore_quota: true` on the run (from `--ignore-quota`). */
-    readonly ignoreQuota?: boolean;
-    /** When true, persist `e2e: true` on the run (from `--e2e`) — opts into the e2e phase. */
-    readonly e2e?: boolean;
-    /**
-     * When true, persist `debug: true` on the run — a `/factory:debug` session
-     * (Decision 39, Task 6). No CLI flag on `run create`; only the debug driver
-     * (`factory debug seed`) ever passes this.
-     */
-    readonly debug?: boolean;
-  };
+    RunIntent & {
+        readonly repo: string
+        readonly runId: string
+        readonly shipMode?: RunState['ship_mode']
+        /**
+         * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
+         * stamped once onto the run so the Stop hook can session-scope its block. Absent
+         * when the launching session id could not be resolved (best-effort).
+         */
+        readonly ownerSession?: RunState['owner_session']
+        /** When true, persist `ignore_quota: true` on the run (from `--ignore-quota`). */
+        readonly ignoreQuota?: boolean
+        /** When true, persist `e2e: true` on the run (from `--e2e`) — opts into the e2e phase. */
+        readonly e2e?: boolean
+        /**
+         * When true, persist `debug: true` on the run — a `/factory:debug` session
+         * (Decision 39, Task 6). No CLI flag on `run create`; only the debug driver
+         * (`factory debug seed`) ever passes this.
+         */
+        readonly debug?: boolean
+    }
 
 /**
  * Resolve the durable spec named by `opts` — by explicit spec-id when given, else
@@ -284,31 +285,29 @@ export type CreateRunOptions = SpecSelector &
  * (resolve-or-reuse) so the spec is resolved exactly once on each path.
  */
 async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promise<SpecManifest> {
-  // The selector is a discriminated union — these two arms are exhaustive (no
-  // neither/both case can reach here, so no defensive fallback is needed). Narrow
-  // on the VALUE (`specId !== undefined`): the `?: never` padding keeps the unused
-  // key structurally present, so `"specId" in opts` would not discriminate cleanly.
-  const request =
-    opts.specId !== undefined
-      ? await specStore.read(opts.repo, opts.specId)
-      : await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (request === null) {
-    throw new Error(
-      `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
-    );
-  }
-  // S9 preflight: the traceability stage reads the durable PRD snapshot at the
-  // END of the run — refuse NOW rather than fail a fully-paid run. In-protocol
-  // Phase 1 (`spec resolve`) always backfills first; this guards the
-  // off-protocol `--spec-id` path onto a pre-S9 spec.
-  if (!(await specStore.hasPrd(request.repo, request.spec_id))) {
-    throw new Error(
-      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) — ` +
-        `run \`factory spec resolve --issue ${request.issue_number}\` to backfill, ` +
-        `or \`--supersede\` to regenerate`,
-    );
-  }
-  return request;
+    // The selector is a discriminated union — these two arms are exhaustive (no
+    // neither/both case can reach here, so no defensive fallback is needed). Narrow
+    // on the VALUE (`specId !== undefined`): the `?: never` padding keeps the unused
+    // key structurally present, so `"specId" in opts` would not discriminate cleanly.
+    const request =
+        opts.specId !== undefined
+            ? await specStore.read(opts.repo, opts.specId)
+            : await specStore.resolveByIssue(opts.repo, opts.issue)
+    if (request === null) {
+        throw new Error(`run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`)
+    }
+    // S9 preflight: the traceability stage reads the durable PRD snapshot at the
+    // END of the run — refuse NOW rather than fail a fully-paid run. In-protocol
+    // Phase 1 (`spec resolve`) always backfills first; this guards the
+    // off-protocol `--spec-id` path onto a pre-S9 spec.
+    if (!(await specStore.hasPrd(request.repo, request.spec_id))) {
+        throw new Error(
+            `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) — ` +
+                `run \`factory spec resolve --issue ${request.issue_number}\` to backfill, ` +
+                `or \`--supersede\` to regenerate`
+        )
+    }
+    return request
 }
 
 /**
@@ -322,56 +321,56 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
  * AFTER the run state row is persisted so `run.run_id` is guaranteed to exist.
  */
 async function createRunFromManifest(
-  state: StateManager,
-  specStore: SpecStore,
-  request: SpecManifest,
-  opts: CreateRunOptions,
-  stagingDeps?: RunStagingDeps,
+    state: StateManager,
+    specStore: SpecStore,
+    request: SpecManifest,
+    opts: CreateRunOptions,
+    stagingDeps?: RunStagingDeps
 ): Promise<RunState> {
-  const seeded = seedTasksFromSpec(request);
-  // Decision 33 hardening: compute the per-run staging branch ONCE and PIN it on the
-  // row, so every later base-ref resolution reads this exact name (never a recompute
-  // that a mid-run naming-scheme change could desync). Reused below for the actual cut.
-  const branch = runStagingBranch(opts.runId);
-  await state.create({
-    run_id: opts.runId,
-    spec: specStore.toPointer(request),
-    staging_branch: branch,
-    // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
-    execution_mode: "sequential",
-    ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
-    ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
-    ...(opts.ignoreQuota === true ? { ignore_quota: true } : {}),
-    ...(opts.e2e === true ? { e2e: true } : {}),
-    ...(opts.debug === true ? { debug: true } : {}),
-  });
-  const run = await state.update(opts.runId, (s) => ({
-    ...s,
-    tasks: seeded,
-    // S11: the launch touch — every run costs at least one human action, so a
-    // clean lights-out run scores exactly 1.0 on the derived touch metric.
-    human_touches: [{ kind: "launch" as const, at: s.started_at }],
-  }));
+    const seeded = seedTasksFromSpec(request)
+    // Decision 33 hardening: compute the per-run staging branch ONCE and PIN it on the
+    // row, so every later base-ref resolution reads this exact name (never a recompute
+    // that a mid-run naming-scheme change could desync). Reused below for the actual cut.
+    const branch = runStagingBranch(opts.runId)
+    await state.create({
+        run_id: opts.runId,
+        spec: specStore.toPointer(request),
+        staging_branch: branch,
+        // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
+        execution_mode: 'sequential',
+        ...(opts.shipMode !== undefined ? {ship_mode: opts.shipMode} : {}),
+        ...(opts.ownerSession !== undefined ? {owner_session: opts.ownerSession} : {}),
+        ...(opts.ignoreQuota === true ? {ignore_quota: true} : {}),
+        ...(opts.e2e === true ? {e2e: true} : {}),
+        ...(opts.debug === true ? {debug: true} : {}),
+    })
+    const run = await state.update(opts.runId, (s) => ({
+        ...s,
+        tasks: seeded,
+        // S11: the launch touch — every run costs at least one human action, so a
+        // clean lights-out run scores exactly 1.0 on the derived touch metric.
+        human_touches: [{kind: 'launch' as const, at: s.started_at}],
+    }))
 
-  // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
-  if (stagingDeps !== undefined) {
-    await ensureStaging({
-      gitClient: stagingDeps.gitClient,
-      stagingBranch: branch,
-      baseBranch: stagingDeps.config.git.baseBranch,
-      cwd: stagingDeps.targetRoot,
-    });
-    await provisionProtection({
-      ghClient: stagingDeps.ghClient,
-      owner: stagingDeps.owner,
-      repo: stagingDeps.repo,
-      branch,
-      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
-      provision: true,
-    });
-  }
+    // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
+    if (stagingDeps !== undefined) {
+        await ensureStaging({
+            gitClient: stagingDeps.gitClient,
+            stagingBranch: branch,
+            baseBranch: stagingDeps.config.git.baseBranch,
+            cwd: stagingDeps.targetRoot,
+        })
+        await provisionProtection({
+            ghClient: stagingDeps.ghClient,
+            owner: stagingDeps.owner,
+            repo: stagingDeps.repo,
+            branch,
+            requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+            provision: true,
+        })
+    }
 
-  return run;
+    return run
 }
 
 /**
@@ -386,12 +385,8 @@ async function createRunFromManifest(
  * goes through `runCreate`, which supplies `stagingDeps`. Do NOT route a real run
  * through here expecting a staging branch (Decision 33).
  */
-export async function createRun(
-  state: StateManager,
-  specStore: SpecStore,
-  opts: CreateRunOptions,
-): Promise<RunState> {
-  return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
+export async function createRun(state: StateManager, specStore: SpecStore, opts: CreateRunOptions): Promise<RunState> {
+    return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts)
 }
 
 /**
@@ -407,16 +402,16 @@ export async function createRun(
  *   `.supersededId` is the old run's id.
  */
 export type ResolveOrCreateResult =
-  | { readonly kind: "created"; readonly run: RunState }
-  | { readonly kind: "exists"; readonly existing: RunState }
-  | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string }
-  /**
-   * A weekly-quota (7d) park is active and `--ignore-quota` was not passed. Creating
-   * or superseding is blocked until the window resets or `--ignore-quota` overrides.
-   * The `--resume` intent is never blocked here (it falls through to the live-gated
-   * `/factory:resume` path, which re-checks the window on the fresh session).
-   */
-  | { readonly kind: "pause"; readonly existing: RunState };
+    | {readonly kind: 'created'; readonly run: RunState}
+    | {readonly kind: 'exists'; readonly existing: RunState}
+    | {readonly kind: 'superseded'; readonly run: RunState; readonly supersededId: string}
+    /**
+     * A weekly-quota (7d) park is active and `--ignore-quota` was not passed. Creating
+     * or superseding is blocked until the window resets or `--ignore-quota` overrides.
+     * The `--resume` intent is never blocked here (it falls through to the live-gated
+     * `/factory:resume` path, which re-checks the window on the fresh session).
+     */
+    | {readonly kind: 'pause'; readonly existing: RunState}
 
 /**
  * Supersede an active run (Decision 35): tear down its protection (GitHub blocks
@@ -431,17 +426,13 @@ export type ResolveOrCreateResult =
  * which finalizes FIRST because its priority is releasing the Stop gate even if teardown
  * fails; supersede has no gate, so a clean, recoverable replacement wins.
  */
-async function supersedeRun(
-  state: StateManager,
-  existing: RunState,
-  stagingDeps: RunStagingDeps,
-): Promise<void> {
-  // Resolve the PINNED branch: superseding must tear down the branch the run actually
-  // cut, not a recompute that a mid-run naming change could have desynced (Decision 33).
-  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
-  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
-  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
-  await state.finalize(existing.run_id, "superseded"); // terminal LAST (resume-safe)
+async function supersedeRun(state: StateManager, existing: RunState, stagingDeps: RunStagingDeps): Promise<void> {
+    // Resolve the PINNED branch: superseding must tear down the branch the run actually
+    // cut, not a recompute that a mid-run naming change could have desynced (Decision 33).
+    const branch = resolveStagingBranch(existing.run_id, existing.staging_branch)
+    await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch)
+    await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch)
+    await state.finalize(existing.run_id, 'superseded') // terminal LAST (resume-safe)
 }
 
 /**
@@ -464,62 +455,58 @@ async function supersedeRun(
  * by the `--supersede` path to delete the old run's branch.
  */
 export async function resolveOrCreateRun(
-  state: StateManager,
-  specStore: SpecStore,
-  opts: CreateRunOptions,
-  stagingDeps?: RunStagingDeps,
+    state: StateManager,
+    specStore: SpecStore,
+    opts: CreateRunOptions,
+    stagingDeps?: RunStagingDeps
 ): Promise<ResolveOrCreateResult> {
-  // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
-  const request = await resolveSpec(specStore, opts);
-  if (opts.intent === "fresh") {
-    return {
-      kind: "created",
-      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
-    };
-  }
-  const pointer = specStore.toPointer(request);
-  return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
-    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
-    if (existing !== null) {
-      // Weekly quota is a hard wall: a 7d-parked run can't be created-fresh or
-      // superseded without --ignore-quota. The `binding_window === "7d"` guard
-      // targets only the weekly park — NOT the `unavailable-halt` suspend (quota:
-      // undefined) or a 5h pause. The `--resume` intent falls through to the
-      // `kind:"exists"` caller path, which hands off to `factory resume` (that
-      // re-checks the LIVE window on the fresh session).
-      const weeklyParked =
-        existing.status === "suspended" && existing.quota?.binding_window === "7d";
-      if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
-        return { kind: "pause", existing };
-      }
-
-      if (opts.intent === "supersede") {
-        if (stagingDeps === undefined) {
-          throw new UsageError("run create --supersede requires the CLI gh deps");
+    // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
+    const request = await resolveSpec(specStore, opts)
+    if (opts.intent === 'fresh') {
+        return {
+            kind: 'created',
+            run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
         }
-        const supersededId = existing.run_id;
-        await supersedeRun(state, existing, stagingDeps);
-        const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
-        // S11: a supersede is a conflict-resolution touch ON TOP of the launch.
-        const run = await state.update(created.run_id, (s) => ({
-          ...s,
-          human_touches: [
-            ...(s.human_touches ?? []),
-            { kind: "conflict" as const, at: s.started_at },
-          ],
-        }));
-        return { kind: "superseded", run, supersededId };
-      }
-      // --resume currently reports the live run (kind:"exists"); the full continue-the-run
-      // hand-off is the caller's job (Task 4.2). No flag-compatibility assert here — that
-      // belongs with the resume implementation, not a premature gate (review #3).
-      return { kind: "exists", existing };
     }
-    return {
-      kind: "created",
-      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
-    };
-  });
+    const pointer = specStore.toPointer(request)
+    return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
+        const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id)
+        if (existing !== null) {
+            // Weekly quota is a hard wall: a 7d-parked run can't be created-fresh or
+            // superseded without --ignore-quota. The `binding_window === "7d"` guard
+            // targets only the weekly park — NOT the `unavailable-halt` suspend (quota:
+            // undefined) or a 5h pause. The `--resume` intent falls through to the
+            // `kind:"exists"` caller path, which hands off to `factory resume` (that
+            // re-checks the LIVE window on the fresh session).
+            const weeklyParked = existing.status === 'suspended' && existing.quota?.binding_window === '7d'
+            if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== 'resume') {
+                return {kind: 'pause', existing}
+            }
+
+            if (opts.intent === 'supersede') {
+                if (stagingDeps === undefined) {
+                    throw new UsageError('run create --supersede requires the CLI gh deps')
+                }
+                const supersededId = existing.run_id
+                await supersedeRun(state, existing, stagingDeps)
+                const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps)
+                // S11: a supersede is a conflict-resolution touch ON TOP of the launch.
+                const run = await state.update(created.run_id, (s) => ({
+                    ...s,
+                    human_touches: [...(s.human_touches ?? []), {kind: 'conflict' as const, at: s.started_at}],
+                }))
+                return {kind: 'superseded', run, supersededId}
+            }
+            // --resume currently reports the live run (kind:"exists"); the full continue-the-run
+            // hand-off is the caller's job (Task 4.2). No flag-compatibility assert here — that
+            // belongs with the resume implementation, not a premature gate (review #3).
+            return {kind: 'exists', existing}
+        }
+        return {
+            kind: 'created',
+            run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -528,35 +515,35 @@ export async function resolveOrCreateRun(
 
 /** The single JSON document `factory run resume` emits — the runner's contract. */
 export type ResumeResult =
-  /**
-   * `cleared` (S11): true iff this resume actually cleared a park (a state write
-   * happened — the human_touches "resume" entry was appended); absent on the
-   * idempotent already-running re-entry. The CLI mirrors the touch to
-   * metrics.jsonl only when set.
-   */
-  | { readonly kind: "resumed"; readonly run: RunState; readonly cleared?: true }
-  | {
-      readonly kind: "pause";
-      readonly run_id: string;
-      readonly status: RunStatus;
-      readonly reason: string;
-      readonly resets_at_epoch?: number;
-    }
-  | {
-      /**
-       * A `debug:true` run resolved through the plain `resume` action. The plain
-       * runner loop's `planResume`/quota-recheck path is NOT for a debug run — it
-       * loops multiple review⇄fix passes on ONE run instead of finalizing as soon as
-       * tasks go terminal (Decision 39, deferred to the debug driver). Returning this
-       * distinct kind, before any quota/planResume logic runs, signals the caller (a
-       * human or `/factory:debug`) to re-enter the debug SKILL rather than drive the
-       * run through the ordinary resume path. Minimal by design: only the CALLER-facing
-       * envelope, not the debug-resume UX itself (that lands with the debug driver).
-       */
-      readonly kind: "debug-resume";
-      readonly run_id: string;
-      readonly run: RunState;
-    };
+    /**
+     * `cleared` (S11): true iff this resume actually cleared a park (a state write
+     * happened — the human_touches "resume" entry was appended); absent on the
+     * idempotent already-running re-entry. The CLI mirrors the touch to
+     * metrics.jsonl only when set.
+     */
+    | {readonly kind: 'resumed'; readonly run: RunState; readonly cleared?: true}
+    | {
+          readonly kind: 'pause'
+          readonly run_id: string
+          readonly status: RunStatus
+          readonly reason: string
+          readonly resets_at_epoch?: number
+      }
+    | {
+          /**
+           * A `debug:true` run resolved through the plain `resume` action. The plain
+           * runner loop's `planResume`/quota-recheck path is NOT for a debug run — it
+           * loops multiple review⇄fix passes on ONE run instead of finalizing as soon as
+           * tasks go terminal (Decision 39, deferred to the debug driver). Returning this
+           * distinct kind, before any quota/planResume logic runs, signals the caller (a
+           * human or `/factory:debug`) to re-enter the debug SKILL rather than drive the
+           * run through the ordinary resume path. Minimal by design: only the CALLER-facing
+           * envelope, not the debug-resume UX itself (that lands with the debug driver).
+           */
+          readonly kind: 'debug-resume'
+          readonly run_id: string
+          readonly run: RunState
+      }
 
 /**
  * The testable core of `run resume`. Reads the run (LOUD if terminal — nothing to
@@ -570,66 +557,66 @@ export type ResumeResult =
  *     leaves state exactly as persisted.
  */
 export async function applyResume(
-  state: StateManager,
-  runId: string,
-  reading: UsageReading,
-  config: Config,
-  nowEpochSec: number,
-  // S11: `touch:false` suppresses the human_touches "resume" append — recover's
-  // route-4 tail (rescue already appended "recover" for the SAME human action).
-  opts: { touch?: boolean } = {},
+    state: StateManager,
+    runId: string,
+    reading: UsageReading,
+    config: Config,
+    nowEpochSec: number,
+    // S11: `touch:false` suppresses the human_touches "resume" append — recover's
+    // route-4 tail (rescue already appended "recover" for the SAME human action).
+    opts: {touch?: boolean} = {}
 ): Promise<ResumeResult> {
-  const run = await state.read(runId);
-  if (isTerminalRunStatus(run.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run.status}); nothing to resume`);
-  }
-  // Decision 39: a debug run is not a plain resume — it loops multiple review⇄fix
-  // passes on this run instead of finalizing once tasks go terminal, so the debug
-  // driver (not planResume/the quota recheck) must drive it. Return early, LOUD and
-  // distinct, before any quota/planResume logic runs or touches state.
-  if (run.debug) {
-    return { kind: "debug-resume", run_id: runId, run };
-  }
+    const run = await state.read(runId)
+    if (isTerminalRunStatus(run.status)) {
+        throw new Error(`run resume: run '${runId}' is terminal (${run.status}); nothing to resume`)
+    }
+    // Decision 39: a debug run is not a plain resume — it loops multiple review⇄fix
+    // passes on this run instead of finalizing once tasks go terminal, so the debug
+    // driver (not planResume/the quota recheck) must drive it. Return early, LOUD and
+    // distinct, before any quota/planResume logic runs or touches state.
+    if (run.debug) {
+        return {kind: 'debug-resume', run_id: runId, run}
+    }
 
-  const plan = planResume(run, reading, config, nowEpochSec);
-  switch (plan.kind) {
-    case "not-resumable":
-      // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
-      return { kind: "resumed", run };
-    case "resume": {
-      const at = new Date(nowEpochSec * 1000).toISOString();
-      const updated = await state.update(runId, (s) => ({
-        ...s,
-        status: plan.clear.status,
-        quota: plan.clear.quota,
-        ...(opts.touch === false
-          ? {}
-          : { human_touches: [...(s.human_touches ?? []), { kind: "resume" as const, at }] }),
-      }));
-      return { kind: "resumed", run: updated, cleared: true };
+    const plan = planResume(run, reading, config, nowEpochSec)
+    switch (plan.kind) {
+        case 'not-resumable':
+            // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
+            return {kind: 'resumed', run}
+        case 'resume': {
+            const at = new Date(nowEpochSec * 1000).toISOString()
+            const updated = await state.update(runId, (s) => ({
+                ...s,
+                status: plan.clear.status,
+                quota: plan.clear.quota,
+                ...(opts.touch === false
+                    ? {}
+                    : {human_touches: [...(s.human_touches ?? []), {kind: 'resume' as const, at}]}),
+            }))
+            return {kind: 'resumed', run: updated, cleared: true}
+        }
+        case 'pause': {
+            const d = plan.decision
+            // NB: two distinct `.kind` unions are in play here — the OUTER `plan.kind`
+            // (ResumePlan: not-resumable | resume | pause, switched above) and this
+            // INNER `d.kind` (QuotaDecision: proceed | pause-5h | suspend-7d | unavailable-halt).
+            // planResume only ever pairs `pause` with a NON-proceed QuotaDecision, so
+            // `proceed` is not expected here — but this is a DEFENSIVE TYPE NARROW, not dead
+            // code: without it the compiler cannot prove `d.reason` (below) exists, since the
+            // `proceed` arm of QuotaDecision carries no `reason`. The guard discharges that.
+            if (d.kind === 'proceed') {
+                return {kind: 'resumed', run}
+            }
+            const base = {
+                kind: 'pause',
+                run_id: runId,
+                status: run.status,
+                reason: d.reason,
+            } as const
+            // pause-5h / suspend-7d carry a reset horizon; unavailable-halt does not.
+            return 'resetsAtEpoch' in d ? {...base, resets_at_epoch: d.resetsAtEpoch} : base
+        }
     }
-    case "pause": {
-      const d = plan.decision;
-      // NB: two distinct `.kind` unions are in play here — the OUTER `plan.kind`
-      // (ResumePlan: not-resumable | resume | pause, switched above) and this
-      // INNER `d.kind` (QuotaDecision: proceed | pause-5h | suspend-7d | unavailable-halt).
-      // planResume only ever pairs `pause` with a NON-proceed QuotaDecision, so
-      // `proceed` is not expected here — but this is a DEFENSIVE TYPE NARROW, not dead
-      // code: without it the compiler cannot prove `d.reason` (below) exists, since the
-      // `proceed` arm of QuotaDecision carries no `reason`. The guard discharges that.
-      if (d.kind === "proceed") {
-        return { kind: "resumed", run };
-      }
-      const base = {
-        kind: "pause",
-        run_id: runId,
-        status: run.status,
-        reason: d.reason,
-      } as const;
-      // pause-5h / suspend-7d carry a reset horizon; unavailable-halt does not.
-      return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -637,13 +624,17 @@ export async function applyResume(
 // ---------------------------------------------------------------------------
 
 function parseIssue(raw: string | boolean | undefined): number | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "string") throw new UsageError("--issue requires a value");
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
-  }
-  return n;
+    if (raw === undefined) {
+        return undefined
+    }
+    if (typeof raw !== 'string') {
+        throw new UsageError('--issue requires a value')
+    }
+    const n = Number(raw)
+    if (!Number.isInteger(n) || n <= 0) {
+        throw new UsageError(`--issue must be a positive integer, got '${raw}'`)
+    }
+    return n
 }
 
 /**
@@ -655,10 +646,10 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
  * resolves the session's own run via `findActiveByOwner`, which requires an owner).
  */
 export function resolveOwnerSession(
-  flag: string | boolean | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+    flag: string | boolean | undefined,
+    env: NodeJS.ProcessEnv = process.env
 ): string | undefined {
-  return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
+    return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID)
 }
 
 /**
@@ -668,10 +659,10 @@ export function resolveOwnerSession(
  * none of these (real clients, real `process.cwd()`, env-resolved data dir).
  */
 export interface RunCreateOverrides {
-  readonly gitClient?: GitClient;
-  readonly ghClient?: GhClient;
-  readonly cwd?: string;
-  readonly dataDir?: string;
+    readonly gitClient?: GitClient
+    readonly ghClient?: GhClient
+    readonly cwd?: string
+    readonly dataDir?: string
 }
 
 /**
@@ -681,39 +672,42 @@ export interface RunCreateOverrides {
  * never set up here" before a run is born, when the fix is still one command.
  */
 async function assertE2ePrereqs(cwd: string): Promise<void> {
-  const missing: string[] = [];
-  let pkgRaw: string | undefined;
-  try {
-    pkgRaw = await readFile(join(cwd, "package.json"), "utf8");
-  } catch {
-    missing.push("package.json");
-  }
-  if (pkgRaw !== undefined) {
-    let hasDep = false;
+    const missing: string[] = []
+    let pkgRaw: string | undefined
     try {
-      const pkg = JSON.parse(pkgRaw) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      hasDep =
-        pkg.dependencies?.["@playwright/test"] !== undefined ||
-        pkg.devDependencies?.["@playwright/test"] !== undefined;
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- reads the target repo's own package.json at cwd, an internal derived path
+        pkgRaw = await readFile(join(cwd, 'package.json'), 'utf8')
     } catch {
-      // Unparseable package.json reads as "dependency not declared" — same remedy.
+        missing.push('package.json')
     }
-    if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
-  }
-  try {
-    await access(join(cwd, "playwright.config.ts"));
-  } catch {
-    missing.push("playwright.config.ts");
-  }
-  if (missing.length > 0) {
-    throw new UsageError(
-      `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. ` +
-        "Run `factory scaffold` to seed playwright.config.ts + e2e/, and install @playwright/test.",
-    );
-  }
+    if (pkgRaw !== undefined) {
+        let hasDep = false
+        try {
+            const pkg = JSON.parse(pkgRaw) as {
+                dependencies?: Record<string, string>
+                devDependencies?: Record<string, string>
+            }
+            hasDep =
+                pkg.dependencies?.['@playwright/test'] !== undefined ||
+                pkg.devDependencies?.['@playwright/test'] !== undefined
+        } catch {
+            // Unparseable package.json reads as "dependency not declared" — same remedy.
+        }
+        if (!hasDep) {
+            missing.push('@playwright/test (dependencies or devDependencies)')
+        }
+    }
+    try {
+        await access(join(cwd, 'playwright.config.ts'))
+    } catch {
+        missing.push('playwright.config.ts')
+    }
+    if (missing.length > 0) {
+        throw new UsageError(
+            `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(', ')}. ` +
+                'Run `factory scaffold` to seed playwright.config.ts + e2e/, and install @playwright/test.'
+        )
+    }
 }
 
 /**
@@ -725,250 +719,250 @@ async function assertE2ePrereqs(cwd: string): Promise<void> {
  * runs created pre-contract are covered by the GateRunner legacy warn.
  */
 async function assertGateContract(cwd: string, gitClient: GitClient): Promise<void> {
-  const load = await loadGateContract(cwd);
-  if (load.state === "absent") {
-    throw new UsageError(
-      `run create: missing ${GATE_CONTRACT_REL} gate contract — run \`factory scaffold\` and commit the contract.`,
-    );
-  }
-  if (load.state === "invalid") {
-    throw new UsageError(
-      `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) — fix it or delete it and re-run \`factory scaffold\`.`,
-    );
-  }
-  if (!(await gitClient.isTracked(GATE_CONTRACT_REL, { cwd }))) {
-    throw new UsageError(
-      `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked — commit it so task worktrees see the contract.`,
-    );
-  }
+    const load = await loadGateContract(cwd)
+    if (load.state === 'absent') {
+        throw new UsageError(
+            `run create: missing ${GATE_CONTRACT_REL} gate contract — run \`factory scaffold\` and commit the contract.`
+        )
+    }
+    if (load.state === 'invalid') {
+        throw new UsageError(
+            `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) — fix it or delete it and re-run \`factory scaffold\`.`
+        )
+    }
+    if (!(await gitClient.isTracked(GATE_CONTRACT_REL, {cwd}))) {
+        throw new UsageError(
+            `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked — commit it so task worktrees see the contract.`
+        )
+    }
 }
 
-export async function runCreate(
-  argv: string[],
-  overrides: RunCreateOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, {
-    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e", "approve-spec"],
-  });
-  if (args.flag("help") === true) {
-    emitLine(CREATE_HELP);
-    return EXIT.OK;
-  }
-  // Mandatory autonomous-mode gate: the pipeline runs unattended, no opt-out.
-  // A run can only be born in the foreground runner session (which has the
-  // env), so gating create here halts non-autonomous runs at the source.
-  requireAutonomousMode();
+export async function runCreate(argv: string[], overrides: RunCreateOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {
+        booleans: ['new', 'no-ship', 'supersede', 'resume', 'ignore-quota', 'e2e', 'approve-spec'],
+    })
+    if (args.flag('help') === true) {
+        emitLine(CREATE_HELP)
+        return EXIT.OK
+    }
+    // Mandatory autonomous-mode gate: the pipeline runs unattended, no opt-out.
+    // A run can only be born in the foreground runner session (which has the
+    // env), so gating create here halts non-autonomous runs at the source.
+    requireAutonomousMode()
 
-  // --repo is OPTIONAL (Prompt G): auto-derive from the origin remote when omitted,
-  // and fail LOUD if an explicit value disagrees with the remote.
-  const cwd = overrides.cwd ?? process.cwd();
-  const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repoSlug = await resolveRepo({
-    explicit: optionalString(args.flag("repo")),
-    cwd,
-    gitClient,
-  });
-  const issue = parseIssue(args.flag("issue"));
-  const specId = optionalString(args.flag("spec-id"));
-  // Collapse the two CLI flags into the exactly-one SpecSelector here, at the
-  // command boundary, so the rest of create works with the type-enforced invariant.
-  let selector: SpecSelector;
-  if (issue !== undefined && specId !== undefined) {
-    throw new UsageError("run create: pass exactly one of --issue or --spec-id");
-  } else if (issue !== undefined) {
-    selector = { issue };
-  } else if (specId !== undefined) {
-    selector = { specId };
-  } else {
-    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
-  }
-  const explicitRunId = optionalString(args.flag("run-id"));
-  const runId = explicitRunId ?? makeRunId();
-  validateId(runId, "run-id");
-  // Terse boolean override over the no-flag default (live). Resolves to a CONCRETE
-  // value so the reuse guard can compare the caller's intent against an existing
-  // run — a bare re-create of a `--no-ship` run must not silently reuse it under
-  // the (different) default intent.
-  const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
-  const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  // Runs must be owned: the Stop hook resolves the session's own run via
-  // findActiveByOwner, which never matches an ownerless run.
-  if (ownerSession === undefined) {
-    throw new UsageError(
-      "run create: runs require an owning session id " +
-        "(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID).",
-    );
-  }
-  // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
-  // --run-id both mean "fresh" (a named id is an address — determinism/tests — not a
-  // reuse request, so it never silently resolves to a different run). On an ACTIVE run,
-  // the "default" intent reports it as kind:"exists" (CONFLICT) — never a silent reuse.
-  const fresh = args.flag("new") === true || explicitRunId !== undefined;
-  const supersede = args.flag("supersede") === true;
-  const resume = args.flag("resume") === true;
-  // --no-ship/--e2e are CREATE-ONLY selectors; --resume continues a run whose
-  // ship_mode + e2e are already fixed (immutable post-create). The combo is
-  // incoherent — reject it loud here, before any orchestrator launches.
-  if (resume && (args.flag("no-ship") === true || args.flag("e2e") === true)) {
-    throw new UsageError(
-      "run create: --no-ship/--e2e are create-only and cannot combine with --resume — " +
-        "a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue " +
-        "the existing run, or use --supersede to start fresh.",
-    );
-  }
-  // S9 (Decision 47): --approve-spec is a create-only park; resuming IS the sign-off.
-  const approveSpec = args.flag("approve-spec") === true;
-  if (approveSpec && resume) {
-    throw new UsageError(
-      "run create: --approve-spec is create-only and cannot combine with --resume — " +
-        "resuming a parked run IS the spec sign-off.",
-    );
-  }
-  const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
-    Boolean,
-  ) as RunIntent["intent"][];
-  if (picked.length > 1) {
-    throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
-  }
-  const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
-  const ignoreQuota = args.flag("ignore-quota") === true;
-  const e2e = args.flag("e2e") === true;
-  if (e2e) await assertE2ePrereqs(cwd);
-  // Contract precondition applies to run BIRTH only — `--resume` continues an
-  // existing run, and pre-contract in-flight runs must stay resumable (their
-  // sweeps take the GateRunner legacy path + warn instead).
-  if (intent !== "resume") await assertGateContract(cwd, gitClient);
-  const hasDataDirOverride = overrides.dataDir !== undefined;
+    // --repo is OPTIONAL (Prompt G): auto-derive from the origin remote when omitted,
+    // and fail LOUD if an explicit value disagrees with the remote.
+    const cwd = overrides.cwd ?? process.cwd()
+    const gitClient = overrides.gitClient ?? new DefaultGitClient()
+    const repoSlug = await resolveRepo({
+        explicit: optionalString(args.flag('repo')),
+        cwd,
+        gitClient,
+    })
+    const issue = parseIssue(args.flag('issue'))
+    const specId = optionalString(args.flag('spec-id'))
+    // Collapse the two CLI flags into the exactly-one SpecSelector here, at the
+    // command boundary, so the rest of create works with the type-enforced invariant.
+    let selector: SpecSelector
+    if (issue !== undefined && specId !== undefined) {
+        throw new UsageError('run create: pass exactly one of --issue or --spec-id')
+    } else if (issue !== undefined) {
+        selector = {issue}
+    } else if (specId !== undefined) {
+        selector = {specId}
+    } else {
+        throw new UsageError('run create requires --issue <n> or --spec-id <id>')
+    }
+    const explicitRunId = optionalString(args.flag('run-id'))
+    const runId = explicitRunId ?? makeRunId()
+    validateId(runId, 'run-id')
+    // Terse boolean override over the no-flag default (live). Resolves to a CONCRETE
+    // value so the reuse guard can compare the caller's intent against an existing
+    // run — a bare re-create of a `--no-ship` run must not silently reuse it under
+    // the (different) default intent.
+    const shipMode: RunState['ship_mode'] = args.flag('no-ship') === true ? 'no-merge' : 'live'
+    const ownerSession = resolveOwnerSession(args.flag('session-id'))
+    // Runs must be owned: the Stop hook resolves the session's own run via
+    // findActiveByOwner, which never matches an ownerless run.
+    if (ownerSession === undefined) {
+        throw new UsageError(
+            'run create: runs require an owning session id ' + '(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID).'
+        )
+    }
+    // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
+    // --run-id both mean "fresh" (a named id is an address — determinism/tests — not a
+    // reuse request, so it never silently resolves to a different run). On an ACTIVE run,
+    // the "default" intent reports it as kind:"exists" (CONFLICT) — never a silent reuse.
+    const fresh = args.flag('new') === true || explicitRunId !== undefined
+    const supersede = args.flag('supersede') === true
+    const resume = args.flag('resume') === true
+    // --no-ship/--e2e are CREATE-ONLY selectors; --resume continues a run whose
+    // ship_mode + e2e are already fixed (immutable post-create). The combo is
+    // incoherent — reject it loud here, before any orchestrator launches.
+    if (resume && (args.flag('no-ship') === true || args.flag('e2e') === true)) {
+        throw new UsageError(
+            'run create: --no-ship/--e2e are create-only and cannot combine with --resume — ' +
+                'a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue ' +
+                'the existing run, or use --supersede to start fresh.'
+        )
+    }
+    // S9 (Decision 47): --approve-spec is a create-only park; resuming IS the sign-off.
+    const approveSpec = args.flag('approve-spec') === true
+    if (approveSpec && resume) {
+        throw new UsageError(
+            'run create: --approve-spec is create-only and cannot combine with --resume — ' +
+                'resuming a parked run IS the spec sign-off.'
+        )
+    }
+    const picked = [supersede && 'supersede', resume && 'resume', fresh && 'fresh'].filter(
+        Boolean
+    ) as RunIntent['intent'][]
+    if (picked.length > 1) {
+        throw new UsageError('run create: pass at most one of --new / --supersede / --resume')
+    }
+    const intent: NonNullable<RunIntent['intent']> = picked[0] ?? 'default'
+    const ignoreQuota = args.flag('ignore-quota') === true
+    const e2e = args.flag('e2e') === true
+    if (e2e) {
+        await assertE2ePrereqs(cwd)
+    }
+    // Contract precondition applies to run BIRTH only — `--resume` continues an
+    // existing run, and pre-contract in-flight runs must stay resumable (their
+    // sweeps take the GateRunner legacy path + warn instead).
+    if (intent !== 'resume') {
+        await assertGateContract(cwd, gitClient)
+    }
+    const hasDataDirOverride = overrides.dataDir !== undefined
 
-  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
-  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
-  const state = new StateManager({ dataDir });
-  const specStore = new SpecStore({ dataDir });
-  // Decision 33: build the staging deps bundle (git + gh + config + root + repo
-  // coords) so createRunFromManifest can cut + protect staging-<run-id> from develop.
-  const ghClient = overrides.ghClient ?? new DefaultGhClient();
-  const { owner, repo } = splitRepoSlug(repoSlug);
-  const stagingDeps: RunStagingDeps = {
-    gitClient,
-    ghClient,
-    config,
-    targetRoot: cwd,
-    owner,
-    repo,
-  };
-  const result = await resolveOrCreateRun(
-    state,
-    specStore,
-    {
-      repo: repoSlug,
-      runId,
-      ...selector,
-      shipMode,
-      ...(ownerSession !== undefined ? { ownerSession } : {}),
-      ...(ignoreQuota ? { ignoreQuota } : {}),
-      ...(e2e ? { e2e } : {}),
-      intent,
-    },
-    stagingDeps,
-  );
-  if (result.kind === "pause") {
-    const r = result.existing;
-    const resets = r.quota?.resets_at_epoch;
-    emitJson({
-      kind: "pause",
-      scope: "7d",
-      run_id: r.run_id,
-      status: r.status,
-      reason: `weekly quota window has not reset; run '${r.run_id}' is parked until the 7d window resets`,
-      ...(resets !== undefined ? { resets_at_epoch: resets } : {}),
-    });
-    emitError(
-      `run create: run '${r.run_id}' is parked on a weekly quota (7d) — ` +
-        `resume after the window resets with /factory:resume, or pass --ignore-quota to override`,
-    );
-    return EXIT.CONFLICT;
-  }
-  if (result.kind === "exists") {
-    emitJson({
-      kind: "exists",
-      existing: { run_id: result.existing.run_id, status: result.existing.status },
-    });
-    emitError(
-      `run create: active run '${result.existing.run_id}' already exists — ` +
-        `pass --resume to continue it or --supersede to replace it`,
-    );
-    return EXIT.CONFLICT;
-  }
-  // S9 (Decision 47): --approve-spec parks the FULLY-created run (staging cut,
-  // tasks seeded) for human spec sign-off — ONE suspend write, NO quota checkpoint
-  // (A2: a non-quota suspend never writes one). `factory resume` clears it (the
-  // sign-off); the runner session STOPS on the parked envelope instead of looping.
-  const park = async (run: RunState) => {
-    const parked = await state.update(run.run_id, (s) => ({
-      ...s,
-      status: "suspended" as const,
-    }));
-    return {
-      run: parked,
-      spec_approval: {
-        spec_path: join(specDir(dataDir, repoSlug, run.spec.spec_id), "spec.md"),
-        note: "run parked for spec approval — review the spec, then run `factory resume`",
-      },
-    };
-  };
-  // S11: mirror the human_touches appends to metrics.jsonl (observability only —
-  // the derived metric reads state, never this stream).
-  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "launch" });
-  if (result.kind === "created") {
-    const out = approveSpec ? await park(result.run) : { run: result.run };
-    emitJson({ kind: "created", ...out });
-    return EXIT.OK;
-  }
-  // kind === "superseded"
-  await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "conflict" });
-  const out = approveSpec ? await park(result.run) : { run: result.run };
-  emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
-  return EXIT.OK;
+    const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})
+    const config = loadConfig(hasDataDirOverride ? {dataDir} : {})
+    const state = new StateManager({dataDir})
+    const specStore = new SpecStore({dataDir})
+    // Decision 33: build the staging deps bundle (git + gh + config + root + repo
+    // coords) so createRunFromManifest can cut + protect staging-<run-id> from develop.
+    const ghClient = overrides.ghClient ?? new DefaultGhClient()
+    const {owner, repo} = splitRepoSlug(repoSlug)
+    const stagingDeps: RunStagingDeps = {
+        gitClient,
+        ghClient,
+        config,
+        targetRoot: cwd,
+        owner,
+        repo,
+    }
+    const result = await resolveOrCreateRun(
+        state,
+        specStore,
+        {
+            repo: repoSlug,
+            runId,
+            ...selector,
+            shipMode,
+            ownerSession,
+            ...(ignoreQuota ? {ignoreQuota} : {}),
+            ...(e2e ? {e2e} : {}),
+            intent,
+        },
+        stagingDeps
+    )
+    if (result.kind === 'pause') {
+        const r = result.existing
+        const resets = r.quota?.resets_at_epoch
+        emitJson({
+            kind: 'pause',
+            scope: '7d',
+            run_id: r.run_id,
+            status: r.status,
+            reason: `weekly quota window has not reset; run '${r.run_id}' is parked until the 7d window resets`,
+            ...(resets !== undefined ? {resets_at_epoch: resets} : {}),
+        })
+        emitError(
+            `run create: run '${r.run_id}' is parked on a weekly quota (7d) — ` +
+                `resume after the window resets with /factory:resume, or pass --ignore-quota to override`
+        )
+        return EXIT.CONFLICT
+    }
+    if (result.kind === 'exists') {
+        emitJson({
+            kind: 'exists',
+            existing: {run_id: result.existing.run_id, status: result.existing.status},
+        })
+        emitError(
+            `run create: active run '${result.existing.run_id}' already exists — ` +
+                `pass --resume to continue it or --supersede to replace it`
+        )
+        return EXIT.CONFLICT
+    }
+    // S9 (Decision 47): --approve-spec parks the FULLY-created run (staging cut,
+    // tasks seeded) for human spec sign-off — ONE suspend write, NO quota checkpoint
+    // (A2: a non-quota suspend never writes one). `factory resume` clears it (the
+    // sign-off); the runner session STOPS on the parked envelope instead of looping.
+    const park = async (run: RunState) => {
+        const parked = await state.update(run.run_id, (s) => ({
+            ...s,
+            status: 'suspended' as const,
+        }))
+        return {
+            run: parked,
+            spec_approval: {
+                spec_path: join(specDir(dataDir, repoSlug, run.spec.spec_id), 'spec.md'),
+                note: 'run parked for spec approval — review the spec, then run `factory resume`',
+            },
+        }
+    }
+    // S11: mirror the human_touches appends to metrics.jsonl (observability only —
+    // the derived metric reads state, never this stream).
+    await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'launch'})
+    if (result.kind === 'created') {
+        const out = approveSpec ? await park(result.run) : {run: result.run}
+        emitJson({kind: 'created', ...out})
+        return EXIT.OK
+    }
+    // kind === "superseded"
+    await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'conflict'})
+    const out = approveSpec ? await park(result.run) : {run: result.run}
+    emitJson({kind: 'superseded', ...out, supersededId: result.supersededId})
+    return EXIT.OK
 }
 
 async function runResume(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["no-ship", "ignore-quota", "e2e"] });
-  if (args.flag("help") === true) {
-    emitLine(RESUME_HELP);
-    return EXIT.OK;
-  }
-  // --no-ship/--e2e select ship/e2e at CREATE; a resumed run keeps them as born
-  // (immutable). Silently ignoring these flags here is the quieter twin of the
-  // create-side footgun — reject loud so neither path can ever imply them on resume.
-  if (args.flag("no-ship") === true || args.flag("e2e") === true) {
-    throw new UsageError(
-      "run resume: --no-ship/--e2e are not valid on resume — a run keeps the " +
-        "ship_mode/e2e it was created with.",
-    );
-  }
-  // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
-  // runs in the foreground `/factory:run resume` session, which has the env.
-  requireAutonomousMode();
+    const args = parseArgs(argv, {booleans: ['no-ship', 'ignore-quota', 'e2e']})
+    if (args.flag('help') === true) {
+        emitLine(RESUME_HELP)
+        return EXIT.OK
+    }
+    // --no-ship/--e2e select ship/e2e at CREATE; a resumed run keeps them as born
+    // (immutable). Silently ignoring these flags here is the quieter twin of the
+    // create-side footgun — reject loud so neither path can ever imply them on resume.
+    if (args.flag('no-ship') === true || args.flag('e2e') === true) {
+        throw new UsageError(
+            'run resume: --no-ship/--e2e are not valid on resume — a run keeps the ' +
+                'ship_mode/e2e it was created with.'
+        )
+    }
+    // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
+    // runs in the foreground `/factory:run resume` session, which has the env.
+    requireAutonomousMode()
 
-  const dataDir = resolveDataDir({});
-  const config = loadConfig({ dataDir });
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "resume");
+    const dataDir = resolveDataDir({})
+    const config = loadConfig({dataDir})
+    const state = new StateManager({dataDir})
+    const runId = await resolveRunId(state, args, 'resume')
 
-  // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
-  // to resume regardless of the live reading. Persisting also prevents re-suspension on
-  // subsequent steps (both orchestrators read run.ignore_quota via the gate).
-  if (args.flag("ignore-quota") === true) {
-    await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
-  }
+    // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
+    // to resume regardless of the live reading. Persisting also prevents re-suspension on
+    // subsequent steps (both orchestrators read run.ignore_quota via the gate).
+    if (args.flag('ignore-quota') === true) {
+        await state.update(runId, (s) => ({...s, ignore_quota: true}))
+    }
 
-  const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
-  if (envelope.kind === "resumed" && envelope.cleared === true) {
-    await emitMetric(dataDir, runId, "human_touch", { kind: "resume" }); // S11 mirror
-  }
-  emitJson(envelope);
-  return EXIT.OK;
+    const reading = await new StatuslineUsageSignal({dataDir}).read()
+    const envelope = await applyResume(state, runId, reading, config, nowEpoch())
+    if (envelope.kind === 'resumed' && envelope.cleared === true) {
+        await emitMetric(dataDir, runId, 'human_touch', {kind: 'resume'}) // S11 mirror
+    }
+    emitJson(envelope)
+    return EXIT.OK
 }
 
 /**
@@ -977,56 +971,57 @@ async function runResume(argv: string[]): Promise<ExitCode> {
  * active run).
  */
 async function resolveRunId(
-  state: StateManager,
-  args: ReturnType<typeof parseArgs>,
-  action: string,
-  overrides: CurrentRunOverrides = {},
+    state: StateManager,
+    args: ReturnType<typeof parseArgs>,
+    action: string,
+    overrides: CurrentRunOverrides = {}
 ): Promise<string> {
-  const explicit = optionalString(args.flag("run"));
-  if (explicit !== undefined) return explicit;
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`run ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
+    const explicit = optionalString(args.flag('run'))
+    if (explicit !== undefined) {
+        return explicit
+    }
+    const current = await readCurrentForCwd(state, overrides)
+    if (current === null) {
+        throw new UsageError(`run ${action}: no --run given and no current run`)
+    }
+    return current.run_id
 }
 
 async function runFinalize(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["no-ship"] });
-  if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP);
-    return EXIT.OK;
-  }
+    const args = parseArgs(argv, {booleans: ['no-ship']})
+    if (args.flag('help') === true) {
+        emitLine(FINALIZE_HELP)
+        return EXIT.OK
+    }
 
-  // --no-ship forces no-merge for THIS finalize; otherwise honor the run's persisted
-  // ship_mode (loadCliDeps falls back to it — never a hard-coded default).
-  const shipMode: RunState["ship_mode"] | undefined =
-    args.flag("no-ship") === true ? "no-merge" : undefined;
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "finalize");
+    // --no-ship forces no-merge for THIS finalize; otherwise honor the run's persisted
+    // ship_mode (loadCliDeps falls back to it — never a hard-coded default).
+    const shipMode: RunState['ship_mode'] | undefined = args.flag('no-ship') === true ? 'no-merge' : undefined
+    const dataDir = resolveDataDir({})
+    const state = new StateManager({dataDir})
+    const runId = await resolveRunId(state, args, 'finalize')
 
-  const deps = await loadCliDeps({
-    dataDir,
-    runId,
-    ...(shipMode !== undefined ? { shipMode } : {}),
-  });
-  const { run, report, rollup, failureCommentPosted } = await finalizeRun(deps, runId);
-  emitJson({
-    kind: "finalized",
-    run,
-    report,
-    ...(rollup !== undefined ? { rollup } : {}),
-    failure_comment_posted: failureCommentPosted,
-  });
-  return EXIT.OK;
+    const deps = await loadCliDeps({
+        dataDir,
+        runId,
+        ...(shipMode !== undefined ? {shipMode} : {}),
+    })
+    const {run, report, rollup, failureCommentPosted} = await finalizeRun(deps, runId)
+    emitJson({
+        kind: 'finalized',
+        run,
+        report,
+        ...(rollup !== undefined ? {rollup} : {}),
+        failure_comment_posted: failureCommentPosted,
+    })
+    return EXIT.OK
 }
 
 const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
 Emit the documentation-phase spawn request, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the phase done, or suspend
-the run on failure. The CLI never spawns scribe — a orchestrator does.`;
+the run on failure. The CLI never spawns scribe — a orchestrator does.`
 
 /**
  * Shared body of the docs/e2e phase subcommands: resolve the run, then either
@@ -1034,41 +1029,35 @@ the run on failure. The CLI never spawns scribe — a orchestrator does.`;
  * the agent — a orchestrator does.
  */
 function phaseCommand<R>(opts: {
-  help: string;
-  phase: string;
-  parse: (raw: unknown) => R;
-  record: (deps: CliDeps, runId: string, results: R) => Promise<unknown>;
-  emit: (deps: CliDeps, runId: string) => Promise<unknown>;
+    help: string
+    phase: string
+    parse: (raw: unknown) => R
+    record: (deps: CliDeps, runId: string, results: R) => Promise<unknown>
+    emit: (deps: CliDeps, runId: string) => Promise<unknown>
 }): (argv: string[]) => Promise<ExitCode> {
-  return async (argv) => {
-    const args = parseArgs(argv, { booleans: [] });
-    if (args.flag("help") === true) {
-      emitLine(opts.help);
-      return EXIT.OK;
+    return async (argv) => {
+        const args = parseArgs(argv, {booleans: []})
+        if (args.flag('help') === true) {
+            emitLine(opts.help)
+            return EXIT.OK
+        }
+        const dataDir = resolveDataDir({})
+        const state = new StateManager({dataDir})
+        const runId = await resolveRunId(state, args, opts.phase)
+        const deps = await loadCliDeps({dataDir, runId})
+        const results = await parseResultsFlag(args, async (path) => opts.parse(await readJsonInput<unknown>(path)))
+        emitJson(results !== undefined ? await opts.record(deps, runId, results) : await opts.emit(deps, runId))
+        return EXIT.OK
     }
-    const dataDir = resolveDataDir({});
-    const state = new StateManager({ dataDir });
-    const runId = await resolveRunId(state, args, opts.phase);
-    const deps = await loadCliDeps({ dataDir, runId });
-    const results = await parseResultsFlag(args, async (path) =>
-      opts.parse(await readJsonInput<unknown>(path)),
-    );
-    emitJson(
-      results !== undefined
-        ? await opts.record(deps, runId, results)
-        : await opts.emit(deps, runId),
-    );
-    return EXIT.OK;
-  };
 }
 
 const runDocs = phaseCommand({
-  help: DOCS_HELP,
-  phase: "docs",
-  parse: (raw) => DocsResultsSchema.parse(raw),
-  record: runDocsRecord,
-  emit: runDocsEmit,
-});
+    help: DOCS_HELP,
+    phase: 'docs',
+    parse: (raw) => DocsResultsSchema.parse(raw),
+    record: runDocsRecord,
+    emit: runDocsEmit,
+})
 
 const TRACE_HELP = `factory run traceability [--run <id>] [--results <path>]
 
@@ -1076,15 +1065,15 @@ Emit the PRD-traceability audit spawn request (S9, Decision 47), or (with
 --results) record the auditor's per-requirement verdicts: all met/partial →
 phase done; any unmet → run condemned (finalize blocks the rollup); a crashed
 auditor retries once, then fails the run. The CLI never spawns the auditor — a
-orchestrator does.`;
+orchestrator does.`
 
 const runTraceability = phaseCommand({
-  help: TRACE_HELP,
-  phase: "traceability",
-  parse: (raw) => TraceabilityResultsSchema.parse(raw),
-  record: runTraceabilityRecord,
-  emit: runTraceabilityEmit,
-});
+    help: TRACE_HELP,
+    phase: 'traceability',
+    parse: (raw) => TraceabilityResultsSchema.parse(raw),
+    record: runTraceabilityRecord,
+    emit: runTraceabilityEmit,
+})
 
 const E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
 
@@ -1092,15 +1081,15 @@ Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
 --results) record the e2e-author's manifest: prove + commit critical journeys,
 run the full suite against staging, and either mark the phase done, reopen a
 mappable failing task with feedback, or fail the run. The CLI never spawns the
-e2e author — a orchestrator does.`;
+e2e author — a orchestrator does.`
 
 const runE2ePhase = phaseCommand({
-  help: E2E_HELP,
-  phase: "e2e",
-  parse: (raw) => E2eResultsSchema.parse(raw),
-  record: runE2eRecord,
-  emit: runE2eEmit,
-});
+    help: E2E_HELP,
+    phase: 'e2e',
+    parse: (raw) => E2eResultsSchema.parse(raw),
+    record: runE2eRecord,
+    emit: runE2eEmit,
+})
 
 const E2E_ASSESS_HELP = `factory run e2e-assess [--run <id>] [--results <path>]
 
@@ -1109,15 +1098,15 @@ record the assessor's verdict: merge validated machinery (e2e/** +
 playwright.config.ts only) and persist the coverage forecast, retry a crashed
 assessor once, or fail the run LOUD on a boot/machinery-impossible verdict
 (every non-terminal task swept blocked-environmental). The CLI never spawns the
-assessor — a orchestrator does.`;
+assessor — a orchestrator does.`
 
 const runE2eAssess = phaseCommand({
-  help: E2E_ASSESS_HELP,
-  phase: "e2e-assess",
-  parse: (raw) => AssessmentResultsSchema.parse(raw),
-  record: runAssessmentRecord,
-  emit: runAssessmentEmit,
-});
+    help: E2E_ASSESS_HELP,
+    phase: 'e2e-assess',
+    parse: (raw) => AssessmentResultsSchema.parse(raw),
+    record: runAssessmentRecord,
+    emit: runAssessmentEmit,
+})
 
 /**
  * Test seam for {@link runCancel}: inject the gh client (the `--cleanup` teardown),
@@ -1125,10 +1114,10 @@ const runE2eAssess = phaseCommand({
  * passes none (real clients, real `process.cwd()`, env-resolved data dir).
  */
 export interface RunCancelOverrides {
-  readonly ghClient?: GhClient;
-  readonly gitClient?: GitClient;
-  readonly cwd?: string;
-  readonly dataDir?: string;
+    readonly ghClient?: GhClient
+    readonly gitClient?: GitClient
+    readonly cwd?: string
+    readonly dataDir?: string
 }
 
 /**
@@ -1147,30 +1136,34 @@ export interface RunCancelOverrides {
  * with how `resume`/`finalize` honor `--run`.
  */
 async function resolveCancelRunId(
-  state: StateManager,
-  args: ReturnType<typeof parseArgs>,
-  sessionId: string | undefined,
-  overrides: CurrentRunOverrides = {},
+    state: StateManager,
+    args: ReturnType<typeof parseArgs>,
+    sessionId: string | undefined,
+    overrides: CurrentRunOverrides = {}
 ): Promise<string> {
-  const explicit = optionalString(args.flag("run"));
-  if (explicit !== undefined) return explicit;
-  if (sessionId !== undefined) {
-    const owned = await state.findAllActiveByOwner(sessionId);
-    if (owned.length === 1) return owned[0]!.run_id;
-    if (owned.length >= 2) {
-      const ids = owned.map((r) => r.run_id).join(", ");
-      throw new UsageError(
-        `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); ` +
-          `pass --run <id> to choose which to cancel`,
-      );
+    const explicit = optionalString(args.flag('run'))
+    if (explicit !== undefined) {
+        return explicit
     }
-    // owned.length === 0 → fall through to the current pointer (the run for this checkout).
-  }
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError("run cancel: no --run given and no owned/current run to cancel");
-  }
-  return current.run_id;
+    if (sessionId !== undefined) {
+        const owned = await state.findAllActiveByOwner(sessionId)
+        if (owned.length === 1) {
+            return nonNull(owned[0]).run_id
+        }
+        if (owned.length >= 2) {
+            const ids = owned.map((r) => r.run_id).join(', ')
+            throw new UsageError(
+                `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); ` +
+                    `pass --run <id> to choose which to cancel`
+            )
+        }
+        // owned.length === 0 → fall through to the current pointer (the run for this checkout).
+    }
+    const current = await readCurrentForCwd(state, overrides)
+    if (current === null) {
+        throw new UsageError('run cancel: no --run given and no owned/current run to cancel')
+    }
+    return current.run_id
 }
 
 /**
@@ -1186,118 +1179,113 @@ async function resolveCancelRunId(
  * required to let a session stop (the Stop hook no longer blocks on pending work); it is the
  * verb for deliberately discarding a run you do not intend to resume.
  */
-export async function runCancel(
-  argv: string[],
-  overrides: RunCancelOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["cleanup"] });
-  if (args.flag("help") === true) {
-    emitLine(CANCEL_HELP);
-    return EXIT.OK;
-  }
-
-  const dataDir = resolveDataDir(
-    overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
-  );
-  const state = new StateManager({ dataDir });
-  const sessionId = resolveOwnerSession(args.flag("session-id"));
-  const currentOverrides: CurrentRunOverrides = {
-    ...(overrides.gitClient !== undefined ? { gitClient: overrides.gitClient } : {}),
-    ...(overrides.cwd !== undefined ? { cwd: overrides.cwd } : {}),
-  };
-  const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
-
-  // Mark terminal via the one sanctioned writer (the CLI bypasses the TCB write-deny
-  // hook by design — it guards Edit/Write tools, not the engine's own fs writes).
-  const run = await state.finalize(runId, "failed");
-
-  const cleanup = args.flag("cleanup") === true;
-  // Resolve the PINNED branch (Decision 33) so any teardown targets the branch the run
-  // actually cut, never a recompute a mid-run rename could have desynced.
-  const branch = resolveStagingBranch(run.run_id, run.staging_branch);
-  let cleanedUp = false;
-  let cleanupError: string | undefined;
-  if (cleanup) {
-    // Reuse the supersede teardown: protection FIRST (GitHub blocks deleting a protected
-    // ref), then delete staging-<run-id> (auto-closing its task PRs). Repo coords come from
-    // the run's OWN spec pointer — cancel needs no cwd/--repo.
-    const ghClient = overrides.ghClient ?? new DefaultGhClient();
-    const { owner, repo } = splitRepoSlug(run.spec.repo);
-    try {
-      await ghClient.deleteProtection(owner, repo, branch);
-      await ghClient.deleteRemoteBranch(owner, repo, branch);
-      cleanedUp = true;
-    } catch (err) {
-      // The run is ALREADY failed — cancel's PRIMARY contract (abandon) is met. A genuine
-      // teardown throw (401/403/5xx; already-gone 404/422 is
-      // tolerated upstream by the gh client) must NOT fail the abandon: surface it LOUD
-      // and exit OK. Retry is safe — deleteProtection/deleteRemoteBranch tolerate an
-      // already-gone branch and finalize is idempotent for `failed`.
-      cleanupError = err instanceof Error ? err.message : String(err);
+export async function runCancel(argv: string[], overrides: RunCancelOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {booleans: ['cleanup']})
+    if (args.flag('help') === true) {
+        emitLine(CANCEL_HELP)
+        return EXIT.OK
     }
-  }
 
-  emitJson({
-    kind: "cancelled",
-    run,
-    cleaned_up: cleanedUp,
-    ...(cleanupError !== undefined ? { cleanup_error: cleanupError } : {}),
-  });
-  if (cleanupError !== undefined) {
-    emitError(
-      `run ${run.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging ` +
-        `branch '${branch}': ${cleanupError}. The branch may still exist — re-run ` +
-        `\`factory run cancel --run ${run.run_id} --cleanup\` to retry the teardown.`,
-    );
-  } else {
-    emitError(
-      `run ${run.run_id} cancelled (marked failed)` +
-        (cleanup
-          ? `; staging branch '${branch}' + its task PRs torn down.`
-          : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`),
-    );
-  }
-  return EXIT.OK;
+    const dataDir = resolveDataDir(overrides.dataDir !== undefined ? {dataDir: overrides.dataDir} : {})
+    const state = new StateManager({dataDir})
+    const sessionId = resolveOwnerSession(args.flag('session-id'))
+    const currentOverrides: CurrentRunOverrides = {
+        ...(overrides.gitClient !== undefined ? {gitClient: overrides.gitClient} : {}),
+        ...(overrides.cwd !== undefined ? {cwd: overrides.cwd} : {}),
+    }
+    const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides)
+
+    // Mark terminal via the one sanctioned writer (the CLI bypasses the TCB write-deny
+    // hook by design — it guards Edit/Write tools, not the engine's own fs writes).
+    const run = await state.finalize(runId, 'failed')
+
+    const cleanup = args.flag('cleanup') === true
+    // Resolve the PINNED branch (Decision 33) so any teardown targets the branch the run
+    // actually cut, never a recompute a mid-run rename could have desynced.
+    const branch = resolveStagingBranch(run.run_id, run.staging_branch)
+    let cleanedUp = false
+    let cleanupError: string | undefined
+    if (cleanup) {
+        // Reuse the supersede teardown: protection FIRST (GitHub blocks deleting a protected
+        // ref), then delete staging-<run-id> (auto-closing its task PRs). Repo coords come from
+        // the run's OWN spec pointer — cancel needs no cwd/--repo.
+        const ghClient = overrides.ghClient ?? new DefaultGhClient()
+        const {owner, repo} = splitRepoSlug(run.spec.repo)
+        try {
+            await ghClient.deleteProtection(owner, repo, branch)
+            await ghClient.deleteRemoteBranch(owner, repo, branch)
+            cleanedUp = true
+        } catch (err) {
+            // The run is ALREADY failed — cancel's PRIMARY contract (abandon) is met. A genuine
+            // teardown throw (401/403/5xx; already-gone 404/422 is
+            // tolerated upstream by the gh client) must NOT fail the abandon: surface it LOUD
+            // and exit OK. Retry is safe — deleteProtection/deleteRemoteBranch tolerate an
+            // already-gone branch and finalize is idempotent for `failed`.
+            cleanupError = err instanceof Error ? err.message : String(err)
+        }
+    }
+
+    emitJson({
+        kind: 'cancelled',
+        run,
+        cleaned_up: cleanedUp,
+        ...(cleanupError !== undefined ? {cleanup_error: cleanupError} : {}),
+    })
+    if (cleanupError !== undefined) {
+        emitError(
+            `run ${run.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging ` +
+                `branch '${branch}': ${cleanupError}. The branch may still exist — re-run ` +
+                `\`factory run cancel --run ${run.run_id} --cleanup\` to retry the teardown.`
+        )
+    } else {
+        emitError(
+            `run ${run.run_id} cancelled (marked failed)` +
+                (cleanup
+                    ? `; staging branch '${branch}' + its task PRs torn down.`
+                    : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`)
+        )
+    }
+    return EXIT.OK
 }
 
 async function run(argv: string[]): Promise<ExitCode> {
-  const action = argv[0];
-  if (action === undefined || action === "--help" || action === "-h") {
-    emitLine(RUN_HELP);
-    return EXIT.OK;
-  }
-  const rest = argv.slice(1);
-  switch (action) {
-    case "create":
-      return runCreate(rest);
-    case "resume":
-      return runResume(rest);
-    case "finalize":
-      return runFinalize(rest);
-    case "traceability":
-      return runTraceability(rest);
-    case "docs":
-      return runDocs(rest);
-    case "e2e":
-      return runE2ePhase(rest);
-    case "e2e-assess":
-      return runE2eAssess(rest);
-    case "cancel":
-      return runCancel(rest);
-    default:
-      throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`,
-      );
-  }
+    const action = argv[0]
+    if (action === undefined || action === '--help' || action === '-h') {
+        emitLine(RUN_HELP)
+        return EXIT.OK
+    }
+    const rest = argv.slice(1)
+    switch (action) {
+        case 'create':
+            return runCreate(rest)
+        case 'resume':
+            return runResume(rest)
+        case 'finalize':
+            return runFinalize(rest)
+        case 'traceability':
+            return runTraceability(rest)
+        case 'docs':
+            return runDocs(rest)
+        case 'e2e':
+            return runE2ePhase(rest)
+        case 'e2e-assess':
+            return runE2eAssess(rest)
+        case 'cancel':
+            return runCancel(rest)
+        default:
+            throw new UsageError(
+                `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+            )
+    }
 }
 
 export const runCommand: Subcommand = {
-  describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
-  run: withUsageGuard("run", run),
-};
+    describe: 'Create or resume a run (create resolves+seeds a spec; resume re-checks quota)',
+    run: withUsageGuard('run', run),
+}
 
 /** Top-level `factory resume` — alias-equivalent of `run resume` (Decision 35). */
 export const resumeCommand: Subcommand = {
-  describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
-  run: withUsageGuard("resume", runResume),
-};
+    describe: 'Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)',
+    run: withUsageGuard('resume', runResume),
+}

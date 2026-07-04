@@ -1,4 +1,9 @@
-import { escapeStrykerGlob } from "./scope.js";
+import {escapeStrykerGlob} from './scope.js'
+// Import `at` directly from assert.js, NOT the ../../shared/index.js barrel: this
+// module is bundled into the dependency-free scaffold template
+// templates/.github/scripts/shard-mutation-scope.mjs, and the barrel re-exports
+// file-lock.js → proper-lockfile, which would drag a third-party dep into it.
+import {at} from '../../shared/assert.js'
 
 /**
  * Cost-aware mutation sharding (the balancer behind the CI `mutation-scope` job).
@@ -19,47 +24,61 @@ import { escapeStrykerGlob } from "./scope.js";
 
 /**
  * Source-lines-of-code: physical lines MINUS blank lines, comment-only lines
- * (`//`, `/* … *​/` blocks, ` * …` JSDoc continuations), and import / re-export
+ * (line comments, block comments, and ` * ` JSDoc continuations), and import / re-export
  * statements (single- and multi-line). A weight proxy for mutant count that —
  * unlike raw line count — does not over-weight this codebase's heavily-JSDoc'd
  * foundational modules (the very files the balancer is trying to spread out).
  *
  * Deliberately a heuristic, not a parser: weights only need to rank files, so a
- * line straddling code and a `*​/` is allowed to count as a comment.
+ * line straddling code and a block-comment terminator is allowed to count as a comment.
  */
 export function sloc(text: string): number {
-  let count = 0;
-  let inBlockComment = false;
-  let inImport = false;
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
+    let count = 0
+    let inBlockComment = false
+    let inImport = false
+    for (const raw of text.split('\n')) {
+        const line = raw.trim()
 
-    if (inBlockComment) {
-      if (line.includes("*/")) inBlockComment = false;
-      continue; // the whole line is comment
-    }
-    if (inImport) {
-      // Multi-line import/export — terminates at the statement's `;`.
-      if (line.includes(";")) inImport = false;
-      continue;
-    }
+        if (inBlockComment) {
+            if (line.includes('*/')) {
+                inBlockComment = false
+            }
+            continue // the whole line is comment
+        }
+        if (inImport) {
+            // Multi-line import/export — terminates at the statement's `;`.
+            if (line.includes(';')) {
+                inImport = false
+            }
+            continue
+        }
 
-    if (line === "") continue;
-    if (line.startsWith("//")) continue;
-    if (line.startsWith("*")) continue; // JSDoc continuation
-    if (line.startsWith("/*")) {
-      if (!line.includes("*/")) inBlockComment = true;
-      continue;
-    }
-    if (/^import\b/.test(line) || /^export\b.*\bfrom\b/.test(line)) {
-      // Opens a (possibly multi-line) import/export-from; skip until terminated.
-      if (!line.includes(";")) inImport = true;
-      continue;
-    }
+        if (line === '') {
+            continue
+        }
+        if (line.startsWith('//')) {
+            continue
+        }
+        if (line.startsWith('*')) {
+            continue
+        } // JSDoc continuation
+        if (line.startsWith('/*')) {
+            if (!line.includes('*/')) {
+                inBlockComment = true
+            }
+            continue
+        }
+        if (/^import\b/.test(line) || /^export\b.*\bfrom\b/.test(line)) {
+            // Opens a (possibly multi-line) import/export-from; skip until terminated.
+            if (!line.includes(';')) {
+                inImport = true
+            }
+            continue
+        }
 
-    count++;
-  }
-  return count;
+        count++
+    }
+    return count
 }
 
 /**
@@ -73,32 +92,32 @@ export function sloc(text: string): number {
  * `[1..n]` and indexes the result positionally), so an empty input yields `n`
  * empty strings. Mirrors the CSV the workflow feeds to `stryker run --mutate`.
  */
-export function shardByCost(
-  files: readonly string[],
-  weights: readonly number[],
-  n: number,
-): string[] {
-  const bins: { load: number; files: string[] }[] = Array.from({ length: Math.max(0, n) }, () => ({
-    load: 0,
-    files: [],
-  }));
-  if (bins.length === 0) return [];
-
-  const items = files.map((file, i) => {
-    const w = weights[i];
-    return { file, weight: typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1 };
-  });
-  // Heaviest first; stable tie-break by path keeps assignment deterministic.
-  items.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-
-  for (const { file, weight } of items) {
-    let lightest = bins[0]!;
-    for (const bin of bins) {
-      if (bin.load < lightest.load) lightest = bin;
+export function shardByCost(files: readonly string[], weights: readonly number[], n: number): string[] {
+    const bins: {load: number; files: string[]}[] = Array.from({length: Math.max(0, n)}, () => ({
+        load: 0,
+        files: [],
+    }))
+    if (bins.length === 0) {
+        return []
     }
-    lightest.files.push(file);
-    lightest.load += weight;
-  }
 
-  return bins.map((b) => b.files.map(escapeStrykerGlob).join(","));
+    const items = files.map((file, i) => {
+        const w = weights[i]
+        return {file, weight: typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 1}
+    })
+    // Heaviest first; stable tie-break by path keeps assignment deterministic.
+    items.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+
+    for (const {file, weight} of items) {
+        let lightest = at(bins, 0)
+        for (const bin of bins) {
+            if (bin.load < lightest.load) {
+                lightest = bin
+            }
+        }
+        lightest.files.push(file)
+        lightest.load += weight
+    }
+
+    return bins.map((b) => b.files.map(escapeStrykerGlob).join(','))
 }

@@ -18,7 +18,7 @@
  * is still "one place", and is intended to migrate into `src/config` (WS0-owned)
  * as a committed `review.model` default in a follow-up.
  */
-import type { Config } from "../../config/schema.js";
+import type {Config} from '../../config/schema.js'
 
 /**
  * The documented FALLBACK reviewer model when `config.review.model` is unset.
@@ -27,18 +27,18 @@ import type { Config } from "../../config/schema.js";
  * kept in sync. NOT a scattered literal: it is referenced only from
  * {@link resolveReviewModel}.
  */
-export const FALLBACK_REVIEW_MODEL = "opus" as const;
+export const FALLBACK_REVIEW_MODEL = 'opus' as const
 
 /** The judgment-domain view of the config WS7 actually needs. */
 export interface JudgmentConfig {
-  /** The FIXED reviewer model — identical for every reviewer, every task. */
-  readonly reviewModel: string;
-  /** Turn budget for a deep (panel) review pass — D26 fixed depth. */
-  readonly maxTurnsDeep: number;
-  /** Cross-vendor (Codex) model id, if configured; else absent. */
-  readonly codexModel?: string;
-  /** Whether retained finding text is redacted before it is surfaced (Δ K). */
-  readonly redactFindings: boolean;
+    /** The FIXED reviewer model — identical for every reviewer, every task. */
+    readonly reviewModel: string
+    /** Turn budget for a deep (panel) review pass — D26 fixed depth. */
+    readonly maxTurnsDeep: number
+    /** Cross-vendor (Codex) model id, if configured; else absent. */
+    readonly codexModel?: string
+    /** Whether retained finding text is redacted before it is surfaced (Δ K). */
+    readonly redactFindings: boolean
 }
 
 /**
@@ -48,15 +48,13 @@ export interface JudgmentConfig {
  * it structurally impossible (there is nowhere to pass a RiskTier).
  */
 export function resolveReviewModel(config: Config): string {
-  const m = config.review.model;
-  if (m !== undefined && m.trim().length === 0) {
-    // A configured-but-empty model is a misconfiguration, not "use the default":
-    // fail loud rather than silently falling back (Δ T — the model is load-bearing).
-    throw new Error(
-      "review.model is configured but empty — set a non-empty fixed reviewer model or unset it",
-    );
-  }
-  return m ?? FALLBACK_REVIEW_MODEL;
+    const m = config.review.model
+    if (m?.trim().length === 0) {
+        // A configured-but-empty model is a misconfiguration, not "use the default":
+        // fail loud rather than silently falling back (Δ T — the model is load-bearing).
+        throw new Error('review.model is configured but empty — set a non-empty fixed reviewer model or unset it')
+    }
+    return m ?? FALLBACK_REVIEW_MODEL
 }
 
 /**
@@ -64,10 +62,10 @@ export function resolveReviewModel(config: Config): string {
  * Pure; reads only existing seam fields.
  */
 export function resolveJudgmentConfig(config: Config): JudgmentConfig {
-  const base: JudgmentConfig = {
-    reviewModel: resolveReviewModel(config),
-    maxTurnsDeep: config.review.maxTurnsDeep,
-    redactFindings: config.quality.securityRedactFindings,
-  };
-  return config.codex.model !== undefined ? { ...base, codexModel: config.codex.model } : base;
+    const base: JudgmentConfig = {
+        reviewModel: resolveReviewModel(config),
+        maxTurnsDeep: config.review.maxTurnsDeep,
+        redactFindings: config.quality.securityRedactFindings,
+    }
+    return config.codex.model !== undefined ? {...base, codexModel: config.codex.model} : base
 }

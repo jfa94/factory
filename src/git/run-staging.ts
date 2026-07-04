@@ -10,14 +10,14 @@
  * A flat `staging-<run-id>` shares no path segment with `refs/heads/staging`, so
  * the two coexist regardless of the target repo's branch layout.
  */
-export const RUN_STAGING_PREFIX = "staging";
+export const RUN_STAGING_PREFIX = 'staging'
 
 /** Map a run id to its per-run staging branch (`staging-<run-id>`). LOUD on empty. */
 export function runStagingBranch(runId: string): string {
-  if (runId.length === 0) {
-    throw new Error("runStagingBranch: empty run id (would yield a bare 'staging-' branch)");
-  }
-  return `${RUN_STAGING_PREFIX}-${runId}`;
+    if (runId.length === 0) {
+        throw new Error("runStagingBranch: empty run id (would yield a bare 'staging-' branch)")
+    }
+    return `${RUN_STAGING_PREFIX}-${runId}`
 }
 
 /**
@@ -32,8 +32,8 @@ export function runStagingBranch(runId: string): string {
  * empty-run-id loud guard.
  */
 export function resolveStagingBranch(runId: string, pinned?: string): string {
-  if (pinned !== undefined && pinned.length > 0) {
-    return pinned;
-  }
-  return runStagingBranch(runId);
+    if (pinned !== undefined && pinned.length > 0) {
+        return pinned
+    }
+    return runStagingBranch(runId)
 }

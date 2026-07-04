@@ -23,12 +23,13 @@
  * is computed INSIDE the update mutator (on the locked snapshot) so a concurrent
  * writer cannot race the scan against the write.
  */
-import { scanRun } from "./scan.js";
-import { effectiveAutoResets } from "./auto.js";
-import type { StateManager } from "../core/state/index.js";
-import { isTerminalRunStatus } from "../types/index.js";
-import { nowIso } from "../shared/time.js";
-import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js";
+import {scanRun} from './scan.js'
+import {effectiveAutoResets} from './auto.js'
+import type {StateManager} from '../core/state/index.js'
+import {isTerminalRunStatus} from '../types/index.js'
+import {nowIso} from '../shared/time.js'
+import {nonNull} from '../shared/assert.js'
+import type {E2ePhase, RunState, RunStatus, TaskState} from '../types/index.js'
 
 /**
  * Clear a `failed` e2e_phase verdict so `wantsE2e` (orchestrator/next.ts) re-enters
@@ -60,114 +61,116 @@ import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js
  * orchestrator/deps.ts → rescue/index.ts → rescue/apply.ts.
  */
 function reopenE2ePhase(phase: E2ePhase): E2ePhase | undefined {
-  if (phase.manifest.length === 0) return undefined;
-  const {
-    status: _status,
-    reason: _reason,
-    advisory: _advisory,
-    ended_at: _endedAt,
-    adjudication: _adjudication,
-    ...rest
-  } = phase;
-  return rest;
+    if (phase.manifest.length === 0) {
+        return undefined
+    }
+    const {
+        status: _status,
+        reason: _reason,
+        advisory: _advisory,
+        ended_at: _endedAt,
+        adjudication: _adjudication,
+        ...rest
+    } = phase
+    return rest
 }
 
 /** Options narrowing what a `rescue apply` resets. */
 export interface RescueApplyOptions {
-  /**
-   * Explicit task ids to reset. When provided (non-empty) it OVERRIDES the
-   * default resettable set: each named task is reset unless it is `done` (a LOUD
-   * error — would un-ship) or already `pending` (a no-op, recorded in `skipped`).
-   * A missing id is a LOUD error. Naming a task is itself the human assertion, so
-   * an explicit dead-end IS reset (no `--include-dead-ends` needed).
-   */
-  tasks?: readonly string[];
-  /**
-   * Also reset dead-end failures (`spec-defect`/`capability-budget`). Ignored when
-   * explicit `tasks` are given (those are reset regardless). The human is
-   * asserting the root cause is fixed; default is `false` (don't repeat dead ends).
-   */
-  includeDeadEnds?: boolean;
-  /**
-   * Clear a `failed` e2e_phase verdict (Decision 39) so the phase re-enters and
-   * re-derives on the next pass. Ignored when `run.e2e_phase?.status !== "failed"`.
-   * The human is asserting the underlying cause (flaky infra, a since-fixed app bug,
-   * a reopen-cap exhaustion worth retrying) no longer applies — default `false`
-   * (don't silently auto-retry a failed verdict). Alone sufficient to reopen a
-   * terminal run even when no task itself is resettable.
-   *
-   * ALSO drops a `failed` e2e_assessment (Decision 40) — the WHOLE object, so
-   * `wantsE2eAssessment` re-fires a fresh assessor on the next drive (unlike the
-   * phase, there is no authored manifest worth preserving; the swept tasks are the
-   * scan's `recoverable` set and reset via the normal default path).
-   */
-  resetE2e?: boolean;
-  /**
-   * Reopen a `completed` run whose rollup ARMED but never landed
-   * (`run.rollup?.merged === false` — e.g. the "auto-armed" branch-policy
-   * fallback, finding #5) so a re-drive re-enters `finalizeRun`. Its rollup()
-   * resume-guard then finds the (by-then, hopefully) merged PR and completes the
-   * PRD-close + branch-GC. Ignored when `run.rollup` is absent or already merged.
-   * No task/e2e state is touched — this is purely a reopen; finalize re-derives
-   * and re-persists (or clears) `rollup` itself. Default `false` — a human is
-   * asserting the queued merge landed (or is worth re-checking), not silently
-   * auto-polled. Alone sufficient to reopen a terminal run.
-   */
-  recheckRollup?: boolean;
-  /**
-   * The bounded self-heal path (`factory recover --auto`, S10 / Decision 48).
-   * Mutually exclusive with every manual option above (a LOUD error, not a
-   * merge): the auto-safe target set is computed INSIDE the locked mutator via
-   * {@link effectiveAutoResets} — stuck ∪ recoverable, filtered to tasks that
-   * are actionable post-reset. Requires `(run.self_heal?.attempts ?? 0) === 0`
-   * and a non-empty effective set; otherwise the apply is a no-op and the
-   * result carries `auto_blocked` so the CLI pages instead of resetting.
-   * On success, `self_heal: {attempts: +1, last_at: at}` is stamped in the SAME
-   * mutation as the resets (the sanctioned stored-event exception).
-   */
-  auto?: { at: string };
-  /**
-   * ISO stamp for the human_touches `recover` entry a manual (non-auto) apply
-   * that actually does work appends (S11). Defaults to {@link nowIso}; tests pin it.
-   */
-  at?: string;
+    /**
+     * Explicit task ids to reset. When provided (non-empty) it OVERRIDES the
+     * default resettable set: each named task is reset unless it is `done` (a LOUD
+     * error — would un-ship) or already `pending` (a no-op, recorded in `skipped`).
+     * A missing id is a LOUD error. Naming a task is itself the human assertion, so
+     * an explicit dead-end IS reset (no `--include-dead-ends` needed).
+     */
+    tasks?: readonly string[]
+    /**
+     * Also reset dead-end failures (`spec-defect`/`capability-budget`). Ignored when
+     * explicit `tasks` are given (those are reset regardless). The human is
+     * asserting the root cause is fixed; default is `false` (don't repeat dead ends).
+     */
+    includeDeadEnds?: boolean
+    /**
+     * Clear a `failed` e2e_phase verdict (Decision 39) so the phase re-enters and
+     * re-derives on the next pass. Ignored when `run.e2e_phase?.status !== "failed"`.
+     * The human is asserting the underlying cause (flaky infra, a since-fixed app bug,
+     * a reopen-cap exhaustion worth retrying) no longer applies — default `false`
+     * (don't silently auto-retry a failed verdict). Alone sufficient to reopen a
+     * terminal run even when no task itself is resettable.
+     *
+     * ALSO drops a `failed` e2e_assessment (Decision 40) — the WHOLE object, so
+     * `wantsE2eAssessment` re-fires a fresh assessor on the next drive (unlike the
+     * phase, there is no authored manifest worth preserving; the swept tasks are the
+     * scan's `recoverable` set and reset via the normal default path).
+     */
+    resetE2e?: boolean
+    /**
+     * Reopen a `completed` run whose rollup ARMED but never landed
+     * (`run.rollup?.merged === false` — e.g. the "auto-armed" branch-policy
+     * fallback, finding #5) so a re-drive re-enters `finalizeRun`. Its rollup()
+     * resume-guard then finds the (by-then, hopefully) merged PR and completes the
+     * PRD-close + branch-GC. Ignored when `run.rollup` is absent or already merged.
+     * No task/e2e state is touched — this is purely a reopen; finalize re-derives
+     * and re-persists (or clears) `rollup` itself. Default `false` — a human is
+     * asserting the queued merge landed (or is worth re-checking), not silently
+     * auto-polled. Alone sufficient to reopen a terminal run.
+     */
+    recheckRollup?: boolean
+    /**
+     * The bounded self-heal path (`factory recover --auto`, S10 / Decision 48).
+     * Mutually exclusive with every manual option above (a LOUD error, not a
+     * merge): the auto-safe target set is computed INSIDE the locked mutator via
+     * {@link effectiveAutoResets} — stuck ∪ recoverable, filtered to tasks that
+     * are actionable post-reset. Requires `(run.self_heal?.attempts ?? 0) === 0`
+     * and a non-empty effective set; otherwise the apply is a no-op and the
+     * result carries `auto_blocked` so the CLI pages instead of resetting.
+     * On success, `self_heal: {attempts: +1, last_at: at}` is stamped in the SAME
+     * mutation as the resets (the sanctioned stored-event exception).
+     */
+    auto?: {at: string}
+    /**
+     * ISO stamp for the human_touches `recover` entry a manual (non-auto) apply
+     * that actually does work appends (S11). Defaults to {@link nowIso}; tests pin it.
+     */
+    at?: string
 }
 
 /** What a `rescue apply` did. */
 export interface RescueApplyResult {
-  run_id: string;
-  /** The run status AFTER apply (`running` if it was reopened). */
-  run_status: RunStatus;
-  /** Task ids reset to `pending` (in run.tasks order, or `tasks` order if explicit). */
-  reset: string[];
-  /** True iff a terminal run was reopened to `running` (had work to reset). */
-  reopened: boolean;
-  /** Explicitly-named ids that were no-ops because already `pending`. */
-  skipped: string[];
-  /**
-   * Why an `auto` apply refused to reset: the one self-heal cycle already ran
-   * (`attempts`) or nothing is effectively resettable (`empty`). Absent on a
-   * successful auto and on every non-auto apply.
-   */
-  auto_blocked?: "attempts" | "empty";
-  /** `self_heal.attempts` AFTER a successful auto apply; absent otherwise. */
-  self_heal_attempts?: number;
-  /**
-   * True iff a manual apply actually did work and appended a human_touches
-   * `recover` entry (S11) — the CLI mirrors the touch to metrics.jsonl on this.
-   * Always false on `auto` (self-heal is not a human) and on pure no-ops.
-   */
-  touched: boolean;
+    run_id: string
+    /** The run status AFTER apply (`running` if it was reopened). */
+    run_status: RunStatus
+    /** Task ids reset to `pending` (in run.tasks order, or `tasks` order if explicit). */
+    reset: string[]
+    /** True iff a terminal run was reopened to `running` (had work to reset). */
+    reopened: boolean
+    /** Explicitly-named ids that were no-ops because already `pending`. */
+    skipped: string[]
+    /**
+     * Why an `auto` apply refused to reset: the one self-heal cycle already ran
+     * (`attempts`) or nothing is effectively resettable (`empty`). Absent on a
+     * successful auto and on every non-auto apply.
+     */
+    auto_blocked?: 'attempts' | 'empty'
+    /** `self_heal.attempts` AFTER a successful auto apply; absent otherwise. */
+    self_heal_attempts?: number
+    /**
+     * True iff a manual apply actually did work and appended a human_touches
+     * `recover` entry (S11) — the CLI mirrors the touch to metrics.jsonl on this.
+     * Always false on `auto` (self-heal is not a human) and on pure no-ops.
+     */
+    touched: boolean
 }
 
 /** Optional overrides applied on top of a plain {@link resetTaskRow} reset. */
 export interface ResetTaskRowOpts {
-  /**
-   * Fresh e2e-reopen feedback to stamp onto the reset row (Decision 39). When
-   * omitted, whatever `e2e_feedback` the task already carries flows through
-   * UNCHANGED — see the field's own note below.
-   */
-  e2eFeedback?: string;
+    /**
+     * Fresh e2e-reopen feedback to stamp onto the reset row (Decision 39). When
+     * omitted, whatever `e2e_feedback` the task already carries flows through
+     * UNCHANGED — see the field's own note below.
+     */
+    e2eFeedback?: string
 }
 
 /**
@@ -189,30 +192,30 @@ export interface ResetTaskRowOpts {
  * "what a reset clears/keeps", shared by both call sites. Exported for that reuse.
  */
 export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): TaskState {
-  // Destructure OUT the fields a reset must clear; keep the rest verbatim.
-  const {
-    failure_class: _failureClass,
-    failure_reason: _failureReason,
-    producer_role: _producerRole,
-    test_revision_feedback: _testRevisionFeedback,
-    started_at: _startedAt,
-    ended_at: _endedAt,
-    phase: _phase,
-    // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
-    // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
-    // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
-    // recreated worktree to the pre-rescue tip_sha.
-    spawn_in_flight: _spawnInFlight,
-    ...rest
-  } = task;
-  return {
-    ...rest,
-    status: "pending",
-    escalation_rung: 0,
-    reviewers: [],
-    merge_resyncs: 0,
-    ...(opts.e2eFeedback !== undefined ? { e2e_feedback: opts.e2eFeedback } : {}),
-  };
+    // Destructure OUT the fields a reset must clear; keep the rest verbatim.
+    const {
+        failure_class: _failureClass,
+        failure_reason: _failureReason,
+        producer_role: _producerRole,
+        test_revision_feedback: _testRevisionFeedback,
+        started_at: _startedAt,
+        ended_at: _endedAt,
+        phase: _phase,
+        // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
+        // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
+        // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
+        // recreated worktree to the pre-rescue tip_sha.
+        spawn_in_flight: _spawnInFlight,
+        ...rest
+    } = task
+    return {
+        ...rest,
+        status: 'pending',
+        escalation_rung: 0,
+        reviewers: [],
+        merge_resyncs: 0,
+        ...(opts.e2eFeedback !== undefined ? {e2e_feedback: opts.e2eFeedback} : {}),
+    }
 }
 
 /**
@@ -220,39 +223,34 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
  * explicitly-named ids skipped for already being `pending`. THROWS on an explicit
  * id that is missing or `done`. See {@link RescueApplyOptions}.
  */
-function selectTargets(
-  run: RunState,
-  opts: RescueApplyOptions,
-): { targets: string[]; skipped: string[] } {
-  const explicit = opts.tasks ?? [];
-  if (explicit.length > 0) {
-    const targets: string[] = [];
-    const skipped: string[] = [];
-    for (const id of explicit) {
-      const task = run.tasks[id];
-      if (task === undefined) {
-        throw new Error(`rescue: run '${run.run_id}' has no task '${id}'`);
-      }
-      if (task.status === "done") {
-        throw new Error(
-          `rescue: refusing to reset shipped task '${id}' (status 'done') — would un-ship merged work`,
-        );
-      }
-      if (task.status === "pending") {
-        skipped.push(id); // already runnable — nothing to reset
-        continue;
-      }
-      targets.push(id);
+function selectTargets(run: RunState, opts: RescueApplyOptions): {targets: string[]; skipped: string[]} {
+    const explicit = opts.tasks ?? []
+    if (explicit.length > 0) {
+        const targets: string[] = []
+        const skipped: string[] = []
+        for (const id of explicit) {
+            const task = run.tasks[id]
+            if (task === undefined) {
+                throw new Error(`rescue: run '${run.run_id}' has no task '${id}'`)
+            }
+            if (task.status === 'done') {
+                throw new Error(
+                    `rescue: refusing to reset shipped task '${id}' (status 'done') — would un-ship merged work`
+                )
+            }
+            if (task.status === 'pending') {
+                skipped.push(id) // already runnable — nothing to reset
+                continue
+            }
+            targets.push(id)
+        }
+        return {targets, skipped}
     }
-    return { targets, skipped };
-  }
 
-  // Default: the scan's resettable set, plus dead-ends only when asserted-fixed.
-  const scan = scanRun(run);
-  const targets = opts.includeDeadEnds
-    ? [...scan.resettable, ...scan.dead_ends]
-    : [...scan.resettable];
-  return { targets, skipped: [] };
+    // Default: the scan's resettable set, plus dead-ends only when asserted-fixed.
+    const scan = scanRun(run)
+    const targets = opts.includeDeadEnds === true ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable]
+    return {targets, skipped: []}
 }
 
 /**
@@ -263,121 +261,122 @@ function selectTargets(
  * and is a no-op with `reopened:false`.
  */
 export async function applyRescue(
-  state: StateManager,
-  runId: string,
-  opts: RescueApplyOptions = {},
+    state: StateManager,
+    runId: string,
+    opts: RescueApplyOptions = {}
 ): Promise<RescueApplyResult> {
-  let result: RescueApplyResult | null = null;
+    let result: RescueApplyResult | null = null
 
-  if (
-    opts.auto !== undefined &&
-    ((opts.tasks?.length ?? 0) > 0 ||
-      opts.includeDeadEnds === true ||
-      opts.resetE2e === true ||
-      opts.recheckRollup === true)
-  ) {
-    throw new Error(
-      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup)",
-    );
-  }
+    if (
+        opts.auto !== undefined &&
+        ((opts.tasks?.length ?? 0) > 0 ||
+            opts.includeDeadEnds === true ||
+            opts.resetE2e === true ||
+            opts.recheckRollup === true)
+    ) {
+        throw new Error(
+            'rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup)'
+        )
+    }
 
-  const updated = await state.update(runId, (run) => {
-    // The bounded self-heal path: targets + gating computed on the LOCKED snapshot,
-    // and the self_heal ledger stamped in the same mutation as the resets.
-    if (opts.auto !== undefined) {
-      const attempts = run.self_heal?.attempts ?? 0;
-      const noop = (blocked: "attempts" | "empty"): RunState => {
+    const updated = await state.update(runId, (run) => {
+        // The bounded self-heal path: targets + gating computed on the LOCKED snapshot,
+        // and the self_heal ledger stamped in the same mutation as the resets.
+        if (opts.auto !== undefined) {
+            const attempts = run.self_heal?.attempts ?? 0
+            const noop = (blocked: 'attempts' | 'empty'): RunState => {
+                result = {
+                    run_id: runId,
+                    run_status: run.status,
+                    reset: [],
+                    reopened: false,
+                    skipped: [],
+                    auto_blocked: blocked,
+                    touched: false,
+                }
+                return run
+            }
+            if (attempts > 0) {
+                return noop('attempts')
+            }
+            const targets = effectiveAutoResets(run, scanRun(run))
+            if (targets.length === 0) {
+                return noop('empty')
+            }
+
+            const reopen = isTerminalRunStatus(run.status)
+            result = {
+                run_id: runId,
+                run_status: reopen ? 'running' : run.status,
+                reset: targets,
+                reopened: reopen,
+                skipped: [],
+                self_heal_attempts: attempts + 1,
+                touched: false, // self-heal is not a human (S11)
+            }
+            const nextTasks: Record<string, TaskState> = {...run.tasks}
+            for (const id of targets) {
+                nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
+            }
+            return {
+                ...run,
+                tasks: nextTasks,
+                self_heal: {attempts: attempts + 1, last_at: opts.auto.at},
+                ...(reopen ? {status: 'running' as const, ended_at: null} : {}),
+            }
+        }
+
+        const {targets, skipped} = selectTargets(run, opts)
+        const wasTerminal = isTerminalRunStatus(run.status)
+        // A failed e2e_phase verdict, when the human asserts (via resetE2e) it's worth
+        // retrying, is ALSO sufficient reason to reopen — a run can be stuck purely on
+        // e2e (every task otherwise `done`, so `targets` is empty) and would otherwise
+        // never have anything for a plain rescue apply to reset.
+        const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === 'failed'
+        const assessReset = opts.resetE2e === true && run.e2e_assessment?.status === 'failed'
+        const rollupRecheck = opts.recheckRollup === true && run.rollup?.merged === false
+        // Only reopen a terminal run when there is actually work to pick back up —
+        // reopening with nothing to do would just re-finalize to the same status.
+        const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck)
+        const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck
+
         result = {
-          run_id: runId,
-          run_status: run.status,
-          reset: [],
-          reopened: false,
-          skipped: [],
-          auto_blocked: blocked,
-          touched: false,
-        };
-        return run;
-      };
-      if (attempts > 0) return noop("attempts");
-      const targets = effectiveAutoResets(run, scanRun(run));
-      if (targets.length === 0) return noop("empty");
+            run_id: runId,
+            run_status: reopen ? 'running' : run.status,
+            reset: targets,
+            reopened: reopen,
+            skipped,
+            touched: didWork,
+        }
 
-      const reopen = isTerminalRunStatus(run.status);
-      result = {
-        run_id: runId,
-        run_status: reopen ? "running" : run.status,
-        reset: targets,
-        reopened: reopen,
-        skipped: [],
-        self_heal_attempts: attempts + 1,
-        touched: false, // self-heal is not a human (S11)
-      };
-      const nextTasks: Record<string, TaskState> = { ...run.tasks };
-      for (const id of targets) {
-        nextTasks[id] = resetTaskRow(run.tasks[id]!);
-      }
-      return {
-        ...run,
-        tasks: nextTasks,
-        self_heal: { attempts: attempts + 1, last_at: opts.auto.at },
-        ...(reopen ? { status: "running" as const, ended_at: null } : {}),
-      };
-    }
+        // Phase repairs are DECOUPLED from run-status reopening: a crash between e2e's
+        // markFailed and finalize leaves the run NON-terminal (`reopen` false), but the
+        // asserted --reset-e2e repair must still clear the failed verdict — otherwise the
+        // documented recovery silently no-ops and requires the non-obvious two-step of
+        // finalizing first, then rescuing again.
+        if (!didWork) {
+            return run // pure no-op (update still stamps updated_at — harmless)
+        }
 
-    const { targets, skipped } = selectTargets(run, opts);
-    const wasTerminal = isTerminalRunStatus(run.status);
-    // A failed e2e_phase verdict, when the human asserts (via resetE2e) it's worth
-    // retrying, is ALSO sufficient reason to reopen — a run can be stuck purely on
-    // e2e (every task otherwise `done`, so `targets` is empty) and would otherwise
-    // never have anything for a plain rescue apply to reset.
-    const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === "failed";
-    const assessReset = opts.resetE2e === true && run.e2e_assessment?.status === "failed";
-    const rollupRecheck = opts.recheckRollup === true && run.rollup?.merged === false;
-    // Only reopen a terminal run when there is actually work to pick back up —
-    // reopening with nothing to do would just re-finalize to the same status.
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
-    const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck;
+        const nextTasks: Record<string, TaskState> = {...run.tasks}
+        for (const id of targets) {
+            nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
+        }
+        return {
+            ...run,
+            tasks: nextTasks,
+            // S11: a manual apply that did work IS a human touch.
+            human_touches: [...(run.human_touches ?? []), {kind: 'recover' as const, at: opts.at ?? nowIso()}],
+            ...(e2eReset ? {e2e_phase: reopenE2ePhase(nonNull(run.e2e_phase))} : {}),
+            // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
+            // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
+            ...(assessReset ? {e2e_assessment: undefined} : {}),
+            // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
+            // so returning to `running` with `ended_at:null` satisfies every invariant.
+            ...(reopen ? {status: 'running' as const, ended_at: null} : {}),
+        }
+    })
 
-    result = {
-      run_id: runId,
-      run_status: reopen ? "running" : run.status,
-      reset: targets,
-      reopened: reopen,
-      skipped,
-      touched: didWork,
-    };
-
-    // Phase repairs are DECOUPLED from run-status reopening: a crash between e2e's
-    // markFailed and finalize leaves the run NON-terminal (`reopen` false), but the
-    // asserted --reset-e2e repair must still clear the failed verdict — otherwise the
-    // documented recovery silently no-ops and requires the non-obvious two-step of
-    // finalizing first, then rescuing again.
-    if (!didWork) {
-      return run; // pure no-op (update still stamps updated_at — harmless)
-    }
-
-    const nextTasks: Record<string, TaskState> = { ...run.tasks };
-    for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run.tasks[id]!);
-    }
-    return {
-      ...run,
-      tasks: nextTasks,
-      // S11: a manual apply that did work IS a human touch.
-      human_touches: [
-        ...(run.human_touches ?? []),
-        { kind: "recover" as const, at: opts.at ?? nowIso() },
-      ],
-      ...(e2eReset ? { e2e_phase: reopenE2ePhase(run.e2e_phase!) } : {}),
-      // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
-      // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
-      ...(assessReset ? { e2e_assessment: undefined } : {}),
-      // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
-      // so returning to `running` with `ended_at:null` satisfies every invariant.
-      ...(reopen ? { status: "running" as const, ended_at: null } : {}),
-    };
-  });
-
-  // `result` is always assigned by the (synchronous) mutator above.
-  return { ...result!, run_status: updated.status };
+    // `result` is always assigned by the (synchronous) mutator above.
+    return {...nonNull<RescueApplyResult>(result), run_status: updated.status}
 }

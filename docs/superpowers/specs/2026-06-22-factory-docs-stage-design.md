@@ -81,19 +81,19 @@ A new run-scoped coroutine, symmetric with the task-level `drive`:
 
 1. **Emit:** `factory run docs --run <id>` returns a `DocsEnvelope` — a spawn
    manifest naming the `scribe` agent, with:
-   - a worktree checked out on the **staging branch**, and
-   - the whole-PRD diff base `origin/<baseBranch>` (so scribe diffs
-     `origin/<baseBranch>..<stagingBranch>` per D5; `baseBranch` is
-     `config.git.baseBranch`, typically `develop`).
+    - a worktree checked out on the **staging branch**, and
+    - the whole-PRD diff base `origin/<baseBranch>` (so scribe diffs
+      `origin/<baseBranch>..<stagingBranch>` per D5; `baseBranch` is
+      `config.git.baseBranch`, typically `develop`).
 2. **Spawn:** the driver spawns scribe (isolation omitted — it works _in_ the
    provided staging worktree, like the producer agents), captures its terminal
    STATUS line, and writes a results file.
 3. **Fold:** `factory run docs --run <id> --results <file>` folds the result:
-   - on `STATUS: DONE` → push the staging branch (scribe's commit, if any, rides
-     along) and set the `docs` stage marker to `done`; return a terminal `done`
-     envelope.
-   - on non-`DONE` (or no usable output) → leave the marker `pending`, transition
-     the run to **suspended** with a loud reason, and return a `blocked` envelope.
+    - on `STATUS: DONE` → push the staging branch (scribe's commit, if any, rides
+      along) and set the `docs` stage marker to `done`; return a terminal `done`
+      envelope.
+    - on non-`DONE` (or no usable output) → leave the marker `pending`, transition
+      the run to **suspended** with a loud reason, and return a `blocked` envelope.
 
 The loop then re-invokes `factory next`: with `docs` now `done`, it returns
 `all-terminal` → `factory run finalize` ships the rollup (now including the docs

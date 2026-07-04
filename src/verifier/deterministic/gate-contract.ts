@@ -20,31 +20,22 @@
  * `coverage/coverage-summary.json` (istanbul json-summary shape) — that file is
  * the measurement the gate parses (S8).
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import {
-  runnerName,
-  validateCommand,
-  type CommandValidation,
-} from "../../shared/command-allowlist.js";
-import { GATE_IDS, type GateId } from "./gate-id.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {readFile} from 'node:fs/promises'
+import {join} from 'node:path'
+import {z} from 'zod'
+import {runnerName, validateCommand, type CommandValidation} from '../../shared/command-allowlist.js'
+import {GATE_IDS, type GateId} from './gate-id.js'
 
 /** Where the contract lives, relative to the target repo root / worktree. */
-export const GATE_CONTRACT_REL = ".factory/gates.json";
+export const GATE_CONTRACT_REL = '.factory/gates.json'
 
 /** The stacks the scaffold resolution table knows how to contract. */
-export const GATE_CONTRACT_STACKS = ["npm", "deno", "custom"] as const;
-export type GateContractStack = (typeof GATE_CONTRACT_STACKS)[number];
+export const GATE_CONTRACT_STACKS = ['npm', 'deno', 'custom'] as const
+export type GateContractStack = (typeof GATE_CONTRACT_STACKS)[number]
 
 /** Gates whose strategies EXECUTE a contracted `command` override. */
-export const COMMAND_GATES: readonly GateId[] = [
-  "test",
-  "type",
-  "build",
-  "lint",
-  "coverage",
-] as const;
+export const COMMAND_GATES: readonly GateId[] = ['test', 'type', 'build', 'lint', 'coverage'] as const
 
 /**
  * The RUNNER policy for contracted gate commands (charset validation is the
@@ -52,99 +43,96 @@ export const COMMAND_GATES: readonly GateId[] = [
  * resolution table emits + the bare well-known dev tools.
  */
 export function isAllowedGateRunner(argv: readonly string[]): boolean {
-  const runner = runnerName(argv);
-  const a1 = argv[1];
-  switch (runner) {
-    case "deno":
-      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
-    case "go":
-      return a1 === "test";
-    case "cargo":
-      return a1 === "test" || a1 === "check" || a1 === "build";
-    case "npm":
-    case "pnpm":
-    case "yarn":
-      return a1 === "run" && argv[2] !== undefined;
-    case "vitest":
-    case "tsc":
-    case "eslint":
-    case "jest":
-    case "mocha":
-    case "pytest":
-      return true;
-    default:
-      return false;
-  }
+    const runner = runnerName(argv)
+    const a1 = argv[1]
+    switch (runner) {
+        case 'deno':
+            return a1 === 'test' || a1 === 'check' || a1 === 'task' || a1 === 'lint' || a1 === 'fmt'
+        case 'go':
+            return a1 === 'test'
+        case 'cargo':
+            return a1 === 'test' || a1 === 'check' || a1 === 'build'
+        case 'npm':
+        case 'pnpm':
+        case 'yarn':
+            return a1 === 'run' && argv[2] !== undefined
+        case 'vitest':
+        case 'tsc':
+        case 'eslint':
+        case 'jest':
+        case 'mocha':
+        case 'pytest':
+            return true
+        default:
+            return false
+    }
 }
 
 /** Validate one contracted gate command (shared charset + the gate runner policy). */
 export function validateGateCommand(command: string): CommandValidation {
-  return validateCommand(command, isAllowedGateRunner);
+    return validateCommand(command, isAllowedGateRunner)
 }
 
 const ContractedSchema = z
-  .object({
-    contracted: z.literal(true),
-    /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-    command: z.string().optional(),
-  })
-  .strict();
+    .object({
+        contracted: z.literal(true),
+        /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+        command: z.string().optional(),
+    })
+    .strict()
 
 const UncontractedSchema = z
-  .object({
-    contracted: z.literal(false),
-    /** Why this gate is waived — required; the committed audit trail. */
-    reason: z.string().min(1, "uncontracted gate requires a non-empty reason"),
-  })
-  .strict();
+    .object({
+        contracted: z.literal(false),
+        /** Why this gate is waived — required; the committed audit trail. */
+        reason: z.string().min(1, 'uncontracted gate requires a non-empty reason'),
+    })
+    .strict()
 
-const EntrySchema = z.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+const EntrySchema = z.discriminatedUnion('contracted', [ContractedSchema, UncontractedSchema])
 
 /** One gate's contract entry. */
-export type GateContractEntry = z.infer<typeof EntrySchema>;
+export type GateContractEntry = z.infer<typeof EntrySchema>
 
 /**
  * The `.factory/gates.json` schema. ALL gate ids are REQUIRED keys — omitting a
  * gate is exactly the silent skip this contract exists to kill.
  */
 export const GateContractSchema = z
-  .object({
-    version: z.literal(1),
-    stack: z.enum(GATE_CONTRACT_STACKS),
-    gates: z
-      .object(
-        Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema])) as Record<
-          GateId,
-          typeof EntrySchema
-        >,
-      )
-      .strict(),
-  })
-  .strict()
-  .superRefine((contract, issues) => {
-    for (const id of GATE_IDS) {
-      const entry = contract.gates[id];
-      if (!entry.contracted || entry.command === undefined) continue;
-      if (!COMMAND_GATES.includes(id)) {
-        issues.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["gates", id, "command"],
-          message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`,
-        });
-        continue;
-      }
-      const v = validateGateCommand(entry.command);
-      if (!v.ok) {
-        issues.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["gates", id, "command"],
-          message: `${v.reason}: ${v.detail}`,
-        });
-      }
-    }
-  });
+    .object({
+        version: z.literal(1),
+        stack: z.enum(GATE_CONTRACT_STACKS),
+        gates: z
+            .object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema])) as Record<GateId, typeof EntrySchema>)
+            .strict(),
+    })
+    .strict()
+    .superRefine((contract, issues) => {
+        for (const id of GATE_IDS) {
+            const entry = contract.gates[id]
+            if (!entry.contracted || entry.command === undefined) {
+                continue
+            }
+            if (!COMMAND_GATES.includes(id)) {
+                issues.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['gates', id, 'command'],
+                    message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(', ')})`,
+                })
+                continue
+            }
+            const v = validateGateCommand(entry.command)
+            if (!v.ok) {
+                issues.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['gates', id, 'command'],
+                    message: `${v.reason}: ${v.detail}`,
+                })
+            }
+        }
+    })
 
-export type GateContract = z.infer<typeof GateContractSchema>;
+export type GateContract = z.infer<typeof GateContractSchema>
 
 /**
  * The result of loading a contract from a repo root / worktree. `absent` is the
@@ -153,31 +141,33 @@ export type GateContract = z.infer<typeof GateContractSchema>;
  * never degrade to legacy.
  */
 export type GateContractLoad =
-  | { readonly state: "ok"; readonly contract: GateContract }
-  | { readonly state: "absent" }
-  | { readonly state: "invalid"; readonly error: string };
+    | {readonly state: 'ok'; readonly contract: GateContract}
+    | {readonly state: 'absent'}
+    | {readonly state: 'invalid'; readonly error: string}
 
 /** Load + validate `<root>/.factory/gates.json`. Never throws. */
 export async function loadGateContract(rootAbs: string): Promise<GateContractLoad> {
-  let raw: string;
-  try {
-    raw = await readFile(join(rootAbs, GATE_CONTRACT_REL), "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
-    return { state: "invalid", error: `unreadable: ${(err as Error).message}` };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    return { state: "invalid", error: `not JSON: ${(err as Error).message}` };
-  }
-  const result = GateContractSchema.safeParse(parsed);
-  if (!result.success) {
-    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-    return { state: "invalid", error: issues };
-  }
-  return { state: "ok", contract: result.data };
+    let raw: string
+    try {
+        raw = await readFile(join(rootAbs, GATE_CONTRACT_REL), 'utf8')
+    } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            return {state: 'absent'}
+        }
+        return {state: 'invalid', error: `unreadable: ${(err as Error).message}`}
+    }
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(raw)
+    } catch (err) {
+        return {state: 'invalid', error: `not JSON: ${(err as Error).message}`}
+    }
+    const result = GateContractSchema.safeParse(parsed)
+    if (!result.success) {
+        const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
+        return {state: 'invalid', error: issues}
+    }
+    return {state: 'ok', contract: result.data}
 }
 
 /**
@@ -188,15 +178,12 @@ export async function loadGateContract(rootAbs: string): Promise<GateContractLoa
  * Unknown reasons classify as tooling (fail-closed): a new skip reason must be
  * added here deliberately to earn scope-exclusion.
  */
-const SCOPE_SKIP_REASONS: ReadonlySet<string> = new Set([
-  "no-vitest-runnable-tests-in-scope",
-  "no-mutable-changes",
-]);
+const SCOPE_SKIP_REASONS: ReadonlySet<string> = new Set(['no-vitest-runnable-tests-in-scope', 'no-mutable-changes'])
 
-export type SkipClass = "scope" | "tooling";
+export type SkipClass = 'scope' | 'tooling'
 
 export function classifySkip(reason: string): SkipClass {
-  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
+    return SCOPE_SKIP_REASONS.has(reason) ? 'scope' : 'tooling'
 }
 
 /**
@@ -205,15 +192,14 @@ export function classifySkip(reason: string): SkipClass {
  * command — the loader's schema already rejects those, so reaching one here
  * means a contract bypassed validation (structural, loud).
  */
-export function contractCommand(
-  contract: GateContract | undefined,
-  id: GateId,
-): readonly string[] | undefined {
-  const entry = contract?.gates[id];
-  if (entry === undefined || !entry.contracted || entry.command === undefined) return undefined;
-  const v = validateGateCommand(entry.command);
-  if (!v.ok) {
-    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
-  }
-  return v.argv;
+export function contractCommand(contract: GateContract | undefined, id: GateId): readonly string[] | undefined {
+    const entry = contract?.gates[id]
+    if (entry === undefined || !entry.contracted || entry.command === undefined) {
+        return undefined
+    }
+    const v = validateGateCommand(entry.command)
+    if (!v.ok) {
+        throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`)
+    }
+    return v.argv
 }

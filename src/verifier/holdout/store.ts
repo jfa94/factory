@@ -12,13 +12,14 @@
  * resuming at the verify phase reads the same answer key the split wrote at the
  * exec phase).
  */
-import { mkdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { z } from "zod";
-import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { validateId } from "../../shared/index.js";
-import { parseJson, stringifyJson } from "../../shared/json.js";
-import { runDir } from "../../core/state/index.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {mkdir, readFile} from 'node:fs/promises'
+import {dirname, join} from 'node:path'
+import {z} from 'zod'
+import {atomicWriteFile} from '../../shared/atomic-write.js'
+import {validateId} from '../../shared/index.js'
+import {parseJson, stringifyJson} from '../../shared/json.js'
+import {runDir} from '../../core/state/index.js'
 
 /**
  * The persisted answer-key record (snake_case to match the run-store JSON
@@ -27,42 +28,38 @@ import { runDir } from "../../core/state/index.js";
  * validator prompt + audit.
  */
 export const HoldoutRecordSchema = z
-  .object({
-    task_id: z.string().min(1),
-    withheld_criteria: z.array(z.string()),
-    total_criteria: z.number().int().nonnegative(),
-    withheld_count: z.number().int().nonnegative(),
-  })
-  .strict()
-  .refine((r) => r.withheld_count === r.withheld_criteria.length, {
-    message: "withheld_count must equal withheld_criteria.length",
-  });
+    .object({
+        task_id: z.string().min(1),
+        withheld_criteria: z.array(z.string()),
+        total_criteria: z.number().int().nonnegative(),
+        withheld_count: z.number().int().nonnegative(),
+    })
+    .strict()
+    .refine((r) => r.withheld_count === r.withheld_criteria.length, {
+        message: 'withheld_count must equal withheld_criteria.length',
+    })
 
 /** A persisted holdout answer-key record. */
-export type HoldoutRecord = z.infer<typeof HoldoutRecordSchema>;
+export type HoldoutRecord = z.infer<typeof HoldoutRecordSchema>
 
 /** Parse + validate a holdout record (LOUD on a malformed/forged answer key). */
 export function parseHoldoutRecord(raw: unknown, source?: string): HoldoutRecord {
-  const result = HoldoutRecordSchema.safeParse(raw);
-  if (!result.success) {
-    const where = source ? ` (${source})` : "";
-    throw new Error(`invalid holdout record${where}: ${result.error.message}`);
-  }
-  return result.data;
+    const result = HoldoutRecordSchema.safeParse(raw)
+    if (!result.success) {
+        const where = source != null && source.length > 0 ? ` (${source})` : ''
+        throw new Error(`invalid holdout record${where}: ${result.error.message}`)
+    }
+    return result.data
 }
 
 /** Build a {@link HoldoutRecord} from a task id + its withheld criteria. */
-export function makeHoldoutRecord(
-  taskId: string,
-  withheld: readonly string[],
-  totalCriteria: number,
-): HoldoutRecord {
-  return {
-    task_id: taskId,
-    withheld_criteria: [...withheld],
-    total_criteria: totalCriteria,
-    withheld_count: withheld.length,
-  };
+export function makeHoldoutRecord(taskId: string, withheld: readonly string[], totalCriteria: number): HoldoutRecord {
+    return {
+        task_id: taskId,
+        withheld_criteria: [...withheld],
+        total_criteria: totalCriteria,
+        withheld_count: withheld.length,
+    }
 }
 
 /**
@@ -70,37 +67,35 @@ export function makeHoldoutRecord(
  * re-running the split on a retried step is safe; `get` is LOUD if absent.
  */
 export interface HoldoutStore {
-  put(runId: string, record: HoldoutRecord): Promise<void>;
-  get(runId: string, taskId: string): Promise<HoldoutRecord>;
-  has(runId: string, taskId: string): Promise<boolean>;
+    put(runId: string, record: HoldoutRecord): Promise<void>
+    get(runId: string, taskId: string): Promise<HoldoutRecord>
+    has(runId: string, taskId: string): Promise<boolean>
 }
 
 /** In-memory store: the in-process loop + units. Keyed by `runId\0taskId`. */
 export class InMemoryHoldoutStore implements HoldoutStore {
-  private readonly records = new Map<string, HoldoutRecord>();
+    private readonly records = new Map<string, HoldoutRecord>()
 
-  private key(runId: string, taskId: string): string {
-    return `${runId} ${taskId}`;
-  }
-
-  put(runId: string, record: HoldoutRecord): Promise<void> {
-    this.records.set(this.key(runId, record.task_id), record);
-    return Promise.resolve();
-  }
-
-  get(runId: string, taskId: string): Promise<HoldoutRecord> {
-    const record = this.records.get(this.key(runId, taskId));
-    if (record === undefined) {
-      return Promise.reject(
-        new Error(`InMemoryHoldoutStore: no holdout for task '${taskId}' in run '${runId}'`),
-      );
+    private key(runId: string, taskId: string): string {
+        return `${runId} ${taskId}`
     }
-    return Promise.resolve(record);
-  }
 
-  has(runId: string, taskId: string): Promise<boolean> {
-    return Promise.resolve(this.records.has(this.key(runId, taskId)));
-  }
+    put(runId: string, record: HoldoutRecord): Promise<void> {
+        this.records.set(this.key(runId, record.task_id), record)
+        return Promise.resolve()
+    }
+
+    get(runId: string, taskId: string): Promise<HoldoutRecord> {
+        const record = this.records.get(this.key(runId, taskId))
+        if (record === undefined) {
+            return Promise.reject(new Error(`InMemoryHoldoutStore: no holdout for task '${taskId}' in run '${runId}'`))
+        }
+        return Promise.resolve(record)
+    }
+
+    has(runId: string, taskId: string): Promise<boolean> {
+        return Promise.resolve(this.records.has(this.key(runId, taskId)))
+    }
 }
 
 /**
@@ -109,31 +104,31 @@ export class InMemoryHoldoutStore implements HoldoutStore {
  * task id is validated to a safe slug before it becomes a path segment.
  */
 export class FsHoldoutStore implements HoldoutStore {
-  constructor(private readonly dataDir: string) {}
+    constructor(private readonly dataDir: string) {}
 
-  private path(runId: string, taskId: string): string {
-    const safe = validateId(taskId, "task_id");
-    return join(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
-  }
-
-  async put(runId: string, record: HoldoutRecord): Promise<void> {
-    const path = this.path(runId, record.task_id);
-    await mkdir(dirname(path), { recursive: true });
-    await atomicWriteFile(path, stringifyJson(record));
-  }
-
-  async get(runId: string, taskId: string): Promise<HoldoutRecord> {
-    const path = this.path(runId, taskId);
-    const raw = await readFile(path, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path), path);
-  }
-
-  async has(runId: string, taskId: string): Promise<boolean> {
-    try {
-      await readFile(this.path(runId, taskId), "utf8");
-      return true;
-    } catch {
-      return false;
+    private path(runId: string, taskId: string): string {
+        const safe = validateId(taskId, 'task_id')
+        return join(runDir(this.dataDir, runId), 'holdouts', `${safe}.json`)
     }
-  }
+
+    async put(runId: string, record: HoldoutRecord): Promise<void> {
+        const path = this.path(runId, record.task_id)
+        await mkdir(dirname(path), {recursive: true})
+        await atomicWriteFile(path, stringifyJson(record))
+    }
+
+    async get(runId: string, taskId: string): Promise<HoldoutRecord> {
+        const path = this.path(runId, taskId)
+        const raw = await readFile(path, 'utf8')
+        return parseHoldoutRecord(parseJson(raw, path), path)
+    }
+
+    async has(runId: string, taskId: string): Promise<boolean> {
+        try {
+            await readFile(this.path(runId, taskId), 'utf8')
+            return true
+        } catch {
+            return false
+        }
+    }
 }

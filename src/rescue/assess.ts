@@ -18,8 +18,8 @@
  * git-touching part is isolated behind an injected {@link WorkProbe} — trivially
  * testable, and the scan classification has no new dependency.
  */
-import { resolveStagingBranch } from "../git/run-staging.js";
-import type { RunState } from "../types/index.js";
+import {resolveStagingBranch} from '../git/run-staging.js'
+import type {RunState} from '../types/index.js'
 
 /**
  * The narrow, read-only git surface {@link assessWork} needs, injected so the
@@ -27,10 +27,10 @@ import type { RunState } from "../types/index.js";
  * pass a fake). Both refs are full git refs (heads, remote-tracking, or shas).
  */
 export interface WorkProbe {
-  /** True iff `ref` resolves to a commit. */
-  refExists(ref: string): Promise<boolean>;
-  /** Count commits reachable from `branch` but not `base`. Both must resolve. */
-  commitsAhead(base: string, branch: string): Promise<number>;
+    /** True iff `ref` resolves to a commit. */
+    refExists(ref: string): Promise<boolean>
+    /** Count commits reachable from `branch` but not `base`. Both must resolve. */
+    commitsAhead(base: string, branch: string): Promise<number>
 }
 
 /**
@@ -43,26 +43,23 @@ export interface WorkProbe {
  * BASE is unresolvable (a WorkAssessment-level condition), a number otherwise.
  */
 export type TaskWork = {
-  task_id: string;
-  /** The local task branch (`factory/<run>/<task>`). */
-  branch: string;
-  pr_number?: number;
-} & (
-  | { branch_exists: true; commits_ahead: number | null }
-  | { branch_exists: false; commits_ahead: null }
-);
+    task_id: string
+    /** The local task branch (`factory/<run>/<task>`). */
+    branch: string
+    pr_number?: number
+} & ({branch_exists: true; commits_ahead: number | null} | {branch_exists: false; commits_ahead: null})
 
 /** The read-only recoverable-work survey appended to a {@link scanRun} report. */
 export interface WorkAssessment {
-  /** The base ref each branch is measured against (`origin/staging-<run-id>`). */
-  base_ref: string;
-  /**
-   * False when `base_ref` no longer resolves (e.g. a superseded/`--cleanup`'d run
-   * whose remote staging branch was deleted); every `commits_ahead` is then `null`.
-   */
-  base_resolved: boolean;
-  /** One line per non-shipped branched task, in `run.tasks` order. */
-  tasks: TaskWork[];
+    /** The base ref each branch is measured against (`origin/staging-<run-id>`). */
+    base_ref: string
+    /**
+     * False when `base_ref` no longer resolves (e.g. a superseded/`--cleanup`'d run
+     * whose remote staging branch was deleted); every `commits_ahead` is then `null`.
+     */
+    base_resolved: boolean
+    /** One line per non-shipped branched task, in `run.tasks` order. */
+    tasks: TaskWork[]
 }
 
 /**
@@ -74,38 +71,42 @@ export interface WorkAssessment {
  * tasks (never reached preflight → no work to recover).
  */
 export async function assessWork(run: RunState, probe: WorkProbe): Promise<WorkAssessment> {
-  // The SAME per-run base the gates diff against — `staging-<run-id>` (hyphen), via
-  // the pinned name when present. A generic `staging` would yield wrong counts.
-  const baseRef = `origin/${resolveStagingBranch(run.run_id, run.staging_branch)}`;
-  const baseResolved = await probe.refExists(baseRef);
+    // The SAME per-run base the gates diff against — `staging-<run-id>` (hyphen), via
+    // the pinned name when present. A generic `staging` would yield wrong counts.
+    const baseRef = `origin/${resolveStagingBranch(run.run_id, run.staging_branch)}`
+    const baseResolved = await probe.refExists(baseRef)
 
-  const tasks: TaskWork[] = [];
-  for (const t of Object.values(run.tasks)) {
-    if (t.status === "done") continue;
-    if (t.branch === undefined) continue;
-    const branchExists = await probe.refExists(t.branch);
-    const pr = t.pr_number !== undefined ? { pr_number: t.pr_number } : {};
-    // A `boolean` can't narrow an object literal to one union arm, so branch on it:
-    // the false arm pins `commits_ahead` to `null` (a deleted branch counts nothing).
-    if (branchExists) {
-      const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null;
-      tasks.push({
-        task_id: t.task_id,
-        branch: t.branch,
-        branch_exists: true,
-        commits_ahead: commitsAhead,
-        ...pr,
-      });
-    } else {
-      tasks.push({
-        task_id: t.task_id,
-        branch: t.branch,
-        branch_exists: false,
-        commits_ahead: null,
-        ...pr,
-      });
+    const tasks: TaskWork[] = []
+    for (const t of Object.values(run.tasks)) {
+        if (t.status === 'done') {
+            continue
+        }
+        if (t.branch === undefined) {
+            continue
+        }
+        const branchExists = await probe.refExists(t.branch)
+        const pr = t.pr_number !== undefined ? {pr_number: t.pr_number} : {}
+        // A `boolean` can't narrow an object literal to one union arm, so branch on it:
+        // the false arm pins `commits_ahead` to `null` (a deleted branch counts nothing).
+        if (branchExists) {
+            const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null
+            tasks.push({
+                task_id: t.task_id,
+                branch: t.branch,
+                branch_exists: true,
+                commits_ahead: commitsAhead,
+                ...pr,
+            })
+        } else {
+            tasks.push({
+                task_id: t.task_id,
+                branch: t.branch,
+                branch_exists: false,
+                commits_ahead: null,
+                ...pr,
+            })
+        }
     }
-  }
 
-  return { base_ref: baseRef, base_resolved: baseResolved, tasks };
+    return {base_ref: baseRef, base_resolved: baseResolved, tasks}
 }

@@ -10,48 +10,53 @@
  * shelled out, and THAT is done by branch-protection via the injectable exec
  * seam, not here.
  */
+import {at, nonNull} from '../shared/assert.js'
 
 /** Parsed result of a single git invocation (or `subcommand:null` if no git). */
 export interface GitInvocation {
-  /** The git subcommand (push|reset|branch|…) or null if no `git` token found. */
-  subcommand: string | null;
-  /** `-C <dir>` working-dir override (empty if absent). */
-  workDir: string;
-  /** `--git-dir[=]<path>` override (empty if absent). */
-  gitDir: string;
-  /** Resolved destination branch for push (may be empty → implicit current). */
-  destBranch: string;
-  /** Branch named by push --delete / branch -D/-d/--delete (empty if none). */
-  namedArg: string;
-  /** True if --force / -f / --force-with-lease[=…] / --force-if-includes[=…]. */
-  isForce: boolean;
-  /** True if a `+<refspec>` force-push token was seen. */
-  isPlusRef: boolean;
-  /** True if `reset --hard` was seen. */
-  isHardReset: boolean;
-  /** True if push saw a remote token (so an implicit-current push can be detected). */
-  sawRemote: boolean;
-  /**
-   * Names of every `VAR=` env-prefix token stripped from the command, in order
-   * (e.g. `["GIT_INDEX_FILE", "FOO"]`). The tokenizer records names and judges
-   * none — a consumer decides which matter (secret-guard denies the git
-   * index/repo-redirection family). Empty when no env prefixes were present.
-   */
-  envNames: readonly string[];
+    /** The git subcommand (push|reset|branch|…) or null if no `git` token found. */
+    subcommand: string | null
+    /** `-C <dir>` working-dir override (empty if absent). */
+    workDir: string
+    /** `--git-dir[=]<path>` override (empty if absent). */
+    gitDir: string
+    /** Resolved destination branch for push (may be empty → implicit current). */
+    destBranch: string
+    /** Branch named by push --delete / branch -D/-d/--delete (empty if none). */
+    namedArg: string
+    /** True if --force / -f / --force-with-lease[=…] / --force-if-includes[=…]. */
+    isForce: boolean
+    /** True if a `+<refspec>` force-push token was seen. */
+    isPlusRef: boolean
+    /** True if `reset --hard` was seen. */
+    isHardReset: boolean
+    /** True if push saw a remote token (so an implicit-current push can be detected). */
+    sawRemote: boolean
+    /**
+     * Names of every `VAR=` env-prefix token stripped from the command, in order
+     * (e.g. `["GIT_INDEX_FILE", "FOO"]`). The tokenizer records names and judges
+     * none — a consumer decides which matter (secret-guard denies the git
+     * index/repo-redirection family). Empty when no env prefixes were present.
+     */
+    envNames: readonly string[]
 }
 
 /** Strip one layer of surrounding single/double quotes from a token. */
 function unquote(tok: string): string {
-  let t = tok;
-  if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-  if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-  return t;
+    let t = tok
+    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
+        t = t.slice(1, -1)
+    }
+    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
+        t = t.slice(1, -1)
+    }
+    return t
 }
 
 /** Basename of a path-like token (last `/`-separated component). */
 function basename(tok: string): string {
-  const parts = tok.split("/");
-  return parts[parts.length - 1] ?? tok;
+    const parts = tok.split('/')
+    return parts[parts.length - 1] ?? tok
 }
 
 /**
@@ -64,154 +69,172 @@ function basename(tok: string): string {
  * non-git command and passes through).
  */
 export function parseGitInvocation(command: string): GitInvocation {
-  // Tokenize on whitespace; partition off env-var prefix tokens (VAR=value /
-  // VAR=). They are dropped from the token stream (as before) but their NAMES are
-  // recorded on `envNames` so a consumer can detect index/repo-redirecting
-  // overrides (GIT_INDEX_FILE, GIT_DIR, …). git-args stays a dumb tokenizer — it
-  // judges no name; the consumer (secret-guard) decides which are dangerous.
-  const ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
-  const tokens: string[] = [];
-  const envNames: string[] = [];
-  for (const tok of command.split(/\s+/)) {
-    if (tok.length === 0) continue;
-    const m = ENV_PREFIX_RE.exec(tok);
-    if (m) {
-      envNames.push(m[1]!);
-      continue;
+    // Tokenize on whitespace; partition off env-var prefix tokens (VAR=value /
+    // VAR=). They are dropped from the token stream (as before) but their NAMES are
+    // recorded on `envNames` so a consumer can detect index/repo-redirecting
+    // overrides (GIT_INDEX_FILE, GIT_DIR, …). git-args stays a dumb tokenizer — it
+    // judges no name; the consumer (secret-guard) decides which are dangerous.
+    const ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/
+    const tokens: string[] = []
+    const envNames: string[] = []
+    for (const tok of command.split(/\s+/)) {
+        if (tok.length === 0) {
+            continue
+        }
+        const m = ENV_PREFIX_RE.exec(tok)
+        if (m) {
+            envNames.push(nonNull(m[1]))
+            continue
+        }
+        tokens.push(tok)
     }
-    tokens.push(tok);
-  }
 
-  const result: GitInvocation = {
-    subcommand: null,
-    workDir: "",
-    gitDir: "",
-    destBranch: "",
-    namedArg: "",
-    isForce: false,
-    isPlusRef: false,
-    isHardReset: false,
-    sawRemote: false,
-    envNames,
-  };
+    const result: GitInvocation = {
+        subcommand: null,
+        workDir: '',
+        gitDir: '',
+        destBranch: '',
+        namedArg: '',
+        isForce: false,
+        isPlusRef: false,
+        isHardReset: false,
+        sawRemote: false,
+        envNames,
+    }
 
-  const n = tokens.length;
-  let i = 0;
+    const n = tokens.length
+    let i = 0
 
-  // Walk to the `git` binary (by basename).
-  let foundGit = false;
-  while (i < n) {
-    if (basename(tokens[i]!) === "git") {
-      foundGit = true;
-      i++;
-      break;
+    // Walk to the `git` binary (by basename).
+    let foundGit = false
+    while (i < n) {
+        if (basename(at(tokens, i)) === 'git') {
+            foundGit = true
+            i++
+            break
+        }
+        i++
     }
-    i++;
-  }
-  if (!foundGit) return result;
+    if (!foundGit) {
+        return result
+    }
 
-  // Pre-subcommand globals: -C <dir>, --git-dir[=]<path>, skip other -* flags.
-  while (i < n) {
-    const tok = tokens[i]!;
-    if (tok === "-C") {
-      if (i + 1 < n) result.workDir = tokens[i + 1]!;
-      i += 2;
-      continue;
+    // Pre-subcommand globals: -C <dir>, --git-dir[=]<path>, skip other -* flags.
+    while (i < n) {
+        const tok = at(tokens, i)
+        if (tok === '-C') {
+            if (i + 1 < n) {
+                result.workDir = at(tokens, i + 1)
+            }
+            i += 2
+            continue
+        }
+        // `-c <name=value>`: the value is a separate token, NOT the subcommand.
+        // Without this it parses `git -c x=y commit` as subcommand `x=y`.
+        if (tok === '-c') {
+            i += 2
+            continue
+        }
+        if (tok.startsWith('--git-dir=')) {
+            result.gitDir = tok.slice('--git-dir='.length)
+            i++
+            continue
+        }
+        if (tok === '--git-dir' || tok === '--work-tree') {
+            if (tok === '--git-dir' && i + 1 < n) {
+                result.gitDir = at(tokens, i + 1)
+            }
+            i += 2
+            continue
+        }
+        if (tok.startsWith('-')) {
+            i++
+            continue
+        }
+        result.subcommand = tok
+        i++
+        break
     }
-    // `-c <name=value>`: the value is a separate token, NOT the subcommand.
-    // Without this it parses `git -c x=y commit` as subcommand `x=y`.
-    if (tok === "-c") {
-      i += 2;
-      continue;
+    if (result.subcommand === null) {
+        return result
     }
-    if (tok.startsWith("--git-dir=")) {
-      result.gitDir = tok.slice("--git-dir=".length);
-      i++;
-      continue;
-    }
-    if (tok === "--git-dir" || tok === "--work-tree") {
-      if (tok === "--git-dir" && i + 1 < n) result.gitDir = tokens[i + 1]!;
-      i += 2;
-      continue;
-    }
-    if (tok.startsWith("-")) {
-      i++;
-      continue;
-    }
-    result.subcommand = tok;
-    i++;
-    break;
-  }
-  if (result.subcommand === null) return result;
 
-  // Subcommand args.
-  let pushIsDelete = false;
-  while (i < n) {
-    const tok = unquote(tokens[i]!);
-    switch (result.subcommand) {
-      case "push": {
-        if (
-          tok === "--force" ||
-          tok === "-f" ||
-          tok === "--force-with-lease" ||
-          tok.startsWith("--force-with-lease=") ||
-          tok === "--force-if-includes" ||
-          tok.startsWith("--force-if-includes=")
-        ) {
-          result.isForce = true;
-          break;
+    // Subcommand args.
+    let pushIsDelete = false
+    while (i < n) {
+        const tok = unquote(at(tokens, i))
+        switch (result.subcommand) {
+            case 'push': {
+                if (
+                    tok === '--force' ||
+                    tok === '-f' ||
+                    tok === '--force-with-lease' ||
+                    tok.startsWith('--force-with-lease=') ||
+                    tok === '--force-if-includes' ||
+                    tok.startsWith('--force-if-includes=')
+                ) {
+                    result.isForce = true
+                    break
+                }
+                if (tok === '--delete' || tok === '-d') {
+                    pushIsDelete = true
+                    break
+                }
+                if (tok.startsWith('-')) {
+                    break
+                }
+                if (!result.sawRemote) {
+                    result.sawRemote = true
+                    break
+                }
+                if (pushIsDelete) {
+                    // The branch to delete (captured in the post-pass below for parity);
+                    // also record it here so a single `--delete <b>` is caught.
+                    if (result.namedArg.length === 0) {
+                        result.namedArg = tok
+                    }
+                    break
+                }
+                // Refspec → resolve destination branch.
+                let stripped = tok
+                if (stripped.startsWith('+')) {
+                    result.isPlusRef = true
+                    stripped = stripped.slice(1)
+                }
+                if (stripped.includes(':')) {
+                    stripped = stripped.slice(stripped.lastIndexOf(':') + 1)
+                }
+                if (stripped.startsWith('refs/heads/')) {
+                    stripped = stripped.slice('refs/heads/'.length)
+                }
+                result.destBranch = stripped
+                break
+            }
+            case 'reset': {
+                if (tok === '--hard') {
+                    result.isHardReset = true
+                }
+                break
+            }
+            case 'branch': {
+                if (tok === '-D' || tok === '-d' || tok === '--delete') {
+                    // The next non-flag token is the branch to delete.
+                    for (let j = i + 1; j < n; j++) {
+                        const nt = unquote(at(tokens, j))
+                        if (nt.startsWith('-')) {
+                            continue
+                        }
+                        result.namedArg = nt
+                        break
+                    }
+                }
+                break
+            }
+            default:
+                break
         }
-        if (tok === "--delete" || tok === "-d") {
-          pushIsDelete = true;
-          break;
-        }
-        if (tok.startsWith("-")) break;
-        if (!result.sawRemote) {
-          result.sawRemote = true;
-          break;
-        }
-        if (pushIsDelete) {
-          // The branch to delete (captured in the post-pass below for parity);
-          // also record it here so a single `--delete <b>` is caught.
-          if (result.namedArg.length === 0) result.namedArg = tok;
-          break;
-        }
-        // Refspec → resolve destination branch.
-        let stripped = tok;
-        if (stripped.startsWith("+")) {
-          result.isPlusRef = true;
-          stripped = stripped.slice(1);
-        }
-        if (stripped.includes(":")) {
-          stripped = stripped.slice(stripped.lastIndexOf(":") + 1);
-        }
-        if (stripped.startsWith("refs/heads/")) {
-          stripped = stripped.slice("refs/heads/".length);
-        }
-        result.destBranch = stripped;
-        break;
-      }
-      case "reset": {
-        if (tok === "--hard") result.isHardReset = true;
-        break;
-      }
-      case "branch": {
-        if (tok === "-D" || tok === "-d" || tok === "--delete") {
-          // The next non-flag token is the branch to delete.
-          for (let j = i + 1; j < n; j++) {
-            const nt = unquote(tokens[j]!);
-            if (nt.startsWith("-")) continue;
-            result.namedArg = nt;
-            break;
-          }
-        }
-        break;
-      }
-      default:
-        break;
+        i++
     }
-    i++;
-  }
 
-  return result;
+    return result
 }

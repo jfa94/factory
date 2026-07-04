@@ -96,7 +96,7 @@ Mints the run id, cuts the debug staging branch (the SAME `ensureStaging` +
 `runStagingBranch` mechanism `run create` uses), and emits:
 
 ```json
-{ "kind": "review", "run_id": "<id>", "base": "<resolved base>", "worktree": "<cwd>", "pass": 1 }
+{"kind": "review", "run_id": "<id>", "base": "<resolved base>", "worktree": "<cwd>", "pass": 1}
 ```
 
 No `RunState` exists yet — a debug run is born later, at `seed` (step 4). Record
@@ -211,10 +211,10 @@ Emits ONE of:
 - `{ "kind": "findings", "run_id", "pass", "report_path", "confirmed_count" }` —
   ≥1 confirmed blocker, written to `report_path` (a markdown findings write-up
   under `<dataDir>/debug/<run-id>/pass-<n>/findings.md`).
-  - If `pass == maxPasses` (from `debug start`'s `--max-passes`, tracked by you —
-    the CLI does not itself compare `pass` to the cap): **go straight to step 6
-    (finalize)**, reporting `report_path`'s residual findings as unresolved. STOP.
-  - Else: continue to step 3 (the spec sub-loop).
+    - If `pass == maxPasses` (from `debug start`'s `--max-passes`, tracked by you —
+      the CLI does not itself compare `pass` to the cap): **go straight to step 6
+      (finalize)**, reporting `report_path`'s residual findings as unresolved. STOP.
+    - Else: continue to step 3 (the spec sub-loop).
 
 ## Step 3 — Spec sub-loop: `factory debug spec resolve|gate|store`
 
@@ -327,17 +327,17 @@ UNCHANGED — just re-emitted under debug's own envelope kind). Emits:
 
 ```json
 {
-  "kind": "finalized",
-  "run": {
-    /* RunState */
-  },
-  "report": {
-    /* PartialRunReport */
-  },
-  "rollup": {
-    /* RollupResult, optional */
-  },
-  "failure_comment_posted": false
+    "kind": "finalized",
+    "run": {
+        /* RunState */
+    },
+    "report": {
+        /* PartialRunReport */
+    },
+    "rollup": {
+        /* RollupResult, optional */
+    },
+    "failure_comment_posted": false
 }
 ```
 

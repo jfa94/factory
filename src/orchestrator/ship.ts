@@ -15,37 +15,37 @@
  * "write done" in one place.
  */
 import {
-  taskDone,
-  taskFailed,
-  waitRetry,
-  runScopedBranch,
-  resolveStagingBranch,
-  createTaskPrIdempotent,
-  MergeSerializer,
-  type MergeOutcome,
-  type PhaseContext,
-  type PhaseResult,
-  type StateManager,
-  type TaskState,
-} from "./deps.js";
-import { specTaskOf, shipBody } from "./handlers.js";
-import { taskWorktreePath } from "./paths.js";
-import type { HandlerDeps } from "./types.js";
-import { createLogger } from "../shared/index.js";
+    taskDone,
+    taskFailed,
+    waitRetry,
+    runScopedBranch,
+    resolveStagingBranch,
+    createTaskPrIdempotent,
+    MergeSerializer,
+    type MergeOutcome,
+    type PhaseContext,
+    type PhaseResult,
+    type StateManager,
+    type TaskState,
+} from './deps.js'
+import {specTaskOf, shipBody} from './handlers.js'
+import {taskWorktreePath} from './paths.js'
+import type {HandlerDeps} from './types.js'
+import {createLogger} from '../shared/index.js'
 
-const log = createLogger("ship");
+const log = createLogger('ship')
 
 /** The narrow deps shipping needs: the reporter bundle + the state write path. */
 export interface ShipDeps extends HandlerDeps {
-  readonly state: StateManager;
+    readonly state: StateManager
 }
 
 /** The task a ship acts on; absent only for the run-level finalize. */
 function requireTask(ctx: PhaseContext): TaskState {
-  if (ctx.task === undefined) {
-    throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
-  }
-  return ctx.task;
+    if (ctx.task === undefined) {
+        throw new Error("ship: phase 'ship' requires a task but ctx.task is absent")
+    }
+    return ctx.task
 }
 
 /**
@@ -57,75 +57,77 @@ function requireTask(ctx: PhaseContext): TaskState {
  * `done` status — that is the caller's `completeTask`.
  */
 export async function shipTask(deps: ShipDeps, ctx: PhaseContext): Promise<PhaseResult> {
-  const task = requireTask(ctx);
-  const runId = ctx.run.run_id;
-  const specTask = specTaskOf(deps.spec, task.task_id);
-  const branch = runScopedBranch(runId, task.task_id);
+    const task = requireTask(ctx)
+    const runId = ctx.run.run_id
+    const specTask = specTaskOf(deps.spec, task.task_id)
+    const branch = runScopedBranch(runId, task.task_id)
 
-  // The task branch exists only in the per-task worktree until now: preflight created it
-  // locally (`checkout -B`) and the producers committed to it locally — nothing pushed it
-  // to origin. `gh pr create --head <branch>` needs the head to exist on the remote, so
-  // push it FIRST. Force-free + idempotent: a re-ship fast-forwards or no-ops.
-  //
-  // Non-fast-forward rejection is the rescue-reset wedge: a reset task's preflight
-  // `checkout -B` re-roots the branch on the fresh staging tip while the remote still
-  // holds the pre-rescue commits, so every re-drive deterministically re-hits the same
-  // rejected push. The branch is run-scoped and factory-owned (never human work), so the
-  // root-cause repair is safe: delete the stale remote ref and retry ONCE, force-free.
-  const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id);
-  try {
-    await deps.git.push("origin", branch, { setUpstream: true, cwd });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) throw err;
-    log.warn(
-      `task '${task.task_id}' push of '${branch}' rejected non-fast-forward — ` +
-        `deleting the stale remote ref and retrying once`,
-    );
-    await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch);
+    // The task branch exists only in the per-task worktree until now: preflight created it
+    // locally (`checkout -B`) and the producers committed to it locally — nothing pushed it
+    // to origin. `gh pr create --head <branch>` needs the head to exist on the remote, so
+    // push it FIRST. Force-free + idempotent: a re-ship fast-forwards or no-ops.
+    //
+    // Non-fast-forward rejection is the rescue-reset wedge: a reset task's preflight
+    // `checkout -B` re-roots the branch on the fresh staging tip while the remote still
+    // holds the pre-rescue commits, so every re-drive deterministically re-hits the same
+    // rejected push. The branch is run-scoped and factory-owned (never human work), so the
+    // root-cause repair is safe: delete the stale remote ref and retry ONCE, force-free.
+    const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id)
     try {
-      await deps.git.push("origin", branch, { setUpstream: true, cwd });
-    } catch (retryErr) {
-      const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-      return taskFailed(
-        "blocked-environmental",
-        `ship: push of '${branch}' still rejected after deleting the stale remote ref — ` +
-          `investigate origin manually: ${retryMsg}`,
-      );
+        await deps.git.push('origin', branch, {setUpstream: true, cwd})
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) {
+            throw err
+        }
+        log.warn(
+            `task '${task.task_id}' push of '${branch}' rejected non-fast-forward — ` +
+                `deleting the stale remote ref and retrying once`
+        )
+        await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch)
+        try {
+            await deps.git.push('origin', branch, {setUpstream: true, cwd})
+        } catch (retryErr) {
+            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+            return taskFailed(
+                'blocked-environmental',
+                `ship: push of '${branch}' still rejected after deleting the stale remote ref — ` +
+                    `investigate origin manually: ${retryMsg}`
+            )
+        }
     }
-  }
 
-  const pr = await createTaskPrIdempotent({
-    ghClient: deps.gh,
-    branch,
-    title: specTask.title,
-    body: shipBody(runId, specTask),
-    base: resolveStagingBranch(runId, ctx.run.staging_branch),
-  });
-  await deps.state.updateTask(runId, task.task_id, (t) => ({
-    ...t,
-    branch,
-    pr_number: pr.number,
-  }));
+    const pr = await createTaskPrIdempotent({
+        ghClient: deps.gh,
+        branch,
+        title: specTask.title,
+        body: shipBody(runId, specTask),
+        base: resolveStagingBranch(runId, ctx.run.staging_branch),
+    })
+    await deps.state.updateTask(runId, task.task_id, (t) => ({
+        ...t,
+        branch,
+        pr_number: pr.number,
+    }))
 
-  if (deps.shipMode !== "live") {
-    // no-merge: the PR is open; staging integration is not automated (cutover net).
-    return taskDone();
-  }
+    if (deps.shipMode !== 'live') {
+        // no-merge: the PR is open; staging integration is not automated (cutover net).
+        return taskDone()
+    }
 
-  const serializer = new MergeSerializer({
-    ghClient: deps.gh,
-    owner: deps.owner,
-    repo: deps.repo,
-    stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
-    dataDir: deps.dataDir,
-  });
-  const outcome: MergeOutcome = await serializer.merge(pr.number);
-  if (outcome.merged) {
-    log.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
-    return taskDone();
-  }
-  // Refused: the caller re-routes through the producer for a branch re-sync. The
-  // nominal attempt/max (1,1) are unused — a per-loop budget bounds the re-route.
-  return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
+    const serializer = new MergeSerializer({
+        ghClient: deps.gh,
+        owner: deps.owner,
+        repo: deps.repo,
+        stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
+        dataDir: deps.dataDir,
+    })
+    const outcome: MergeOutcome = await serializer.merge(pr.number)
+    if (outcome.merged) {
+        log.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`)
+        return taskDone()
+    }
+    // Refused: the caller re-routes through the producer for a branch re-sync. The
+    // nominal attempt/max (1,1) are unused — a per-loop budget bounds the re-route.
+    return waitRetry('ship', `serial merge refused (${outcome.reason})`, 1, 1)
 }

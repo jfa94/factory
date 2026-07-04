@@ -16,4 +16,4 @@
  */
 
 /** The maximum number of escalating producer retries past the starting rung. */
-export const ESCALATION_CAP = 4;
+export const ESCALATION_CAP = 4

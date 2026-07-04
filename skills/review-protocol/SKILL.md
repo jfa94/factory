@@ -96,20 +96,20 @@ empty `quote`, a missing/empty/over-300-char `claim`, a non-array `findings`, a 
 
 ```json
 {
-  "reviewer": "<your role, e.g. quality-reviewer>",
-  "verdict": "approve | blocked | error",
-  "findings": [
-    {
-      "reviewer": "<your role>",
-      "severity": "info | warning | error | critical",
-      "blocking": true,
-      "file": "src/path/to/file.ts",
-      "line": 42,
-      "quote": "exact substring copied from src/path/to/file.ts line ~42",
-      "claim": "One-sentence checkable assertion of the defect",
-      "description": "What is wrong and why it matters"
-    }
-  ]
+    "reviewer": "<your role, e.g. quality-reviewer>",
+    "verdict": "approve | blocked | error",
+    "findings": [
+        {
+            "reviewer": "<your role>",
+            "severity": "info | warning | error | critical",
+            "blocking": true,
+            "file": "src/path/to/file.ts",
+            "line": 42,
+            "quote": "exact substring copied from src/path/to/file.ts line ~42",
+            "claim": "One-sentence checkable assertion of the defect",
+            "description": "What is wrong and why it matters"
+        }
+    ]
 }
 ```
 

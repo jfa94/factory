@@ -19,9 +19,10 @@ names a **worktree** and a **base ref**. In that mode:
   marker logic below — use the base ref you were given.
 - **Commit** your `/docs` changes in the worktree. **Do NOT push** — the engine
   publishes the commit on fold. If nothing material changed, make no commit.
-- Always finish with your terminal `STATUS:` line (see Phase 5 — Report). A non-`DONE`
-  status suspends the run for retry, so only emit `DONE` when the docs are
-  actually written (or correctly a no-op).
+- Always finish with your terminal `STATUS:` line (see Phase 5 — Report). `DONE` and
+  `DONE_WITH_CONCERNS` both close the stage as success — emit either only when the docs
+  are actually written (or correctly a no-op). `BLOCKED` / `NEEDS_CONTEXT` (or a missing
+  line) suspend the run for retry.
 
 ## Iron Laws
 
@@ -40,15 +41,15 @@ Mermaid diagrams only where they add clarity over prose — do not add diagrams 
 ## Phase 1 — Detect Mode
 
 1. Check whether `docs/` exists and contains files.
-   - If missing or empty → **full sweep**
-   - If populated → **incremental**
+    - If missing or empty → **full sweep**
+    - If populated → **incremental**
 2. If the user explicitly says "full sweep" → override to full sweep regardless.
 3. In incremental mode:
-   - If a base ref was provided by the factory docs stage, use `git diff <base_ref>..HEAD --name-only` to identify changed files. This overrides the last-documented marker logic below.
-   - Otherwise, read the first line of `docs/README.md` to find `<!-- last-documented: <hash> -->`
-   - If found: run `git diff <hash>..HEAD --name-only` to identify changed files
-   - If not found: run `git diff HEAD~1 --name-only`
-   - Scope your exploration and updates to changed files and their direct dependents
+    - If a base ref was provided by the factory docs stage, use `git diff <base_ref>..HEAD --name-only` to identify changed files. This overrides the last-documented marker logic below.
+    - Otherwise, read the first line of `docs/README.md` to find `<!-- last-documented: <hash> -->`
+    - If found: run `git diff <hash>..HEAD --name-only` to identify changed files
+    - If not found: run `git diff HEAD~1 --name-only`
+    - Scope your exploration and updates to changed files and their direct dependents
 
 ---
 

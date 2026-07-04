@@ -4,45 +4,52 @@
  * template copy, staging-ensure, and protection probe/refuse/provision are all
  * exercised without touching the host repo or the network.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {mkdtemp, rm, readFile, writeFile, mkdir} from 'node:fs/promises'
+import {existsSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {dirname, join} from 'node:path'
 
-import {
-  runScaffold,
-  resolveTemplatesDir,
-  scaffoldCommand,
-  resolveScaffoldRepo,
-} from "./scaffold.js";
-import { parseArgs } from "../args.js";
-import { EXIT } from "../../shared/exit-codes.js";
-import { defaultConfig } from "../../config/index.js";
-import { buildTargetDataDirRules } from "./target-settings.js";
-import { FakeGitClient, FakeGhClient } from "../../git/index.js";
-import type { ProtectionApiResult } from "../../git/index.js";
+import {runScaffold, resolveTemplatesDir, scaffoldCommand, resolveScaffoldRepo} from './scaffold.js'
+import {parseArgs} from '../args.js'
+import {EXIT} from '../../shared/exit-codes.js'
+import {defaultConfig} from '../../config/index.js'
+import {buildTargetDataDirRules} from './target-settings.js'
+import {FakeGitClient, FakeGhClient} from '../../git/index.js'
+import type {ProtectionApiResult} from '../../git/index.js'
 
-const cfg = defaultConfig();
-const BASE = cfg.git.baseBranch; // "develop"
+const cfg = defaultConfig()
+const BASE = cfg.git.baseBranch // "develop"
 
 /** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
 const DATA_DIR_RULES = buildTargetDataDirRules({
-  dataDir: "/Users/jo/.claude/plugins/data/factory-jfa94",
-  home: "/Users/jo",
-});
+    dataDir: '/Users/jo/.claude/plugins/data/factory-jfa94',
+    home: '/Users/jo',
+})
 
 /** Protection state that satisfies requireProtectionOrRefuse (no required checks). */
 const PROTECTED: ProtectionApiResult = {
-  enabled: true,
-  requiredStatusChecks: [],
-  strictUpToDate: true,
-  hasMergeQueue: false,
-};
+    enabled: true,
+    requiredStatusChecks: [],
+    strictUpToDate: true,
+    hasMergeQueue: false,
+}
 
-let root: string;
-let templatesDir: string;
-let dataDir: string;
+/** Pragmatic read-back shape for a written gates.json fixture (not the full discriminated union). */
+interface GateEntryFixture {
+    contracted: boolean
+    command?: string
+    reason?: string
+}
+interface GateContractFixture {
+    // The scaffolder always emits an entry per known gate, so these are required
+    // (not `Record<string, …>` — that would make every `.contracted` read `| undefined`).
+    gates: Record<'test' | 'type' | 'build' | 'tdd' | 'mutation' | 'coverage' | 'sast' | 'lint', GateEntryFixture>
+}
+
+let root: string
+let templatesDir: string
+let dataDir: string
 
 /**
  * A minimal npm fixture that satisfies the gate-contract FLOOR (S7, Decision 46):
@@ -50,331 +57,328 @@ let dataDir: string;
  * Without it every runScaffold call would refuse on the 'custom'/below-floor stack.
  */
 async function seedNpmFixture(dir: string): Promise<void> {
-  await writeFile(
-    join(dir, "package.json"),
-    JSON.stringify({
-      name: "fixture",
-      scripts: { build: "tsc -p ." },
-      devDependencies: {
-        vitest: "^2.0.0",
-        "@stryker-mutator/core": "^8.0.0",
-        "@vitest/coverage-v8": "^2.0.0",
-      },
-    }) + "\n",
-    "utf8",
-  );
-  await writeFile(join(dir, "tsconfig.json"), "{}\n", "utf8");
+    await writeFile(
+        join(dir, 'package.json'),
+        JSON.stringify({
+            name: 'fixture',
+            scripts: {build: 'tsc -p .'},
+            devDependencies: {
+                vitest: '^2.0.0',
+                '@stryker-mutator/core': '^8.0.0',
+                '@vitest/coverage-v8': '^2.0.0',
+            },
+        }) + '\n',
+        'utf8'
+    )
+    await writeFile(join(dir, 'tsconfig.json'), '{}\n', 'utf8')
 }
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "factory-scaffold-"));
-  // Isolated config-overlay dir so CI build-env detection's gateEnv write (and the
-  // no-op read when nothing is detected) never touches the host data dir.
-  dataDir = await mkdtemp(join(tmpdir(), "factory-scaffold-data-"));
-  templatesDir = resolveTemplatesDir();
-  await seedNpmFixture(root);
-});
+    root = await mkdtemp(join(tmpdir(), 'factory-scaffold-'))
+    // Isolated config-overlay dir so CI build-env detection's gateEnv write (and the
+    // no-op read when nothing is detected) never touches the host data dir.
+    dataDir = await mkdtemp(join(tmpdir(), 'factory-scaffold-data-'))
+    templatesDir = resolveTemplatesDir()
+    await seedNpmFixture(root)
+})
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-  await rm(dataDir, { recursive: true, force: true });
-});
+    await rm(root, {recursive: true, force: true})
+    await rm(dataDir, {recursive: true, force: true})
+})
 
-describe("runScaffold", () => {
-  it("copies the CI template + manages .gitignore, and reports protection on develop", async () => {
-    const report = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
+describe('runScaffold', () => {
+    it('copies the CI template + manages .gitignore, and reports protection on develop', async () => {
+        const report = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
 
-    expect(existsSync(join(root, ".github", "workflows", "quality-gate.yml"))).toBe(true);
-    expect(existsSync(join(root, ".gitignore"))).toBe(true);
-    expect(report.files_created).toContain(".github/workflows/quality-gate.yml");
-    // The cost-aware shard helper is a plugin-MANAGED file shipped with the CI net.
-    expect(report.files_created).toContain(".github/scripts/shard-mutation-scope.mjs");
-    expect(existsSync(join(root, ".github", "scripts", "shard-mutation-scope.mjs"))).toBe(true);
-    expect(report.files_updated).toEqual([]);
-    // The advisory `files_outdated` bucket was retired with the project-owned SEED
-    // model (Decision 15) — a SEED file is either created or present, never "outdated".
-    expect(report).not.toHaveProperty("files_outdated");
-    // Per-run staging is no longer scaffold's concern — report carries no staging field.
-    expect(report).not.toHaveProperty("staging");
-    expect(report.protection.enabled).toBe(true);
-    expect(report.protection.provisioned).toBe(false);
+        expect(existsSync(join(root, '.github', 'workflows', 'quality-gate.yml'))).toBe(true)
+        expect(existsSync(join(root, '.gitignore'))).toBe(true)
+        expect(report.files_created).toContain('.github/workflows/quality-gate.yml')
+        // The cost-aware shard helper is a plugin-MANAGED file shipped with the CI net.
+        expect(report.files_created).toContain('.github/scripts/shard-mutation-scope.mjs')
+        expect(existsSync(join(root, '.github', 'scripts', 'shard-mutation-scope.mjs'))).toBe(true)
+        expect(report.files_updated).toEqual([])
+        // The advisory `files_outdated` bucket was retired with the project-owned SEED
+        // model (Decision 15) — a SEED file is either created or present, never "outdated".
+        expect(report).not.toHaveProperty('files_outdated')
+        // Per-run staging is no longer scaffold's concern — report carries no staging field.
+        expect(report).not.toHaveProperty('staging')
+        expect(report.protection.enabled).toBe(true)
+        expect(report.protection.provisioned).toBe(false)
 
-    const gitignore = await readFile(join(root, ".gitignore"), "utf8");
-    expect(gitignore).toMatch(/\.claude-plugin-data\//);
+        const gitignore = await readFile(join(root, '.gitignore'), 'utf8')
+        expect(gitignore).toMatch(/\.claude-plugin-data\//)
 
-    // Decision 40 D11: no e2e job in CI — it would gate auto-merge on infra CI
-    // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
-    const gate = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
-    expect(gate).not.toContain("E2E Tests");
-    expect(gate).toContain("needs: [quality, mutation-testing, security]");
+        // Decision 40 D11: no e2e job in CI — it would gate auto-merge on infra CI
+        // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
+        const gate = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
+        expect(gate).not.toContain('E2E Tests')
+        expect(gate).toContain('needs: [quality, mutation-testing, security]')
 
-    // E1: a target-repo .claude/settings.json is emitted with the factory
-    // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
-    // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
-    expect(report.settings.created).toBe(true);
-    const settingsRaw = await readFile(join(root, ".claude", "settings.json"), "utf8");
-    expect(settingsRaw).not.toContain("${CLAUDE_PLUGIN_DATA}"); // the bug we fixed
-    const settings = JSON.parse(settingsRaw) as Record<string, unknown>;
-    expect((settings.worktree as { baseRef: string }).baseRef).toBe("head");
-    const allow = (settings.permissions as { allow: string[] }).allow;
-    expect(allow).toContain("Bash(factory:*)");
-    expect(allow).toContain(`Read(${DATA_DIR_RULES.allowGlobBase}/**)`); // baked, resolved dir
-    const dirs = (settings.permissions as { additionalDirectories: string[] })
-      .additionalDirectories;
-    expect(dirs).toContain(DATA_DIR_RULES.additionalDir);
-    expect(settings).not.toHaveProperty("statusLine");
-    expect(report.files_created).toContain(".claude/settings.json");
-  });
+        // E1: a target-repo .claude/settings.json is emitted with the factory
+        // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
+        // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
+        expect(report.settings.created).toBe(true)
+        const settingsRaw = await readFile(join(root, '.claude', 'settings.json'), 'utf8')
+        expect(settingsRaw).not.toContain('${CLAUDE_PLUGIN_DATA}') // the bug we fixed
+        const settings = JSON.parse(settingsRaw) as Record<string, unknown>
+        expect((settings.worktree as {baseRef: string}).baseRef).toBe('head')
+        const allow = (settings.permissions as {allow: string[]}).allow
+        expect(allow).toContain('Bash(factory:*)')
+        expect(allow).toContain(`Read(${DATA_DIR_RULES.allowGlobBase}/**)`) // baked, resolved dir
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toContain(DATA_DIR_RULES.additionalDir)
+        expect(settings).not.toHaveProperty('statusLine')
+        expect(report.files_created).toContain('.claude/settings.json')
+    })
 
-  it("E1: merges non-destructively into an existing target .claude/settings.json", async () => {
-    await mkdir(join(root, ".claude"), { recursive: true });
-    await writeFile(
-      join(root, ".claude", "settings.json"),
-      JSON.stringify({ statusLine: { command: "mine" }, permissions: { allow: ["Bash(make:*)"] } }),
-      "utf8",
-    );
-    const report = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
-    expect(report.settings.created).toBe(false);
-    expect(report.settings.changed).toBe(true);
-    const settings = JSON.parse(
-      await readFile(join(root, ".claude", "settings.json"), "utf8"),
-    ) as Record<string, unknown>;
-    expect(settings.statusLine).toEqual({ command: "mine" }); // user's own kept
-    const allow = (settings.permissions as { allow: string[] }).allow;
-    expect(allow).toContain("Bash(make:*)");
-    expect(allow).toContain("Bash(factory:*)");
-    expect(report.files_present).toContain(".claude/settings.json");
-  });
+    it('E1: merges non-destructively into an existing target .claude/settings.json', async () => {
+        await mkdir(join(root, '.claude'), {recursive: true})
+        await writeFile(
+            join(root, '.claude', 'settings.json'),
+            JSON.stringify({statusLine: {command: 'mine'}, permissions: {allow: ['Bash(make:*)']}}),
+            'utf8'
+        )
+        const report = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
+        expect(report.settings.created).toBe(false)
+        expect(report.settings.changed).toBe(true)
+        const settings = JSON.parse(await readFile(join(root, '.claude', 'settings.json'), 'utf8')) as Record<
+            string,
+            unknown
+        >
+        expect(settings.statusLine).toEqual({command: 'mine'}) // user's own kept
+        const allow = (settings.permissions as {allow: string[]}).allow
+        expect(allow).toContain('Bash(make:*)')
+        expect(allow).toContain('Bash(factory:*)')
+        expect(report.files_present).toContain('.claude/settings.json')
+    })
 
-  it("copies the Node gate configs ONLY when package.json exists", async () => {
-    // No package.json → stryker/depcruise are skipped; the run then REFUSES on the
-    // 'custom' stack (gate-contract floor, S7) — but the nodeOnly skip already
-    // happened (templates run before the contract step) and is observable on disk.
-    const bare = await mkdtemp(join(tmpdir(), "factory-scaffold-bare-"));
-    try {
-      await expect(
-        runScaffold({
-          targetRoot: bare,
-          templatesDir,
-          owner: "acme",
-          repo: "widgets",
-          config: cfg,
-          dataDirRules: DATA_DIR_RULES,
-          dataDir,
-          ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-          provision: false,
-        }),
-      ).rejects.toThrow(/custom/);
-      expect(existsSync(join(bare, ".stryker.config.json"))).toBe(false);
-      expect(existsSync(join(bare, "eslint.config.mjs"))).toBe(false);
-      expect(existsSync(join(bare, "playwright.config.ts"))).toBe(false);
-    } finally {
-      await rm(bare, { recursive: true, force: true });
-    }
+    it('copies the Node gate configs ONLY when package.json exists', async () => {
+        // No package.json → stryker/depcruise are skipped; the run then REFUSES on the
+        // 'custom' stack (gate-contract floor, S7) — but the nodeOnly skip already
+        // happened (templates run before the contract step) and is observable on disk.
+        const bare = await mkdtemp(join(tmpdir(), 'factory-scaffold-bare-'))
+        try {
+            await expect(
+                runScaffold({
+                    targetRoot: bare,
+                    templatesDir,
+                    owner: 'acme',
+                    repo: 'widgets',
+                    config: cfg,
+                    dataDirRules: DATA_DIR_RULES,
+                    dataDir,
+                    ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+                    provision: false,
+                })
+            ).rejects.toThrow(/custom/)
+            expect(existsSync(join(bare, '.stryker.config.json'))).toBe(false)
+            expect(existsSync(join(bare, 'eslint.config.mjs'))).toBe(false)
+            expect(existsSync(join(bare, 'playwright.config.ts'))).toBe(false)
+        } finally {
+            await rm(bare, {recursive: true, force: true})
+        }
 
-    // With package.json (the fixture) → the gate configs are copied.
-    const withPkg = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
-    expect(withPkg.files_created).toContain(".stryker.config.json");
-    expect(withPkg.files_created).toContain(".dependency-cruiser.cjs");
-    expect(withPkg.files_created).toContain("eslint.config.mjs");
-    expect(withPkg.files_created).toContain("playwright.config.ts");
-    expect(withPkg.files_created).toContain("e2e/example.spec.ts");
-  });
+        // With package.json (the fixture) → the gate configs are copied.
+        const withPkg = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
+        expect(withPkg.files_created).toContain('.stryker.config.json')
+        expect(withPkg.files_created).toContain('.dependency-cruiser.cjs')
+        expect(withPkg.files_created).toContain('eslint.config.mjs')
+        expect(withPkg.files_created).toContain('playwright.config.ts')
+        expect(withPkg.files_created).toContain('e2e/example.spec.ts')
+    })
 
-  it("is idempotent: a second run reports the files as present, not created", async () => {
-    const args = {
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    };
-    await runScaffold(args);
-    const second = await runScaffold(args);
-    expect(second.files_created).toEqual([]);
-    expect(second.files_present).toContain(".github/workflows/quality-gate.yml");
-    // An UNCHANGED managed file is `present`, not `updated`.
-    expect(second.files_updated).toEqual([]);
-  });
+    it('is idempotent: a second run reports the files as present, not created', async () => {
+        const args = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        }
+        await runScaffold(args)
+        const second = await runScaffold(args)
+        expect(second.files_created).toEqual([])
+        expect(second.files_present).toContain('.github/workflows/quality-gate.yml')
+        // An UNCHANGED managed file is `present`, not `updated`.
+        expect(second.files_updated).toEqual([])
+    })
 
-  it("auto-updates a drifted plugin-MANAGED file (the CI workflow) — propagation path", async () => {
-    const args = {
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    };
-    // Simulate an already-scaffolded repo carrying an OLD/customized workflow.
-    const wf = join(root, ".github", "workflows", "quality-gate.yml");
-    await mkdir(dirname(wf), { recursive: true });
-    await writeFile(wf, "name: stale round-robin workflow\n", "utf8");
+    it('auto-updates a drifted plugin-MANAGED file (the CI workflow) — propagation path', async () => {
+        const args = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        }
+        // Simulate an already-scaffolded repo carrying an OLD/customized workflow.
+        const wf = join(root, '.github', 'workflows', 'quality-gate.yml')
+        await mkdir(dirname(wf), {recursive: true})
+        await writeFile(wf, 'name: stale round-robin workflow\n', 'utf8')
 
-    const report = await runScaffold(args);
+        const report = await runScaffold(args)
 
-    expect(report.files_updated).toContain(".github/workflows/quality-gate.yml");
-    expect(report.files_created).not.toContain(".github/workflows/quality-gate.yml");
-    // Content was refreshed to the shipped template (the fix reaches the repo).
-    const template = await readFile(
-      join(templatesDir, ".github", "workflows", "quality-gate.yml"),
-      "utf8",
-    );
-    expect(await readFile(wf, "utf8")).toBe(template);
-  });
+        expect(report.files_updated).toContain('.github/workflows/quality-gate.yml')
+        expect(report.files_created).not.toContain('.github/workflows/quality-gate.yml')
+        // Content was refreshed to the shipped template (the fix reaches the repo).
+        const template = await readFile(join(templatesDir, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
+        expect(await readFile(wf, 'utf8')).toBe(template)
+    })
 
-  it("treats an existing SEED config as project-owned: present, never overwritten, never re-flagged", async () => {
-    const args = {
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    };
-    await runScaffold(args); // seeds .stryker.config.json (root is the npm fixture)
+    it('treats an existing SEED config as project-owned: present, never overwritten, never re-flagged', async () => {
+        const args = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        }
+        await runScaffold(args) // seeds .stryker.config.json (root is the npm fixture)
 
-    // The project grows its own (user-owned) gate config — exactly the outsidey
-    // case where the repo's config has diverged into a richer superset.
-    const stryker = join(root, ".stryker.config.json");
-    const customized = '{ "thresholds": { "break": 95 } }\n';
-    await writeFile(stryker, customized, "utf8");
+        // The project grows its own (user-owned) gate config — exactly the outsidey
+        // case where the repo's config has diverged into a richer superset.
+        const stryker = join(root, '.stryker.config.json')
+        const customized = '{ "thresholds": { "break": 95 } }\n'
+        await writeFile(stryker, customized, 'utf8')
 
-    const second = await runScaffold(args);
-    // A present SEED file is project-owned: reported `present`, NOT created/updated,
-    // and there is no advisory "outdated" bucket to land in.
-    expect(second.files_present).toContain(".stryker.config.json");
-    expect(second.files_created).not.toContain(".stryker.config.json");
-    expect(second.files_updated).not.toContain(".stryker.config.json");
-    expect(second).not.toHaveProperty("files_outdated");
-    // Customization is preserved — SEED files are never overwritten.
-    expect(await readFile(stryker, "utf8")).toBe(customized);
-  });
+        const second = await runScaffold(args)
+        // A present SEED file is project-owned: reported `present`, NOT created/updated,
+        // and there is no advisory "outdated" bucket to land in.
+        expect(second.files_present).toContain('.stryker.config.json')
+        expect(second.files_created).not.toContain('.stryker.config.json')
+        expect(second.files_updated).not.toContain('.stryker.config.json')
+        expect(second).not.toHaveProperty('files_outdated')
+        // Customization is preserved — SEED files are never overwritten.
+        expect(await readFile(stryker, 'utf8')).toBe(customized)
+    })
 
-  it("guarantees the explicit TRACKED/IGNORED .gitignore split", async () => {
-    const args = {
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    };
-    await runScaffold(args);
-    const gitignore = await readFile(join(root, ".gitignore"), "utf8");
-    const lines = gitignore.split("\n");
+    it('guarantees the explicit TRACKED/IGNORED .gitignore split', async () => {
+        const args = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        }
+        await runScaffold(args)
+        const gitignore = await readFile(join(root, '.gitignore'), 'utf8')
+        const lines = gitignore.split('\n')
 
-    // IGNORED: per-machine local state + factory/worktree state are guaranteed.
-    for (const entry of [
-      ".claude/settings.local.json",
-      ".claude/worktrees/",
-      ".claude/projects/",
-      ".claude/tool-audit.jsonl",
-      ".claude-plugin-data/",
-      "*.worktree",
-    ]) {
-      expect(lines).toContain(entry);
-    }
-    // TRACKED: `.claude/settings.json` must NOT be ignored — neither by an exact
-    // line nor by a wholesale `.claude/` rule. The split is explicit, never reliant
-    // on enumerating siblings or a global excludes file.
-    expect(lines).not.toContain(".claude/settings.json");
-    expect(lines).not.toContain(".claude/");
-    expect(lines).not.toContain(".claude/*");
+        // IGNORED: per-machine local state + factory/worktree state are guaranteed.
+        for (const entry of [
+            '.claude/settings.local.json',
+            '.claude/worktrees/',
+            '.claude/projects/',
+            '.claude/tool-audit.jsonl',
+            '.claude-plugin-data/',
+            '*.worktree',
+        ]) {
+            expect(lines).toContain(entry)
+        }
+        // TRACKED: `.claude/settings.json` must NOT be ignored — neither by an exact
+        // line nor by a wholesale `.claude/` rule. The split is explicit, never reliant
+        // on enumerating siblings or a global excludes file.
+        expect(lines).not.toContain('.claude/settings.json')
+        expect(lines).not.toContain('.claude/')
+        expect(lines).not.toContain('.claude/*')
 
-    // Idempotent + non-duplicating: a second run appends nothing.
-    await runScaffold(args);
-    expect(await readFile(join(root, ".gitignore"), "utf8")).toBe(gitignore);
-  });
+        // Idempotent + non-duplicating: a second run appends nothing.
+        await runScaffold(args)
+        expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe(gitignore)
+    })
 
-  it("REFUSES loudly when develop protection is missing and --provision is off", async () => {
-    await expect(
-      runScaffold({
-        targetRoot: root,
-        templatesDir,
-        owner: "acme",
-        repo: "widgets",
-        config: cfg,
-        dataDirRules: DATA_DIR_RULES,
-        dataDir,
-        ghClient: new FakeGhClient(), // no protection seeded → disabled
-        provision: false,
-      }),
-    ).rejects.toThrow(/refuses to start|protection/i);
-  });
+    it('REFUSES loudly when develop protection is missing and --provision is off', async () => {
+        await expect(
+            runScaffold({
+                targetRoot: root,
+                templatesDir,
+                owner: 'acme',
+                repo: 'widgets',
+                config: cfg,
+                dataDirRules: DATA_DIR_RULES,
+                dataDir,
+                ghClient: new FakeGhClient(), // no protection seeded → disabled
+                provision: false,
+            })
+        ).rejects.toThrow(/refuses to start|protection/i)
+    })
 
-  it("--provision writes protection then passes the gate", async () => {
-    const gh = new FakeGhClient(); // starts unprotected
-    const report = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: gh,
-      provision: true,
-    });
-    expect(report.protection.provisioned).toBe(true);
-    expect(report.protection.strict_up_to_date).toBe(true);
-    // The PUT was issued against develop (the integration base), not a shared staging branch.
-    expect(gh.calls).toContain(`api PUT protection ${BASE}`);
-  });
+    it('--provision writes protection then passes the gate', async () => {
+        const gh = new FakeGhClient() // starts unprotected
+        const report = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: gh,
+            provision: true,
+        })
+        expect(report.protection.provisioned).toBe(true)
+        expect(report.protection.strict_up_to_date).toBe(true)
+        // The PUT was issued against develop (the integration base), not a shared staging branch.
+        expect(gh.calls).toContain(`api PUT protection ${BASE}`)
+    })
 
-  it("auto-detects the repo's CI build env into quality.gateEnv BEFORE the managed template overwrites it", async () => {
-    // The repo ships its OWN quality-gate.yml carrying build placeholders. scaffold
-    // MANAGES (overwrites) that file — so detection must capture the env into the
-    // durable config overlay first. Mirror goodbyespy: a literal build env + a
-    // `${{ secrets.* }}` ref that must be dropped.
-    const wfDir = join(root, ".github", "workflows");
-    await mkdir(wfDir, { recursive: true });
-    await writeFile(
-      join(wfDir, "quality-gate.yml"),
-      `jobs:
+    it("auto-detects the repo's CI build env into quality.gateEnv BEFORE the managed template overwrites it", async () => {
+        // The repo ships its OWN quality-gate.yml carrying build placeholders. scaffold
+        // MANAGES (overwrites) that file — so detection must capture the env into the
+        // durable config overlay first. Mirror goodbyespy: a literal build env + a
+        // `${{ secrets.* }}` ref that must be dropped.
+        const wfDir = join(root, '.github', 'workflows')
+        await mkdir(wfDir, {recursive: true})
+        await writeFile(
+            join(wfDir, 'quality-gate.yml'),
+            `jobs:
   quality:
     steps:
       - run: pnpm build
@@ -382,371 +386,373 @@ describe("runScaffold", () => {
           NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
           DEPLOY_TOKEN: \${{ secrets.DEPLOY_TOKEN }}
 `,
-      "utf8",
-    );
+            'utf8'
+        )
 
-    const report = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
+        const report = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
 
-    // The literal placeholder was captured; the secret ref was dropped.
-    expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe("http://localhost:54321");
-    expect(report.gateEnv?.written).toEqual(["NEXT_PUBLIC_SUPABASE_URL"]);
-    expect(report.gateEnv?.skippedExpressionRefs.map((r) => r.key)).toEqual(["DEPLOY_TOKEN"]);
+        // The literal placeholder was captured; the secret ref was dropped.
+        expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe('http://localhost:54321')
+        expect(report.gateEnv?.written).toEqual(['NEXT_PUBLIC_SUPABASE_URL'])
+        expect(report.gateEnv?.skippedExpressionRefs.map((r) => r.key)).toEqual(['DEPLOY_TOKEN'])
 
-    // It landed in the durable overlay (the same one the rest of the factory reads).
-    const overlay = JSON.parse(await readFile(join(dataDir, "config.json"), "utf8"));
-    expect(overlay.quality.gateEnv).toEqual({
-      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
-    });
+        // It landed in the durable overlay (the same one the rest of the factory reads).
+        const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as {
+            quality: {gateEnv: Record<string, string>}
+        }
+        expect(overlay.quality.gateEnv).toEqual({
+            NEXT_PUBLIC_SUPABASE_URL: 'http://localhost:54321',
+        })
 
-    // The managed template DID overwrite the repo's workflow afterward — proving the
-    // ordering: detect first, then clobber.
-    expect(report.files_updated).toContain(".github/workflows/quality-gate.yml");
-  });
+        // The managed template DID overwrite the repo's workflow afterward — proving the
+        // ordering: detect first, then clobber.
+        expect(report.files_updated).toContain('.github/workflows/quality-gate.yml')
+    })
 
-  it("omits the gateEnv report field when the repo has no detectable build env", async () => {
-    const report = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
-    expect(report).not.toHaveProperty("gateEnv");
-    expect(existsSync(join(dataDir, "config.json"))).toBe(false);
-  });
+    it('omits the gateEnv report field when the repo has no detectable build env', async () => {
+        const report = await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            dataDir,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
+        expect(report).not.toHaveProperty('gateEnv')
+        expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
+    })
 
-  const baseArgs = () => ({
-    targetRoot: root,
-    templatesDir,
-    owner: "acme",
-    repo: "widgets",
-    config: cfg,
-    dataDirRules: DATA_DIR_RULES,
-    dataDir,
-    ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-    provision: false,
-  });
+    const baseArgs = () => ({
+        targetRoot: root,
+        templatesDir,
+        owner: 'acme',
+        repo: 'widgets',
+        config: cfg,
+        dataDirRules: DATA_DIR_RULES,
+        dataDir,
+        ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+        provision: false,
+    })
 
-  const writeRepoWorkflow = async (text: string) => {
-    const wfDir = join(root, ".github", "workflows");
-    await mkdir(wfDir, { recursive: true });
-    await writeFile(join(wfDir, "quality-gate.yml"), text, "utf8");
-  };
+    const writeRepoWorkflow = async (text: string) => {
+        const wfDir = join(root, '.github', 'workflows')
+        await mkdir(wfDir, {recursive: true})
+        await writeFile(join(wfDir, 'quality-gate.yml'), text, 'utf8')
+    }
 
-  const GATEENV_WF = `jobs:
+    const GATEENV_WF = `jobs:
   quality:
     steps:
       - run: pnpm build
         env:
           NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-`;
+`
 
-  it("injects the resolved gateEnv into the WRITTEN managed quality-gate.yml (CI parity)", async () => {
-    await writeRepoWorkflow(GATEENV_WF);
-    const report = await runScaffold(baseArgs());
+    it('injects the resolved gateEnv into the WRITTEN managed quality-gate.yml (CI parity)', async () => {
+        await writeRepoWorkflow(GATEENV_WF)
+        const report = await runScaffold(baseArgs())
 
-    const written = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
-    // The marker became a real env: block carrying the detected placeholder (quoted).
-    expect(written).not.toContain("# factory:gate-env");
-    expect(written).toContain('          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321"');
-    expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe("http://localhost:54321");
-  });
+        const written = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
+        // The marker became a real env: block carrying the detected placeholder (quoted).
+        expect(written).not.toContain('# factory:gate-env')
+        expect(written).toContain('          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321"')
+        expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe('http://localhost:54321')
+    })
 
-  it("leaves the gate-env marker in place when there is no detectable build env", async () => {
-    await runScaffold(baseArgs());
-    const written = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
-    // No injection happened — the marker survives for a future scaffold to fill.
-    expect(written).toContain("# factory:gate-env");
-  });
+    it('leaves the gate-env marker in place when there is no detectable build env', async () => {
+        await runScaffold(baseArgs())
+        const written = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
+        // No injection happened — the marker survives for a future scaffold to fill.
+        expect(written).toContain('# factory:gate-env')
+    })
 
-  it("re-scaffold re-injects a byte-identical file (idempotent round-trip, no spurious update)", async () => {
-    await writeRepoWorkflow(GATEENV_WF);
-    await runScaffold(baseArgs()); // detect + overwrite + inject
-    const wf = join(root, ".github", "workflows", "quality-gate.yml");
-    const first = await readFile(wf, "utf8");
+    it('re-scaffold re-injects a byte-identical file (idempotent round-trip, no spurious update)', async () => {
+        await writeRepoWorkflow(GATEENV_WF)
+        await runScaffold(baseArgs()) // detect + overwrite + inject
+        const wf = join(root, '.github', 'workflows', 'quality-gate.yml')
+        const first = await readFile(wf, 'utf8')
 
-    const second = await runScaffold(baseArgs()); // re-detect injected env (skipped) + re-inject
-    expect(await readFile(wf, "utf8")).toBe(first);
-    expect(second.files_updated).not.toContain(".github/workflows/quality-gate.yml");
-  });
+        const second = await runScaffold(baseArgs()) // re-detect injected env (skipped) + re-inject
+        expect(await readFile(wf, 'utf8')).toBe(first)
+        expect(second.files_updated).not.toContain('.github/workflows/quality-gate.yml')
+    })
 
-  it("surfaces an unparseable workflow in the report (warnings) instead of swallowing it", async () => {
-    // Tab indentation → MalformedWorkflow → the file is skipped with a warning. The
-    // report MUST still carry the gateEnv field so the parse failure isn't silent (the
-    // CRITICAL omission-gate fix), even though nothing was detected.
-    const wfDir = join(root, ".github", "workflows");
-    await mkdir(wfDir, { recursive: true });
-    await writeFile(join(wfDir, "bad.yml"), "jobs:\n\tj:\n\t\tsteps:\n", "utf8");
+    it('surfaces an unparseable workflow in the report (warnings) instead of swallowing it', async () => {
+        // Tab indentation → MalformedWorkflow → the file is skipped with a warning. The
+        // report MUST still carry the gateEnv field so the parse failure isn't silent (the
+        // CRITICAL omission-gate fix), even though nothing was detected.
+        const wfDir = join(root, '.github', 'workflows')
+        await mkdir(wfDir, {recursive: true})
+        await writeFile(join(wfDir, 'bad.yml'), 'jobs:\n\tj:\n\t\tsteps:\n', 'utf8')
 
-    const report = await runScaffold(baseArgs());
-    expect(report.gateEnv).toBeDefined();
-    expect(report.gateEnv?.warnings.map((w) => w.workflow)).toContain("bad.yml");
-  });
+        const report = await runScaffold(baseArgs())
+        expect(report.gateEnv).toBeDefined()
+        expect(report.gateEnv?.warnings.map((w) => w.workflow)).toContain('bad.yml')
+    })
 
-  describe("gate contract (S7, Decision 46)", () => {
-    const gatesPath = () => join(root, ".factory", "gates.json");
+    describe('gate contract (S7, Decision 46)', () => {
+        const gatesPath = () => join(root, '.factory', 'gates.json')
 
-    it("writes the npm contract: floor gates contracted, waivers carry reasons", async () => {
-      const report = await runScaffold(baseArgs());
-      expect(report.stack).toBe("npm");
-      expect(report.gates_contract).toBe("created");
-      expect(report.files_created).toContain(".factory/gates.json");
-      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
-      expect(contract.gates.test).toEqual({ contracted: true });
-      expect(contract.gates.type).toEqual({ contracted: true });
-      expect(contract.gates.build).toEqual({ contracted: true });
-      expect(contract.gates.tdd).toEqual({ contracted: true });
-      expect(contract.gates.mutation).toEqual({ contracted: true }); // stryker devDep in fixture
-      expect(contract.gates.coverage).toEqual({ contracted: true }); // coverage-v8 devDep (S8)
-      expect(contract.gates.sast.contracted).toBe(false); // no securityCommand configured
-      // eslint.config.mjs was seeded this run but eslint itself is not a dep.
-      expect(contract.gates.lint.contracted).toBe(false);
-      expect(contract.gates.lint.reason).toMatch(/eslint not installed/);
-    });
+        it('writes the npm contract: floor gates contracted, waivers carry reasons', async () => {
+            const report = await runScaffold(baseArgs())
+            expect(report.stack).toBe('npm')
+            expect(report.gates_contract).toBe('created')
+            expect(report.files_created).toContain('.factory/gates.json')
+            const contract = JSON.parse(await readFile(gatesPath(), 'utf8')) as GateContractFixture
+            expect(contract.gates.test).toEqual({contracted: true})
+            expect(contract.gates.type).toEqual({contracted: true})
+            expect(contract.gates.build).toEqual({contracted: true})
+            expect(contract.gates.tdd).toEqual({contracted: true})
+            expect(contract.gates.mutation).toEqual({contracted: true}) // stryker devDep in fixture
+            expect(contract.gates.coverage).toEqual({contracted: true}) // coverage-v8 devDep (S8)
+            expect(contract.gates.sast.contracted).toBe(false) // no securityCommand configured
+            // eslint.config.mjs was seeded this run but eslint itself is not a dep.
+            expect(contract.gates.lint.contracted).toBe(false)
+            expect(contract.gates.lint.reason).toMatch(/eslint not installed/)
+        })
 
-    it("contracts sast when quality.securityCommand is configured", async () => {
-      const secured = {
-        ...cfg,
-        quality: { ...cfg.quality, securityCommand: "semgrep --config auto --error" },
-      };
-      const report = await runScaffold({ ...baseArgs(), config: secured });
-      expect(report.gates_contract).toBe("created");
-      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
-      expect(contract.gates.sast).toEqual({ contracted: true });
-    });
+        it('contracts sast when quality.securityCommand is configured', async () => {
+            const secured = {
+                ...cfg,
+                quality: {...cfg.quality, securityCommand: 'semgrep --config auto --error'},
+            }
+            const report = await runScaffold({...baseArgs(), config: secured})
+            expect(report.gates_contract).toBe('created')
+            const contract = JSON.parse(await readFile(gatesPath(), 'utf8')) as GateContractFixture
+            expect(contract.gates.sast).toEqual({contracted: true})
+        })
 
-    it("REFUSES below the npm floor, naming every shortfall; writes nothing", async () => {
-      await writeFile(join(root, "package.json"), JSON.stringify({ name: "x" }), "utf8");
-      await rm(join(root, "tsconfig.json"));
-      await expect(runScaffold(baseArgs())).rejects.toThrow(
-        /vitest[\s\S]*tsconfig\.json[\s\S]*scripts\.build/,
-      );
-      expect(existsSync(gatesPath())).toBe(false);
-    });
+        it('REFUSES below the npm floor, naming every shortfall; writes nothing', async () => {
+            await writeFile(join(root, 'package.json'), JSON.stringify({name: 'x'}), 'utf8')
+            await rm(join(root, 'tsconfig.json'))
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/vitest[\s\S]*tsconfig\.json[\s\S]*scripts\.build/)
+            expect(existsSync(gatesPath())).toBe(false)
+        })
 
-    it("npm without stryker REFUSES naming install-or-waive; --waive mutation records the waiver", async () => {
-      await writeFile(
-        join(root, "package.json"),
-        JSON.stringify({
-          name: "x",
-          scripts: { build: "b" },
-          devDependencies: { vitest: "^2.0.0", "@vitest/coverage-v8": "^2.0.0" },
-        }),
-        "utf8",
-      );
-      await expect(runScaffold(baseArgs())).rejects.toThrow(/--waive mutation/);
-      expect(existsSync(gatesPath())).toBe(false);
+        it('npm without stryker REFUSES naming install-or-waive; --waive mutation records the waiver', async () => {
+            await writeFile(
+                join(root, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    scripts: {build: 'b'},
+                    devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
+                }),
+                'utf8'
+            )
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/--waive mutation/)
+            expect(existsSync(gatesPath())).toBe(false)
 
-      const report = await runScaffold({ ...baseArgs(), waiveMutation: true });
-      expect(report.gates_contract).toBe("created");
-      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
-      expect(contract.gates.mutation).toEqual({
-        contracted: false,
-        reason: "waived via --waive mutation",
-      });
-    });
+            const report = await runScaffold({...baseArgs(), waiveMutation: true})
+            expect(report.gates_contract).toBe('created')
+            const contract = JSON.parse(await readFile(gatesPath(), 'utf8')) as GateContractFixture
+            expect(contract.gates.mutation).toEqual({
+                contracted: false,
+                reason: 'waived via --waive mutation',
+            })
+        })
 
-    it("npm without a coverage provider REFUSES; --waive coverage records the waiver (S8)", async () => {
-      await writeFile(
-        join(root, "package.json"),
-        JSON.stringify({
-          name: "x",
-          scripts: { build: "b" },
-          devDependencies: { vitest: "^2.0.0", "@stryker-mutator/core": "^8.0.0" },
-        }),
-        "utf8",
-      );
-      await expect(runScaffold(baseArgs())).rejects.toThrow(
-        /@vitest\/coverage-v8.*--waive coverage/s,
-      );
-      expect(existsSync(gatesPath())).toBe(false);
+        it('npm without a coverage provider REFUSES; --waive coverage records the waiver (S8)', async () => {
+            await writeFile(
+                join(root, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    scripts: {build: 'b'},
+                    devDependencies: {vitest: '^2.0.0', '@stryker-mutator/core': '^8.0.0'},
+                }),
+                'utf8'
+            )
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/@vitest\/coverage-v8.*--waive coverage/s)
+            expect(existsSync(gatesPath())).toBe(false)
 
-      const report = await runScaffold({ ...baseArgs(), waiveCoverage: true });
-      expect(report.gates_contract).toBe("created");
-      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
-      expect(contract.gates.coverage).toEqual({
-        contracted: false,
-        reason: "waived via --waive coverage",
-      });
-    });
+            const report = await runScaffold({...baseArgs(), waiveCoverage: true})
+            expect(report.gates_contract).toBe('created')
+            const contract = JSON.parse(await readFile(gatesPath(), 'utf8')) as GateContractFixture
+            expect(contract.gates.coverage).toEqual({
+                contracted: false,
+                reason: 'waived via --waive coverage',
+            })
+        })
 
-    it("advises fast-check on npm when not a dep; silent when present (S8 PBT)", async () => {
-      const err: string[] = [];
-      const spy = (c: unknown): boolean => (err.push(String(c)), true);
-      const orig = process.stderr.write;
-      (process.stderr as unknown as { write: typeof spy }).write = spy;
-      try {
-        await runScaffold(baseArgs()); // fixture has no fast-check
-      } finally {
-        process.stderr.write = orig;
-      }
-      expect(err.join("")).toMatch(/fast-check not installed/);
+        it('advises fast-check on npm when not a dep; silent when present (S8 PBT)', async () => {
+            const err: string[] = []
+            const spy = (c: unknown): boolean => (err.push(String(c)), true)
+            const orig = process.stderr.write.bind(process.stderr)
+            ;(process.stderr as unknown as {write: typeof spy}).write = spy
+            try {
+                await runScaffold(baseArgs()) // fixture has no fast-check
+            } finally {
+                process.stderr.write = orig
+            }
+            expect(err.join('')).toMatch(/fast-check not installed/)
 
-      const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-      pkg.devDependencies["fast-check"] = "^3.0.0";
-      await writeFile(join(root, "package.json"), JSON.stringify(pkg), "utf8");
-      const err2: string[] = [];
-      const spy2 = (c: unknown): boolean => (err2.push(String(c)), true);
-      (process.stderr as unknown as { write: typeof spy2 }).write = spy2;
-      try {
-        await runScaffold(baseArgs());
-      } finally {
-        process.stderr.write = orig;
-      }
-      expect(err2.join("")).not.toMatch(/fast-check/);
-    });
+            const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+                devDependencies: Record<string, string>
+            }
+            pkg.devDependencies['fast-check'] = '^3.0.0'
+            await writeFile(join(root, 'package.json'), JSON.stringify(pkg), 'utf8')
+            const err2: string[] = []
+            const spy2 = (c: unknown): boolean => (err2.push(String(c)), true)
+            ;(process.stderr as unknown as {write: typeof spy2}).write = spy2
+            try {
+                await runScaffold(baseArgs())
+            } finally {
+                process.stderr.write = orig
+            }
+            expect(err2.join('')).not.toMatch(/fast-check/)
+        })
 
-    it("deno target: command overrides, build waived-by-stack, nodeOnly seeds skipped", async () => {
-      const deno = await mkdtemp(join(tmpdir(), "factory-scaffold-deno-"));
-      try {
-        await writeFile(join(deno, "deno.json"), JSON.stringify({ tasks: {} }) + "\n", "utf8");
-        const report = await runScaffold({ ...baseArgs(), targetRoot: deno });
-        expect(report.stack).toBe("deno");
-        expect(report.gates_contract).toBe("created");
-        const contract = JSON.parse(await readFile(join(deno, ".factory", "gates.json"), "utf8"));
-        expect(contract.gates.test).toEqual({ contracted: true, command: "deno test" });
-        expect(contract.gates.type).toEqual({ contracted: true, command: "deno check ." });
-        expect(contract.gates.lint).toEqual({ contracted: true, command: "deno lint" });
-        expect(contract.gates.build.contracted).toBe(false);
-        expect(contract.gates.build.reason).toMatch(/waived-by-stack/);
-        expect(contract.gates.mutation.reason).toMatch(/waived-by-stack/);
-        expect(contract.gates.coverage.reason).toMatch(/waived-by-stack/);
-        // A deno target is not a Node package — nodeOnly seeds are skipped.
-        expect(existsSync(join(deno, ".stryker.config.json"))).toBe(false);
-        expect(existsSync(join(deno, "eslint.config.mjs"))).toBe(false);
-      } finally {
-        await rm(deno, { recursive: true, force: true });
-      }
-    });
+        it('deno target: command overrides, build waived-by-stack, nodeOnly seeds skipped', async () => {
+            const deno = await mkdtemp(join(tmpdir(), 'factory-scaffold-deno-'))
+            try {
+                await writeFile(join(deno, 'deno.json'), JSON.stringify({tasks: {}}) + '\n', 'utf8')
+                const report = await runScaffold({...baseArgs(), targetRoot: deno})
+                expect(report.stack).toBe('deno')
+                expect(report.gates_contract).toBe('created')
+                const contract = JSON.parse(
+                    await readFile(join(deno, '.factory', 'gates.json'), 'utf8')
+                ) as GateContractFixture
+                expect(contract.gates.test).toEqual({contracted: true, command: 'deno test'})
+                expect(contract.gates.type).toEqual({contracted: true, command: 'deno check .'})
+                expect(contract.gates.lint).toEqual({contracted: true, command: 'deno lint'})
+                expect(contract.gates.build.contracted).toBe(false)
+                expect(contract.gates.build.reason).toMatch(/waived-by-stack/)
+                expect(contract.gates.mutation.reason).toMatch(/waived-by-stack/)
+                expect(contract.gates.coverage.reason).toMatch(/waived-by-stack/)
+                // A deno target is not a Node package — nodeOnly seeds are skipped.
+                expect(existsSync(join(deno, '.stryker.config.json'))).toBe(false)
+                expect(existsSync(join(deno, 'eslint.config.mjs'))).toBe(false)
+            } finally {
+                await rm(deno, {recursive: true, force: true})
+            }
+        })
 
-    it("is idempotent: an existing VALID contract is project-owned — untouched, 'present'", async () => {
-      await runScaffold(baseArgs());
-      const first = await readFile(gatesPath(), "utf8");
-      const second = await runScaffold(baseArgs());
-      expect(second.gates_contract).toBe("present");
-      expect(second.files_created).not.toContain(".factory/gates.json");
-      expect(second.files_present).toContain(".factory/gates.json");
-      expect(await readFile(gatesPath(), "utf8")).toBe(first);
-    });
+        it("is idempotent: an existing VALID contract is project-owned — untouched, 'present'", async () => {
+            await runScaffold(baseArgs())
+            const first = await readFile(gatesPath(), 'utf8')
+            const second = await runScaffold(baseArgs())
+            expect(second.gates_contract).toBe('present')
+            expect(second.files_created).not.toContain('.factory/gates.json')
+            expect(second.files_present).toContain('.factory/gates.json')
+            expect(await readFile(gatesPath(), 'utf8')).toBe(first)
+        })
 
-    it("REFUSES on a present-but-INVALID contract (fix or delete, never regenerate)", async () => {
-      await mkdir(join(root, ".factory"), { recursive: true });
-      await writeFile(gatesPath(), '{"version": 1}', "utf8");
-      await expect(runScaffold(baseArgs())).rejects.toThrow(/INVALID/);
-      // The corrupt file is left for the user — scaffold never clobbers it.
-      expect(await readFile(gatesPath(), "utf8")).toBe('{"version": 1}');
-    });
-  });
-});
+        it('REFUSES on a present-but-INVALID contract (fix or delete, never regenerate)', async () => {
+            await mkdir(join(root, '.factory'), {recursive: true})
+            await writeFile(gatesPath(), '{"version": 1}', 'utf8')
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/INVALID/)
+            // The corrupt file is left for the user — scaffold never clobbers it.
+            expect(await readFile(gatesPath(), 'utf8')).toBe('{"version": 1}')
+        })
+    })
+})
 
-describe("scaffoldCommand.run", () => {
-  it("--help returns OK", async () => {
-    const out: string[] = [];
-    const spy = (c: unknown): boolean => (out.push(String(c)), true);
-    const orig = process.stdout.write;
-    (process.stdout as unknown as { write: typeof spy }).write = spy;
-    try {
-      expect(await scaffoldCommand.run(["--help"])).toBe(EXIT.OK);
-    } finally {
-      process.stdout.write = orig;
+describe('scaffoldCommand.run', () => {
+    it('--help returns OK', async () => {
+        const out: string[] = []
+        const spy = (c: unknown): boolean => (out.push(String(c)), true)
+        const orig = process.stdout.write.bind(process.stdout)
+        ;(process.stdout as unknown as {write: typeof spy}).write = spy
+        try {
+            expect(await scaffoldCommand.run(['--help'])).toBe(EXIT.OK)
+        } finally {
+            process.stdout.write = orig
+        }
+        expect(out.join('')).toMatch(/factory scaffold/)
+    })
+
+    it("--waive with anything but 'mutation'/'coverage' is a USAGE error", async () => {
+        const err: string[] = []
+        const spy = (c: unknown): boolean => (err.push(String(c)), true)
+        const orig = process.stderr.write.bind(process.stderr)
+        ;(process.stderr as unknown as {write: typeof spy}).write = spy
+        try {
+            expect(await scaffoldCommand.run(['--waive', 'lint'])).toBe(EXIT.USAGE)
+        } finally {
+            process.stderr.write = orig
+        }
+        expect(err.join('')).toMatch(/--waive accepts only 'mutation' or 'coverage'/)
+    })
+
+    it('--waive coverage passes the allowlist (fails later on the malformed --repo, not on --waive)', async () => {
+        const err: string[] = []
+        const spy = (c: unknown): boolean => (err.push(String(c)), true)
+        const orig = process.stderr.write.bind(process.stderr)
+        ;(process.stderr as unknown as {write: typeof spy}).write = spy
+        try {
+            expect(await scaffoldCommand.run(['--waive', 'coverage', '--repo', 'no-slash'])).toBe(EXIT.USAGE)
+        } finally {
+            process.stderr.write = orig
+        }
+        expect(err.join('')).not.toMatch(/--waive accepts only/)
+    })
+
+    it('a malformed --repo is a USAGE error', async () => {
+        const err: string[] = []
+        const spy = (c: unknown): boolean => (err.push(String(c)), true)
+        const orig = process.stderr.write.bind(process.stderr)
+        ;(process.stderr as unknown as {write: typeof spy}).write = spy
+        try {
+            expect(await scaffoldCommand.run(['--repo', 'no-slash'])).toBe(EXIT.USAGE)
+        } finally {
+            process.stderr.write = orig
+        }
+        expect(err.join('')).toMatch(/owner.*name/i)
+    })
+})
+
+describe('resolveScaffoldRepo (auto-derive --repo from origin)', () => {
+    function gitWithOrigin(slug: string | null): FakeGitClient {
+        const git = new FakeGitClient()
+        if (slug !== null) {
+            git.setRemoteUrl('origin', `git@github.com:${slug}.git`)
+        }
+        return git
     }
-    expect(out.join("")).toMatch(/factory scaffold/);
-  });
 
-  it("--waive with anything but 'mutation'/'coverage' is a USAGE error", async () => {
-    const err: string[] = [];
-    const spy = (c: unknown): boolean => (err.push(String(c)), true);
-    const orig = process.stderr.write;
-    (process.stderr as unknown as { write: typeof spy }).write = spy;
-    try {
-      expect(await scaffoldCommand.run(["--waive", "lint"])).toBe(EXIT.USAGE);
-    } finally {
-      process.stderr.write = orig;
-    }
-    expect(err.join("")).toMatch(/--waive accepts only 'mutation' or 'coverage'/);
-  });
+    it('no --repo flag → derives owner/name from the origin remote', async () => {
+        const {owner, repo} = await resolveScaffoldRepo(parseArgs(['--provision'], {booleans: ['provision']}), {
+            gitClient: gitWithOrigin('acme/widgets'),
+            cwd: '/wherever',
+        })
+        expect(owner).toBe('acme')
+        expect(repo).toBe('widgets')
+    })
 
-  it("--waive coverage passes the allowlist (fails later on the malformed --repo, not on --waive)", async () => {
-    const err: string[] = [];
-    const spy = (c: unknown): boolean => (err.push(String(c)), true);
-    const orig = process.stderr.write;
-    (process.stderr as unknown as { write: typeof spy }).write = spy;
-    try {
-      expect(await scaffoldCommand.run(["--waive", "coverage", "--repo", "no-slash"])).toBe(
-        EXIT.USAGE,
-      );
-    } finally {
-      process.stderr.write = orig;
-    }
-    expect(err.join("")).not.toMatch(/--waive accepts only/);
-  });
+    it('an explicit --repo that MISMATCHES the origin fails LOUD naming both', async () => {
+        await expect(
+            resolveScaffoldRepo(parseArgs(['--repo', 'acme/other']), {
+                gitClient: gitWithOrigin('acme/widgets'),
+                cwd: '/wherever',
+            })
+        ).rejects.toThrow(/acme\/other.*acme\/widgets|acme\/widgets.*acme\/other/s)
+    })
 
-  it("a malformed --repo is a USAGE error", async () => {
-    const err: string[] = [];
-    const spy = (c: unknown): boolean => (err.push(String(c)), true);
-    const orig = process.stderr.write;
-    (process.stderr as unknown as { write: typeof spy }).write = spy;
-    try {
-      expect(await scaffoldCommand.run(["--repo", "no-slash"])).toBe(EXIT.USAGE);
-    } finally {
-      process.stderr.write = orig;
-    }
-    expect(err.join("")).toMatch(/owner.*name/i);
-  });
-});
+    it('no --repo and NO origin → fails LOUD telling the user to pass --repo', async () => {
+        await expect(
+            resolveScaffoldRepo(parseArgs([]), {gitClient: gitWithOrigin(null), cwd: '/wherever'})
+        ).rejects.toThrow(/--repo/)
+    })
+})
 
-describe("resolveScaffoldRepo (auto-derive --repo from origin)", () => {
-  function gitWithOrigin(slug: string | null): FakeGitClient {
-    const git = new FakeGitClient();
-    if (slug !== null) git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
-    return git;
-  }
-
-  it("no --repo flag → derives owner/name from the origin remote", async () => {
-    const { owner, repo } = await resolveScaffoldRepo(
-      parseArgs(["--provision"], { booleans: ["provision"] }),
-      { gitClient: gitWithOrigin("acme/widgets"), cwd: "/wherever" },
-    );
-    expect(owner).toBe("acme");
-    expect(repo).toBe("widgets");
-  });
-
-  it("an explicit --repo that MISMATCHES the origin fails LOUD naming both", async () => {
-    await expect(
-      resolveScaffoldRepo(parseArgs(["--repo", "acme/other"]), {
-        gitClient: gitWithOrigin("acme/widgets"),
-        cwd: "/wherever",
-      }),
-    ).rejects.toThrow(/acme\/other.*acme\/widgets|acme\/widgets.*acme\/other/s);
-  });
-
-  it("no --repo and NO origin → fails LOUD telling the user to pass --repo", async () => {
-    await expect(
-      resolveScaffoldRepo(parseArgs([]), { gitClient: gitWithOrigin(null), cwd: "/wherever" }),
-    ).rejects.toThrow(/--repo/);
-  });
-});
-
-describe("dependency-cruiser template content", () => {
-  it("seeds the architectural boundary rules, incl. lib-not-to-app + components-no-app", async () => {
-    const cjs = await readFile(join(resolveTemplatesDir(), ".dependency-cruiser.cjs"), "utf8");
-    expect(cjs).toContain("lib-not-to-app");
-    expect(cjs).toContain("components-no-app");
-    // The exemption that keeps Next.js server actions a legal cross-layer boundary.
-    expect(cjs).toContain("^src/app/actions");
-  });
-});
+describe('dependency-cruiser template content', () => {
+    it('seeds the architectural boundary rules, incl. lib-not-to-app + components-no-app', async () => {
+        const cjs = await readFile(join(resolveTemplatesDir(), '.dependency-cruiser.cjs'), 'utf8')
+        expect(cjs).toContain('lib-not-to-app')
+        expect(cjs).toContain('components-no-app')
+        // The exemption that keeps Next.js server actions a legal cross-layer boundary.
+        expect(cjs).toContain('^src/app/actions')
+    })
+})

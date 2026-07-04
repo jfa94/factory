@@ -104,15 +104,15 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
 1. **Author (once per run).** The `e2e-author` agent boots the app, explores each
    user-facing task via the Playwright MCP tools, and writes two kinds of spec —
    distinguished only by **where they land**:
-   - **Critical** specs (committed into the repo's `e2e.testDir`) — thin, journey-oriented,
-     load-bearing. They gate this run and every future `--e2e` run. (There is **no** CI `e2e`
-     job — Decision 40 D11 removed it from `quality-gate.yml` as a self-bricking hazard; e2e
-     gating is run-level only.)
-   - **Throwaway** specs (an out-of-repo run directory, never committed) — one per
-     user-facing task, broader coverage, discarded at run end.
+    - **Critical** specs (committed into the repo's `e2e.testDir`) — thin, journey-oriented,
+      load-bearing. They gate this run and every future `--e2e` run. (There is **no** CI `e2e`
+      job — Decision 40 D11 removed it from `quality-gate.yml` as a self-bricking hazard; e2e
+      gating is run-level only.)
+    - **Throwaway** specs (an out-of-repo run directory, never committed) — one per
+      user-facing task, broader coverage, discarded at run end.
 
-   The author returns a manifest linking each spec to the `task_id`(s) it covers — the
-   only join the engine has from a failing spec back to its task.
+    The author returns a manifest linking each spec to the `task_id`(s) it covers — the
+    only join the engine has from a failing spec back to its task.
 
 2. **Manifest + trust-boundary checks.** The author branch is merged **unreviewed**, so
    before spending the fail-first proof the engine validates the returned manifest: every
@@ -120,22 +120,22 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
    exist in `run.tasks` (an unknown id fails loud instead of silently vanishing at reopen
    time). Two location rules then bound what can land, with `<testDir>/` (e.g. `e2e/`) as
    the single allowed area:
-   - Every **`critical`** manifest entry's `spec_path` must itself start with `<testDir>/`.
-     A critical entry declared at the repo root (or anywhere outside `testDir`) is rejected —
-     otherwise a spec could merge an unreviewed file into application source just by
-     self-declaring as "critical".
-   - The engine diffs the author branch against staging by name and requires every changed
-     file under `<testDir>/` to be a declared **critical** manifest entry (D6), with a
-     carve-out for the assessment-owned `e2e/support/**` and `e2e/auth.setup.ts`. Any changed
-     path outside `<testDir>/` is rejected outright. Throwaway specs live out-of-repo (never
-     committed, so never in this diff), so a legitimate author branch touches only its declared
-     critical specs. A stray edit to application source — or an undeclared file under
-     `<testDir>/` — aborts the phase rather than landing unreviewed.
+    - Every **`critical`** manifest entry's `spec_path` must itself start with `<testDir>/`.
+      A critical entry declared at the repo root (or anywhere outside `testDir`) is rejected —
+      otherwise a spec could merge an unreviewed file into application source just by
+      self-declaring as "critical".
+    - The engine diffs the author branch against staging by name and requires every changed
+      file under `<testDir>/` to be a declared **critical** manifest entry (D6), with a
+      carve-out for the assessment-owned `e2e/support/**` and `e2e/auth.setup.ts`. Any changed
+      path outside `<testDir>/` is rejected outright. Throwaway specs live out-of-repo (never
+      committed, so never in this diff), so a legitimate author branch touches only its declared
+      critical specs. A stray edit to application source — or an undeclared file under
+      `<testDir>/` — aborts the phase rather than landing unreviewed.
 
-   Authored specs also execute under a **scrubbed, allowlisted environment** (only
-   `PATH`/`HOME` plus the `FACTORY_E2E_*`/`BASE_URL` boot vars — never the parent process's
-   full `process.env`), so an autonomously-authored spec can't reach ambient CI tokens or
-   cloud credentials.
+    Authored specs also execute under a **scrubbed, allowlisted environment** (only
+    `PATH`/`HOME` plus the `FACTORY_E2E_*`/`BASE_URL` boot vars — never the parent process's
+    full `process.env`), so an autonomously-authored spec can't reach ambient CI tokens or
+    cloud credentials.
 
 3. **Fail-first proof (critical specs only).** Before any critical spec is merged, the
    engine runs it twice: once against the **unmodified base branch** (its `control:`
@@ -152,36 +152,36 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
    pointing `testDir` at the out-of-repo throwaway dir with `cwd` set to the run worktree).
    The run worktree is re-synced to staging and `npm ci`-provisioned on every pass. The
    disposition:
-   - **Every critical spec present and green** → the phase passes; a residual throwaway red
-     becomes an advisory line in the report, not a blocker. The run proceeds to docs, then
-     finalize. A critical spec counts as green only if it appears in the results as
-     `passed` or `flaky` — one that is **absent, `failed`, or `skipped`** is a miss that
-     reopens its task (no longer treated as a silent pass).
-   - **A mappable failure** → the task(s) it covers are reopened (reset to `pending`
-     carrying the failure as `e2e_feedback`, with the Playwright per-test error detail —
-     4KB cap, D8 — threaded into the feedback) and re-driven through the normal phase
-     machine. The run **stays `running`** — the e2e phase never marks the run itself
-     failed or complete. Once the reopened tasks settle back to terminal, the phase
-     re-fires (re-running the existing suite, not re-authoring it). Pass 1 reopens for any
-     mappable failure (critical miss or throwaway red); pass 2+ reopens only for critical.
-   - **An unmappable critical failure** (a pre-existing committed spec no manifest entry
-     names) → **adjudication** (D7), routed by the assessment's affected-specs forecast: a
-     `should-still-pass` spec reopens the task it was mapped to; a `needs-update` spec is
-     rewritten to the new behavior by the adjudicator; an **unforecast** spec is ruled by the
-     adjudicator — **regression** (fail the run, loud and cited) vs **intentional-change**
-     (rewrite the spec, re-prove it fail-first, merge, and re-run the suite). Each spec is
-     adjudicated **at most once per run** (`adjudication_counts`); a second failure after its
-     one adjudication is a regression. This replaces the old behavior where any unmappable
-     critical failure failed the run outright.
-   - **A tooling failure** (nonzero Playwright exit / reporter `errors[]` with no individual
-     spec marked failed — e.g. the app never booted) fails the run outright rather than
-     being silently absorbed into a green suite or attributed to an arbitrary task. This is
-     checked for **both** suites: a broken **critical** run always fails the phase, and a
-     broken **throwaway** run fails it too **on pass 1** (mirroring the critical check).
-     On pass 2+ — where the throwaway tier is already non-gating (Decision 8) — a throwaway
-     tooling failure no longer fails the run but is **folded into the advisory line** rather
-     than silently dropped.
-   - Playwright's own **flaky** classification (fail then pass on retry) never reopens.
+    - **Every critical spec present and green** → the phase passes; a residual throwaway red
+      becomes an advisory line in the report, not a blocker. The run proceeds to docs, then
+      finalize. A critical spec counts as green only if it appears in the results as
+      `passed` or `flaky` — one that is **absent, `failed`, or `skipped`** is a miss that
+      reopens its task (no longer treated as a silent pass).
+    - **A mappable failure** → the task(s) it covers are reopened (reset to `pending`
+      carrying the failure as `e2e_feedback`, with the Playwright per-test error detail —
+      4KB cap, D8 — threaded into the feedback) and re-driven through the normal phase
+      machine. The run **stays `running`** — the e2e phase never marks the run itself
+      failed or complete. Once the reopened tasks settle back to terminal, the phase
+      re-fires (re-running the existing suite, not re-authoring it). Pass 1 reopens for any
+      mappable failure (critical miss or throwaway red); pass 2+ reopens only for critical.
+    - **An unmappable critical failure** (a pre-existing committed spec no manifest entry
+      names) → **adjudication** (D7), routed by the assessment's affected-specs forecast: a
+      `should-still-pass` spec reopens the task it was mapped to; a `needs-update` spec is
+      rewritten to the new behavior by the adjudicator; an **unforecast** spec is ruled by the
+      adjudicator — **regression** (fail the run, loud and cited) vs **intentional-change**
+      (rewrite the spec, re-prove it fail-first, merge, and re-run the suite). Each spec is
+      adjudicated **at most once per run** (`adjudication_counts`); a second failure after its
+      one adjudication is a regression. This replaces the old behavior where any unmappable
+      critical failure failed the run outright.
+    - **A tooling failure** (nonzero Playwright exit / reporter `errors[]` with no individual
+      spec marked failed — e.g. the app never booted) fails the run outright rather than
+      being silently absorbed into a green suite or attributed to an arbitrary task. This is
+      checked for **both** suites: a broken **critical** run always fails the phase, and a
+      broken **throwaway** run fails it too **on pass 1** (mirroring the critical check).
+      On pass 2+ — where the throwaway tier is already non-gating (Decision 8) — a throwaway
+      tooling failure no longer fails the run but is **folded into the advisory line** rather
+      than silently dropped.
+    - Playwright's own **flaky** classification (fail then pass on retry) never reopens.
 
 ## 4. Read the outcome
 
@@ -218,9 +218,9 @@ the run's e2e contribution in one of:
 - **Suspend** — the boot config could not be resolved (neither a config override nor an
   assessment-resolved value). Set an override (step 1) and resume:
 
-  ```
-  /factory:resume [--run <id>]
-  ```
+    ```
+    /factory:resume [--run <id>]
+    ```
 
 ## Limitations
 

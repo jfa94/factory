@@ -10,34 +10,34 @@
  * on drift (invariant #4), and (b) carry the `checkout -B` safety net for when
  * the knob is absent.
  */
-import { createLogger } from "../shared/index.js";
-import { GitSchema } from "../config/schema.js";
-import { runScopedBranch } from "./branch.js";
-import type { GitClient, GitOpts } from "./git-client.js";
+import {createLogger} from '../shared/index.js'
+import {GitSchema} from '../config/schema.js'
+import {runScopedBranch} from './branch.js'
+import type {GitClient, GitOpts} from './git-client.js'
 
-const log = createLogger("git");
+const log = createLogger('git')
 
-const GIT_DEFAULTS = GitSchema.parse({});
+const GIT_DEFAULTS = GitSchema.parse({})
 
 /** Args to {@link createTaskWorktree}. */
 export interface CreateTaskWorktreeArgs {
-  gitClient: GitClient;
-  runId: string;
-  taskId: string;
-  /** Absolute path where the worktree is created. */
-  path: string;
-  /** Remote to fetch the base from. */
-  remote?: string;
-  /** Base branch to fork from. Defaults to the configured staging branch. */
-  base?: string;
+    gitClient: GitClient
+    runId: string
+    taskId: string
+    /** Absolute path where the worktree is created. */
+    path: string
+    /** Remote to fetch the base from. */
+    remote?: string
+    /** Base branch to fork from. Defaults to the configured staging branch. */
+    base?: string
 }
 
 /** Result of {@link createTaskWorktree}. */
 export interface TaskWorktree {
-  path: string;
-  branch: string;
-  /** The fully-qualified start point the worktree forked from (e.g. origin/staging). */
-  startPoint: string;
+    path: string
+    branch: string
+    /** The fully-qualified start point the worktree forked from (e.g. origin/staging). */
+    startPoint: string
 }
 
 /**
@@ -56,37 +56,37 @@ export interface TaskWorktree {
  * paths.
  */
 export async function createTaskWorktree(args: CreateTaskWorktreeArgs): Promise<TaskWorktree> {
-  const remote = args.remote ?? "origin";
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
-  const branch = runScopedBranch(args.runId, args.taskId);
-  const startPoint = `${remote}/${base}`;
+    const remote = args.remote ?? 'origin'
+    const base = args.base ?? GIT_DEFAULTS.stagingBranch
+    const branch = runScopedBranch(args.runId, args.taskId)
+    const startPoint = `${remote}/${base}`
 
-  await args.gitClient.fetch(remote, base);
+    await args.gitClient.fetch(remote, base)
 
-  if (await args.gitClient.worktreeExists(args.path)) {
-    // Resume after a mid-preflight failure: reuse the already-registered worktree,
-    // re-pointing its branch onto the freshly-fetched staging tip.
-    await ensureOnStaging({ gitClient: args.gitClient, path: args.path, branch, remote, base });
-  } else {
-    await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
-  }
+    if (await args.gitClient.worktreeExists(args.path)) {
+        // Resume after a mid-preflight failure: reuse the already-registered worktree,
+        // re-pointing its branch onto the freshly-fetched staging tip.
+        await ensureOnStaging({gitClient: args.gitClient, path: args.path, branch, remote, base})
+    } else {
+        await args.gitClient.worktreeAdd(['-b', branch, args.path, startPoint])
+    }
 
-  await assertBaseIsStagingTip({
-    gitClient: args.gitClient,
-    path: args.path,
-    remote,
-    base,
-  });
+    await assertBaseIsStagingTip({
+        gitClient: args.gitClient,
+        path: args.path,
+        remote,
+        base,
+    })
 
-  return { path: args.path, branch, startPoint };
+    return {path: args.path, branch, startPoint}
 }
 
 /** Args to {@link assertBaseIsStagingTip}. */
 export interface AssertBaseArgs {
-  gitClient: GitClient;
-  path: string;
-  remote?: string;
-  base?: string;
+    gitClient: GitClient
+    path: string
+    remote?: string
+    base?: string
 }
 
 /**
@@ -97,26 +97,26 @@ export interface AssertBaseArgs {
  * was written to prevent).
  */
 export async function assertBaseIsStagingTip(args: AssertBaseArgs): Promise<void> {
-  const remote = args.remote ?? "origin";
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
-  const opts: GitOpts = { cwd: args.path };
-  const stagingTip = await args.gitClient.revParse(`${remote}/${base}`, opts);
-  const mergeBase = await args.gitClient.mergeBase("HEAD", `${remote}/${base}`, opts);
-  if (mergeBase !== stagingTip) {
-    throw new Error(
-      `worktree base drift: merge-base(HEAD, ${remote}/${base})=${mergeBase} ` +
-        `!= ${remote}/${base} tip=${stagingTip} — worktree did not birth on the staging tip (D12 invariant #4)`,
-    );
-  }
+    const remote = args.remote ?? 'origin'
+    const base = args.base ?? GIT_DEFAULTS.stagingBranch
+    const opts: GitOpts = {cwd: args.path}
+    const stagingTip = await args.gitClient.revParse(`${remote}/${base}`, opts)
+    const mergeBase = await args.gitClient.mergeBase('HEAD', `${remote}/${base}`, opts)
+    if (mergeBase !== stagingTip) {
+        throw new Error(
+            `worktree base drift: merge-base(HEAD, ${remote}/${base})=${mergeBase} ` +
+                `!= ${remote}/${base} tip=${stagingTip} — worktree did not birth on the staging tip (D12 invariant #4)`
+        )
+    }
 }
 
 /** Args to {@link ensureOnStaging}. */
 export interface EnsureOnStagingArgs {
-  gitClient: GitClient;
-  path: string;
-  branch: string;
-  remote?: string;
-  base?: string;
+    gitClient: GitClient
+    path: string
+    branch: string
+    remote?: string
+    base?: string
 }
 
 /**
@@ -127,11 +127,11 @@ export interface EnsureOnStagingArgs {
  * setting alone).
  */
 export async function ensureOnStaging(args: EnsureOnStagingArgs): Promise<void> {
-  const remote = args.remote ?? "origin";
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
-  const opts: GitOpts = { cwd: args.path };
-  log.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`);
-  await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts);
+    const remote = args.remote ?? 'origin'
+    const base = args.base ?? GIT_DEFAULTS.stagingBranch
+    const opts: GitOpts = {cwd: args.path}
+    log.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`)
+    await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts)
 }
 
 /**
@@ -140,12 +140,12 @@ export async function ensureOnStaging(args: EnsureOnStagingArgs): Promise<void> 
  * teardown, NOT a force-push — no history is rewritten.
  */
 export async function removeWorktree(gitClient: GitClient, path: string): Promise<void> {
-  const code = await gitClient.worktreeRemove([path]);
-  if (code !== 0) {
-    log.warn(`worktree remove ${path} exited ${code ?? "null"}; retrying with --force`);
-    const forceCode = await gitClient.worktreeRemove(["--force", path]);
-    if (forceCode !== 0) {
-      throw new Error(`worktree remove --force ${path} failed (code=${forceCode ?? "null"})`);
+    const code = await gitClient.worktreeRemove([path])
+    if (code !== 0) {
+        log.warn(`worktree remove ${path} exited ${code ?? 'null'}; retrying with --force`)
+        const forceCode = await gitClient.worktreeRemove(['--force', path])
+        if (forceCode !== 0) {
+            throw new Error(`worktree remove --force ${path} failed (code=${forceCode ?? 'null'})`)
+        }
     }
-  }
 }

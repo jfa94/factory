@@ -14,66 +14,67 @@
  * guard can choose pass-through, and THROWS on malformed JSON so the dispatcher
  * fails closed.)
  */
-import { EXIT, type ExitCode } from "../shared/exit-codes.js";
-import { readStdin } from "../shared/stdin.js";
+import {EXIT, type ExitCode} from '../shared/exit-codes.js'
+import {readStdin} from '../shared/stdin.js'
 
 // readStdin now lives in shared/ (one-way dep: hooks→shared); re-exported here so
 // existing hook call sites keep importing it from hook-io.
-export { readStdin };
+export {readStdin}
 
 /**
  * Parsed PreToolUse / SubagentStop hook input. Claude Code passes a superset of
  * these fields; we type only what the guards consume and keep the rest open.
  */
 export interface HookInput {
-  /** Tool being invoked (PreToolUse): "Bash" | "Edit" | "Write" | "MultiEdit" | … */
-  tool_name?: string;
-  /** Tool arguments. Shape depends on tool_name. */
-  tool_input?: {
-    /** Bash command string. */
-    command?: string;
-    /** Edit/Write/MultiEdit single target. */
-    file_path?: string;
-    /** MultiEdit per-edit targets. */
-    edits?: Array<{ file_path?: string }>;
-    [k: string]: unknown;
-  };
-  // SubagentStop fields.
-  agent_type?: string;
-  subagent_type?: string;
-  last_assistant_message?: string;
-  agent_transcript_path?: string;
-  transcript_path?: string;
-  session_id?: string;
-  [k: string]: unknown;
+    /** Tool being invoked (PreToolUse): "Bash" | "Edit" | "Write" | "MultiEdit" | … */
+    tool_name?: string
+    /** Tool arguments. Shape depends on tool_name. */
+    tool_input?: {
+        /** Bash command string. */
+        command?: string
+        /** Edit/Write/MultiEdit single target. */
+        file_path?: string
+        /** MultiEdit per-edit targets. Elements are untrusted JSON — a nullable
+         * element type is what makes the per-edit guard in filePathsOf load-bearing. */
+        edits?: ({file_path?: string} | null)[]
+        [k: string]: unknown
+    }
+    // SubagentStop fields.
+    agent_type?: string
+    subagent_type?: string
+    last_assistant_message?: string
+    agent_transcript_path?: string
+    transcript_path?: string
+    session_id?: string
+    [k: string]: unknown
 }
 
 /** A guard's decision. `allow` lets the tool run; `deny` blocks it (reason logged). */
 export type HookDecision =
-  | { readonly action: "allow" }
-  | { readonly action: "deny"; readonly reason: string; readonly detail?: string };
+    | {readonly action: 'allow'}
+    | {readonly action: 'deny'; readonly reason: string; readonly detail?: string}
 
 /** Build an allow decision. */
 export function allow(): HookDecision {
-  return { action: "allow" };
+    return {action: 'allow'}
 }
 
 /** Build a deny decision with a human-facing reason (+ optional detail). */
 export function deny(reason: string, detail?: string): HookDecision {
-  return detail === undefined ? { action: "deny", reason } : { action: "deny", reason, detail };
+    return detail === undefined ? {action: 'deny', reason} : {action: 'deny', reason, detail}
 }
 
 /** Type guard: is the decision a deny? */
-export function isDeny(d: HookDecision): d is { action: "deny"; reason: string; detail?: string } {
-  return d.action === "deny";
+export function isDeny(d: HookDecision): d is {action: 'deny'; reason: string; detail?: string} {
+    return d.action === 'deny'
 }
 
 /** Thrown by {@link parseHookInput} on malformed JSON (the dispatcher fails closed). */
 export class HookInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "HookInputError";
-  }
+    constructor(message: string) {
+        super(message)
+        this.name = 'HookInputError'
+    }
 }
 
 /**
@@ -83,18 +84,20 @@ export class HookInputError extends Error {
  * malformed JSON — a corrupt payload must fail closed, never be silently allowed.
  */
 export function parseHookInput(raw: string): HookInput | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (err) {
-    throw new HookInputError(`malformed hook input JSON: ${(err as Error).message}`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new HookInputError("hook input must be a JSON object");
-  }
-  return parsed as HookInput;
+    const trimmed = raw.trim()
+    if (trimmed.length === 0) {
+        return null
+    }
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(trimmed)
+    } catch (err) {
+        throw new HookInputError(`malformed hook input JSON: ${(err as Error).message}`)
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new HookInputError('hook input must be a JSON object')
+    }
+    return parsed as HookInput
 }
 
 /**
@@ -102,27 +105,25 @@ export function parseHookInput(raw: string): HookInput | null {
  * Propagates {@link HookInputError} on malformed JSON (fail-closed at the call
  * site). Injectable stream for tests.
  */
-export async function readHookInput(
-  stream?: AsyncIterable<string | Uint8Array>,
-): Promise<HookInput | null> {
-  const raw = await readStdin(stream);
-  return parseHookInput(raw);
+export async function readHookInput(stream?: AsyncIterable<string | Uint8Array>): Promise<HookInput | null> {
+    const raw = await readStdin(stream)
+    return parseHookInput(raw)
 }
 
 /** Extract the Bash command from a hook input (empty string if absent). */
 export function commandOf(input: HookInput | null): string {
-  return input?.tool_input?.command ?? "";
+    return input?.tool_input?.command ?? ''
 }
 
 /** Extract the tool name from a hook input (empty string if absent). */
 export function toolNameOf(input: HookInput | null): string {
-  return input?.tool_name ?? "";
+    return input?.tool_name ?? ''
 }
 
 /** Extract the session id from a hook input (undefined when absent or empty-string). */
 export function sessionIdOf(input: HookInput | null): string | undefined {
-  const v = input?.session_id;
-  return typeof v === "string" && v.length > 0 ? v : undefined;
+    const v = input?.session_id
+    return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
 /**
@@ -132,16 +133,22 @@ export function sessionIdOf(input: HookInput | null): string | undefined {
  * checked target-by-target.
  */
 export function filePathsOf(input: HookInput | null): string[] {
-  const ti = input?.tool_input;
-  if (!ti) return [];
-  const out: string[] = [];
-  if (typeof ti.file_path === "string" && ti.file_path.length > 0) out.push(ti.file_path);
-  if (Array.isArray(ti.edits)) {
-    for (const e of ti.edits) {
-      if (e && typeof e.file_path === "string" && e.file_path.length > 0) out.push(e.file_path);
+    const ti = input?.tool_input
+    if (!ti) {
+        return []
     }
-  }
-  return [...new Set(out)];
+    const out: string[] = []
+    if (typeof ti.file_path === 'string' && ti.file_path.length > 0) {
+        out.push(ti.file_path)
+    }
+    if (Array.isArray(ti.edits)) {
+        for (const e of ti.edits) {
+            if (e && typeof e.file_path === 'string' && e.file_path.length > 0) {
+                out.push(e.file_path)
+            }
+        }
+    }
+    return [...new Set(out)]
 }
 
 /**
@@ -151,20 +158,25 @@ export function filePathsOf(input: HookInput | null): string[] {
  * (or empty string) so tests can assert the shape without spying on stdout.
  */
 export function emitPermissionDecision(
-  decision: HookDecision,
-  write: (s: string) => void = (s) => process.stdout.write(s),
+    decision: HookDecision,
+    write: (s: string) => void = (s) => process.stdout.write(s)
 ): string {
-  if (decision.action !== "deny") return "";
-  const reason = decision.detail ? `${decision.reason}: ${decision.detail}` : decision.reason;
-  const payload = JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  });
-  write(payload + "\n");
-  return payload;
+    if (decision.action !== 'deny') {
+        return ''
+    }
+    const reason =
+        decision.detail != null && decision.detail.length > 0
+            ? `${decision.reason}: ${decision.detail}`
+            : decision.reason
+    const payload = JSON.stringify({
+        hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: reason,
+        },
+    })
+    write(payload + '\n')
+    return payload
 }
 
 /**
@@ -173,17 +185,19 @@ export function emitPermissionDecision(
  * Some guards still surface this form; kept for parity. No-op for an allow.
  */
 export function emitBlockDecision(
-  decision: HookDecision,
-  write: (s: string) => void = (s) => process.stderr.write(s),
+    decision: HookDecision,
+    write: (s: string) => void = (s) => process.stderr.write(s)
 ): string {
-  if (decision.action !== "deny") return "";
-  const payload = JSON.stringify(
-    decision.detail
-      ? { decision: "block", reason: decision.reason, detail: decision.detail }
-      : { decision: "block", reason: decision.reason },
-  );
-  write(payload + "\n");
-  return payload;
+    if (decision.action !== 'deny') {
+        return ''
+    }
+    const payload = JSON.stringify(
+        decision.detail != null && decision.detail.length > 0
+            ? {decision: 'block', reason: decision.reason, detail: decision.detail}
+            : {decision: 'block', reason: decision.reason}
+    )
+    write(payload + '\n')
+    return payload
 }
 
 /**
@@ -198,5 +212,5 @@ export function emitBlockDecision(
  * dispatcher's own bad-args case, so a guard deny maps to ERROR).
  */
 export function decisionToExitCode(decision: HookDecision): ExitCode {
-  return decision.action === "deny" ? EXIT.ERROR : EXIT.OK;
+    return decision.action === 'deny' ? EXIT.ERROR : EXIT.OK
 }

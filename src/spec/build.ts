@@ -32,123 +32,123 @@
  * gates, same 56/60+floor adjudication, same request construction) — the only
  * difference is WHO drives the agent spawns and the loop.
  */
-import { join } from "node:path";
-import { atomicWriteFile } from "../shared/atomic-write.js";
-import { stringifyJson, readJsonFile } from "../shared/json.js";
-import { specBuildDir } from "../core/state/paths.js";
-import type { SpecStore } from "./store.js";
-import type { GhClient, Prd } from "./gh.js";
-import { runSpecGates, specifiabilityGate } from "./gates.js";
-import { decideSpecReview, parseReviewVerdict } from "./review.js";
+import {join} from 'node:path'
+import {atomicWriteFile} from '../shared/atomic-write.js'
+import {stringifyJson, readJsonFile} from '../shared/json.js'
+import {specBuildDir} from '../core/state/paths.js'
+import type {SpecStore} from './store.js'
+import type {GhClient, Prd} from './gh.js'
+import {runSpecGates, specifiabilityGate} from './gates.js'
+import {decideSpecReview, parseReviewVerdict} from './review.js'
 import {
-  parseGenerateResult,
-  buildGenerateSpawn,
-  buildReviewSpawn,
-  buildReviseSpawn,
-  type SpecSpawnSpec,
-  type GenerateContext,
-  type ReviseContext,
-  type ReviewContext,
-} from "./agents.js";
-import { buildManifest } from "./pipeline.js";
-import type { Config, SpecPointer } from "../types/index.js";
+    parseGenerateResult,
+    buildGenerateSpawn,
+    buildReviewSpawn,
+    buildReviseSpawn,
+    type SpecSpawnSpec,
+    type GenerateContext,
+    type ReviseContext,
+    type ReviewContext,
+} from './agents.js'
+import {buildManifest} from './pipeline.js'
+import type {Config, SpecPointer} from '../types/index.js'
 
 /** Scratch file names threaded between the three actions. */
-const PRD_FILE = "prd.json";
-const GENERATED_FILE = "generated.json";
-const VERDICT_FILE = "verdict.json";
+const PRD_FILE = 'prd.json'
+const GENERATED_FILE = 'generated.json'
+const VERDICT_FILE = 'verdict.json'
 
 /** The single JSON document each `factory spec` action emits — the runner's contract. */
 export type SpecBuildEnvelope =
-  | {
-      /** An existing spec for this issue was reused (Δ X) — no generation needed. */
-      readonly kind: "reuse";
-      readonly repo: string;
-      readonly issue: number;
-      readonly pointer: SpecPointer;
-    }
-  | {
-      /**
-       * Deterministic pre-generation refusal (S9, Decision 47) — the PRD cannot
-       * support spec generation. TERMINAL: the runner spawns NOTHING and stops
-       * loud; `blockers` tells the PRD author exactly what to add. Zero agent cost.
-       */
-      readonly kind: "unspecifiable";
-      readonly repo: string;
-      readonly issue: number;
-      /** Scratch prd.json — already written, kept as an inspection aid. */
-      readonly prd_path: string;
-      readonly blockers: readonly string[];
-    }
-  | {
-      /** No spec yet — spawn the generator, then write `generated_path` and call `gate`. */
-      readonly kind: "generate";
-      readonly repo: string;
-      readonly issue: number;
-      readonly spawn: SpecSpawnSpec<GenerateContext>;
-      readonly prd_path: string;
-      readonly generated_path: string;
-      /** The runner's bound on the generate/review loop (config.spec.maxRegenIterations). */
-      readonly max_iterations: number;
-    }
-  | {
-      /** Gates passed — spawn the reviewer, then write `verdict_path` and call `store`. */
-      readonly kind: "review";
-      readonly repo: string;
-      readonly issue: number;
-      readonly spawn: SpecSpawnSpec<ReviewContext>;
-      readonly generated_path: string;
-      readonly verdict_path: string;
-    }
-  | {
-      /** The spec needs revision (gate blockers OR a sub-threshold review) — patch + re-gate. */
-      readonly kind: "revise";
-      readonly repo: string;
-      readonly issue: number;
-      readonly source: "gate" | "review";
-      readonly reason: string;
-      readonly blockers: readonly string[];
-      /**
-       * The generator re-spawn, carrying the PRIOR spec + blockers so the agent patches
-       * it rather than re-authoring from the PRD (symmetric with `generate`/`review`).
-       * Invariant: `spawn.context.review_feedback` is built from `blockers` at the single
-       * construction site below — the two never diverge.
-       */
-      readonly spawn: SpecSpawnSpec<ReviseContext>;
-      readonly generated_path: string;
-    }
-  | {
-      /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
-      readonly kind: "stored";
-      readonly repo: string;
-      readonly issue: number;
-      readonly pointer: SpecPointer;
-    };
+    | {
+          /** An existing spec for this issue was reused (Δ X) — no generation needed. */
+          readonly kind: 'reuse'
+          readonly repo: string
+          readonly issue: number
+          readonly pointer: SpecPointer
+      }
+    | {
+          /**
+           * Deterministic pre-generation refusal (S9, Decision 47) — the PRD cannot
+           * support spec generation. TERMINAL: the runner spawns NOTHING and stops
+           * loud; `blockers` tells the PRD author exactly what to add. Zero agent cost.
+           */
+          readonly kind: 'unspecifiable'
+          readonly repo: string
+          readonly issue: number
+          /** Scratch prd.json — already written, kept as an inspection aid. */
+          readonly prd_path: string
+          readonly blockers: readonly string[]
+      }
+    | {
+          /** No spec yet — spawn the generator, then write `generated_path` and call `gate`. */
+          readonly kind: 'generate'
+          readonly repo: string
+          readonly issue: number
+          readonly spawn: SpecSpawnSpec<GenerateContext>
+          readonly prd_path: string
+          readonly generated_path: string
+          /** The runner's bound on the generate/review loop (config.spec.maxRegenIterations). */
+          readonly max_iterations: number
+      }
+    | {
+          /** Gates passed — spawn the reviewer, then write `verdict_path` and call `store`. */
+          readonly kind: 'review'
+          readonly repo: string
+          readonly issue: number
+          readonly spawn: SpecSpawnSpec<ReviewContext>
+          readonly generated_path: string
+          readonly verdict_path: string
+      }
+    | {
+          /** The spec needs revision (gate blockers OR a sub-threshold review) — patch + re-gate. */
+          readonly kind: 'revise'
+          readonly repo: string
+          readonly issue: number
+          readonly source: 'gate' | 'review'
+          readonly reason: string
+          readonly blockers: readonly string[]
+          /**
+           * The generator re-spawn, carrying the PRIOR spec + blockers so the agent patches
+           * it rather than re-authoring from the PRD (symmetric with `generate`/`review`).
+           * Invariant: `spawn.context.review_feedback` is built from `blockers` at the single
+           * construction site below — the two never diverge.
+           */
+          readonly spawn: SpecSpawnSpec<ReviseContext>
+          readonly generated_path: string
+      }
+    | {
+          /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
+          readonly kind: 'stored'
+          readonly repo: string
+          readonly issue: number
+          readonly pointer: SpecPointer
+      }
 
 /** The deps the testable cores need (injected in tests; production-wired by the CLI). */
 export interface SpecBuildDeps {
-  readonly store: SpecStore;
-  readonly gh: GhClient;
-  readonly config: Config;
-  readonly dataDir: string;
+    readonly store: SpecStore
+    readonly gh: GhClient
+    readonly config: Config
+    readonly dataDir: string
 }
 
 /** Resolve the three scratch paths for a (repo, issue) build. */
 function scratchPaths(
-  dataDir: string,
-  repo: string,
-  issue: number,
+    dataDir: string,
+    repo: string,
+    issue: number
 ): {
-  prdPath: string;
-  generatedPath: string;
-  verdictPath: string;
+    prdPath: string
+    generatedPath: string
+    verdictPath: string
 } {
-  const dir = specBuildDir(dataDir, repo, issue);
-  return {
-    prdPath: join(dir, PRD_FILE),
-    generatedPath: join(dir, GENERATED_FILE),
-    verdictPath: join(dir, VERDICT_FILE),
-  };
+    const dir = specBuildDir(dataDir, repo, issue)
+    return {
+        prdPath: join(dir, PRD_FILE),
+        generatedPath: join(dir, GENERATED_FILE),
+        verdictPath: join(dir, VERDICT_FILE),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,50 +165,50 @@ function scratchPaths(
  * `resolveByIssue` treats as a store-integrity error.
  */
 export async function resolveSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-  { regenerate = false }: { regenerate?: boolean } = {},
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    {regenerate = false}: {regenerate?: boolean} = {}
 ): Promise<SpecBuildEnvelope> {
-  if (regenerate) {
-    await deps.store.deleteByIssue(repo, issue);
-  }
-  const existing = await deps.store.resolveByIssue(repo, issue);
-  if (existing) {
-    // S9 backfill: a pre-snapshot spec gains its durable prd.json on first
-    // reuse (one fetch; no gate re-run — the spec was already adjudicated).
-    if (!(await deps.store.hasPrd(repo, existing.spec_id))) {
-      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
+    if (regenerate) {
+        await deps.store.deleteByIssue(repo, issue)
     }
-    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
-  }
+    const existing = await deps.store.resolveByIssue(repo, issue)
+    if (existing) {
+        // S9 backfill: a pre-snapshot spec gains its durable prd.json on first
+        // reuse (one fetch; no gate re-run — the spec was already adjudicated).
+        if (!(await deps.store.hasPrd(repo, existing.spec_id))) {
+            await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, {repo}))
+        }
+        return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
+    }
 
-  const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
-  await atomicWriteFile(prdPath, stringifyJson(prd));
+    const prd = await deps.gh.fetchPrd(issue, {repo})
+    const {prdPath, generatedPath} = scratchPaths(deps.dataDir, repo, issue)
+    await atomicWriteFile(prdPath, stringifyJson(prd))
 
-  // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
-  // spawn — an unspecifiable PRD never costs an apex generator turn.
-  const specifiability = specifiabilityGate(prd.body);
-  if (!specifiability.passed) {
+    // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
+    // spawn — an unspecifiable PRD never costs an apex generator turn.
+    const specifiability = specifiabilityGate(prd.body)
+    if (!specifiability.passed) {
+        return {
+            kind: 'unspecifiable',
+            repo,
+            issue,
+            prd_path: prdPath,
+            blockers: specifiability.blockers,
+        }
+    }
+
     return {
-      kind: "unspecifiable",
-      repo,
-      issue,
-      prd_path: prdPath,
-      blockers: specifiability.blockers,
-    };
-  }
-
-  return {
-    kind: "generate",
-    repo,
-    issue,
-    spawn: buildGenerateSpawn(prd),
-    prd_path: prdPath,
-    generated_path: generatedPath,
-    max_iterations: deps.config.spec.maxRegenIterations,
-  };
+        kind: 'generate',
+        repo,
+        issue,
+        spawn: buildGenerateSpawn(prd),
+        prd_path: prdPath,
+        generated_path: generatedPath,
+        max_iterations: deps.config.spec.maxRegenIterations,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -221,38 +221,34 @@ export async function resolveSpec(
  * emit the apex-pinned review spawn. `generated.json` is UNTRUSTED agent output, so
  * it is parsed loudly via {@link parseGenerateResult}.
  */
-export async function gateSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-): Promise<SpecBuildEnvelope> {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const prd = await readJsonFile<Prd>(prdPath);
-  const generated = parseGenerateResult(await readJsonFile<unknown>(generatedPath));
+export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
+    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.dataDir, repo, issue)
+    const prd = await readJsonFile<Prd>(prdPath)
+    const generated = parseGenerateResult(await readJsonFile(generatedPath))
 
-  const gates = runSpecGates(prd, generated.tasks);
-  if (!gates.passed) {
+    const gates = runSpecGates(prd, generated.tasks)
+    if (!gates.passed) {
+        return {
+            kind: 'revise',
+            repo,
+            issue,
+            source: 'gate',
+            reason: 'deterministic spec gates blocked the spec',
+            blockers: gates.blockers,
+            // review_feedback derives from these same blockers — single source, no divergence.
+            spawn: buildReviseSpawn(prd, generated, gates.blockers),
+            generated_path: generatedPath,
+        }
+    }
+
     return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "gate",
-      reason: "deterministic spec gates blocked the spec",
-      blockers: gates.blockers,
-      // review_feedback derives from these same blockers — single source, no divergence.
-      spawn: buildReviseSpawn(prd, generated, gates.blockers),
-      generated_path: generatedPath,
-    };
-  }
-
-  return {
-    kind: "review",
-    repo,
-    issue,
-    spawn: buildReviewSpawn(prd, generated),
-    generated_path: generatedPath,
-    verdict_path: verdictPath,
-  };
+        kind: 'review',
+        repo,
+        issue,
+        spawn: buildReviewSpawn(prd, generated),
+        generated_path: generatedPath,
+        verdict_path: verdictPath,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -265,40 +261,36 @@ export async function gateSpec(
  * the durable request and persist it, returning the run-facing pointer. Both
  * `generated.json` and `verdict.json` are UNTRUSTED agent output → parsed loudly.
  */
-export async function storeSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-): Promise<SpecBuildEnvelope> {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const generated = parseGenerateResult(await readJsonFile<unknown>(generatedPath));
-  const verdict = parseReviewVerdict(await readJsonFile<unknown>(verdictPath));
+export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
+    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.dataDir, repo, issue)
+    const generated = parseGenerateResult(await readJsonFile(generatedPath))
+    const verdict = parseReviewVerdict(await readJsonFile(verdictPath))
 
-  const decision = decideSpecReview(verdict, {
-    passReviewThreshold: deps.config.spec.passReviewThreshold,
-    dimensionFloor: deps.config.spec.dimensionFloor,
-  });
-  if (decision.decision === "NEEDS_REVISION") {
-    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
-    // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
-    // generator patches the prior spec against the reviewer's blockers, not re-derives it.
-    const prd = await readJsonFile<Prd>(prdPath);
-    return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "review",
-      reason: decision.reason,
-      blockers,
-      spawn: buildReviseSpawn(prd, generated, blockers),
-      generated_path: generatedPath,
-    };
-  }
+    const decision = decideSpecReview(verdict, {
+        passReviewThreshold: deps.config.spec.passReviewThreshold,
+        dimensionFloor: deps.config.spec.dimensionFloor,
+    })
+    if (decision.decision === 'NEEDS_REVISION') {
+        const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason]
+        // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
+        // generator patches the prior spec against the reviewer's blockers, not re-derives it.
+        const prd = await readJsonFile<Prd>(prdPath)
+        return {
+            kind: 'revise',
+            repo,
+            issue,
+            source: 'review',
+            reason: decision.reason,
+            blockers,
+            spawn: buildReviseSpawn(prd, generated, blockers),
+            generated_path: generatedPath,
+        }
+    }
 
-  const request = buildManifest(repo, issue, generated);
-  // S9: snapshot the PRD durably beside the spec — the traceability stage reads
-  // it at finalize time (no gh re-fetch; scratch prd.json is transient).
-  const prd = await readJsonFile<Prd>(prdPath);
-  const pointer = await deps.store.write(request, generated.specMd, prd);
-  return { kind: "stored", repo, issue, pointer };
+    const request = buildManifest(repo, issue, generated)
+    // S9: snapshot the PRD durably beside the spec — the traceability stage reads
+    // it at finalize time (no gh re-fetch; scratch prd.json is transient).
+    const prd = await readJsonFile<Prd>(prdPath)
+    const pointer = await deps.store.write(request, generated.specMd, prd)
+    return {kind: 'stored', repo, issue, pointer}
 }

@@ -26,12 +26,12 @@ graph LR
 
 The line is sharp and principled:
 
-| Recomputed every time (never stored)                         | Stored (it _is_ ground truth)                        |
-| ------------------------------------------------------------ | ---------------------------------------------------- |
-| Each deterministic gate's pass/fail (test, tdd, coverage, …) | Each reviewer's own panel verdict + artifact pointer |
-| The conjunctive **merge gate** verdict (gate ∧ holdout ∧ panel)   | The producer dial: `risk_tier`, `escalation_rung`    |
-| The panel **unanimity** verdict                              | Git/PR pointers, the failure classification          |
-| `tdd_exempt` (read from `tasks.json` / `package.json`)       | Task `status` and `depends_on`                       |
+| Recomputed every time (never stored)                            | Stored (it _is_ ground truth)                        |
+| --------------------------------------------------------------- | ---------------------------------------------------- |
+| Each deterministic gate's pass/fail (test, tdd, coverage, …)    | Each reviewer's own panel verdict + artifact pointer |
+| The conjunctive **merge gate** verdict (gate ∧ holdout ∧ panel) | The producer dial: `risk_tier`, `escalation_rung`    |
+| The panel **unanimity** verdict                                 | Git/PR pointers, the failure classification          |
+| `tdd_exempt` (read from `tasks.json` / `package.json`)          | Task `status` and `depends_on`                       |
 
 The distinction: a deterministic gate's result is a _function of ground truth_
 (the git history, the test run, the holdout key), so storing it would only create

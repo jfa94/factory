@@ -18,23 +18,29 @@
  * the UTILIZATION cap (%) for that window position.
  */
 
+import {at} from '../shared/index.js'
+
 /** Seconds in the 5h window (5 * 3600). */
-export const FIVE_HOUR_WINDOW_SECONDS = 18000;
+export const FIVE_HOUR_WINDOW_SECONDS = 18000
 /** Seconds in the 7d window (7 * 86400). */
-export const SEVEN_DAY_WINDOW_SECONDS = 604800;
+export const SEVEN_DAY_WINDOW_SECONDS = 604800
 
-const SECONDS_PER_HOUR = 3600;
-const SECONDS_PER_DAY = 86400;
+const SECONDS_PER_HOUR = 3600
+const SECONDS_PER_DAY = 86400
 
-const MIN_HOUR = 1;
-const MAX_HOUR = 5;
-const MIN_DAY = 1;
-const MAX_DAY = 7;
+const MIN_HOUR = 1
+const MAX_HOUR = 5
+const MIN_DAY = 1
+const MAX_DAY = 7
 
 function clamp(value: number, lo: number, hi: number): number {
-  if (value < lo) return lo;
-  if (value > hi) return hi;
-  return value;
+    if (value < lo) {
+        return lo
+    }
+    if (value > hi) {
+        return hi
+    }
+    return value
 }
 
 /**
@@ -43,10 +49,10 @@ function clamp(value: number, lo: number, hi: number): number {
  * bash `compute_window_hour`. Pure: no clock read.
  */
 export function computeWindowHour(resetsAtEpoch: number, nowEpoch: number): number {
-  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
-  const elapsed = nowEpoch - windowStart;
-  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
-  return clamp(hour, MIN_HOUR, MAX_HOUR);
+    const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS
+    const elapsed = nowEpoch - windowStart
+    const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1
+    return clamp(hour, MIN_HOUR, MAX_HOUR)
 }
 
 /**
@@ -55,10 +61,10 @@ export function computeWindowHour(resetsAtEpoch: number, nowEpoch: number): numb
  * bash `compute_window_day`. Pure: no clock read.
  */
 export function computeWindowDay(resetsAtEpoch: number, nowEpoch: number): number {
-  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
-  const elapsed = nowEpoch - windowStart;
-  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
-  return clamp(day, MIN_DAY, MAX_DAY);
+    const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS
+    const elapsed = nowEpoch - windowStart
+    const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1
+    return clamp(day, MIN_DAY, MAX_DAY)
 }
 
 /**
@@ -68,7 +74,7 @@ export function computeWindowDay(resetsAtEpoch: number, nowEpoch: number): numbe
  * `compute_hourly_threshold`.
  */
 export function hourlyThresholdFor(hour: number, hourlyThresholds: readonly number[]): number {
-  return curveValue(hour, hourlyThresholds);
+    return curveValue(hour, hourlyThresholds)
 }
 
 /**
@@ -77,7 +83,7 @@ export function hourlyThresholdFor(hour: number, hourlyThresholds: readonly numb
  * `compute_daily_threshold`.
  */
 export function dailyThresholdFor(day: number, dailyThresholds: readonly number[]): number {
-  return curveValue(day, dailyThresholds);
+    return curveValue(day, dailyThresholds)
 }
 
 /**
@@ -87,9 +93,9 @@ export function dailyThresholdFor(day: number, dailyThresholds: readonly number[
  * curve is a config defect, never a silent open gate.
  */
 function curveValue(position: number, curve: readonly number[]): number {
-  if (curve.length === 0) {
-    throw new RangeError("quota curve is empty — cannot resolve a threshold (config defect)");
-  }
-  const idx = clamp(position - 1, 0, curve.length - 1);
-  return curve[idx]!;
+    if (curve.length === 0) {
+        throw new RangeError('quota curve is empty — cannot resolve a threshold (config defect)')
+    }
+    const idx = clamp(position - 1, 0, curve.length - 1)
+    return at(curve, idx)
 }

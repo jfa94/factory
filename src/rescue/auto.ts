@@ -20,42 +20,49 @@
  * Pure over {RunState, RescueScan}; the readiness semantics mirror
  * `depsSatisfied`/`hasUnsatisfiableDep` (scan.ts / orchestrator/next.ts).
  */
-import type { RunState } from "../types/index.js";
-import type { RescueScan } from "./scan.js";
+import type {RunState} from '../types/index.js'
+import type {RescueScan} from './scan.js'
+import {nonNull} from '../shared/index.js'
 
 /** The subset of `scan.resettable` worth auto-resetting (in scan order). */
 export function effectiveAutoResets(run: RunState, scan: RescueScan): string[] {
-  const resets = new Set(scan.resettable);
-  // memo: task id → its simulated transitive closure is free of failed/missing rows.
-  const clean = new Map<string, boolean>();
+    const resets = new Set(scan.resettable)
+    // memo: task id → its simulated transitive closure is free of failed/missing rows.
+    const clean = new Map<string, boolean>()
 
-  function closureClean(id: string, visiting: Set<string>): boolean {
-    const memoized = clean.get(id);
-    if (memoized !== undefined) return memoized;
-    // Cycle guard: the spec gate guarantees an acyclic task graph, so a revisit on
-    // the current path contributes no failure evidence — just stop descending.
-    if (visiting.has(id)) return true;
+    function closureClean(id: string, visiting: Set<string>): boolean {
+        const memoized = clean.get(id)
+        if (memoized !== undefined) {
+            return memoized
+        }
+        // Cycle guard: the spec gate guarantees an acyclic task graph, so a revisit on
+        // the current path contributes no failure evidence — just stop descending.
+        if (visiting.has(id)) {
+            return true
+        }
 
-    const task = run.tasks[id];
-    if (task === undefined) return false; // missing dep — unsatisfiable forever
-    const status = resets.has(id) ? "pending" : task.status;
-    if (status === "failed") {
-      clean.set(id, false);
-      return false;
+        const task = run.tasks[id]
+        if (task === undefined) {
+            return false
+        } // missing dep — unsatisfiable forever
+        const status = resets.has(id) ? 'pending' : task.status
+        if (status === 'failed') {
+            clean.set(id, false)
+            return false
+        }
+        if (status === 'done') {
+            clean.set(id, true)
+            return true
+        }
+
+        visiting.add(id)
+        const ok = task.depends_on.every((dep) => closureClean(dep, visiting))
+        visiting.delete(id)
+        clean.set(id, ok)
+        return ok
     }
-    if (status === "done") {
-      clean.set(id, true);
-      return true;
-    }
 
-    visiting.add(id);
-    const ok = task.depends_on.every((dep) => closureClean(dep, visiting));
-    visiting.delete(id);
-    clean.set(id, ok);
-    return ok;
-  }
-
-  return scan.resettable.filter((id) =>
-    run.tasks[id]!.depends_on.every((dep) => closureClean(dep, new Set([id]))),
-  );
+    return scan.resettable.filter((id) =>
+        nonNull(run.tasks[id]).depends_on.every((dep) => closureClean(dep, new Set([id])))
+    )
 }

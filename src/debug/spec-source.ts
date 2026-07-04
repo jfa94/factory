@@ -26,10 +26,10 @@
  * `src/spec/build.ts` — this module never forks or reimplements them; only
  * the `SpecBuildDeps` passed in differs.
  */
-import type { Config } from "../config/index.js";
-import { loadConfig, resolveDataDir } from "../config/index.js";
-import { SpecStore, type GhClient, type Prd, type SpecBuildDeps } from "../spec/index.js";
-import type { Finding } from "../verifier/judgment/finding.js";
+import type {Config} from '../config/index.js'
+import {loadConfig, resolveDataDir} from '../config/index.js'
+import {SpecStore, type GhClient, type Prd, type SpecBuildDeps} from '../spec/index.js'
+import type {Finding} from '../verifier/judgment/finding.js'
 
 /**
  * Base of the synthetic issue-number range reserved for `/factory:debug`
@@ -38,7 +38,7 @@ import type { Finding } from "../verifier/judgment/finding.js";
  * approached 2 billion), so `DEBUG_ISSUE_BASE + passNumber` can never collide
  * with a real PRD-issue spec's lookup key in {@link SpecStore.resolveByIssue}.
  */
-export const DEBUG_ISSUE_BASE = 2_000_000_000;
+export const DEBUG_ISSUE_BASE = 2_000_000_000
 
 /**
  * Derive the synthetic issue number for a debug pass. `passNumber` is
@@ -47,10 +47,10 @@ export const DEBUG_ISSUE_BASE = 2_000_000_000;
  * @throws if `passNumber` is not a positive integer.
  */
 export function debugIssueNumber(passNumber: number): number {
-  if (!Number.isInteger(passNumber) || passNumber < 1) {
-    throw new Error(`debugIssueNumber: passNumber must be a positive integer, got ${passNumber}`);
-  }
-  return DEBUG_ISSUE_BASE + passNumber;
+    if (!Number.isInteger(passNumber) || passNumber < 1) {
+        throw new Error(`debugIssueNumber: passNumber must be a positive integer, got ${passNumber}`)
+    }
+    return DEBUG_ISSUE_BASE + passNumber
 }
 
 /**
@@ -63,42 +63,34 @@ export function debugIssueNumber(passNumber: number): number {
  * signature.
  */
 export class ReportGhClient implements GhClient {
-  constructor(private readonly report: { readonly title: string; readonly body: string }) {}
+    constructor(private readonly report: {readonly title: string; readonly body: string}) {}
 
-  async fetchPrd(issueNumber: number, _opts?: { repo?: string }): Promise<Prd> {
-    return {
-      issue_number: issueNumber,
-      title: this.report.title,
-      body: this.report.body,
-      labels: ["factory-debug"],
-      body_truncated: false,
-    };
-  }
+    fetchPrd(issueNumber: number, _opts?: {repo?: string}): Promise<Prd> {
+        return Promise.resolve({
+            issue_number: issueNumber,
+            title: this.report.title,
+            body: this.report.body,
+            labels: ['factory-debug'],
+            body_truncated: false,
+        })
+    }
 }
 
 /** Input to {@link buildDebugReport}. */
 export interface BuildDebugReportInput {
-  /** Confirmed blockers from `adjudicateWholeScope` (Task 1/2). */
-  readonly confirmedBlockers: readonly Finding[];
-  /** 1-based debug pass number (mirrors {@link debugIssueNumber}'s input). */
-  readonly passNumber: number;
-  /** The diff base (git ref or empty-tree SHA) the whole-scope review scanned. */
-  readonly base: string;
+    /** Confirmed blockers from `adjudicateWholeScope` (Task 1/2). */
+    readonly confirmedBlockers: readonly Finding[]
+    /** 1-based debug pass number (mirrors {@link debugIssueNumber}'s input). */
+    readonly passNumber: number
+    /** The diff base (git ref or empty-tree SHA) the whole-scope review scanned. */
+    readonly base: string
 }
 
 /** One rendered finding line-group within its reviewer's section. */
 function renderFinding(finding: Finding): string {
-  const citation =
-    finding.file !== undefined && finding.line !== undefined
-      ? `${finding.file}:${finding.line}`
-      : "(no citation)";
-  return [
-    `### [${finding.severity}] ${citation}`,
-    "",
-    `> ${finding.quote}`,
-    "",
-    finding.description,
-  ].join("\n");
+    const citation =
+        finding.file !== undefined && finding.line !== undefined ? `${finding.file}:${finding.line}` : '(no citation)'
+    return [`### [${finding.severity}] ${citation}`, '', `> ${finding.quote}`, '', finding.description].join('\n')
 }
 
 /**
@@ -109,21 +101,21 @@ function renderFinding(finding: Finding): string {
  * human-written PRD issue body.
  */
 function renderFindingsBody(confirmedBlockers: readonly Finding[]): string {
-  const byReviewer = new Map<string, Finding[]>();
-  for (const finding of confirmedBlockers) {
-    const bucket = byReviewer.get(finding.reviewer);
-    if (bucket) {
-      bucket.push(finding);
-    } else {
-      byReviewer.set(finding.reviewer, [finding]);
+    const byReviewer = new Map<string, Finding[]>()
+    for (const finding of confirmedBlockers) {
+        const bucket = byReviewer.get(finding.reviewer)
+        if (bucket) {
+            bucket.push(finding)
+        } else {
+            byReviewer.set(finding.reviewer, [finding])
+        }
     }
-  }
 
-  const sections: string[] = [];
-  for (const [reviewer, findings] of byReviewer) {
-    sections.push(`## ${reviewer}`, "", findings.map(renderFinding).join("\n\n"));
-  }
-  return sections.join("\n\n");
+    const sections: string[] = []
+    for (const [reviewer, findings] of byReviewer) {
+        sections.push(`## ${reviewer}`, '', findings.map(renderFinding).join('\n\n'))
+    }
+    return sections.join('\n\n')
 }
 
 /**
@@ -133,12 +125,11 @@ function renderFindingsBody(confirmedBlockers: readonly Finding[]): string {
  * right axiom for a debug pass: every confirmed finding is fixed.
  */
 function renderAcceptanceCriteria(confirmedBlockers: readonly Finding[]): string {
-  const bullets = confirmedBlockers.map((f) => {
-    const citation =
-      f.file !== undefined && f.line !== undefined ? `${f.file}:${f.line}` : "(no citation)";
-    return `- The finding at ${citation} (${f.severity}, ${f.reviewer}) is fixed.`;
-  });
-  return ["## Acceptance Criteria", "", ...bullets].join("\n");
+    const bullets = confirmedBlockers.map((f) => {
+        const citation = f.file !== undefined && f.line !== undefined ? `${f.file}:${f.line}` : '(no citation)'
+        return `- The finding at ${citation} (${f.severity}, ${f.reviewer}) is fixed.`
+    })
+    return ['## Acceptance Criteria', '', ...bullets].join('\n')
 }
 
 /**
@@ -150,29 +141,29 @@ function renderAcceptanceCriteria(confirmedBlockers: readonly Finding[]): string
  * merely a serialized findings dump.
  */
 export function buildDebugReport(input: BuildDebugReportInput): {
-  readonly title: string;
-  readonly body: string;
+    readonly title: string
+    readonly body: string
 } {
-  const { confirmedBlockers, passNumber, base } = input;
-  const title = `factory debug pass ${passNumber} — ${confirmedBlockers.length} blocking finding(s)`;
+    const {confirmedBlockers, passNumber, base} = input
+    const title = `factory debug pass ${passNumber} — ${confirmedBlockers.length} blocking finding(s)`
 
-  const header = [
-    `# Factory Debug Pass ${passNumber}`,
-    "",
-    `Scan base: \`${base}\``,
-    "",
-    `${confirmedBlockers.length} blocking finding(s) confirmed by the whole-scope review panel. ` +
-      "Each finding below is a citation-verified, independently-confirmed blocker (reviewer, " +
-      "severity, exact file:line, the quoted offending code, and the reviewer's description). " +
-      "Treat this as the PRD: derive tasks that fix every finding below.",
-  ].join("\n");
+    const header = [
+        `# Factory Debug Pass ${passNumber}`,
+        '',
+        `Scan base: \`${base}\``,
+        '',
+        `${confirmedBlockers.length} blocking finding(s) confirmed by the whole-scope review panel. ` +
+            'Each finding below is a citation-verified, independently-confirmed blocker (reviewer, ' +
+            "severity, exact file:line, the quoted offending code, and the reviewer's description). " +
+            'Treat this as the PRD: derive tasks that fix every finding below.',
+    ].join('\n')
 
-  const body =
-    confirmedBlockers.length === 0
-      ? `${header}\n\n(no confirmed blockers)`
-      : `${header}\n\n${renderFindingsBody(confirmedBlockers)}\n\n${renderAcceptanceCriteria(confirmedBlockers)}`;
+    const body =
+        confirmedBlockers.length === 0
+            ? `${header}\n\n(no confirmed blockers)`
+            : `${header}\n\n${renderFindingsBody(confirmedBlockers)}\n\n${renderAcceptanceCriteria(confirmedBlockers)}`
 
-  return { title, body };
+    return {title, body}
 }
 
 /**
@@ -185,15 +176,15 @@ export function buildDebugReport(input: BuildDebugReportInput): {
  * never touch the network.
  */
 export function wireDebugSpecDeps(
-  report: { readonly title: string; readonly body: string },
-  dataDirOverride?: string,
+    report: {readonly title: string; readonly body: string},
+    dataDirOverride?: string
 ): SpecBuildDeps {
-  const dataDir = dataDirOverride ?? resolveDataDir({});
-  const config: Config = loadConfig({ dataDir });
-  return {
-    store: new SpecStore({ dataDir }),
-    gh: new ReportGhClient(report),
-    config,
-    dataDir,
-  };
+    const dataDir = dataDirOverride ?? resolveDataDir({})
+    const config: Config = loadConfig({dataDir})
+    return {
+        store: new SpecStore({dataDir}),
+        gh: new ReportGhClient(report),
+        config,
+        dataDir,
+    }
 }

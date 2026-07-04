@@ -49,11 +49,11 @@ New compliance formula:
 ### D2. Split `skipped_ok` into two buckets
 
 - `skipped_na` — step is legitimately N/A in this configuration:
-  - Mode mismatch (`R2`/`R3` in task mode).
-  - No PR exists to check against (`R9`/`R10`, `T12`/`T13`).
-  - No holdout fixture for task (`T7`).
-  - Task `risk_tier` is bugfix/chore so policy says don't mutate
-    (`T8`).
+    - Mode mismatch (`R2`/`R3` in task mode).
+    - No PR exists to check against (`R9`/`R10`, `T12`/`T13`).
+    - No holdout fixture for task (`T7`).
+    - Task `risk_tier` is bugfix/chore so policy says don't mutate
+      (`T8`).
 - `skipped_task_inactive` — task never reached `executing` status. Applies
   to all per-task steps that depend on task activity (`T2`-`T6`, `T9`-`T10`,
   `T14`).
@@ -94,10 +94,10 @@ Normalization — for each rollup entry, derive a tuple `(kind, outcome)`:
   `.state` ∈ {`PENDING`,`EXPECTED`} or
   (`.status == COMPLETED` but `.conclusion == null`) → `pending`.
 - Else resolve `outcome = (.conclusion // .state | ascii_upcase)` and bucket:
-  - `SUCCESS`, `SKIPPED`, `NEUTRAL` → `pass`.
-  - `FAILURE`, `TIMED_OUT`, `CANCELLED`, `STARTUP_FAILURE`,
-    `ACTION_REQUIRED`, `ERROR` → `fail`.
-  - Anything else → `unknown`.
+    - `SUCCESS`, `SKIPPED`, `NEUTRAL` → `pass`.
+    - `FAILURE`, `TIMED_OUT`, `CANCELLED`, `STARTUP_FAILURE`,
+      `ACTION_REQUIRED`, `ERROR` → `fail`.
+    - Anything else → `unknown`.
 
 Aggregate:
 
@@ -109,10 +109,10 @@ Aggregate:
 Caller mapping:
 
 - `eval_R10_final_pr_ci_green` and `eval_T12_pr_ci_green`:
-  - `green` → `pass`
-  - `red` → `fail`
-  - `pending` → `not_performed`
-  - `unknown` → `not_performed`
+    - `green` → `pass`
+    - `red` → `fail`
+    - `pending` → `not_performed`
+    - `unknown` → `not_performed`
 - `tools/score-run-backfill.sh`: when color ∈ {`green`,`red`}, write a
   `task.ci` event with `status: green|red`. When color ∈
   {`pending`,`unknown`}, **skip the emit** so the scorer sees no terminal
@@ -199,9 +199,9 @@ the new shape in `bin/tests/score.sh`.
 
 - `bin/test` must pass with updated fixture.
 - `tools/score-run.sh --run run-20260420-141621 --format table` must show:
-  - Start / end / duration on the header.
-  - Compliance < 100 % on steps with any `not_performed` or
-    `skipped_task_inactive`.
-  - `T12_pr_ci_green` shows non-zero passes once backfill is re-run against
-    the new `_gh_pr_ci_color` helper.
-  - `T1_quota_checked` present and populated.
+    - Start / end / duration on the header.
+    - Compliance < 100 % on steps with any `not_performed` or
+      `skipped_task_inactive`.
+    - `T12_pr_ci_green` shows non-zero passes once backfill is re-run against
+      the new `_gh_pr_ci_color` helper.
+    - `T1_quota_checked` present and populated.

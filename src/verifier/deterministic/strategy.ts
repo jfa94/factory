@@ -12,12 +12,17 @@
  * distinct {@link GateSkip} outcome — so "nothing ran" is structurally never
  * confused with "the gate passed".
  */
-import type { GateEvidence } from "../../types/index.js";
-import { GATE_IDS, type GateId } from "./gate-id.js";
+import type {GateEvidence} from '../../types/index.js'
+import type {Config} from '../../config/schema.js'
+import type {ExemptReader} from './tdd-exempt.js'
+import type {GateMemo} from './memo.js'
+import type {GateContract} from './gate-contract.js'
+import type {CoverageStore} from './coverage-store.js'
+import {GATE_IDS, type GateId} from './gate-id.js'
 
 // Re-exported from the leaf gate-id.ts so existing importers of strategy.ts are
 // unaffected, while memo.ts depends on the leaf directly (breaks the type cycle).
-export { GATE_IDS, type GateId };
+export {GATE_IDS, type GateId}
 
 /**
  * A strategy ran and produced ground-truth evidence. `observed` is the raw
@@ -26,8 +31,8 @@ export { GATE_IDS, type GateId };
  * stored boolean.
  */
 export interface GateRan {
-  readonly kind: "ran";
-  readonly evidence: GateEvidence;
+    readonly kind: 'ran'
+    readonly evidence: GateEvidence
 }
 
 /**
@@ -37,24 +42,23 @@ export interface GateRan {
  * with a reason for the audit trail.
  */
 export interface GateSkip {
-  readonly kind: "skip";
-  readonly gate: GateId;
-  readonly reason: string;
+    readonly kind: 'skip'
+    readonly gate: GateId
+    readonly reason: string
 }
 
 /** What a strategy returns: it either RAN (with evidence) or SKIPPED (with reason). */
-export type GateOutcome = GateRan | GateSkip;
+export type GateOutcome = GateRan | GateSkip
 
 /** Convenience constructor: a strategy that ran, with its observed pass signal. */
 export function ran(gate: GateId, observed: boolean, detail?: string): GateRan {
-  const evidence: GateEvidence =
-    detail === undefined ? { gate, observed } : { gate, observed, detail };
-  return { kind: "ran", evidence };
+    const evidence: GateEvidence = detail === undefined ? {gate, observed} : {gate, observed, detail}
+    return {kind: 'ran', evidence}
 }
 
 /** Convenience constructor: a strategy that skipped (not applicable). */
 export function skip(gate: GateId, reason: string): GateSkip {
-  return { kind: "skip", gate, reason };
+    return {kind: 'skip', gate, reason}
 }
 
 /**
@@ -67,39 +71,39 @@ export function skip(gate: GateId, reason: string): GateSkip {
  * pinning a concrete shape here (avoids a circular module dependency).
  */
 export interface StrategyContext<TTools> {
-  readonly runId: string;
-  readonly taskId: string;
-  /** Absolute path of the worktree the gate runs against. */
-  readonly worktree: string;
-  /** Base ref for diff-scoping (e.g. "staging"); strategies resolve origin/<base>. */
-  readonly baseRef: string;
-  /** The resolved config — the single source of every gate threshold. */
-  readonly config: import("../../config/schema.js").Config;
-  /** Injected tool wrappers (real or fake). */
-  readonly tools: TTools;
-  /**
-   * tdd_exempt resolver (tasks.json / package.json, never state.json). Required by
-   * the tdd strategy; other strategies ignore it. Optional so non-TDD callers need
-   * not supply it.
-   */
-  readonly exemptReader?: import("./tdd-exempt.js").ExemptReader;
-  /**
-   * Tip/tree-SHA memo (Δ N/O). The tdd strategy memoizes by tip SHA; the runner
-   * may memoize evidence by tree SHA. Optional — absent means no memoization.
-   */
-  readonly memo?: import("./memo.js").GateMemo;
-  /**
-   * The repo's gate contract (S7, Decision 46), when `.factory/gates.json` is
-   * present in the worktree. Command gates (test/type/build/lint) execute a
-   * contracted `command` override instead of their built-in tool. Absent =
-   * legacy pre-contract repo — built-in behavior.
-   */
-  readonly contract?: import("./gate-contract.js").GateContract;
-  /**
-   * Per-tree-SHA coverage summary store (S8). A perf cache only: absent means
-   * the coverage strategy measures uncached — never a correctness fallback.
-   */
-  readonly coverageStore?: import("./coverage-store.js").CoverageStore;
+    readonly runId: string
+    readonly taskId: string
+    /** Absolute path of the worktree the gate runs against. */
+    readonly worktree: string
+    /** Base ref for diff-scoping (e.g. "staging"); strategies resolve origin/<base>. */
+    readonly baseRef: string
+    /** The resolved config — the single source of every gate threshold. */
+    readonly config: Config
+    /** Injected tool wrappers (real or fake). */
+    readonly tools: TTools
+    /**
+     * tdd_exempt resolver (tasks.json / package.json, never state.json). Required by
+     * the tdd strategy; other strategies ignore it. Optional so non-TDD callers need
+     * not supply it.
+     */
+    readonly exemptReader?: ExemptReader | undefined
+    /**
+     * Tip/tree-SHA memo (Δ N/O). The tdd strategy memoizes by tip SHA; the runner
+     * may memoize evidence by tree SHA. Optional — absent means no memoization.
+     */
+    readonly memo?: GateMemo
+    /**
+     * The repo's gate contract (S7, Decision 46), when `.factory/gates.json` is
+     * present in the worktree. Command gates (test/type/build/lint) execute a
+     * contracted `command` override instead of their built-in tool. Absent =
+     * legacy pre-contract repo — built-in behavior.
+     */
+    readonly contract?: GateContract | undefined
+    /**
+     * Per-tree-SHA coverage summary store (S8). A perf cache only: absent means
+     * the coverage strategy measures uncached — never a correctness fallback.
+     */
+    readonly coverageStore?: CoverageStore | undefined
 }
 
 /**
@@ -109,6 +113,6 @@ export interface StrategyContext<TTools> {
  * error the runner must surface (e.g. truncated tool output).
  */
 export interface GateStrategy<TTools> {
-  readonly id: GateId;
-  run(ctx: StrategyContext<TTools>): Promise<GateOutcome>;
+    readonly id: GateId
+    run(ctx: StrategyContext<TTools>): Promise<GateOutcome>
 }

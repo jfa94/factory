@@ -12,315 +12,314 @@
  *   - per-task lines carry the failure/branch/PR passthrough;
  *   - the summary flags reopen (terminal run) + deadlock.
  */
-import { describe, it, expect } from "vitest";
-import { scanRun } from "./scan.js";
-import { parseRunState, isTerminalRunStatus } from "../core/state/index.js";
-import type { RunState, RunStatus, TaskState } from "../types/index.js";
+import {describe, it, expect} from 'vitest'
+import {scanRun} from './scan.js'
+import {parseRunState, isTerminalRunStatus} from '../core/state/index.js'
+import type {RunState, RunStatus, TaskState} from '../types/index.js'
+import {nonNull} from '../shared/index.js'
 
 /** A loose task seed; defaults fill the non-relevant fields. */
-type TaskSeed = Partial<TaskState> & { task_id: string; status: TaskState["status"] };
+type TaskSeed = Partial<TaskState> & {task_id: string; status: TaskState['status']}
 
 function task(seed: TaskSeed): TaskState {
-  const base = {
-    depends_on: [],
-    risk_tier: "medium" as const,
-    escalation_rung: 0,
-    reviewers: [],
-    merge_resyncs: 0,
-    ...seed,
-  };
-  // A failed row must carry the classification (cross-field invariant).
-  if (seed.status === "failed") {
-    return {
-      failure_class: "capability-budget" as const,
-      failure_reason: "ran out of retries",
-      ...base,
-    };
-  }
-  return base;
+    const base = {
+        depends_on: [],
+        risk_tier: 'medium' as const,
+        escalation_rung: 0,
+        reviewers: [],
+        merge_resyncs: 0,
+        ...seed,
+    }
+    // A failed row must carry the classification (cross-field invariant).
+    if (seed.status === 'failed') {
+        return {
+            failure_class: 'capability-budget' as const,
+            failure_reason: 'ran out of retries',
+            ...base,
+        }
+    }
+    return base
 }
 
 function mkRun(
-  seeds: readonly TaskSeed[],
-  status: RunStatus = "running",
-  e2ePhase?: RunState["e2e_phase"],
-  rollup?: RunState["rollup"],
-  assessment?: RunState["e2e_assessment"],
+    seeds: readonly TaskSeed[],
+    status: RunStatus = 'running',
+    e2ePhase?: RunState['e2e_phase'],
+    rollup?: RunState['rollup'],
+    assessment?: RunState['e2e_assessment']
 ): RunState {
-  return parseRunState({
-    run_id: "run-scan-1",
-    status,
-    spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
-    tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
-    started_at: "2026-06-08T00:00:00.000Z",
-    updated_at: "2026-06-08T00:00:00.000Z",
-    ...(isTerminalRunStatus(status) ? { ended_at: "2026-06-08T01:00:00.000Z" } : {}),
-    ...(e2ePhase !== undefined ? { e2e_phase: e2ePhase } : {}),
-    ...(rollup !== undefined ? { rollup } : {}),
-    ...(assessment !== undefined ? { e2e_assessment: assessment } : {}),
-  });
+    return parseRunState({
+        run_id: 'run-scan-1',
+        status,
+        spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
+        tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
+        started_at: '2026-06-08T00:00:00.000Z',
+        updated_at: '2026-06-08T00:00:00.000Z',
+        ...(isTerminalRunStatus(status) ? {ended_at: '2026-06-08T01:00:00.000Z'} : {}),
+        ...(e2ePhase !== undefined ? {e2e_phase: e2ePhase} : {}),
+        ...(rollup !== undefined ? {rollup} : {}),
+        ...(assessment !== undefined ? {e2e_assessment: assessment} : {}),
+    })
 }
 
-describe("scanRun — disposition", () => {
-  it("classifies every status into its disposition", () => {
-    const scan = scanRun(
-      mkRun([
-        { task_id: "shipped", status: "done" },
-        { task_id: "runnable", status: "pending" },
-        { task_id: "stuck-x", status: "executing" },
-        { task_id: "stuck-r", status: "reviewing" },
-        { task_id: "stuck-s", status: "shipping" },
-        { task_id: "recover", status: "failed", failure_class: "blocked-environmental" },
-        { task_id: "dead-spec", status: "failed", failure_class: "spec-defect" },
-        { task_id: "dead-cap", status: "failed", failure_class: "capability-budget" },
-      ]),
-    );
-    const disp = Object.fromEntries(scan.tasks.map((t) => [t.task_id, t.disposition]));
-    expect(disp).toEqual({
-      shipped: "shipped",
-      runnable: "runnable",
-      "stuck-x": "stuck",
-      "stuck-r": "stuck",
-      "stuck-s": "stuck",
-      recover: "recoverable",
-      "dead-spec": "dead-end",
-      "dead-cap": "dead-end",
-    });
-    expect(scan.counts).toEqual({
-      total: 8,
-      shipped: 1,
-      runnable: 1,
-      stuck: 3,
-      recoverable: 1,
-      dead_end: 2,
-    });
-  });
-});
+describe('scanRun — disposition', () => {
+    it('classifies every status into its disposition', () => {
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'shipped', status: 'done'},
+                {task_id: 'runnable', status: 'pending'},
+                {task_id: 'stuck-x', status: 'executing'},
+                {task_id: 'stuck-r', status: 'reviewing'},
+                {task_id: 'stuck-s', status: 'shipping'},
+                {task_id: 'recover', status: 'failed', failure_class: 'blocked-environmental'},
+                {task_id: 'dead-spec', status: 'failed', failure_class: 'spec-defect'},
+                {task_id: 'dead-cap', status: 'failed', failure_class: 'capability-budget'},
+            ])
+        )
+        const disp = Object.fromEntries(scan.tasks.map((t) => [t.task_id, t.disposition]))
+        expect(disp).toEqual({
+            shipped: 'shipped',
+            runnable: 'runnable',
+            'stuck-x': 'stuck',
+            'stuck-r': 'stuck',
+            'stuck-s': 'stuck',
+            recover: 'recoverable',
+            'dead-spec': 'dead-end',
+            'dead-cap': 'dead-end',
+        })
+        expect(scan.counts).toEqual({
+            total: 8,
+            shipped: 1,
+            runnable: 1,
+            stuck: 3,
+            recoverable: 1,
+            dead_end: 2,
+        })
+    })
+})
 
-describe("scanRun — resettable / dead_ends / needs_rescue", () => {
-  it("resettable = stuck ∪ recoverable; dead_ends excluded", () => {
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "executing" },
-        { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
-        { task_id: "c", status: "failed", failure_class: "spec-defect" },
-        { task_id: "d", status: "done" },
-      ]),
-    );
-    expect(scan.resettable).toEqual(["a", "b"]);
-    expect(scan.dead_ends).toEqual(["c"]);
-    expect(scan.needs_rescue).toBe(true);
-  });
+describe('scanRun — resettable / dead_ends / needs_rescue', () => {
+    it('resettable = stuck ∪ recoverable; dead_ends excluded', () => {
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'executing'},
+                {task_id: 'b', status: 'failed', failure_class: 'blocked-environmental'},
+                {task_id: 'c', status: 'failed', failure_class: 'spec-defect'},
+                {task_id: 'd', status: 'done'},
+            ])
+        )
+        expect(scan.resettable).toEqual(['a', 'b'])
+        expect(scan.dead_ends).toEqual(['c'])
+        expect(scan.needs_rescue).toBe(true)
+    })
 
-  it("needs_rescue is false when nothing is stuck or recoverable", () => {
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "done" },
-        { task_id: "c", status: "failed", failure_class: "spec-defect" },
-      ]),
-    );
-    expect(scan.resettable).toEqual([]);
-    expect(scan.needs_rescue).toBe(false);
-    expect(scan.summary).toMatch(/no rescue needed/);
-    expect(scan.summary).toMatch(/dead-end/); // names the unrecoverable fail
-  });
+    it('needs_rescue is false when nothing is stuck or recoverable', () => {
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'done'},
+                {task_id: 'c', status: 'failed', failure_class: 'spec-defect'},
+            ])
+        )
+        expect(scan.resettable).toEqual([])
+        expect(scan.needs_rescue).toBe(false)
+        expect(scan.summary).toMatch(/no rescue needed/)
+        expect(scan.summary).toMatch(/dead-end/) // names the unrecoverable fail
+    })
 
-  it("e2e_failed is true when the e2e phase is failed, even with every task done — and needs_rescue follows it (a run stuck ONLY on a failed e2e verdict must not scan as 'nothing to rescue')", () => {
-    const scan = scanRun(
-      mkRun(
-        [
-          { task_id: "a", status: "done" },
-          { task_id: "b", status: "done" },
-        ],
-        "failed",
-        {
-          status: "failed",
-          reason: "fail-first proof: 'checkout.spec.ts' is still red against staging",
-          manifest: [],
-          reopen_counts: {},
-        },
-      ),
-    );
-    expect(scan.resettable).toEqual([]); // no task-level work to reset
-    expect(scan.e2e_failed).toBe(true);
-    expect(scan.needs_rescue).toBe(true); // the e2e failure alone is enough
-    expect(scan.summary).toMatch(/e2e/i);
-    expect(scan.summary).toMatch(/reset-e2e/);
-  });
+    it("e2e_failed is true when the e2e phase is failed, even with every task done — and needs_rescue follows it (a run stuck ONLY on a failed e2e verdict must not scan as 'nothing to rescue')", () => {
+        const scan = scanRun(
+            mkRun(
+                [
+                    {task_id: 'a', status: 'done'},
+                    {task_id: 'b', status: 'done'},
+                ],
+                'failed',
+                {
+                    status: 'failed',
+                    reason: "fail-first proof: 'checkout.spec.ts' is still red against staging",
+                    manifest: [],
+                    reopen_counts: {},
+                }
+            )
+        )
+        expect(scan.resettable).toEqual([]) // no task-level work to reset
+        expect(scan.e2e_failed).toBe(true)
+        expect(scan.needs_rescue).toBe(true) // the e2e failure alone is enough
+        expect(scan.summary).toMatch(/e2e/i)
+        expect(scan.summary).toMatch(/reset-e2e/)
+    })
 
-  it("e2e_assessment_failed is true when the run-start assessment failed (Decision 40); swept tasks scan recoverable", () => {
-    const scan = scanRun(
-      mkRun(
-        [
-          { task_id: "a", status: "failed", failure_class: "blocked-environmental" },
-          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
-        ],
-        "failed",
-        undefined,
-        undefined,
-        { status: "failed", reason: "the app cannot boot", affected_specs: [] },
-      ),
-    );
-    expect(scan.e2e_assessment_failed).toBe(true);
-    expect(scan.needs_rescue).toBe(true);
-    // The record leg's sweep used blocked-environmental — the default reset set.
-    expect(scan.resettable).toEqual(["a", "b"]);
-    expect(scan.summary).toMatch(/assessment/i);
-    expect(scan.summary).toMatch(/reset-e2e/);
-  });
+    it('e2e_assessment_failed is true when the run-start assessment failed (Decision 40); swept tasks scan recoverable', () => {
+        const scan = scanRun(
+            mkRun(
+                [
+                    {task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'},
+                    {task_id: 'b', status: 'failed', failure_class: 'blocked-environmental'},
+                ],
+                'failed',
+                undefined,
+                undefined,
+                {status: 'failed', reason: 'the app cannot boot', affected_specs: []}
+            )
+        )
+        expect(scan.e2e_assessment_failed).toBe(true)
+        expect(scan.needs_rescue).toBe(true)
+        // The record leg's sweep used blocked-environmental — the default reset set.
+        expect(scan.resettable).toEqual(['a', 'b'])
+        expect(scan.summary).toMatch(/assessment/i)
+        expect(scan.summary).toMatch(/reset-e2e/)
+    })
 
-  it("e2e_assessment_failed is false when the assessment is unset, in-flight, or done", () => {
-    expect(
-      scanRun(mkRun([{ task_id: "a", status: "done" }], "completed")).e2e_assessment_failed,
-    ).toBe(false);
-    expect(
-      scanRun(
-        mkRun([{ task_id: "a", status: "done" }], "completed", undefined, undefined, {
-          status: "done",
-          affected_specs: [],
-        }),
-      ).e2e_assessment_failed,
-    ).toBe(false);
-    expect(
-      scanRun(
-        mkRun([{ task_id: "a", status: "pending" }], "running", undefined, undefined, {
-          attempts: 1,
-          affected_specs: [],
-        }),
-      ).e2e_assessment_failed,
-    ).toBe(false);
-  });
+    it('e2e_assessment_failed is false when the assessment is unset, in-flight, or done', () => {
+        expect(scanRun(mkRun([{task_id: 'a', status: 'done'}], 'completed')).e2e_assessment_failed).toBe(false)
+        expect(
+            scanRun(
+                mkRun([{task_id: 'a', status: 'done'}], 'completed', undefined, undefined, {
+                    status: 'done',
+                    affected_specs: [],
+                })
+            ).e2e_assessment_failed
+        ).toBe(false)
+        expect(
+            scanRun(
+                mkRun([{task_id: 'a', status: 'pending'}], 'running', undefined, undefined, {
+                    attempts: 1,
+                    affected_specs: [],
+                })
+            ).e2e_assessment_failed
+        ).toBe(false)
+    })
 
-  it("e2e_failed is false when the e2e phase is unset or done", () => {
-    const doneScan = scanRun(
-      mkRun([{ task_id: "a", status: "done" }], "completed", {
-        status: "done",
-        manifest: [],
-        reopen_counts: {},
-      }),
-    );
-    expect(doneScan.e2e_failed).toBe(false);
+    it('e2e_failed is false when the e2e phase is unset or done', () => {
+        const doneScan = scanRun(
+            mkRun([{task_id: 'a', status: 'done'}], 'completed', {
+                status: 'done',
+                manifest: [],
+                reopen_counts: {},
+            })
+        )
+        expect(doneScan.e2e_failed).toBe(false)
 
-    const unsetScan = scanRun(mkRun([{ task_id: "a", status: "done" }], "completed"));
-    expect(unsetScan.e2e_failed).toBe(false);
-  });
+        const unsetScan = scanRun(mkRun([{task_id: 'a', status: 'done'}], 'completed'))
+        expect(unsetScan.e2e_failed).toBe(false)
+    })
 
-  it("rollup_pending is true when the rollup armed but never landed, even with every task done — and needs_rescue follows it", () => {
-    const scan = scanRun(
-      mkRun([{ task_id: "a", status: "done" }], "completed", undefined, {
-        number: 42,
-        merged: false,
-        reason: "auto-armed",
-      }),
-    );
-    expect(scan.resettable).toEqual([]); // no task-level work to reset
-    expect(scan.rollup_pending).toBe(true);
-    expect(scan.needs_rescue).toBe(true); // the pending rollup alone is enough
-    expect(scan.summary).toMatch(/rollup/i);
-    expect(scan.summary).toMatch(/recheck-rollup/);
-  });
+    it('rollup_pending is true when the rollup armed but never landed, even with every task done — and needs_rescue follows it', () => {
+        const scan = scanRun(
+            mkRun([{task_id: 'a', status: 'done'}], 'completed', undefined, {
+                number: 42,
+                merged: false,
+                reason: 'auto-armed',
+            })
+        )
+        expect(scan.resettable).toEqual([]) // no task-level work to reset
+        expect(scan.rollup_pending).toBe(true)
+        expect(scan.needs_rescue).toBe(true) // the pending rollup alone is enough
+        expect(scan.summary).toMatch(/rollup/i)
+        expect(scan.summary).toMatch(/recheck-rollup/)
+    })
 
-  it("rollup_pending is false when the run has no rollup pointer, or it landed merged", () => {
-    const unsetScan = scanRun(mkRun([{ task_id: "a", status: "done" }], "completed"));
-    expect(unsetScan.rollup_pending).toBe(false);
+    it('rollup_pending is false when the run has no rollup pointer, or it landed merged', () => {
+        const unsetScan = scanRun(mkRun([{task_id: 'a', status: 'done'}], 'completed'))
+        expect(unsetScan.rollup_pending).toBe(false)
 
-    // A merged rollup is cleared (undefined) by finalize itself, but guard the
-    // classification directly in case a stale merged:true row is ever read.
-    const mergedScan = scanRun(
-      mkRun([{ task_id: "a", status: "done" }], "completed", undefined, {
-        number: 42,
-        merged: true,
-      }),
-    );
-    expect(mergedScan.rollup_pending).toBe(false);
-  });
+        // A merged rollup is cleared (undefined) by finalize itself, but guard the
+        // classification directly in case a stale merged:true row is ever read.
+        const mergedScan = scanRun(
+            mkRun([{task_id: 'a', status: 'done'}], 'completed', undefined, {
+                number: 42,
+                merged: true,
+            })
+        )
+        expect(mergedScan.rollup_pending).toBe(false)
+    })
 
-  it("carries failure/branch/PR passthrough on the task lines", () => {
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "shipping", branch: "factory/run/a", pr_number: 9 },
-        {
-          task_id: "b",
-          status: "failed",
-          failure_class: "spec-defect",
-          failure_reason: "criterion unattainable",
-        },
-      ]),
-    );
-    const a = scan.tasks.find((t) => t.task_id === "a")!;
-    expect(a).toMatchObject({ branch: "factory/run/a", pr_number: 9 });
-    const b = scan.tasks.find((t) => t.task_id === "b")!;
-    expect(b).toMatchObject({
-      failure_class: "spec-defect",
-      failure_reason: "criterion unattainable",
-    });
-  });
-});
+    it('carries failure/branch/PR passthrough on the task lines', () => {
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'shipping', branch: 'factory/run/a', pr_number: 9},
+                {
+                    task_id: 'b',
+                    status: 'failed',
+                    failure_class: 'spec-defect',
+                    failure_reason: 'criterion unattainable',
+                },
+            ])
+        )
+        const a = nonNull(scan.tasks.find((t) => t.task_id === 'a'))
+        expect(a).toMatchObject({branch: 'factory/run/a', pr_number: 9})
+        const b = nonNull(scan.tasks.find((t) => t.task_id === 'b'))
+        expect(b).toMatchObject({
+            failure_class: 'spec-defect',
+            failure_reason: 'criterion unattainable',
+        })
+    })
+})
 
 describe("scanRun — would_deadlock (the orchestrator's guard, mirrored)", () => {
-  it("is true when a stuck task blocks the only dependent pending task", () => {
-    // A crashed mid-phase (executing); B waits on A → neither is actionable.
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "executing" },
-        { task_id: "b", status: "pending", depends_on: ["a"] },
-      ]),
-    );
-    expect(scan.would_deadlock).toBe(true);
-    expect(scan.needs_rescue).toBe(true);
-    expect(scan.summary).toMatch(/deadlock/);
-  });
+    it('is true when a stuck task blocks the only dependent pending task', () => {
+        // A crashed mid-phase (executing); B waits on A → neither is actionable.
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'executing'},
+                {task_id: 'b', status: 'pending', depends_on: ['a']},
+            ])
+        )
+        expect(scan.would_deadlock).toBe(true)
+        expect(scan.needs_rescue).toBe(true)
+        expect(scan.summary).toMatch(/deadlock/)
+    })
 
-  it("is false when a pending task is still actionable despite a stuck task", () => {
-    // A is stuck, but B is an independent ready task → the orchestrator can make progress.
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "executing" },
-        { task_id: "b", status: "pending", depends_on: [] },
-      ]),
-    );
-    expect(scan.would_deadlock).toBe(false);
-    expect(scan.needs_rescue).toBe(true); // still stuck → still needs rescue
-  });
+    it('is false when a pending task is still actionable despite a stuck task', () => {
+        // A is stuck, but B is an independent ready task → the orchestrator can make progress.
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'executing'},
+                {task_id: 'b', status: 'pending', depends_on: []},
+            ])
+        )
+        expect(scan.would_deadlock).toBe(false)
+        expect(scan.needs_rescue).toBe(true) // still stuck → still needs rescue
+    })
 
-  it("is false for an all-terminal run (already finalized, never deadlocked)", () => {
-    const scan = scanRun(
-      mkRun(
-        [
-          { task_id: "a", status: "done" },
-          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
-        ],
-        "failed",
-      ),
-    );
-    expect(scan.would_deadlock).toBe(false);
-    // a recoverable fail on a terminal run still needs rescue (retry on reopen).
-    expect(scan.needs_rescue).toBe(true);
-  });
+    it('is false for an all-terminal run (already finalized, never deadlocked)', () => {
+        const scan = scanRun(
+            mkRun(
+                [
+                    {task_id: 'a', status: 'done'},
+                    {task_id: 'b', status: 'failed', failure_class: 'blocked-environmental'},
+                ],
+                'failed'
+            )
+        )
+        expect(scan.would_deadlock).toBe(false)
+        // a recoverable fail on a terminal run still needs rescue (retry on reopen).
+        expect(scan.needs_rescue).toBe(true)
+    })
 
-  it("treats a pending task whose dep was failed as actionable (cascade-failable)", () => {
-    const scan = scanRun(
-      mkRun([
-        { task_id: "a", status: "failed", failure_class: "spec-defect" },
-        { task_id: "b", status: "pending", depends_on: ["a"] },
-      ]),
-    );
-    // B's dep is failed → the orchestrator cascade-fails B; not a deadlock.
-    expect(scan.would_deadlock).toBe(false);
-  });
-});
+    it('treats a pending task whose dep was failed as actionable (cascade-failable)', () => {
+        const scan = scanRun(
+            mkRun([
+                {task_id: 'a', status: 'failed', failure_class: 'spec-defect'},
+                {task_id: 'b', status: 'pending', depends_on: ['a']},
+            ])
+        )
+        // B's dep is failed → the orchestrator cascade-fails B; not a deadlock.
+        expect(scan.would_deadlock).toBe(false)
+    })
+})
 
-describe("scanRun — summary", () => {
-  it("flags that a terminal run will reopen", () => {
-    const scan = scanRun(
-      mkRun(
-        [
-          { task_id: "a", status: "done" },
-          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
-        ],
-        "failed",
-      ),
-    );
-    expect(scan.summary).toMatch(/will reopen the run/);
-  });
-});
+describe('scanRun — summary', () => {
+    it('flags that a terminal run will reopen', () => {
+        const scan = scanRun(
+            mkRun(
+                [
+                    {task_id: 'a', status: 'done'},
+                    {task_id: 'b', status: 'failed', failure_class: 'blocked-environmental'},
+                ],
+                'failed'
+            )
+        )
+        expect(scan.summary).toMatch(/will reopen the run/)
+    })
+})

@@ -59,50 +59,34 @@
  * the runner's review-collection code is the same shape whether it is
  * recording a per-task verify pass or a whole-scope debug pass.
  */
-import { join } from "node:path";
-import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, UsageError, optionalString } from "../args.js";
-import { emitJson, emitLine } from "../io.js";
-import { readJsonInput } from "../../orchestrator/index.js";
-import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { readJsonFile, writeJsonFile } from "../../shared/json.js";
-import { makeRunId, validateId } from "../../shared/ids.js";
-import { StateManager } from "../../core/state/index.js";
-import { SpecStore } from "../../spec/index.js";
-import {
-  DefaultGitClient,
-  runStagingBranch,
-  resolveRepo,
-  type GitClient,
-} from "../../git/index.js";
-import { loadCliDeps } from "../wiring.js";
-import { finalizeRun } from "../../orchestrator/finalize.js";
-import { createRun, resolveOwnerSession } from "./run.js";
-import {
-  resolveSpec,
-  gateSpec,
-  storeSpec,
-  type SpecBuildDeps,
-  type SpecBuildEnvelope,
-} from "./spec.js";
-import {
-  buildReviewManifest,
-  adjudicateWholeScope,
-  runCommittedE2e,
-  foldE2eIntoBlockers,
-} from "../../debug/review.js";
-import { debugIssueNumber, buildDebugReport, wireDebugSpecDeps } from "../../debug/spec-source.js";
-import { appendTasksFromSpec } from "../../debug/batch.js";
-import { resolveReviewModel } from "../../verifier/judgment/config.js";
-import { resolveCodexCrossVendor } from "../../verifier/judgment/codex-probe.js";
-import type { VendorProbe } from "../../verifier/judgment/vendor.js";
-import type { ReviewerVerifications } from "../../orchestrator/record.js";
-import type { Finding } from "../../verifier/judgment/finding.js";
-import type { PartialRunReport } from "../../scoring/index.js";
-import type { RollupResult } from "../../git/index.js";
-import type { Config, RunState, SpawnRequest } from "../../types/index.js";
-import { withUsageGuard, type Subcommand } from "../registry-types.js";
+import {join} from 'node:path'
+import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {parseArgs, UsageError, optionalString} from '../args.js'
+import {emitJson, emitLine} from '../io.js'
+import {readJsonInput} from '../../orchestrator/index.js'
+import {loadConfig, resolveDataDir} from '../../config/index.js'
+import {atomicWriteFile} from '../../shared/atomic-write.js'
+import {readJsonFile, writeJsonFile} from '../../shared/json.js'
+import {makeRunId, validateId} from '../../shared/ids.js'
+import {StateManager} from '../../core/state/index.js'
+import {SpecStore} from '../../spec/index.js'
+import {DefaultGitClient, runStagingBranch, resolveRepo, type GitClient} from '../../git/index.js'
+import {loadCliDeps} from '../wiring.js'
+import {finalizeRun} from '../../orchestrator/finalize.js'
+import {createRun, resolveOwnerSession} from './run.js'
+import {resolveSpec, gateSpec, storeSpec, type SpecBuildDeps, type SpecBuildEnvelope} from './spec.js'
+import {buildReviewManifest, adjudicateWholeScope, runCommittedE2e, foldE2eIntoBlockers} from '../../debug/review.js'
+import {debugIssueNumber, buildDebugReport, wireDebugSpecDeps} from '../../debug/spec-source.js'
+import {appendTasksFromSpec} from '../../debug/batch.js'
+import {resolveReviewModel} from '../../verifier/judgment/config.js'
+import {resolveCodexCrossVendor} from '../../verifier/judgment/codex-probe.js'
+import type {VendorProbe} from '../../verifier/judgment/vendor.js'
+import type {ReviewerVerifications} from '../../orchestrator/record.js'
+import type {Finding} from '../../verifier/judgment/finding.js'
+import type {PartialRunReport} from '../../scoring/index.js'
+import type {RollupResult} from '../../git/index.js'
+import type {Config, RunState, SpawnRequest} from '../../types/index.js'
+import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -114,12 +98,12 @@ import { withUsageGuard, type Subcommand } from "../registry-types.js";
  * git invocation for a value that never changes). `--full` diffs against this
  * so the whole-scope review scans the ENTIRE tree, not just a range.
  */
-const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 /** Default cap on review⇄fix passes before the driver must stop looping. */
-const DEFAULT_MAX_PASSES = 5;
+const DEFAULT_MAX_PASSES = 5
 
-const DEBUG_SESSION_FILE = "session.json";
+const DEBUG_SESSION_FILE = 'session.json'
 
 const DEBUG_HELP = `factory debug — the /factory:debug whole-scope review⇄fix loop
 
@@ -143,7 +127,7 @@ Actions:
   review    --emit spawns the whole-scope panel; --record adjudicates its output.
   spec      Thin pass-through to 'factory spec resolve|gate|store' fed a synthetic PRD.
   seed      Create (pass 1) or append (pass > 1) the run's tasks from the resolved spec.
-  finalize  Turn an all-terminal debug run into its shipped outcome.`;
+  finalize  Turn an all-terminal debug run into its shipped outcome.`
 
 const START_HELP = `factory debug start — cut the debug staging branch and mint a run id
 
@@ -158,7 +142,7 @@ Usage:
   --max-passes   Cap on review⇄fix passes before the driver must stop looping. Default: ${DEFAULT_MAX_PASSES}.
   --session-id   Owning Claude Code session id (defaults to $CLAUDE_CODE_SESSION_ID).
 
-Emits { kind:"review", run_id, base, worktree, pass:1 }.`;
+Emits { kind:"review", run_id, base, worktree, pass:1 }.`
 
 const REVIEW_HELP = `factory debug review — spawn or record the whole-scope review panel
 
@@ -172,7 +156,7 @@ IDENTICAL to the per-task merge-gate's record-reviews input shape.
 Emits { kind:"review-spawn", run_id, pass, manifest, base, worktree, codex_available }
 on --emit, or { kind:"clean", run_id, pass, e2e } | { kind:"findings", run_id, pass,
 report_path, confirmed_count, e2e } on --record, where e2e is
-{ kind:"ran" } | { kind:"skipped", reason }.`;
+{ kind:"ran" } | { kind:"skipped", reason }.`
 
 const SPEC_SUB_HELP = `factory debug spec — thin pass-through to 'factory spec' fed a synthetic PRD
 
@@ -183,14 +167,14 @@ Usage:
 
 Reads the pass's confirmed blockers from the debug session, renders them as a
 synthetic PRD (src/debug/spec-source.ts), and calls the UNCHANGED
-resolveSpec/gateSpec/storeSpec — returns their envelope verbatim.`;
+resolveSpec/gateSpec/storeSpec — returns their envelope verbatim.`
 
 const SEED_HELP = `factory debug seed — create (pass 1) or append (pass > 1) the run's tasks
 
 Usage:
   factory debug seed --run <id>
 
-Emits { kind:"loop", run_id }.`;
+Emits { kind:"loop", run_id }.`
 
 const FINALIZE_HELP = `factory debug finalize — turn an all-terminal debug run into its shipped outcome
 
@@ -200,7 +184,7 @@ Usage:
 Delegates to the UNCHANGED finalizeRun exactly once (mirrors 'factory run finalize').
 Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
-RunState was ever created (no 'debug seed' ever ran).`;
+RunState was ever created (no 'debug seed' ever ran).`
 
 // ---------------------------------------------------------------------------
 // Session scratch state
@@ -212,35 +196,35 @@ RunState was ever created (no 'debug seed' ever ran).`;
  * session is driven by exactly one runner loop, never concurrently).
  */
 export interface DebugSession {
-  readonly runId: string;
-  /** Diff base for the whole-scope review; set once at `start`, never changes. */
-  readonly base: string;
-  /** The pass CURRENTLY being reviewed/fixed. See the module header's pass-ownership note. */
-  readonly pass: number;
-  readonly maxPasses: number;
-  readonly noShip: boolean;
-  readonly authorE2e: boolean;
-  readonly sessionId?: string;
-  /** This pass's folded confirmed blockers, persisted by `review --record`; read by `spec resolve|gate|store`. */
-  readonly confirmedBlockers?: readonly Finding[];
-  /** This pass's stored spec id, persisted by `spec store`; read by `seed`. */
-  readonly specId?: string;
+    readonly runId: string
+    /** Diff base for the whole-scope review; set once at `start`, never changes. */
+    readonly base: string
+    /** The pass CURRENTLY being reviewed/fixed. See the module header's pass-ownership note. */
+    readonly pass: number
+    readonly maxPasses: number
+    readonly noShip: boolean
+    readonly authorE2e: boolean
+    readonly sessionId?: string
+    /** This pass's folded confirmed blockers, persisted by `review --record`; read by `spec resolve|gate|store`. */
+    readonly confirmedBlockers?: readonly Finding[]
+    /** This pass's stored spec id, persisted by `spec store`; read by `seed`. */
+    readonly specId?: string
 }
 
 function debugSessionPath(dataDir: string, runId: string): string {
-  return join(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+    return join(dataDir, 'debug', runId, DEBUG_SESSION_FILE)
 }
 
 function debugPassDir(dataDir: string, runId: string, pass: number): string {
-  return join(dataDir, "debug", runId, `pass-${pass}`);
+    return join(dataDir, 'debug', runId, `pass-${pass}`)
 }
 
 async function readSession(dataDir: string, runId: string): Promise<DebugSession> {
-  return readJsonFile<DebugSession>(debugSessionPath(dataDir, runId));
+    return readJsonFile<DebugSession>(debugSessionPath(dataDir, runId))
 }
 
 async function writeSession(dataDir: string, session: DebugSession): Promise<void> {
-  await writeJsonFile(debugSessionPath(dataDir, session.runId), session);
+    await writeJsonFile(debugSessionPath(dataDir, session.runId), session)
 }
 
 // ---------------------------------------------------------------------------
@@ -249,69 +233,65 @@ async function writeSession(dataDir: string, session: DebugSession): Promise<voi
 
 /** The single JSON document `start`/`review`/`seed`/`finalize` emit. `spec` returns {@link SpecBuildEnvelope} verbatim (a pass-through — see module header). */
 export type DebugEnvelope =
-  | {
-      /** `start`'s output: the pass-1 review scope. No RunState exists yet. */
-      readonly kind: "review";
-      readonly run_id: string;
-      readonly base: string;
-      readonly worktree: string;
-      readonly pass: number;
-    }
-  | {
-      /** `review --emit`'s output: the whole-scope panel spawn manifest. */
-      readonly kind: "review-spawn";
-      readonly run_id: string;
-      readonly pass: number;
-      readonly manifest: SpawnRequest;
-      readonly base: string;
-      readonly worktree: string;
-      readonly codex_available: boolean;
-      /** The exact absence reason when codex_available=false — echoed verbatim by the runner. */
-      readonly codex_absent_reason?: string;
-    }
-  | {
-      /** `review --record`'s output when the pass has zero confirmed blockers. */
-      readonly kind: "clean";
-      readonly run_id: string;
-      readonly pass: number;
-      /** Whether the committed e2e suite actually ran, or was skipped (unconfigured) —
-       * without this, a clean pass looks identical either way (finding #2). */
-      readonly e2e:
-        | { readonly kind: "ran" }
-        | { readonly kind: "skipped"; readonly reason: string };
-    }
-  | {
-      /** `review --record`'s output when the pass has ≥1 confirmed blocker. */
-      readonly kind: "findings";
-      readonly run_id: string;
-      readonly pass: number;
-      readonly report_path: string;
-      readonly confirmed_count: number;
-      /** See `clean.e2e` above — same visibility, findings pass may or may not include e2e. */
-      readonly e2e:
-        | { readonly kind: "ran" }
-        | { readonly kind: "skipped"; readonly reason: string };
-    }
-  | {
-      /** `seed`'s output — the run is ready for the ordinary next-task/next-action loop. */
-      readonly kind: "loop";
-      readonly run_id: string;
-    }
-  | {
-      /** `finalize`'s output — mirrors `run finalize`'s envelope exactly. */
-      readonly kind: "finalized";
-      readonly run: RunState;
-      readonly report: PartialRunReport;
-      readonly rollup?: RollupResult;
-      readonly failure_comment_posted: boolean;
-    }
-  | {
-      /** `finalize`'s output when no RunState was ever created for this run —
-       * the debug session converged clean on pass 1, before `seed` ever ran.
-       * Nothing changed, so there is nothing to ship: no rollup PR, no report. */
-      readonly kind: "nothing-to-ship";
-      readonly run_id: string;
-    };
+    | {
+          /** `start`'s output: the pass-1 review scope. No RunState exists yet. */
+          readonly kind: 'review'
+          readonly run_id: string
+          readonly base: string
+          readonly worktree: string
+          readonly pass: number
+      }
+    | {
+          /** `review --emit`'s output: the whole-scope panel spawn manifest. */
+          readonly kind: 'review-spawn'
+          readonly run_id: string
+          readonly pass: number
+          readonly manifest: SpawnRequest
+          readonly base: string
+          readonly worktree: string
+          readonly codex_available: boolean
+          /** The exact absence reason when codex_available=false — echoed verbatim by the runner. */
+          readonly codex_absent_reason?: string
+      }
+    | {
+          /** `review --record`'s output when the pass has zero confirmed blockers. */
+          readonly kind: 'clean'
+          readonly run_id: string
+          readonly pass: number
+          /** Whether the committed e2e suite actually ran, or was skipped (unconfigured) —
+           * without this, a clean pass looks identical either way (finding #2). */
+          readonly e2e: {readonly kind: 'ran'} | {readonly kind: 'skipped'; readonly reason: string}
+      }
+    | {
+          /** `review --record`'s output when the pass has ≥1 confirmed blocker. */
+          readonly kind: 'findings'
+          readonly run_id: string
+          readonly pass: number
+          readonly report_path: string
+          readonly confirmed_count: number
+          /** See `clean.e2e` above — same visibility, findings pass may or may not include e2e. */
+          readonly e2e: {readonly kind: 'ran'} | {readonly kind: 'skipped'; readonly reason: string}
+      }
+    | {
+          /** `seed`'s output — the run is ready for the ordinary next-task/next-action loop. */
+          readonly kind: 'loop'
+          readonly run_id: string
+      }
+    | {
+          /** `finalize`'s output — mirrors `run finalize`'s envelope exactly. */
+          readonly kind: 'finalized'
+          readonly run: RunState
+          readonly report: PartialRunReport
+          readonly rollup?: RollupResult
+          readonly failure_comment_posted: boolean
+      }
+    | {
+          /** `finalize`'s output when no RunState was ever created for this run —
+           * the debug session converged clean on pass 1, before `seed` ever ran.
+           * Nothing changed, so there is nothing to ship: no rollup PR, no report. */
+          readonly kind: 'nothing-to-ship'
+          readonly run_id: string
+      }
 
 // ---------------------------------------------------------------------------
 // Deps
@@ -319,15 +299,15 @@ export type DebugEnvelope =
 
 /** The deps the testable action cores need (injected in tests; production-wired by the command). */
 export interface DebugDeps {
-  readonly gitClient: GitClient;
-  readonly config: Config;
-  readonly dataDir: string;
-  /** The target repo checkout the debug session operates against (the debug staging worktree). */
-  readonly cwd: string;
-  readonly state: StateManager;
-  readonly specStore: SpecStore;
-  /** S5/C — injectable cross-vendor probe (tests inject; defaults to the real `codex --version`). */
-  readonly vendorProbe?: VendorProbe;
+    readonly gitClient: GitClient
+    readonly config: Config
+    readonly dataDir: string
+    /** The target repo checkout the debug session operates against (the debug staging worktree). */
+    readonly cwd: string
+    readonly state: StateManager
+    readonly specStore: SpecStore
+    /** S5/C — injectable cross-vendor probe (tests inject; defaults to the real `codex --version`). */
+    readonly vendorProbe?: VendorProbe
 }
 
 // ---------------------------------------------------------------------------
@@ -336,12 +316,12 @@ export interface DebugDeps {
 
 /** Options for {@link debugStart}, already parsed/validated from CLI flags. */
 export interface DebugStartOptions {
-  readonly full?: boolean;
-  readonly base?: string;
-  readonly noShip?: boolean;
-  readonly authorE2e?: boolean;
-  readonly maxPasses?: number;
-  readonly sessionId?: string;
+    readonly full?: boolean
+    readonly base?: string
+    readonly noShip?: boolean
+    readonly authorE2e?: boolean
+    readonly maxPasses?: number
+    readonly sessionId?: string
 }
 
 /**
@@ -357,41 +337,36 @@ export interface DebugStartOptions {
  * and swap the reviewed tree out from under the session. Cutting from the
  * snapshot HEAD keeps the working tree byte-identical.
  */
-export async function debugStart(
-  deps: DebugDeps,
-  opts: DebugStartOptions = {},
-): Promise<DebugEnvelope> {
-  if (opts.full === true && opts.base !== undefined) {
-    throw new UsageError("debug start: pass exactly one of --base or --full");
-  }
-  const base = opts.full === true ? EMPTY_TREE_SHA : (opts.base ?? "HEAD~1");
-  const maxPasses = opts.maxPasses ?? DEFAULT_MAX_PASSES;
-  if (!Number.isInteger(maxPasses) || maxPasses <= 0) {
-    throw new UsageError(
-      `--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`,
-    );
-  }
+export async function debugStart(deps: DebugDeps, opts: DebugStartOptions = {}): Promise<DebugEnvelope> {
+    if (opts.full === true && opts.base !== undefined) {
+        throw new UsageError('debug start: pass exactly one of --base or --full')
+    }
+    const base = opts.full === true ? EMPTY_TREE_SHA : (opts.base ?? 'HEAD~1')
+    const maxPasses = opts.maxPasses ?? DEFAULT_MAX_PASSES
+    if (!Number.isInteger(maxPasses) || maxPasses <= 0) {
+        throw new UsageError(`--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`)
+    }
 
-  const runId = makeRunId();
-  validateId(runId, "run-id");
+    const runId = makeRunId()
+    validateId(runId, 'run-id')
 
-  const headSha = await deps.gitClient.revParse("HEAD", { cwd: deps.cwd });
-  const stagingBranch = runStagingBranch(runId);
-  await deps.gitClient.checkoutB(stagingBranch, headSha, { cwd: deps.cwd });
-  await deps.gitClient.push("origin", stagingBranch, { setUpstream: true, cwd: deps.cwd });
+    const headSha = await deps.gitClient.revParse('HEAD', {cwd: deps.cwd})
+    const stagingBranch = runStagingBranch(runId)
+    await deps.gitClient.checkoutB(stagingBranch, headSha, {cwd: deps.cwd})
+    await deps.gitClient.push('origin', stagingBranch, {setUpstream: true, cwd: deps.cwd})
 
-  const session: DebugSession = {
-    runId,
-    base,
-    pass: 1,
-    maxPasses,
-    noShip: opts.noShip === true,
-    authorE2e: opts.authorE2e === true,
-    ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
-  };
-  await writeSession(deps.dataDir, session);
+    const session: DebugSession = {
+        runId,
+        base,
+        pass: 1,
+        maxPasses,
+        noShip: opts.noShip === true,
+        authorE2e: opts.authorE2e === true,
+        ...(opts.sessionId !== undefined ? {sessionId: opts.sessionId} : {}),
+    }
+    await writeSession(deps.dataDir, session)
 
-  return { kind: "review", run_id: runId, base, worktree: deps.cwd, pass: 1 };
+    return {kind: 'review', run_id: runId, base, worktree: deps.cwd, pass: 1}
 }
 
 // ---------------------------------------------------------------------------
@@ -405,29 +380,27 @@ export async function debugStart(
  * verify phase does (`resolveReviewModel`, `config.review.maxTurnsDeep`).
  */
 export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<DebugEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
-  const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
-  const built = buildReviewManifest({
-    resumePhase: "verify",
-    model: resolveReviewModel(deps.config),
-    maxTurns: deps.config.review.maxTurnsDeep,
-    base: session.base,
-    worktree: deps.cwd,
-    crossVendor,
-  });
-  return {
-    kind: "review-spawn",
-    run_id: runId,
-    pass: session.pass,
-    manifest: built.manifest,
-    base: built.base,
-    worktree: built.worktree,
-    codex_available: built.codexAvailable,
-    ...(built.codexAbsentReason !== undefined
-      ? { codex_absent_reason: built.codexAbsentReason }
-      : {}),
-  };
+    const session = await readSession(deps.dataDir, runId)
+    // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
+    const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
+    const built = buildReviewManifest({
+        resumePhase: 'verify',
+        model: resolveReviewModel(deps.config),
+        maxTurns: deps.config.review.maxTurnsDeep,
+        base: session.base,
+        worktree: deps.cwd,
+        crossVendor,
+    })
+    return {
+        kind: 'review-spawn',
+        run_id: runId,
+        pass: session.pass,
+        manifest: built.manifest,
+        base: built.base,
+        worktree: built.worktree,
+        codex_available: built.codexAvailable,
+        ...(built.codexAbsentReason !== undefined ? {codex_absent_reason: built.codexAbsentReason} : {}),
+    }
 }
 
 /**
@@ -435,9 +408,9 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
  * `src/orchestrator/record.ts`'s `RecordReviewsInput` (see module header).
  */
 export interface DebugReviewRecordInput {
-  readonly reviews: readonly unknown[];
-  readonly verifications: readonly ReviewerVerifications[];
-  readonly crossVendorAbsent?: { readonly reason: string };
+    readonly reviews: readonly unknown[]
+    readonly verifications: readonly ReviewerVerifications[]
+    readonly crossVendorAbsent?: {readonly reason: string}
 }
 
 /**
@@ -447,53 +420,48 @@ export interface DebugReviewRecordInput {
  * `spec resolve|gate|store`), and write the findings write-up.
  */
 export async function debugReviewRecord(
-  deps: DebugDeps,
-  runId: string,
-  input: DebugReviewRecordInput,
+    deps: DebugDeps,
+    runId: string,
+    input: DebugReviewRecordInput
 ): Promise<DebugEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  const worktree = deps.cwd;
+    const session = await readSession(deps.dataDir, runId)
+    const worktree = deps.cwd
 
-  const adjudicated = await adjudicateWholeScope({
-    reviews: input.reviews,
-    verifications: input.verifications,
-    worktree,
-    ...(input.crossVendorAbsent !== undefined
-      ? { crossVendorAbsent: input.crossVendorAbsent }
-      : {}),
-  });
-  const e2e = await runCommittedE2e({ cwd: worktree, config: deps.config.e2e });
-  const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e);
-  const e2eStatus =
-    e2e.kind === "skipped"
-      ? { kind: "skipped" as const, reason: e2e.reason }
-      : { kind: "ran" as const };
+    const adjudicated = await adjudicateWholeScope({
+        reviews: input.reviews,
+        verifications: input.verifications,
+        worktree,
+        ...(input.crossVendorAbsent !== undefined ? {crossVendorAbsent: input.crossVendorAbsent} : {}),
+    })
+    const e2e = await runCommittedE2e({cwd: worktree, config: deps.config.e2e})
+    const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e)
+    const e2eStatus = e2e.kind === 'skipped' ? {kind: 'skipped' as const, reason: e2e.reason} : {kind: 'ran' as const}
 
-  await writeSession(deps.dataDir, { ...session, confirmedBlockers });
+    await writeSession(deps.dataDir, {...session, confirmedBlockers})
 
-  if (confirmedBlockers.length === 0) {
-    return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
-  }
+    if (confirmedBlockers.length === 0) {
+        return {kind: 'clean', run_id: runId, pass: session.pass, e2e: e2eStatus}
+    }
 
-  const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join(passDir, "findings.json");
-  const reportPath = join(passDir, "findings.md");
-  await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
-  const report = buildDebugReport({
-    confirmedBlockers,
-    passNumber: session.pass,
-    base: session.base,
-  });
-  await atomicWriteFile(reportPath, report.body);
+    const passDir = debugPassDir(deps.dataDir, runId, session.pass)
+    const findingsPath = join(passDir, 'findings.json')
+    const reportPath = join(passDir, 'findings.md')
+    await writeJsonFile(findingsPath, {confirmedBlockers, base: session.base, pass: session.pass})
+    const report = buildDebugReport({
+        confirmedBlockers,
+        passNumber: session.pass,
+        base: session.base,
+    })
+    await atomicWriteFile(reportPath, report.body)
 
-  return {
-    kind: "findings",
-    run_id: runId,
-    pass: session.pass,
-    report_path: reportPath,
-    confirmed_count: confirmedBlockers.length,
-    e2e: e2eStatus,
-  };
+    return {
+        kind: 'findings',
+        run_id: runId,
+        pass: session.pass,
+        report_path: reportPath,
+        confirmed_count: confirmedBlockers.length,
+        e2e: e2eStatus,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,38 +475,40 @@ export async function debugReviewRecord(
  * as real specs (Task 3). LOUD if `review --record` has not run yet for this
  * pass — there is nothing to build a PRD from.
  */
-async function specDepsFor(deps: DebugDeps, session: DebugSession): Promise<SpecBuildDeps> {
-  if (session.confirmedBlockers === undefined) {
-    throw new Error(
-      `debug spec: run '${session.runId}' pass ${session.pass} has no recorded review — ` +
-        "run 'debug review --record' first",
-    );
-  }
-  const report = buildDebugReport({
-    confirmedBlockers: session.confirmedBlockers,
-    passNumber: session.pass,
-    base: session.base,
-  });
-  return wireDebugSpecDeps(report, deps.dataDir);
+function specDepsFor(deps: DebugDeps, session: DebugSession): Promise<SpecBuildDeps> {
+    if (session.confirmedBlockers === undefined) {
+        return Promise.reject(
+            new Error(
+                `debug spec: run '${session.runId}' pass ${session.pass} has no recorded review — ` +
+                    "run 'debug review --record' first"
+            )
+        )
+    }
+    const report = buildDebugReport({
+        confirmedBlockers: session.confirmedBlockers,
+        passNumber: session.pass,
+        base: session.base,
+    })
+    return Promise.resolve(wireDebugSpecDeps(report, deps.dataDir))
 }
 
 /** Auto-derive the target repo's `owner/name` from the origin remote (mirrors `factory spec`'s `--repo` resolution — no explicit override here since debug always targets the checkout it is running in). */
 async function debugRepo(deps: DebugDeps): Promise<string> {
-  return resolveRepo({ cwd: deps.cwd, gitClient: deps.gitClient });
+    return resolveRepo({cwd: deps.cwd, gitClient: deps.gitClient})
 }
 
 /** `factory debug spec resolve` — pass-through to the UNCHANGED `resolveSpec`. */
 export async function debugSpecResolve(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  const repo = await debugRepo(deps);
-  return resolveSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+    const session = await readSession(deps.dataDir, runId)
+    const repo = await debugRepo(deps)
+    return resolveSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
 }
 
 /** `factory debug spec gate` — pass-through to the UNCHANGED `gateSpec`. */
 export async function debugSpecGate(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  const repo = await debugRepo(deps);
-  return gateSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+    const session = await readSession(deps.dataDir, runId)
+    const repo = await debugRepo(deps)
+    return gateSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
 }
 
 /**
@@ -547,17 +517,13 @@ export async function debugSpecGate(deps: DebugDeps, runId: string): Promise<Spe
  * `seed` can find it.
  */
 export async function debugSpecStore(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  const repo = await debugRepo(deps);
-  const envelope = await storeSpec(
-    await specDepsFor(deps, session),
-    repo,
-    debugIssueNumber(session.pass),
-  );
-  if (envelope.kind === "stored") {
-    await writeSession(deps.dataDir, { ...session, specId: envelope.pointer.spec_id });
-  }
-  return envelope;
+    const session = await readSession(deps.dataDir, runId)
+    const repo = await debugRepo(deps)
+    const envelope = await storeSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
+    if (envelope.kind === 'stored') {
+        await writeSession(deps.dataDir, {...session, specId: envelope.pointer.spec_id})
+    }
+    return envelope
 }
 
 // ---------------------------------------------------------------------------
@@ -573,35 +539,34 @@ export async function debugSpecStore(deps: DebugDeps, runId: string): Promise<Sp
  * module header's pass-ownership note.
  */
 export async function debugSeed(deps: DebugDeps, runId: string): Promise<DebugEnvelope> {
-  const session = await readSession(deps.dataDir, runId);
-  if (session.specId === undefined) {
-    throw new Error(
-      `debug seed: run '${runId}' pass ${session.pass} has no stored spec — ` +
-        "run 'debug spec store' first",
-    );
-  }
-  const repo = await debugRepo(deps);
+    const session = await readSession(deps.dataDir, runId)
+    if (session.specId === undefined) {
+        throw new Error(
+            `debug seed: run '${runId}' pass ${session.pass} has no stored spec — ` + "run 'debug spec store' first"
+        )
+    }
+    const repo = await debugRepo(deps)
 
-  if (session.pass === 1) {
-    await createRun(deps.state, deps.specStore, {
-      repo,
-      specId: session.specId,
-      runId,
-      debug: true,
-      intent: "fresh",
-      shipMode: session.noShip ? "no-merge" : "live",
-      e2e: session.authorE2e,
-      ...(session.sessionId !== undefined ? { ownerSession: session.sessionId } : {}),
-    });
-  } else {
-    const run = await deps.state.read(runId);
-    const request = await deps.specStore.read(repo, session.specId);
-    const merged = appendTasksFromSpec(run.tasks, request, session.pass);
-    await deps.state.update(runId, (s) => ({ ...s, tasks: merged }));
-  }
+    if (session.pass === 1) {
+        await createRun(deps.state, deps.specStore, {
+            repo,
+            specId: session.specId,
+            runId,
+            debug: true,
+            intent: 'fresh',
+            shipMode: session.noShip ? 'no-merge' : 'live',
+            e2e: session.authorE2e,
+            ...(session.sessionId !== undefined ? {ownerSession: session.sessionId} : {}),
+        })
+    } else {
+        const run = await deps.state.read(runId)
+        const request = await deps.specStore.read(repo, session.specId)
+        const merged = appendTasksFromSpec(run.tasks, request, session.pass)
+        await deps.state.update(runId, (s) => ({...s, tasks: merged}))
+    }
 
-  await writeSession(deps.dataDir, { ...session, pass: session.pass + 1 });
-  return { kind: "loop", run_id: runId };
+    await writeSession(deps.dataDir, {...session, pass: session.pass + 1})
+    return {kind: 'loop', run_id: runId}
 }
 
 // ---------------------------------------------------------------------------
@@ -614,26 +579,26 @@ export async function debugSeed(deps: DebugDeps, runId: string): Promise<DebugEn
  * pattern, just re-emitted under debug's own envelope kind.
  */
 export async function debugFinalize(
-  deps: Pick<DebugDeps, "dataDir">,
-  runId: string,
-  shipMode?: RunState["ship_mode"],
+    deps: Pick<DebugDeps, 'dataDir'>,
+    runId: string,
+    shipMode?: RunState['ship_mode']
 ): Promise<DebugEnvelope> {
-  if (!new StateManager({ dataDir: deps.dataDir }).exists(runId)) {
-    return { kind: "nothing-to-ship", run_id: runId };
-  }
-  const cliDeps = await loadCliDeps({
-    dataDir: deps.dataDir,
-    runId,
-    ...(shipMode !== undefined ? { shipMode } : {}),
-  });
-  const { run, report, rollup, failureCommentPosted } = await finalizeRun(cliDeps, runId);
-  return {
-    kind: "finalized",
-    run,
-    report,
-    ...(rollup !== undefined ? { rollup } : {}),
-    failure_comment_posted: failureCommentPosted,
-  };
+    if (!new StateManager({dataDir: deps.dataDir}).exists(runId)) {
+        return {kind: 'nothing-to-ship', run_id: runId}
+    }
+    const cliDeps = await loadCliDeps({
+        dataDir: deps.dataDir,
+        runId,
+        ...(shipMode !== undefined ? {shipMode} : {}),
+    })
+    const {run, report, rollup, failureCommentPosted} = await finalizeRun(cliDeps, runId)
+    return {
+        kind: 'finalized',
+        run,
+        report,
+        ...(rollup !== undefined ? {rollup} : {}),
+        failure_comment_posted: failureCommentPosted,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,157 +607,138 @@ export async function debugFinalize(
 
 /** Test seam: inject the git seam + cwd + data dir so `start`'s branch-cut and every action's `--repo` auto-derive are exercised with fakes and a temp data dir. Production passes none of these. */
 export interface DebugOverrides {
-  readonly gitClient?: GitClient;
-  readonly cwd?: string;
-  readonly dataDir?: string;
+    readonly gitClient?: GitClient
+    readonly cwd?: string
+    readonly dataDir?: string
 }
 
 /** Wire production deps once per invocation (own wiring — mirrors `spec.ts`'s `wireDeps`). */
 function wireDeps(overrides: DebugOverrides = {}): DebugDeps {
-  const hasDataDirOverride = overrides.dataDir !== undefined;
-  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
-  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
-  return {
-    gitClient: overrides.gitClient ?? new DefaultGitClient(),
-    config,
-    dataDir,
-    cwd: overrides.cwd ?? process.cwd(),
-    state: new StateManager({ dataDir }),
-    specStore: new SpecStore({ dataDir }),
-  };
+    const hasDataDirOverride = overrides.dataDir !== undefined
+    const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})
+    const config = loadConfig(hasDataDirOverride ? {dataDir} : {})
+    return {
+        gitClient: overrides.gitClient ?? new DefaultGitClient(),
+        config,
+        dataDir,
+        cwd: overrides.cwd ?? process.cwd(),
+        state: new StateManager({dataDir}),
+        specStore: new SpecStore({dataDir}),
+    }
 }
 
 function parseMaxPasses(raw: string): number {
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new UsageError(`--max-passes must be a positive integer, got '${raw}'`);
-  }
-  return n;
+    const n = Number(raw)
+    if (!Number.isInteger(n) || n <= 0) {
+        throw new UsageError(`--max-passes must be a positive integer, got '${raw}'`)
+    }
+    return n
 }
 
 /** `factory debug start` — parse flags, wire deps, run the testable core, emit. */
-export async function runDebugStart(
-  argv: string[],
-  overrides: DebugOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["full", "no-ship", "author-e2e"] });
-  if (args.flag("help") === true) {
-    emitLine(START_HELP);
-    return EXIT.OK;
-  }
-  const base = optionalString(args.flag("base"));
-  const maxPassesRaw = optionalString(args.flag("max-passes"));
-  const sessionId = resolveOwnerSession(args.flag("session-id"));
+export async function runDebugStart(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {booleans: ['full', 'no-ship', 'author-e2e']})
+    if (args.flag('help') === true) {
+        emitLine(START_HELP)
+        return EXIT.OK
+    }
+    const base = optionalString(args.flag('base'))
+    const maxPassesRaw = optionalString(args.flag('max-passes'))
+    const sessionId = resolveOwnerSession(args.flag('session-id'))
 
-  const deps = wireDeps(overrides);
-  const envelope = await debugStart(deps, {
-    full: args.flag("full") === true,
-    ...(base !== undefined ? { base } : {}),
-    noShip: args.flag("no-ship") === true,
-    authorE2e: args.flag("author-e2e") === true,
-    ...(maxPassesRaw !== undefined ? { maxPasses: parseMaxPasses(maxPassesRaw) } : {}),
-    ...(sessionId !== undefined ? { sessionId } : {}),
-  });
-  emitJson(envelope);
-  return EXIT.OK;
+    const deps = wireDeps(overrides)
+    const envelope = await debugStart(deps, {
+        full: args.flag('full') === true,
+        ...(base !== undefined ? {base} : {}),
+        noShip: args.flag('no-ship') === true,
+        authorE2e: args.flag('author-e2e') === true,
+        ...(maxPassesRaw !== undefined ? {maxPasses: parseMaxPasses(maxPassesRaw)} : {}),
+        ...(sessionId !== undefined ? {sessionId} : {}),
+    })
+    emitJson(envelope)
+    return EXIT.OK
 }
 
 /** `factory debug review --emit|--record` — parse flags, wire deps, run the testable core, emit. */
-export async function runDebugReview(
-  argv: string[],
-  overrides: DebugOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["emit", "record"] });
-  if (args.flag("help") === true) {
-    emitLine(REVIEW_HELP);
-    return EXIT.OK;
-  }
-  const emit = args.flag("emit") === true;
-  const record = args.flag("record") === true;
-  if (emit === record) {
-    throw new UsageError("debug review: pass exactly one of --emit or --record");
-  }
-  const runId = args.requireFlag("run");
-  const deps = wireDeps(overrides);
+export async function runDebugReview(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {booleans: ['emit', 'record']})
+    if (args.flag('help') === true) {
+        emitLine(REVIEW_HELP)
+        return EXIT.OK
+    }
+    const emit = args.flag('emit') === true
+    const record = args.flag('record') === true
+    if (emit === record) {
+        throw new UsageError('debug review: pass exactly one of --emit or --record')
+    }
+    const runId = args.requireFlag('run')
+    const deps = wireDeps(overrides)
 
-  if (emit) {
-    emitJson(await debugReviewEmit(deps, runId));
-    return EXIT.OK;
-  }
-  const resultsPath = args.requireFlag("results");
-  const input = await readJsonInput<DebugReviewRecordInput>(resultsPath);
-  emitJson(await debugReviewRecord(deps, runId, input));
-  return EXIT.OK;
+    if (emit) {
+        emitJson(await debugReviewEmit(deps, runId))
+        return EXIT.OK
+    }
+    const resultsPath = args.requireFlag('results')
+    const input = await readJsonInput<DebugReviewRecordInput>(resultsPath)
+    emitJson(await debugReviewRecord(deps, runId, input))
+    return EXIT.OK
 }
 
-const SPEC_ACTIONS: Record<string, (deps: DebugDeps, runId: string) => Promise<SpecBuildEnvelope>> =
-  {
+const SPEC_ACTIONS: Record<string, (deps: DebugDeps, runId: string) => Promise<SpecBuildEnvelope>> = {
     resolve: debugSpecResolve,
     gate: debugSpecGate,
     store: debugSpecStore,
-  };
+}
 
 /** `factory debug spec <resolve|gate|store>` — parse the sub-action, wire deps, dispatch, emit. */
-export async function runDebugSpec(
-  argv: string[],
-  overrides: DebugOverrides = {},
-): Promise<ExitCode> {
-  const subAction = argv[0];
-  if (subAction === undefined || subAction === "--help" || subAction === "-h") {
-    emitLine(SPEC_SUB_HELP);
-    return EXIT.OK;
-  }
-  const handler = SPEC_ACTIONS[subAction];
-  if (handler === undefined) {
-    throw new UsageError(
-      `unknown debug spec action '${subAction}' (expected resolve | gate | store)`,
-    );
-  }
-  const args = parseArgs(argv.slice(1), {});
-  if (args.flag("help") === true) {
-    emitLine(SPEC_SUB_HELP);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const deps = wireDeps(overrides);
-  emitJson(await handler(deps, runId));
-  return EXIT.OK;
+export async function runDebugSpec(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
+    const subAction = argv[0]
+    if (subAction === undefined || subAction === '--help' || subAction === '-h') {
+        emitLine(SPEC_SUB_HELP)
+        return EXIT.OK
+    }
+    const handler = SPEC_ACTIONS[subAction]
+    if (handler === undefined) {
+        throw new UsageError(`unknown debug spec action '${subAction}' (expected resolve | gate | store)`)
+    }
+    const args = parseArgs(argv.slice(1), {})
+    if (args.flag('help') === true) {
+        emitLine(SPEC_SUB_HELP)
+        return EXIT.OK
+    }
+    const runId = args.requireFlag('run')
+    const deps = wireDeps(overrides)
+    emitJson(await handler(deps, runId))
+    return EXIT.OK
 }
 
 /** `factory debug seed` — parse flags, wire deps, run the testable core, emit. */
-export async function runDebugSeed(
-  argv: string[],
-  overrides: DebugOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, {});
-  if (args.flag("help") === true) {
-    emitLine(SEED_HELP);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const deps = wireDeps(overrides);
-  emitJson(await debugSeed(deps, runId));
-  return EXIT.OK;
+export async function runDebugSeed(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {})
+    if (args.flag('help') === true) {
+        emitLine(SEED_HELP)
+        return EXIT.OK
+    }
+    const runId = args.requireFlag('run')
+    const deps = wireDeps(overrides)
+    emitJson(await debugSeed(deps, runId))
+    return EXIT.OK
 }
 
 /** `factory debug finalize` — mirrors `run.ts`'s `runFinalize` exactly. */
-export async function runDebugFinalize(
-  argv: string[],
-  overrides: DebugOverrides = {},
-): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["no-ship"] });
-  if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const shipMode: RunState["ship_mode"] | undefined =
-    args.flag("no-ship") === true ? "no-merge" : undefined;
-  const hasDataDirOverride = overrides.dataDir !== undefined;
-  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
+export async function runDebugFinalize(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {booleans: ['no-ship']})
+    if (args.flag('help') === true) {
+        emitLine(FINALIZE_HELP)
+        return EXIT.OK
+    }
+    const runId = args.requireFlag('run')
+    const shipMode: RunState['ship_mode'] | undefined = args.flag('no-ship') === true ? 'no-merge' : undefined
+    const hasDataDirOverride = overrides.dataDir !== undefined
+    const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})
 
-  emitJson(await debugFinalize({ dataDir }, runId, shipMode));
-  return EXIT.OK;
+    emitJson(await debugFinalize({dataDir}, runId, shipMode))
+    return EXIT.OK
 }
 
 /**
@@ -804,33 +750,30 @@ export async function runDebugFinalize(
  * same), rather than forcing a shared parameter shape spec.ts's uniform
  * actions happen to allow.
  */
-type Action = (argv: string[], overrides: DebugOverrides) => Promise<ExitCode>;
+type Action = (argv: string[], overrides: DebugOverrides) => Promise<ExitCode>
 
 const ACTIONS: Record<string, Action> = {
-  start: runDebugStart,
-  review: runDebugReview,
-  spec: runDebugSpec,
-  seed: runDebugSeed,
-  finalize: runDebugFinalize,
-};
+    start: runDebugStart,
+    review: runDebugReview,
+    spec: runDebugSpec,
+    seed: runDebugSeed,
+    finalize: runDebugFinalize,
+}
 
 async function run(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
-  const action = argv[0];
-  if (action === undefined || action === "--help" || action === "-h") {
-    emitLine(DEBUG_HELP);
-    return EXIT.OK;
-  }
-  const handler = ACTIONS[action];
-  if (handler === undefined) {
-    throw new UsageError(
-      `unknown debug action '${action}' (expected start | review | spec | seed | finalize)`,
-    );
-  }
-  return handler(argv.slice(1), overrides);
+    const action = argv[0]
+    if (action === undefined || action === '--help' || action === '-h') {
+        emitLine(DEBUG_HELP)
+        return EXIT.OK
+    }
+    const handler = ACTIONS[action]
+    if (handler === undefined) {
+        throw new UsageError(`unknown debug action '${action}' (expected start | review | spec | seed | finalize)`)
+    }
+    return handler(argv.slice(1), overrides)
 }
 
 export const debugCommand: Subcommand = {
-  describe:
-    "/factory:debug — whole-scope review⇄fix loop (start → review → spec → seed → … → finalize)",
-  run: withUsageGuard("debug", run),
-};
+    describe: '/factory:debug — whole-scope review⇄fix loop (start → review → spec → seed → … → finalize)',
+    run: withUsageGuard('debug', run),
+}

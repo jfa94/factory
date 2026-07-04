@@ -1,115 +1,107 @@
-import { describe, it, expect } from "vitest";
-import {
-  buildGenerateSpawn,
-  buildReviewSpawn,
-  buildReviseSpawn,
-  type GenerateResult,
-} from "./agents.js";
-import type { Prd } from "./gh.js";
-import type { SpecTask } from "./schema.js";
+import {describe, it, expect} from 'vitest'
+import {buildGenerateSpawn, buildReviewSpawn, buildReviseSpawn, type GenerateResult} from './agents.js'
+import type {Prd} from './gh.js'
+import type {SpecTask} from './schema.js'
 
 const prd: Prd = {
-  issue_number: 123,
-  title: "Checkout",
-  body: "Users must be able to check out.",
-  labels: ["prd"],
-  body_truncated: false,
-};
+    issue_number: 123,
+    title: 'Checkout',
+    body: 'Users must be able to check out.',
+    labels: ['prd'],
+    body_truncated: false,
+}
 
 const task: SpecTask = {
-  task_id: "task_1",
-  title: "Add checkout",
-  description: "checkout flow",
-  files: ["src/checkout.ts"],
-  acceptance_criteria: ["checkout returns 201"],
-  tests_to_write: ["checkout returns 201"],
-  depends_on: [],
-  risk_tier: "high",
-  risk_rationale: "payment path",
-};
+    task_id: 'task_1',
+    title: 'Add checkout',
+    description: 'checkout flow',
+    files: ['src/checkout.ts'],
+    acceptance_criteria: ['checkout returns 201'],
+    tests_to_write: ['checkout returns 201'],
+    depends_on: [],
+    risk_tier: 'high',
+    risk_rationale: 'payment path',
+}
 
-const generated: GenerateResult = { specMd: "# spec", slug: "checkout", tasks: [task] };
+const generated: GenerateResult = {specMd: '# spec', slug: 'checkout', tasks: [task]}
 
-describe("D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max", () => {
-  it("D21: generate spawn pins model=opus + effort=max", () => {
-    const s = buildGenerateSpawn(prd);
-    expect(s.model).toBe("opus");
-    expect(s.effort).toBe("max");
-    expect(s.model).toBe("opus");
-    expect(s.effort).toBe("max");
-    expect(s.role).toBe("spec-generator");
-  });
+describe('D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max', () => {
+    it('D21: generate spawn pins model=opus + effort=max', () => {
+        const s = buildGenerateSpawn(prd)
+        expect(s.model).toBe('opus')
+        expect(s.effort).toBe('max')
+        expect(s.model).toBe('opus')
+        expect(s.effort).toBe('max')
+        expect(s.role).toBe('spec-generator')
+    })
 
-  it("D21: review spawn pins model=opus + effort=max", () => {
-    const s = buildReviewSpawn(prd, generated);
-    expect(s.model).toBe("opus");
-    expect(s.effort).toBe("max");
-    expect(s.role).toBe("spec-reviewer");
-  });
+    it('D21: review spawn pins model=opus + effort=max', () => {
+        const s = buildReviewSpawn(prd, generated)
+        expect(s.model).toBe('opus')
+        expect(s.effort).toBe('max')
+        expect(s.role).toBe('spec-reviewer')
+    })
 
-  it("D21: the pin does NOT change with risk_tier, task count, or PRD size", () => {
-    const lowRiskTask: SpecTask = { ...task, risk_tier: "low", risk_rationale: "trivial" };
-    const manyTasks: GenerateResult = {
-      specMd: "x",
-      slug: "s",
-      tasks: [task, lowRiskTask, { ...task, task_id: "task_3" }],
-    };
-    const bigPrd: Prd = { ...prd, body: "x".repeat(50_000) };
+    it('D21: the pin does NOT change with risk_tier, task count, or PRD size', () => {
+        const lowRiskTask: SpecTask = {...task, risk_tier: 'low', risk_rationale: 'trivial'}
+        const manyTasks: GenerateResult = {
+            specMd: 'x',
+            slug: 's',
+            tasks: [task, lowRiskTask, {...task, task_id: 'task_3'}],
+        }
+        const bigPrd: Prd = {...prd, body: 'x'.repeat(50_000)}
 
-    for (const p of [prd, bigPrd]) {
-      expect(buildGenerateSpawn(p).model).toBe("opus");
-      expect(buildGenerateSpawn(p).effort).toBe("max");
-      for (const g of [generated, manyTasks]) {
-        const r = buildReviewSpawn(p, g);
-        expect(r.model).toBe("opus");
-        expect(r.effort).toBe("max");
-      }
-    }
-  });
+        for (const p of [prd, bigPrd]) {
+            expect(buildGenerateSpawn(p).model).toBe('opus')
+            expect(buildGenerateSpawn(p).effort).toBe('max')
+            for (const g of [generated, manyTasks]) {
+                const r = buildReviewSpawn(p, g)
+                expect(r.model).toBe('opus')
+                expect(r.effort).toBe('max')
+            }
+        }
+    })
 
-  it("D21: there is no config/risk override path — the spawn carries no tier field", () => {
-    const s = buildGenerateSpawn(prd);
-    expect(s).not.toHaveProperty("risk_tier");
-    expect(s).not.toHaveProperty("riskTier");
-  });
+    it('D21: there is no config/risk override path — the spawn carries no tier field', () => {
+        const s = buildGenerateSpawn(prd)
+        expect(s).not.toHaveProperty('risk_tier')
+        expect(s).not.toHaveProperty('riskTier')
+    })
 
-  it("generate spawn forwards the PRD context the agent needs", () => {
-    const s = buildGenerateSpawn(prd);
-    expect(s.context.issue_number).toBe(123);
-    expect(s.context.title).toBe("Checkout");
-  });
-});
+    it('generate spawn forwards the PRD context the agent needs', () => {
+        const s = buildGenerateSpawn(prd)
+        expect(s.context.issue_number).toBe(123)
+        expect(s.context.title).toBe('Checkout')
+    })
+})
 
-describe("buildReviseSpawn — feeds the prior spec + blockers back for an incremental patch", () => {
-  const blockers = [
-    "testability: criterion X has no covering test",
-    "traceability: req Y uncovered",
-  ];
+describe('buildReviseSpawn — feeds the prior spec + blockers back for an incremental patch', () => {
+    const blockers = ['testability: criterion X has no covering test', 'traceability: req Y uncovered']
 
-  it("keeps the apex pin + spec-generator role (it is a re-spawn of the generator)", () => {
-    const s = buildReviseSpawn(prd, generated, blockers);
-    expect(s.role).toBe("spec-generator");
-    expect(s.model).toBe("opus");
-    expect(s.effort).toBe("max");
-    expect(s.model).toBe("opus");
-    expect(s.effort).toBe("max");
-  });
+    it('keeps the apex pin + spec-generator role (it is a re-spawn of the generator)', () => {
+        const s = buildReviseSpawn(prd, generated, blockers)
+        expect(s.role).toBe('spec-generator')
+        expect(s.model).toBe('opus')
+        expect(s.effort).toBe('max')
+        expect(s.model).toBe('opus')
+        expect(s.effort).toBe('max')
+    })
 
-  it("forwards the original PRD context (the axiom is preserved across revisions)", () => {
-    const s = buildReviseSpawn(prd, generated, blockers);
-    expect(s.context.issue_number).toBe(123);
-    expect(s.context.title).toBe("Checkout");
-    expect(s.context.body).toBe(prd.body);
-    // labels ride along through the spread (the prior_* keys are disjoint, so the type forbids
-    // any clobber — this just asserts the PRD fields are forwarded, not dropped).
-    expect(s.context.labels).toEqual(prd.labels);
-    expect(s.context.labels).not.toBe(undefined);
-  });
+    it('forwards the original PRD context (the axiom is preserved across revisions)', () => {
+        const s = buildReviseSpawn(prd, generated, blockers)
+        expect(s.context.issue_number).toBe(123)
+        expect(s.context.title).toBe('Checkout')
+        expect(s.context.body).toBe(prd.body)
+        // labels ride along through the spread (the prior_* keys are disjoint, so the type forbids
+        // any clobber — this just asserts the PRD fields are forwarded, not dropped).
+        expect(s.context.labels).toEqual(prd.labels)
+        expect(s.context.labels).not.toBe(undefined)
+    })
 
-  it("embeds the prior spec + the blockers so the agent patches instead of re-deriving", () => {
-    const s = buildReviseSpawn(prd, generated, blockers);
-    expect(s.context.prior_spec_md).toBe(generated.specMd);
-    expect(s.context.prior_tasks).toEqual(generated.tasks);
-    expect(s.context.review_feedback).toEqual(blockers);
-  });
-});
+    it('embeds the prior spec + the blockers so the agent patches instead of re-deriving', () => {
+        const s = buildReviseSpawn(prd, generated, blockers)
+        expect(s.context.prior_spec_md).toBe(generated.specMd)
+        expect(s.context.prior_tasks).toEqual(generated.tasks)
+        expect(s.context.review_feedback).toEqual(blockers)
+    })
+})

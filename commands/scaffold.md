@@ -1,13 +1,13 @@
 ---
-description: "Prepare a repo for the factory pipeline (run once per project)"
-argument-hint: "[--repo <owner/name>] [--provision]"
+description: 'Prepare a repo for the factory pipeline (run once per project)'
+argument-hint: '[--repo <owner/name>] [--provision]'
 arguments:
-  - name: "--repo"
-    description: "Target GitHub repo as <owner>/<name> (defaults to the current repo's origin)"
-    required: false
-  - name: "--provision"
-    description: "Write branch protection on develop if missing (default: refuse when unprotected)"
-    required: false
+    - name: '--repo'
+      description: "Target GitHub repo as <owner>/<name> (defaults to the current repo's origin)"
+      required: false
+    - name: '--provision'
+      description: 'Write branch protection on develop if missing (default: refuse when unprotected)'
+      required: false
 ---
 
 # /factory:scaffold
@@ -80,12 +80,12 @@ two options:
 
 - **Provision it** (writes branch protection on `develop`): re-run with `--provision`.
 
-  ```bash
-  factory scaffold --provision        # --repo auto-derived from origin
-  ```
+    ```bash
+    factory scaffold --provision        # --repo auto-derived from origin
+    ```
 
 - **Protect it manually** in the repo settings (strict "require branches to be up to date"
-  - the required status checks), then re-run `factory scaffold`.
+    - the required status checks), then re-run `factory scaffold`.
 
 Do not proceed against an unprotected repo.
 

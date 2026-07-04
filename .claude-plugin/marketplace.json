@@ -1,13 +1,13 @@
 {
-  "name": "jfa94",
-  "owner": { "name": "Javier Flores" },
-  "description": "Javier's plugin marketplace — ships the factory autonomous coding pipeline",
-  "plugins": [
-    {
-      "name": "factory",
-      "source": "./",
-      "description": "Autonomous coding pipeline: converts GitHub PRD issues into merged pull requests with quality-first review gates",
-      "version": "1.2.3"
-    }
-  ]
+    "name": "jfa94",
+    "owner": {"name": "Javier Flores"},
+    "description": "Javier's plugin marketplace — ships the factory autonomous coding pipeline",
+    "plugins": [
+        {
+            "name": "factory",
+            "source": "./",
+            "description": "Autonomous coding pipeline: converts GitHub PRD issues into merged pull requests with quality-first review gates",
+            "version": "1.2.3"
+        }
+    ]
 }

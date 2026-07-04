@@ -8,9 +8,9 @@
  * a LOUD error here, not a malformed filesystem path that fails opaquely later
  * (mirrors the run-scoped branch discipline in src/git/branch.ts).
  */
-import { join } from "node:path";
-import { validateId } from "../shared/index.js";
-import { worktreesRoot } from "../core/state/index.js";
+import {join} from 'node:path'
+import {validateId} from '../shared/index.js'
+import {worktreesRoot} from '../core/state/index.js'
 
 /**
  * The absolute worktree path for one task in one run. Deterministic — the
@@ -18,7 +18,7 @@ import { worktreesRoot } from "../core/state/index.js";
  * (no need to thread it through state).
  */
 export function taskWorktreePath(dataDir: string, runId: string, taskId: string): string {
-  validateId(runId, "run-id");
-  validateId(taskId, "task-id");
-  return join(worktreesRoot(dataDir), runId, taskId);
+    validateId(runId, 'run-id')
+    validateId(taskId, 'task-id')
+    return join(worktreesRoot(dataDir), runId, taskId)
 }

@@ -540,8 +540,8 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 **Choice:** The pipeline bounds its own subscription-quota consumption by **proactive pacing**, not reactive backoff. Quota is **never a reason to fail work — only to pause it** (distinct from the Decision 22 retry-budget fail).
 
 - **Two windows, paced linearly with a 10% reserve floor:**
-  - **5-hour window** — burn ≤ 20%/hr; milestones at 80 / 60 / 40 / 20% remaining at hours 1 / 2 / 3 / 4; never below 10% remaining.
-  - **7-day window** — the same shape pro-rated: ≤ 14.29%/day (100% ÷ 7); never below 10% remaining.
+    - **5-hour window** — burn ≤ 20%/hr; milestones at 80 / 60 / 40 / 20% remaining at hours 1 / 2 / 3 / 4; never below 10% remaining.
+    - **7-day window** — the same shape pro-rated: ≤ 14.29%/day (100% ÷ 7); never below 10% remaining.
 - **Over the curve → pause.** The binding (more-constrained) window wins.
 - **5h breach → pause in place.** Self-heals within ≤ 5h as the curve descends with elapsed time and the window resets; the run holds.
 - **7d breach → graceful stop.** The recovery horizon is too long to hold a live process, so the run exits cleanly — _paused, not failed_: the PRD stays open, completed tasks stay committed, and a **human relaunch resumes it from checkpoint** (chosen for implementation simplicity over automatic resume).
@@ -798,7 +798,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 **Choice:** Three distinct run-lifecycle commands, plus the unchanged standalone `debug`:
 
 - **`run`** — always a fresh start. It looks for a NON-terminal run on the spec; finding one, it PROMPTS (continue via `resume`, or supersede). Proceeding supersedes: the prior run goes `superseded` (its private branch deleted, Decision 33), a fresh run begins. With no active run it starts silently. It never sees terminal runs (a delivered PRD is closed, Decision 34).
-  - **Supersede regenerates the spec, not just the run (2026-06-26).** A supersede is an escape from a _bad attempt_, and the spec is often what was bad — so `--supersede` deletes the durable spec dir (`SpecStore.deleteByIssue`) as well as the run's branch. `commands/run.md` forwards `--supersede` into Phase 1's `factory spec resolve`, which deletes before its reuse check so Phase 1 always falls through to `generate` and rebuilds the spec from the PRD. Without this the superseding run silently reused the same broken spec it was trying to escape. Deletion is mandatory (regen-without-delete risks two dirs for one issue, a `resolveByIssue` store-integrity error). The run-level CLI (`run create --supersede`) does NOT touch the spec — spec regen is the runner's Phase 1 — and pairing `--supersede` with `--spec-id` leaves the spec untouched (Phase 1 is skipped).
+    - **Supersede regenerates the spec, not just the run (2026-06-26).** A supersede is an escape from a _bad attempt_, and the spec is often what was bad — so `--supersede` deletes the durable spec dir (`SpecStore.deleteByIssue`) as well as the run's branch. `commands/run.md` forwards `--supersede` into Phase 1's `factory spec resolve`, which deletes before its reuse check so Phase 1 always falls through to `generate` and rebuilds the spec from the PRD. Without this the superseding run silently reused the same broken spec it was trying to escape. Deletion is mandatory (regen-without-delete risks two dirs for one issue, a `resolveByIssue` store-integrity error). The run-level CLI (`run create --supersede`) does NOT touch the spec — spec regen is the runner's Phase 1 — and pairing `--supersede` with `--spec-id` leaves the spec untouched (Phase 1 is skipped).
 - **`resume`** — continue an unfinished run if possible. It classifies via the read-only rescue scan: no active run → report the terminal status; quota-paused → re-check the window; running with runnable work → continue; running but deadlocked → STOP and redirect to rescue. It never mutates state and never auto-escalates.
 - **`rescue`** — repair, then auto-resume. It reconciles run-state and git/GitHub drift, then continues driving. Forward-only/non-destructive repair is autonomous; any destructive step (delete a branch, close a PR, discard work) is surfaced for consent; force-push never. Git/GitHub reconciliation is performed by a CODING AGENT that detects, troubleshoots, and addresses the issue — not an enumerated catalog of fix-ups in the deterministic engine. The engine detects "stuck/drifted" and hands off; the open-ended repair is agent work, per Model A.
 - **`debug`** — unchanged; a standalone, run-independent review-fix loop (risk-invariant panel + Codex on a chosen scope), not part of the recovery ladder.
@@ -1213,13 +1213,13 @@ pathology rather than a recoverable budget stop.
 - **Arm-tagged verdicts with different severities.** `CircuitBreakerResult`'s tripped
   variant now carries `arm: "runtime" | "failures" | "fail-closed"`. `nextTask`
   (`src/orchestrator/next.ts`) maps severity:
-  - **`runtime`** → the run is **suspended** (not failed) and returns a `kind:"pause"`
-    envelope with the new scope `"runtime-budget"`; the reason tells the operator to raise
-    `maxRuntimeMinutes` in `config.json` and resume. Resuming without raising the cap simply
-    re-suspends here. This preserves the 28 healthy tasks the old cascade-fail destroyed.
-  - **`failures` / `fail-closed`** → unchanged HARD abort: every remaining non-terminal task
-    is failed `capability-budget` (loud, classified) and the run falls through to
-    all-terminal → finalize → `failed`, reusing the Decision-34 wedge-fail path.
+    - **`runtime`** → the run is **suspended** (not failed) and returns a `kind:"pause"`
+      envelope with the new scope `"runtime-budget"`; the reason tells the operator to raise
+      `maxRuntimeMinutes` in `config.json` and resume. Resuming without raising the cap simply
+      re-suspends here. This preserves the 28 healthy tasks the old cascade-fail destroyed.
+    - **`failures` / `fail-closed`** → unchanged HARD abort: every remaining non-terminal task
+      is failed `capability-budget` (loud, classified) and the run falls through to
+      all-terminal → finalize → `failed`, reusing the Decision-34 wedge-fail path.
 - **Resume clears unconditionally in workflow mode.** A `runtime-budget` suspend is
   non-quota by construction — workflow mode never quota-pauses (Decision 24) — so
   `planResume` (`src/quota/resume.ts`) force-clears the checkpoint without consulting the

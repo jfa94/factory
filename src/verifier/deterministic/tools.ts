@@ -10,16 +10,17 @@
  * reader) MUST throw when ExecResult.truncated is set, rather than mis-parse a
  * clipped payload (exec.ts ExecResult.truncated contract).
  */
-import { access, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { exec, type ExecResult } from "../../shared/index.js";
-import { escapeStrykerGlob } from "./scope.js";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {access, mkdtemp, readFile, rm, symlink} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import path from 'node:path'
+import {at, exec, type ExecResult} from '../../shared/index.js'
+import {escapeStrykerGlob} from './scope.js'
 
 /** Common per-call options shared by the CLI wrappers. */
 export interface ToolRunOpts {
-  /** Working directory the tool runs in (the worktree). */
-  readonly cwd: string;
+    /** Working directory the tool runs in (the worktree). */
+    readonly cwd: string
 }
 
 // ---------------------------------------------------------------------------
@@ -28,13 +29,13 @@ export interface ToolRunOpts {
 
 /** A single commit's TDD-relevant classification inputs. */
 export interface CommitInfo {
-  readonly sha: string;
-  /** Files this commit introduces (first-parent for merges — see GitProbe.commitFiles). */
-  readonly files: readonly string[];
-  /** Number of parents (>1 ⇒ merge commit). */
-  readonly parentCount: number;
-  /** True iff the commit subject+body contains the `[task-id]` tag. */
-  readonly tagged: boolean;
+    readonly sha: string
+    /** Files this commit introduces (first-parent for merges — see GitProbe.commitFiles). */
+    readonly files: readonly string[]
+    /** Number of parents (>1 ⇒ merge commit). */
+    readonly parentCount: number
+    /** True iff the commit subject+body contains the `[task-id]` tag. */
+    readonly tagged: boolean
 }
 
 /**
@@ -44,25 +45,25 @@ export interface CommitInfo {
  * tdd/mutation strategies unit-test with a {@link import("./fakes.js").FakeGitProbe}.
  */
 export interface GitProbe {
-  /** True iff `git rev-parse --verify <ref>` resolves (a miss is a normal NO). */
-  refExists(ref: string, opts: ToolRunOpts): Promise<boolean>;
-  /** Resolve `<ref>` to a sha (e.g. for tip-SHA memoization). Throws if unresolved. */
-  revParse(ref: string, opts: ToolRunOpts): Promise<string>;
-  /** The worktree's tree object sha (`git rev-parse HEAD^{tree}`) for tree-SHA memo. */
-  treeSha(opts: ToolRunOpts): Promise<string>;
-  /**
-   * Changed files vs the base (`git diff --name-only --diff-filter=AM
-   * <base>...HEAD`). Used for diff-scoped unit + blob-scoped mutation. The
-   * triple-dot is the symmetric-difference form CI uses.
-   */
-  changedFiles(base: string, opts: ToolRunOpts): Promise<readonly string[]>;
-  /**
-   * Commits in `<base>..HEAD`, OLDEST-FIRST, each with its classification inputs.
-   * The probe owns the per-commit diff-tree (first-parent for merges) + the
-   * `[task-id]` tag detection so the tdd strategy stays pure classification logic.
-   * Throws LOUD on a diff-tree error (fail-closed — bin/pipeline-tdd-gate:103).
-   */
-  commits(base: string, taskId: string, opts: ToolRunOpts): Promise<readonly CommitInfo[]>;
+    /** True iff `git rev-parse --verify <ref>` resolves (a miss is a normal NO). */
+    refExists(ref: string, opts: ToolRunOpts): Promise<boolean>
+    /** Resolve `<ref>` to a sha (e.g. for tip-SHA memoization). Throws if unresolved. */
+    revParse(ref: string, opts: ToolRunOpts): Promise<string>
+    /** The worktree's tree object sha (`git rev-parse HEAD^{tree}`) for tree-SHA memo. */
+    treeSha(opts: ToolRunOpts): Promise<string>
+    /**
+     * Changed files vs the base (`git diff --name-only --diff-filter=AM
+     * <base>...HEAD`). Used for diff-scoped unit + blob-scoped mutation. The
+     * triple-dot is the symmetric-difference form CI uses.
+     */
+    changedFiles(base: string, opts: ToolRunOpts): Promise<readonly string[]>
+    /**
+     * Commits in `<base>..HEAD`, OLDEST-FIRST, each with its classification inputs.
+     * The probe owns the per-commit diff-tree (first-parent for merges) + the
+     * `[task-id]` tag detection so the tdd strategy stays pure classification logic.
+     * Throws LOUD on a diff-tree error (fail-closed — bin/pipeline-tdd-gate:103).
+     */
+    commits(base: string, taskId: string, opts: ToolRunOpts): Promise<readonly CommitInfo[]>
 }
 
 // ---------------------------------------------------------------------------
@@ -71,41 +72,41 @@ export interface GitProbe {
 
 /** The minimal result a process-style gate cares about. */
 export interface ProcResult {
-  readonly code: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly truncated: boolean;
+    readonly code: number | null
+    readonly stdout: string
+    readonly stderr: string
+    readonly truncated: boolean
 }
 
 /** Vitest runner (unit + integration test gates). */
 export interface VitestTool {
-  /** Run vitest (optionally scoped to `files`). Pass = exit 0. */
-  run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult>;
+    /** Run vitest (optionally scoped to `files`). Pass = exit 0. */
+    run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult>
 }
 
 /** tsc --noEmit type-check gate. */
 export interface TscTool {
-  typecheck(opts: ToolRunOpts): Promise<ProcResult>;
+    typecheck(opts: ToolRunOpts): Promise<ProcResult>
 }
 
 /** eslint (+ dependency-cruiser where present) lint gate. */
 export interface EslintTool {
-  lint(opts: ToolRunOpts): Promise<ProcResult>;
+    lint(opts: ToolRunOpts): Promise<ProcResult>
 }
 
 /** Build gate (e.g. `npm run build`). */
 export interface BuildTool {
-  build(opts: ToolRunOpts): Promise<ProcResult>;
+    build(opts: ToolRunOpts): Promise<ProcResult>
 }
 
 /** Semgrep / configured-securityCommand SAST gate. */
 export interface SemgrepTool {
-  /**
-   * Run the configured security command (argv form, already allowlist-validated by
-   * the strategy). Pass = exit 0. Returns raw stdout/stderr so the strategy can
-   * redact findings before persistence.
-   */
-  run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>;
+    /**
+     * Run the configured security command (argv form, already allowlist-validated by
+     * the strategy). Pass = exit 0. Returns raw stdout/stderr so the strategy can
+     * redact findings before persistence.
+     */
+    run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>
 }
 
 /**
@@ -115,7 +116,7 @@ export interface SemgrepTool {
  * this instead of their built-in tool when the contract carries a command.
  */
 export interface CommandRunner {
-  run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>;
+    run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult>
 }
 
 // ---------------------------------------------------------------------------
@@ -136,32 +137,32 @@ export interface CommandRunner {
  * mutation scope is non-empty.
  */
 export type StrykerReport =
-  | { readonly report: "absent" }
-  | { readonly report: "unparseable" }
-  | { readonly report: "present"; readonly mutationScore: number | null };
+    | {readonly report: 'absent'}
+    | {readonly report: 'unparseable'}
+    | {readonly report: 'present'; readonly mutationScore: number | null}
 
 /** Outcome of a stryker run: the process result + the parsed report state. */
 export interface StrykerResult {
-  readonly proc: ProcResult;
-  readonly report: StrykerReport;
+    readonly proc: ProcResult
+    readonly report: StrykerReport
 }
 
 /** Stryker mutation runner. */
 export interface StrykerTool {
-  /**
-   * Run stryker scoped to `mutate` (CSV of files) and read the report. Throws LOUD
-   * if the report JSON was truncated. A non-zero process exit is reported in
-   * `proc.code` (the strategy maps it to stryker-failed), NOT thrown.
-   */
-  run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult>;
+    /**
+     * Run stryker scoped to `mutate` (CSV of files) and read the report. Throws LOUD
+     * if the report JSON was truncated. A non-zero process exit is reported in
+     * `proc.code` (the strategy maps it to stryker-failed), NOT thrown.
+     */
+    run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult>
 }
 
 /** A coverage-v8 total summary (percentages 0..100). */
 export interface CoverageSummary {
-  readonly lines: number;
-  readonly branches: number;
-  readonly functions: number;
-  readonly statements: number;
+    readonly lines: number
+    readonly branches: number
+    readonly functions: number
+    readonly statements: number
 }
 
 /**
@@ -174,8 +175,8 @@ export interface CoverageSummary {
  *     itself write `coverage/coverage-summary.json`.
  */
 export type CoverageCommand =
-  | { readonly kind: "vitest"; readonly args: readonly string[] }
-  | { readonly kind: "argv"; readonly argv: readonly string[] };
+    | {readonly kind: 'vitest'; readonly args: readonly string[]}
+    | {readonly kind: 'argv'; readonly argv: readonly string[]}
 
 /**
  * The outcome of ONE coverage measurement, as a discriminated union so the
@@ -187,10 +188,10 @@ export type CoverageCommand =
  * "Half a measurement" is never representable as a pass.
  */
 export type CoverageMeasurement =
-  | { readonly kind: "measured"; readonly summary: CoverageSummary }
-  | { readonly kind: "command-failed"; readonly proc: ProcResult }
-  | { readonly kind: "summary-missing" }
-  | { readonly kind: "summary-invalid" };
+    | {readonly kind: 'measured'; readonly summary: CoverageSummary}
+    | {readonly kind: 'command-failed'; readonly proc: ProcResult}
+    | {readonly kind: 'summary-missing'}
+    | {readonly kind: 'summary-invalid'}
 
 /**
  * Runs a REAL coverage measurement (S8 — replaces the dead before/after file
@@ -198,19 +199,15 @@ export type CoverageMeasurement =
  * `coverage/coverage-summary.json` it wrote.
  */
 export interface CoverageTool {
-  /** Measure the tree checked out at `opts.cwd` (the task worktree). */
-  measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement>;
-  /**
-   * Measure at a BASE commit: an ephemeral detached worktree is created from the
-   * repo at `opts.cwd`, reusing its installed `node_modules` (symlink). Plumbing
-   * failures (worktree add) THROW; command failures inside the checkout are a
-   * normal `command-failed` answer.
-   */
-  measureAtBase(
-    baseSha: string,
-    cmd: CoverageCommand,
-    opts: ToolRunOpts,
-  ): Promise<CoverageMeasurement>;
+    /** Measure the tree checked out at `opts.cwd` (the task worktree). */
+    measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement>
+    /**
+     * Measure at a BASE commit: an ephemeral detached worktree is created from the
+     * repo at `opts.cwd`, reusing its installed `node_modules` (symlink). Plumbing
+     * failures (worktree add) THROW; command failures inside the checkout are a
+     * normal `command-failed` answer.
+     */
+    measureAtBase(baseSha: string, cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement>
 }
 
 /**
@@ -221,24 +218,24 @@ export interface CoverageTool {
  * must not fail-close every task. Injectable so units test without touching disk.
  */
 export interface FsProbe {
-  /** True iff `relPath` (resolved under `opts.cwd`) exists. */
-  exists(relPath: string, opts: ToolRunOpts): Promise<boolean>;
-  /** True iff ANY of `relPaths` (resolved under `opts.cwd`) exists. */
-  existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean>;
+    /** True iff `relPath` (resolved under `opts.cwd`) exists. */
+    exists(relPath: string, opts: ToolRunOpts): Promise<boolean>
+    /** True iff ANY of `relPaths` (resolved under `opts.cwd`) exists. */
+    existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean>
 }
 
 /** The full injected tool-bag a {@link import("./gate-runner.js").GateRunner} carries. */
 export interface GateTools {
-  readonly git: GitProbe;
-  readonly vitest: VitestTool;
-  readonly tsc: TscTool;
-  readonly eslint: EslintTool;
-  readonly build: BuildTool;
-  readonly semgrep: SemgrepTool;
-  readonly stryker: StrykerTool;
-  readonly coverage: CoverageTool;
-  readonly fs: FsProbe;
-  readonly command: CommandRunner;
+    readonly git: GitProbe
+    readonly vitest: VitestTool
+    readonly tsc: TscTool
+    readonly eslint: EslintTool
+    readonly build: BuildTool
+    readonly semgrep: SemgrepTool
+    readonly stryker: StrykerTool
+    readonly coverage: CoverageTool
+    readonly fs: FsProbe
+    readonly command: CommandRunner
 }
 
 // ---------------------------------------------------------------------------
@@ -246,29 +243,29 @@ export interface GateTools {
 // ---------------------------------------------------------------------------
 
 function toProc(r: ExecResult): ProcResult {
-  return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
+    return {code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated}
 }
 
 /** Guard: refuse to parse a clipped payload (exec.ts ExecResult.truncated). */
 function assertNotTruncated(r: ExecResult, what: string): void {
-  if (r.truncated) {
-    throw new Error(
-      `WS6 tool output for ${what} was TRUNCATED (hit maxBuffer) — refusing to parse a clipped payload`,
-    );
-  }
+    if (r.truncated) {
+        throw new Error(
+            `WS6 tool output for ${what} was TRUNCATED (hit maxBuffer) — refusing to parse a clipped payload`
+        )
+    }
 }
 
 async function pathExists(absPath: string): Promise<boolean> {
-  try {
-    await access(absPath);
-    return true;
-  } catch {
-    return false;
-  }
+    try {
+        await access(absPath)
+        return true
+    } catch {
+        return false
+    }
 }
 
 /** The closed set of external command-gate tools resolved via `node_modules/.bin`. */
-export type GateTool = "vitest" | "tsc" | "eslint" | "stryker";
+export type GateTool = 'vitest' | 'tsc' | 'eslint' | 'stryker'
 
 /**
  * Resolve a {@link GateTool} to the worktree's OWN `node_modules/.bin/<tool>`,
@@ -297,26 +294,29 @@ export type GateTool = "vitest" | "tsc" | "eslint" | "stryker";
  * `.bin` symlink crosses no privilege boundary the gates did not already cross.
  */
 export async function resolveLocalBin(
-  cwd: string,
-  tool: GateTool,
-  exists: (absPath: string) => Promise<boolean> = pathExists,
+    cwd: string,
+    tool: GateTool,
+    exists: (absPath: string) => Promise<boolean> = pathExists
 ): Promise<string | null> {
-  let dir = path.resolve(cwd);
-  for (;;) {
-    const candidate = path.join(dir, "node_modules", ".bin", tool);
-    if (await exists(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null; // reached the filesystem root
-    dir = parent;
-  }
+    let dir = path.resolve(cwd)
+    for (;;) {
+        const candidate = path.join(dir, 'node_modules', '.bin', tool)
+        if (await exists(candidate)) {
+            return candidate
+        }
+        const parent = path.dirname(dir)
+        if (parent === dir) {
+            return null
+        } // reached the filesystem root
+        dir = parent
+    }
 }
 
 /** A tool→local-bin resolver, injectable so the Default* tools unit-test without fs. */
-export type LocalBinResolver = (tool: GateTool, opts: ToolRunOpts) => Promise<string | null>;
+export type LocalBinResolver = (tool: GateTool, opts: ToolRunOpts) => Promise<string | null>
 
 /** Production resolver: walk up from the worktree cwd to the nearest local bin. */
-export const defaultLocalBinResolver: LocalBinResolver = (tool, opts) =>
-  resolveLocalBin(opts.cwd, tool);
+export const defaultLocalBinResolver: LocalBinResolver = (tool, opts) => resolveLocalBin(opts.cwd, tool)
 
 /**
  * The synthetic FAIL-CLOSED result a command gate gets when no local bin resolves:
@@ -328,16 +328,16 @@ export const defaultLocalBinResolver: LocalBinResolver = (tool, opts) =>
  * gates can, and a missing tsc/vitest in a provisioned worktree IS a real failure.
  */
 function missingBinResult(tool: GateTool, cwd: string): ExecResult {
-  return {
-    stdout: "",
-    stderr:
-      `${tool}: no local binary found under node_modules/.bin (walked up from ${cwd}); ` +
-      `refusing the npx fallback — a bare \`npx ${tool}\` resolves a remote registry ` +
-      `decoy under corepack/pnpm. Install dev dependencies so ${tool} resolves locally.`,
-    code: 127,
-    signal: null,
-    truncated: false,
-  };
+    return {
+        stdout: '',
+        stderr:
+            `${tool}: no local binary found under node_modules/.bin (walked up from ${cwd}); ` +
+            `refusing the npx fallback — a bare \`npx ${tool}\` resolves a remote registry ` +
+            `decoy under corepack/pnpm. Install dev dependencies so ${tool} resolves locally.`,
+        code: 127,
+        signal: null,
+        truncated: false,
+    }
 }
 
 /**
@@ -346,131 +346,131 @@ function missingBinResult(tool: GateTool, cwd: string): ExecResult {
  * network-free on both paths.
  */
 async function runTool(
-  resolve: LocalBinResolver,
-  tool: GateTool,
-  toolArgs: readonly string[],
-  opts: ToolRunOpts,
-  env: Record<string, string> = {},
+    resolve: LocalBinResolver,
+    tool: GateTool,
+    toolArgs: readonly string[],
+    opts: ToolRunOpts,
+    env: Record<string, string> = {}
 ): Promise<ExecResult> {
-  const localBin = await resolve(tool, opts);
-  if (localBin === null) return missingBinResult(tool, opts.cwd);
-  return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
+    const localBin = await resolve(tool, opts)
+    if (localBin === null) {
+        return missingBinResult(tool, opts.cwd)
+    }
+    return exec(localBin, [...toolArgs], {cwd: opts.cwd, env})
 }
 
 /** Default VitestTool: local `vitest run [files...]`, coverage DISABLED. */
 export class DefaultVitestTool implements VitestTool {
-  constructor(
-    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
-    private readonly env: Record<string, string> = {},
-  ) {}
+    constructor(
+        private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+        private readonly env: Record<string, string> = {}
+    ) {}
 
-  async run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
-    // Coverage is DISABLED here on purpose. The test gate is a PASS/FAIL gate and
-    // it runs DIFF-SCOPED (only the changed test files). A project whose vitest
-    // config forces `coverage.enabled: true` with perFile thresholds would FAIL a
-    // scoped run — every file the scoped tests don't exercise reports 0% — a false
-    // negative unrelated to whether the tests pass. Coverage is the coverage
-    // gate's job (before/after summaries), never this gate's.
-    const args = ["run", "--coverage.enabled=false", ...files];
-    return toProc(await runTool(this.resolve, "vitest", args, opts, this.env));
-  }
+    async run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
+        // Coverage is DISABLED here on purpose. The test gate is a PASS/FAIL gate and
+        // it runs DIFF-SCOPED (only the changed test files). A project whose vitest
+        // config forces `coverage.enabled: true` with perFile thresholds would FAIL a
+        // scoped run — every file the scoped tests don't exercise reports 0% — a false
+        // negative unrelated to whether the tests pass. Coverage is the coverage
+        // gate's job (before/after summaries), never this gate's.
+        const args = ['run', '--coverage.enabled=false', ...files]
+        return toProc(await runTool(this.resolve, 'vitest', args, opts, this.env))
+    }
 }
 
 /** Default TscTool: local `tsc --noEmit`. */
 export class DefaultTscTool implements TscTool {
-  constructor(
-    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
-    private readonly env: Record<string, string> = {},
-  ) {}
+    constructor(
+        private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+        private readonly env: Record<string, string> = {}
+    ) {}
 
-  async typecheck(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts, this.env));
-  }
+    async typecheck(opts: ToolRunOpts): Promise<ProcResult> {
+        return toProc(await runTool(this.resolve, 'tsc', ['--noEmit'], opts, this.env))
+    }
 }
 
 /** Default EslintTool: local `eslint .`. */
 export class DefaultEslintTool implements EslintTool {
-  constructor(
-    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
-    private readonly env: Record<string, string> = {},
-  ) {}
+    constructor(
+        private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+        private readonly env: Record<string, string> = {}
+    ) {}
 
-  async lint(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await runTool(this.resolve, "eslint", ["."], opts, this.env));
-  }
+    async lint(opts: ToolRunOpts): Promise<ProcResult> {
+        return toProc(await runTool(this.resolve, 'eslint', ['.'], opts, this.env))
+    }
 }
 
 /** Default BuildTool: `npm run build`. */
 export class DefaultBuildTool implements BuildTool {
-  constructor(private readonly env: Record<string, string> = {}) {}
+    constructor(private readonly env: Record<string, string> = {}) {}
 
-  async build(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd, env: this.env }));
-  }
+    async build(opts: ToolRunOpts): Promise<ProcResult> {
+        return toProc(await exec('npm', ['run', 'build'], {cwd: opts.cwd, env: this.env}))
+    }
 }
 
 /** Default SemgrepTool: run the already-validated argv directly. */
 export class DefaultSemgrepTool implements SemgrepTool {
-  constructor(private readonly env: Record<string, string> = {}) {}
+    constructor(private readonly env: Record<string, string> = {}) {}
 
-  async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
-    const [bin, ...rest] = command;
-    if (bin === undefined) {
-      throw new Error("DefaultSemgrepTool: empty command");
+    async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
+        const [bin, ...rest] = command
+        if (bin === undefined) {
+            throw new Error('DefaultSemgrepTool: empty command')
+        }
+        return toProc(await exec(bin, rest, {cwd: opts.cwd, env: this.env}))
     }
-    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
-  }
 }
 
 /** Default CommandRunner: run the already-validated contract argv directly. */
 export class DefaultCommandRunner implements CommandRunner {
-  constructor(private readonly env: Record<string, string> = {}) {}
+    constructor(private readonly env: Record<string, string> = {}) {}
 
-  async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
-    const [bin, ...rest] = command;
-    if (bin === undefined) {
-      throw new Error("DefaultCommandRunner: empty command");
+    async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
+        const [bin, ...rest] = command
+        if (bin === undefined) {
+            throw new Error('DefaultCommandRunner: empty command')
+        }
+        return toProc(await exec(bin, rest, {cwd: opts.cwd, env: this.env}))
     }
-    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
-  }
 }
 
 /** Default StrykerTool: local `stryker run --mutate <csv>`, then read the report. */
 export class DefaultStrykerTool implements StrykerTool {
-  /** Report path relative to the worktree (stryker html/json reporter default). */
-  static readonly REPORT_PATH = "reports/mutation/mutation.json";
+    /** Report path relative to the worktree (stryker html/json reporter default). */
+    static readonly REPORT_PATH = 'reports/mutation/mutation.json'
 
-  constructor(
-    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
-    private readonly env: Record<string, string> = {},
-  ) {}
+    constructor(
+        private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+        private readonly env: Record<string, string> = {}
+    ) {}
 
-  async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
-    const csv = mutate.map(escapeStrykerGlob).join(",");
-    const proc = toProc(
-      await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env),
-    );
-    // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
-    // strategy branches on proc.code; we still attempt to read a report.
-    const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH);
-    let raw: string;
-    try {
-      raw = await readFile(reportPath, "utf8");
-    } catch {
-      return { proc, report: { report: "absent" } };
+    async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
+        const csv = mutate.map(escapeStrykerGlob).join(',')
+        const proc = toProc(await runTool(this.resolve, 'stryker', ['run', '--mutate', csv], opts, this.env))
+        // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
+        // strategy branches on proc.code; we still attempt to read a report.
+        const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH)
+        let raw: string
+        try {
+            raw = await readFile(reportPath, 'utf8')
+        } catch {
+            return {proc, report: {report: 'absent'}}
+        }
+        let parsed: unknown
+        try {
+            parsed = JSON.parse(raw)
+        } catch {
+            // A present-but-corrupt report is distinct from a legitimately score-less one
+            // — surfaced as `unparseable` so the strategy can fail-closed without
+            // conflating it with no-score.
+            return {proc, report: {report: 'unparseable'}}
+        }
+        const score = extractMutationScore(parsed)
+        return {proc, report: {report: 'present', mutationScore: score}}
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // A present-but-corrupt report is distinct from a legitimately score-less one
-      // — surfaced as `unparseable` so the strategy can fail-closed without
-      // conflating it with no-score.
-      return { proc, report: { report: "unparseable" } };
-    }
-    const score = extractMutationScore(parsed);
-    return { proc, report: { report: "present", mutationScore: score } };
-  }
 }
 
 /**
@@ -490,19 +490,23 @@ export class DefaultStrykerTool implements StrykerTool {
  * report.
  */
 export function extractMutationScore(report: unknown): number | null {
-  if (typeof report !== "object" || report === null) return null;
-  const metrics = (report as { metrics?: unknown }).metrics;
-  if (typeof metrics === "object" && metrics !== null) {
-    const score = (metrics as { mutationScore?: unknown }).mutationScore;
-    if (typeof score === "number" && Number.isFinite(score)) return score;
-  }
-  return computeMutationScore(report);
+    if (typeof report !== 'object' || report === null) {
+        return null
+    }
+    const metrics = (report as {metrics?: unknown}).metrics
+    if (typeof metrics === 'object' && metrics !== null) {
+        const score = (metrics as {mutationScore?: unknown}).mutationScore
+        if (typeof score === 'number' && Number.isFinite(score)) {
+            return score
+        }
+    }
+    return computeMutationScore(report)
 }
 
 /** Mutant statuses counted as DETECTED in stryker's mutation-score formula. */
-const DETECTED_STATUSES = new Set(["killed", "timeout"]);
+const DETECTED_STATUSES = new Set(['killed', 'timeout'])
 /** Mutant statuses counted as UNDETECTED (valid but live). */
-const UNDETECTED_STATUSES = new Set(["survived", "nocoverage"]);
+const UNDETECTED_STATUSES = new Set(['survived', 'nocoverage'])
 
 /**
  * Derive `mutationScore` from a schema-1.0 report's per-file mutant statuses,
@@ -516,26 +520,32 @@ const UNDETECTED_STATUSES = new Set(["survived", "nocoverage"]);
  * no mutants, or zero VALID mutants — the gate then fails closed.
  */
 function computeMutationScore(report: unknown): number | null {
-  const files = (report as { files?: unknown }).files;
-  if (typeof files !== "object" || files === null) return null;
-  let detected = 0;
-  let valid = 0;
-  for (const file of Object.values(files as Record<string, unknown>)) {
-    const mutants = (file as { mutants?: unknown }).mutants;
-    if (!Array.isArray(mutants)) continue;
-    for (const mutant of mutants) {
-      const rawStatus = (mutant as { status?: unknown }).status;
-      if (typeof rawStatus !== "string") continue;
-      const status = rawStatus.toLowerCase();
-      if (DETECTED_STATUSES.has(status)) {
-        detected += 1;
-        valid += 1;
-      } else if (UNDETECTED_STATUSES.has(status)) {
-        valid += 1;
-      }
+    const files = (report as {files?: unknown}).files
+    if (typeof files !== 'object' || files === null) {
+        return null
     }
-  }
-  return valid > 0 ? (detected / valid) * 100 : null;
+    let detected = 0
+    let valid = 0
+    for (const file of Object.values(files as Record<string, unknown>)) {
+        const mutants = (file as {mutants?: unknown}).mutants
+        if (!Array.isArray(mutants)) {
+            continue
+        }
+        for (const mutant of mutants) {
+            const rawStatus = (mutant as {status?: unknown}).status
+            if (typeof rawStatus !== 'string') {
+                continue
+            }
+            const status = rawStatus.toLowerCase()
+            if (DETECTED_STATUSES.has(status)) {
+                detected += 1
+                valid += 1
+            } else if (UNDETECTED_STATUSES.has(status)) {
+                valid += 1
+            }
+        }
+    }
+    return valid > 0 ? (detected / valid) * 100 : null
 }
 
 /**
@@ -547,82 +557,86 @@ function computeMutationScore(report: unknown): number | null {
  * capped) failure excerpt — so a truncated stream needs no loud throw.
  */
 export class DefaultCoverageTool implements CoverageTool {
-  /** Where every measurement must land, relative to the measured tree's root. */
-  static readonly SUMMARY_PATH = path.join("coverage", "coverage-summary.json");
+    /** Where every measurement must land, relative to the measured tree's root. */
+    static readonly SUMMARY_PATH = path.join('coverage', 'coverage-summary.json')
 
-  constructor(
-    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
-    private readonly env: Record<string, string> = {},
-  ) {}
+    constructor(
+        private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+        private readonly env: Record<string, string> = {}
+    ) {}
 
-  async measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
-    const summaryPath = path.join(opts.cwd, DefaultCoverageTool.SUMMARY_PATH);
-    // Stale-summary guard: a command that "succeeds" without writing the summary
-    // must be judged summary-missing, never from a prior measurement's file.
-    await rm(summaryPath, { force: true });
-    let result: ExecResult;
-    if (cmd.kind === "vitest") {
-      result = await runTool(this.resolve, "vitest", cmd.args, opts, this.env);
-    } else {
-      const [bin, ...rest] = cmd.argv;
-      if (bin === undefined) {
-        throw new Error("DefaultCoverageTool: empty command");
-      }
-      result = await exec(bin, rest, { cwd: opts.cwd, env: this.env });
+    async measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
+        const summaryPath = path.join(opts.cwd, DefaultCoverageTool.SUMMARY_PATH)
+        // Stale-summary guard: a command that "succeeds" without writing the summary
+        // must be judged summary-missing, never from a prior measurement's file.
+        await rm(summaryPath, {force: true})
+        let result: ExecResult
+        if (cmd.kind === 'vitest') {
+            result = await runTool(this.resolve, 'vitest', cmd.args, opts, this.env)
+        } else {
+            const [bin, ...rest] = cmd.argv
+            if (bin === undefined) {
+                throw new Error('DefaultCoverageTool: empty command')
+            }
+            result = await exec(bin, rest, {cwd: opts.cwd, env: this.env})
+        }
+        if (result.code !== 0) {
+            return {kind: 'command-failed', proc: toProc(result)}
+        }
+        let raw: string
+        try {
+            raw = await readFile(summaryPath, 'utf8')
+        } catch {
+            return {kind: 'summary-missing'}
+        }
+        let parsed: unknown
+        try {
+            parsed = JSON.parse(raw)
+        } catch {
+            return {kind: 'summary-invalid'}
+        }
+        const summary = parseCoverageSummary(parsed)
+        return summary === null ? {kind: 'summary-invalid'} : {kind: 'measured', summary}
     }
-    if (result.code !== 0) return { kind: "command-failed", proc: toProc(result) };
-    let raw: string;
-    try {
-      raw = await readFile(summaryPath, "utf8");
-    } catch {
-      return { kind: "summary-missing" };
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return { kind: "summary-invalid" };
-    }
-    const summary = parseCoverageSummary(parsed);
-    return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
-  }
 
-  async measureAtBase(
-    baseSha: string,
-    cmd: CoverageCommand,
-    opts: ToolRunOpts,
-  ): Promise<CoverageMeasurement> {
-    const scratch = await mkdtemp(path.join(tmpdir(), "factory-cov-base-"));
-    const wt = path.join(scratch, "wt");
-    try {
-      const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
-        cwd: opts.cwd,
-      });
-      if (add.code !== 0) {
-        // Plumbing failure — structural, THROW (the strategy cannot answer without a base).
-        throw new Error(
-          `coverage base measurement: git worktree add --detach ${baseSha} failed ` +
-            `(code=${add.code ?? "null"}): ${add.stderr.trim()}`,
-        );
-      }
-      // Reuse the task worktree's installed deps: the base tree's imports are
-      // normally a subset of head's node_modules. A dep-removing/upgrading task
-      // can break the base run — that surfaces as command-failed (loud), never
-      // silently. node:fs rm/worktree-remove below do NOT follow the symlink.
-      if (await pathExists(path.join(opts.cwd, "node_modules"))) {
-        await symlink(path.join(opts.cwd, "node_modules"), path.join(wt, "node_modules"), "dir");
-      }
-      return await this.measure(cmd, { cwd: wt });
-    } finally {
-      // Best-effort cleanup; never masks the primary error. Racing sweeps use
-      // distinct mkdtemp paths, so concurrent base measures cannot collide.
-      await exec("git", ["-C", opts.cwd, "worktree", "remove", "--force", wt], {
-        cwd: opts.cwd,
-      }).catch(() => {});
-      await rm(scratch, { recursive: true, force: true }).catch(() => {});
-      await exec("git", ["-C", opts.cwd, "worktree", "prune"], { cwd: opts.cwd }).catch(() => {});
+    async measureAtBase(baseSha: string, cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
+        const scratch = await mkdtemp(path.join(tmpdir(), 'factory-cov-base-'))
+        const wt = path.join(scratch, 'wt')
+        try {
+            const add = await exec('git', ['-C', opts.cwd, 'worktree', 'add', '--detach', wt, baseSha], {
+                cwd: opts.cwd,
+            })
+            if (add.code !== 0) {
+                // Plumbing failure — structural, THROW (the strategy cannot answer without a base).
+                throw new Error(
+                    `coverage base measurement: git worktree add --detach ${baseSha} failed ` +
+                        `(code=${add.code ?? 'null'}): ${add.stderr.trim()}`
+                )
+            }
+            // Reuse the task worktree's installed deps: the base tree's imports are
+            // normally a subset of head's node_modules. A dep-removing/upgrading task
+            // can break the base run — that surfaces as command-failed (loud), never
+            // silently. node:fs rm/worktree-remove below do NOT follow the symlink.
+            if (await pathExists(path.join(opts.cwd, 'node_modules'))) {
+                await symlink(path.join(opts.cwd, 'node_modules'), path.join(wt, 'node_modules'), 'dir')
+            }
+            return await this.measure(cmd, {cwd: wt})
+        } finally {
+            // Best-effort cleanup; never masks the primary error. Racing sweeps use
+            // distinct mkdtemp paths, so concurrent base measures cannot collide.
+            await exec('git', ['-C', opts.cwd, 'worktree', 'remove', '--force', wt], {
+                cwd: opts.cwd,
+            }).catch(() => {
+                /* best-effort cleanup */
+            })
+            await rm(scratch, {recursive: true, force: true}).catch(() => {
+                /* best-effort cleanup */
+            })
+            await exec('git', ['-C', opts.cwd, 'worktree', 'prune'], {cwd: opts.cwd}).catch(() => {
+                /* best-effort cleanup */
+            })
+        }
     }
-  }
 }
 
 /**
@@ -631,155 +645,157 @@ export class DefaultCoverageTool implements CoverageTool {
  * binary present in the worktree) before running the gate.
  */
 export class DefaultFsProbe implements FsProbe {
-  async exists(relPath: string, opts: ToolRunOpts): Promise<boolean> {
-    try {
-      await access(path.join(opts.cwd, relPath));
-      return true;
-    } catch {
-      return false;
+    async exists(relPath: string, opts: ToolRunOpts): Promise<boolean> {
+        try {
+            await access(path.join(opts.cwd, relPath))
+            return true
+        } catch {
+            return false
+        }
     }
-  }
 
-  async existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean> {
-    for (const rel of relPaths) {
-      if (await this.exists(rel, opts)) return true;
+    async existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean> {
+        for (const rel of relPaths) {
+            if (await this.exists(rel, opts)) {
+                return true
+            }
+        }
+        return false
     }
-    return false;
-  }
 }
 
 /** Read one metric from a `total.*` entry, supporting object-or-scalar shapes. */
 function readMetric(total: Record<string, unknown>, key: string): number | null {
-  const v = total[key];
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "object" && v !== null) {
-    const pct = (v as { pct?: unknown }).pct;
-    if (typeof pct === "number" && Number.isFinite(pct)) return pct;
-  }
-  return null;
+    const v = total[key]
+    if (typeof v === 'number' && Number.isFinite(v)) {
+        return v
+    }
+    if (typeof v === 'object' && v !== null) {
+        const pct = (v as {pct?: unknown}).pct
+        if (typeof pct === 'number' && Number.isFinite(pct)) {
+            return pct
+        }
+    }
+    return null
 }
 
 /** Parse a coverage-v8 summary into the four totals, or null if any is missing. */
 export function parseCoverageSummary(report: unknown): CoverageSummary | null {
-  if (typeof report !== "object" || report === null) return null;
-  const total = (report as { total?: unknown }).total;
-  if (typeof total !== "object" || total === null) return null;
-  const t = total as Record<string, unknown>;
-  const lines = readMetric(t, "lines");
-  const branches = readMetric(t, "branches");
-  const functions = readMetric(t, "functions");
-  const statements = readMetric(t, "statements");
-  if (lines === null || branches === null || functions === null || statements === null) {
-    return null;
-  }
-  return { lines, branches, functions, statements };
+    if (typeof report !== 'object' || report === null) {
+        return null
+    }
+    const total = (report as {total?: unknown}).total
+    if (typeof total !== 'object' || total === null) {
+        return null
+    }
+    const t = total as Record<string, unknown>
+    const lines = readMetric(t, 'lines')
+    const branches = readMetric(t, 'branches')
+    const functions = readMetric(t, 'functions')
+    const statements = readMetric(t, 'statements')
+    if (lines === null || branches === null || functions === null || statements === null) {
+        return null
+    }
+    return {lines, branches, functions, statements}
 }
 
 /**
  * Default GitProbe over shared/exec.ts (no shell). All ops run in `opts.cwd`.
  */
 export class DefaultGitProbe implements GitProbe {
-  private async git(args: readonly string[], cwd: string): Promise<ExecResult> {
-    return exec("git", args, { cwd });
-  }
-
-  async refExists(ref: string, opts: ToolRunOpts): Promise<boolean> {
-    const r = await this.git(["rev-parse", "--verify", "--quiet", ref], opts.cwd);
-    return r.code === 0;
-  }
-
-  async revParse(ref: string, opts: ToolRunOpts): Promise<string> {
-    const r = await this.git(["rev-parse", ref], opts.cwd);
-    if (r.code !== 0) {
-      throw new Error(`git rev-parse ${ref} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    private async git(args: readonly string[], cwd: string): Promise<ExecResult> {
+        return exec('git', args, {cwd})
     }
-    return r.stdout.trim();
-  }
 
-  async treeSha(opts: ToolRunOpts): Promise<string> {
-    return this.revParse("HEAD^{tree}", opts);
-  }
-
-  async changedFiles(base: string, opts: ToolRunOpts): Promise<readonly string[]> {
-    const r = await this.git(
-      ["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`],
-      opts.cwd,
-    );
-    if (r.code !== 0) {
-      throw new Error(`git diff vs ${base} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    async refExists(ref: string, opts: ToolRunOpts): Promise<boolean> {
+        const r = await this.git(['rev-parse', '--verify', '--quiet', ref], opts.cwd)
+        return r.code === 0
     }
-    assertNotTruncated(r, "git diff --name-only");
-    return splitLines(r.stdout);
-  }
 
-  async commits(base: string, taskId: string, opts: ToolRunOpts): Promise<readonly CommitInfo[]> {
-    const log = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log.code !== 0) {
-      throw new Error(
-        `git log ${base}..HEAD failed (code=${log.code ?? "null"}): ${log.stderr.trim()}`,
-      );
-    }
-    // A truncated commit list silently drops commits → the classifier sees a
-    // partial history → false TDD PASS on the authority-of-record path. Fail LOUD
-    // on every parse in this method (mirrors changedFiles).
-    assertNotTruncated(log, "git log (tdd classification)");
-    // git log is newest-first; the TDD gate classifies OLDEST-first.
-    const shas = splitLines(log.stdout).reverse();
-    const out: CommitInfo[] = [];
-    for (const sha of shas) {
-      const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
-      if (parents.code !== 0) {
-        throw new Error(`git show parents of ${sha} failed: ${parents.stderr.trim()}`);
-      }
-      assertNotTruncated(parents, `git show parents of ${sha}`);
-      const parentShas = parents.stdout
-        .trim()
-        .split(/\s+/)
-        .filter((s) => s.length > 0);
-      const parentCount = parentShas.length;
-      let files: string[];
-      if (parentCount > 1) {
-        // Merge: classify files the merge introduces vs its FIRST parent
-        // (bin/pipeline-tdd-gate:98-99).
-        const firstParent = parentShas[0]!;
-        const dt = await this.git(
-          ["diff-tree", "--no-commit-id", "--name-only", "-r", firstParent, sha],
-          opts.cwd,
-        );
-        if (dt.code !== 0) {
-          throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
+    async revParse(ref: string, opts: ToolRunOpts): Promise<string> {
+        const r = await this.git(['rev-parse', ref], opts.cwd)
+        if (r.code !== 0) {
+            throw new Error(`git rev-parse ${ref} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
         }
-        assertNotTruncated(dt, `git diff-tree (merge) for ${sha}`);
-        files = splitLines(dt.stdout);
-      } else {
-        const dt = await this.git(
-          ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-          opts.cwd,
-        );
-        if (dt.code !== 0) {
-          throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
-        }
-        assertNotTruncated(dt, `git diff-tree for ${sha}`);
-        files = splitLines(dt.stdout);
-      }
-      const subjBody = await this.git(["log", "-1", "--format=%s%n%b", sha], opts.cwd);
-      if (subjBody.code !== 0) {
-        throw new Error(`git log subject/body of ${sha} failed: ${subjBody.stderr.trim()}`);
-      }
-      assertNotTruncated(subjBody, `git log subject/body of ${sha}`);
-      const tagged = subjBody.stdout.includes(`[${taskId}]`);
-      out.push({ sha, files, parentCount, tagged });
+        return r.stdout.trim()
     }
-    return out;
-  }
+
+    async treeSha(opts: ToolRunOpts): Promise<string> {
+        return this.revParse('HEAD^{tree}', opts)
+    }
+
+    async changedFiles(base: string, opts: ToolRunOpts): Promise<readonly string[]> {
+        const r = await this.git(['diff', '--name-only', '--diff-filter=AM', `${base}...HEAD`], opts.cwd)
+        if (r.code !== 0) {
+            throw new Error(`git diff vs ${base} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
+        }
+        assertNotTruncated(r, 'git diff --name-only')
+        return splitLines(r.stdout)
+    }
+
+    async commits(base: string, taskId: string, opts: ToolRunOpts): Promise<readonly CommitInfo[]> {
+        const log = await this.git(['log', '--format=%H', `${base}..HEAD`], opts.cwd)
+        if (log.code !== 0) {
+            throw new Error(`git log ${base}..HEAD failed (code=${log.code ?? 'null'}): ${log.stderr.trim()}`)
+        }
+        // A truncated commit list silently drops commits → the classifier sees a
+        // partial history → false TDD PASS on the authority-of-record path. Fail LOUD
+        // on every parse in this method (mirrors changedFiles).
+        assertNotTruncated(log, 'git log (tdd classification)')
+        // git log is newest-first; the TDD gate classifies OLDEST-first.
+        const shas = splitLines(log.stdout).reverse()
+        const out: CommitInfo[] = []
+        for (const sha of shas) {
+            const parents = await this.git(['show', '-s', '--format=%P', sha], opts.cwd)
+            if (parents.code !== 0) {
+                throw new Error(`git show parents of ${sha} failed: ${parents.stderr.trim()}`)
+            }
+            assertNotTruncated(parents, `git show parents of ${sha}`)
+            const parentShas = parents.stdout
+                .trim()
+                .split(/\s+/)
+                .filter((s) => s.length > 0)
+            const parentCount = parentShas.length
+            let files: string[]
+            if (parentCount > 1) {
+                // Merge: classify files the merge introduces vs its FIRST parent
+                // (bin/pipeline-tdd-gate:98-99).
+                const firstParent = at(parentShas, 0)
+                const dt = await this.git(
+                    ['diff-tree', '--no-commit-id', '--name-only', '-r', firstParent, sha],
+                    opts.cwd
+                )
+                if (dt.code !== 0) {
+                    throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`)
+                }
+                assertNotTruncated(dt, `git diff-tree (merge) for ${sha}`)
+                files = splitLines(dt.stdout)
+            } else {
+                const dt = await this.git(['diff-tree', '--no-commit-id', '--name-only', '-r', sha], opts.cwd)
+                if (dt.code !== 0) {
+                    throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`)
+                }
+                assertNotTruncated(dt, `git diff-tree for ${sha}`)
+                files = splitLines(dt.stdout)
+            }
+            const subjBody = await this.git(['log', '-1', '--format=%s%n%b', sha], opts.cwd)
+            if (subjBody.code !== 0) {
+                throw new Error(`git log subject/body of ${sha} failed: ${subjBody.stderr.trim()}`)
+            }
+            assertNotTruncated(subjBody, `git log subject/body of ${sha}`)
+            const tagged = subjBody.stdout.includes(`[${taskId}]`)
+            out.push({sha, files, parentCount, tagged})
+        }
+        return out
+    }
 }
 
 /** Split command stdout into non-empty trimmed lines. */
 function splitLines(s: string): string[] {
-  return s
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    return s
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
 }
 
 /**
@@ -789,16 +805,16 @@ function splitLines(s: string): string[] {
  * tests use {@link import("./fakes.js").makeFakeTools} instead.
  */
 export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTools {
-  return {
-    git: new DefaultGitProbe(),
-    vitest: new DefaultVitestTool(defaultLocalBinResolver, gateEnv),
-    tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
-    eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
-    build: new DefaultBuildTool(gateEnv),
-    semgrep: new DefaultSemgrepTool(gateEnv),
-    stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
-    coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
-    fs: new DefaultFsProbe(),
-    command: new DefaultCommandRunner(gateEnv),
-  };
+    return {
+        git: new DefaultGitProbe(),
+        vitest: new DefaultVitestTool(defaultLocalBinResolver, gateEnv),
+        tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
+        eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
+        build: new DefaultBuildTool(gateEnv),
+        semgrep: new DefaultSemgrepTool(gateEnv),
+        stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
+        coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
+        fs: new DefaultFsProbe(),
+        command: new DefaultCommandRunner(gateEnv),
+    }
 }

@@ -4,17 +4,17 @@
  * floor parity. See {@link applyGateEnvDetection}.
  */
 export {
-  detectGateEnv,
-  mergeDetectedGateEnv,
-  applyGateEnvDetection,
-  DefaultWorkflowSource,
-  type WorkflowSource,
-  type EnvScope,
-  type DetectedVar,
-  type DroppedKeyReason,
-  type DetectResult,
-  type GateEnvConflict,
-  type GateEnvMerge,
-  type DetectReport,
-} from "./detect-gate-env.js";
-export { injectGateEnvIntoWorkflow } from "./inject-gate-env.js";
+    detectGateEnv,
+    mergeDetectedGateEnv,
+    applyGateEnvDetection,
+    DefaultWorkflowSource,
+    type WorkflowSource,
+    type EnvScope,
+    type DetectedVar,
+    type DroppedKeyReason,
+    type DetectResult,
+    type GateEnvConflict,
+    type GateEnvMerge,
+    type DetectReport,
+} from './detect-gate-env.js'
+export {injectGateEnvIntoWorkflow} from './inject-gate-env.js'

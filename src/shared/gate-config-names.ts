@@ -29,23 +29,23 @@
  * `.stryker.config.json` depending on discovery order.
  */
 export const STRYKER_CONFIG_BASENAMES: readonly string[] = [
-  "stryker.conf.json",
-  "stryker.conf.js",
-  "stryker.conf.mjs",
-  "stryker.conf.cjs",
-  "stryker.config.json",
-  "stryker.config.js",
-  "stryker.config.mjs",
-  "stryker.config.cjs",
-  ".stryker.conf.json",
-  ".stryker.conf.js",
-  ".stryker.conf.mjs",
-  ".stryker.conf.cjs",
-  ".stryker.config.json",
-  ".stryker.config.js",
-  ".stryker.config.mjs",
-  ".stryker.config.cjs",
-] as const;
+    'stryker.conf.json',
+    'stryker.conf.js',
+    'stryker.conf.mjs',
+    'stryker.conf.cjs',
+    'stryker.config.json',
+    'stryker.config.js',
+    'stryker.config.mjs',
+    'stryker.config.cjs',
+    '.stryker.conf.json',
+    '.stryker.conf.js',
+    '.stryker.conf.mjs',
+    '.stryker.conf.cjs',
+    '.stryker.config.json',
+    '.stryker.config.js',
+    '.stryker.config.mjs',
+    '.stryker.config.cjs',
+] as const
 
 /**
  * Every basename dependency-cruiser's config discovery loads (first-existing
@@ -62,8 +62,8 @@ export const STRYKER_CONFIG_BASENAMES: readonly string[] = [
  * discoverable `.dependency-cruiser.json` and `.dependency-cruiser.mjs`.
  */
 export const DEPENDENCY_CRUISER_CONFIG_BASENAMES: readonly string[] = [
-  ".dependency-cruiser.json",
-  ".dependency-cruiser.js",
-  ".dependency-cruiser.cjs",
-  ".dependency-cruiser.mjs",
-] as const;
+    '.dependency-cruiser.json',
+    '.dependency-cruiser.js',
+    '.dependency-cruiser.cjs',
+    '.dependency-cruiser.mjs',
+] as const

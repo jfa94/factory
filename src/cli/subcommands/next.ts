@@ -2,15 +2,15 @@
  * `factory next-task [--run <id>]` — the run-level orchestrator: quota gate, checkpoint
  * recovery, cascade-fail, and the ready set. Emits ONE JSON NextTask.
  */
-import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, UsageError } from "../args.js";
-import { emitJson, emitLine } from "../io.js";
-import { loadOrchestratorDeps } from "../wiring.js";
-import { nextTask } from "../../orchestrator/index.js";
-import { StateManager } from "../../core/state/index.js";
-import type { RunState } from "../../core/state/index.js";
-import { resolveDataDir } from "../../config/index.js";
-import { withUsageGuard, type Subcommand } from "../registry-types.js";
+import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {parseArgs, UsageError} from '../args.js'
+import {emitJson, emitLine} from '../io.js'
+import {loadOrchestratorDeps} from '../wiring.js'
+import {nextTask} from '../../orchestrator/index.js'
+import {StateManager} from '../../core/state/index.js'
+import type {RunState} from '../../core/state/index.js'
+import {resolveDataDir} from '../../config/index.js'
+import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 const HELP = `factory next-task — one run-loop step: quota gate, cascade-fail, ready set
 
@@ -28,7 +28,7 @@ from the first \`next-task\`:
   factory next-task --assert-owner <session>          (loud-assert runs/current ownership)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
-Throws LOUD on a dependency deadlock.`;
+Throws LOUD on a dependency deadlock.`
 
 /**
  * Loud-assert that the runs/current run is the one the caller expects, by owning
@@ -49,43 +49,49 @@ Throws LOUD on a dependency deadlock.`;
  * happy path. A throw means runs/current genuinely points at a foreign run.
  */
 function assertCurrentOwner(current: RunState, assertOwner: string | boolean | undefined): void {
-  const expected = typeof assertOwner === "string" ? assertOwner.trim() : "";
-  if (expected.length === 0) return; // no assertion requested / session env unset
-  const actual = current.owner_session;
-  if (actual === undefined) return; // run owner unknown → cannot assert (degrade safe)
-  if (actual !== expected) {
-    throw new Error(
-      `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', ` +
-        `but --assert-owner expected '${expected}' — a concurrent 'run create' moved ` +
-        `runs/current onto a foreign run. Pass --run <id> explicitly.`,
-    );
-  }
+    const expected = typeof assertOwner === 'string' ? assertOwner.trim() : ''
+    if (expected.length === 0) {
+        return
+    } // no assertion requested / session env unset
+    const actual = current.owner_session
+    if (actual === undefined) {
+        return
+    } // run owner unknown → cannot assert (degrade safe)
+    if (actual !== expected) {
+        throw new Error(
+            `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', ` +
+                `but --assert-owner expected '${expected}' — a concurrent 'run create' moved ` +
+                `runs/current onto a foreign run. Pass --run <id> explicitly.`
+        )
+    }
 }
 
 async function run(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP);
-    return EXIT.OK;
-  }
-  const explicit = args.flag("run");
-  let runId: string;
-  if (typeof explicit === "string" && explicit.length > 0) {
-    runId = explicit;
-  } else {
-    const dataDir = resolveDataDir({});
-    const current = await new StateManager({ dataDir }).readCurrent();
-    if (current === null) throw new UsageError("no --run given and no current run");
-    assertCurrentOwner(current, args.flag("assert-owner"));
-    runId = current.run_id;
-  }
+    const args = parseArgs(argv, {booleans: []})
+    if (args.flag('help') === true) {
+        emitLine(HELP)
+        return EXIT.OK
+    }
+    const explicit = args.flag('run')
+    let runId: string
+    if (typeof explicit === 'string' && explicit.length > 0) {
+        runId = explicit
+    } else {
+        const dataDir = resolveDataDir({})
+        const current = await new StateManager({dataDir}).readCurrent()
+        if (current === null) {
+            throw new UsageError('no --run given and no current run')
+        }
+        assertCurrentOwner(current, args.flag('assert-owner'))
+        runId = current.run_id
+    }
 
-  const deps = await loadOrchestratorDeps({ runId });
-  emitJson(await nextTask(deps, runId));
-  return EXIT.OK;
+    const deps = await loadOrchestratorDeps({runId})
+    emitJson(await nextTask(deps, runId))
+    return EXIT.OK
 }
 
 export const nextCommand: Subcommand = {
-  describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
-  run: withUsageGuard("next-task", run),
-};
+    describe: 'One run-loop step: quota gate, cascade-fail, emit the ready set',
+    run: withUsageGuard('next-task', run),
+}

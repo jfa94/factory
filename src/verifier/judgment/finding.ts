@@ -16,19 +16,19 @@
  * (Δ K) can drop it on a machine-checkable rule rather than the parser guessing
  * intent.
  */
-import { z } from "zod";
-import { createLogger } from "../../shared/index.js";
-import type { PanelVerdict } from "../../core/state/index.js";
+import {z} from 'zod'
+import {createLogger} from '../../shared/index.js'
+import type {PanelVerdict} from '../../core/state/index.js'
 
-const log = createLogger("finding");
+const log = createLogger('finding')
 
 /**
  * Closed severity vocabulary. A value outside the set is a LOUD parse error.
  * Only `blocking === true` findings gate the merge gate; severity is retained for the
  * audit trail and human report.
  */
-export const FindingSeverityEnum = z.enum(["info", "warning", "error", "critical"]);
-export type FindingSeverity = z.infer<typeof FindingSeverityEnum>;
+export const FindingSeverityEnum = z.enum(['info', 'warning', 'error', 'critical'])
+export type FindingSeverity = z.infer<typeof FindingSeverityEnum>
 
 /**
  * A single reviewer finding. `file` + `line` + `quote` form the CITATION the
@@ -39,63 +39,63 @@ export type FindingSeverity = z.infer<typeof FindingSeverityEnum>;
  */
 // Base object schema kept separate so .shape is accessible after superRefine wraps it.
 const FindingBaseSchema = z.object({
-  /** Which panel reviewer raised this (free-form; the role string). */
-  reviewer: z.string().min(1),
-  /** Closed severity. */
-  severity: FindingSeverityEnum,
-  /** True iff this finding, if upheld, BLOCKS the merge gate. */
-  blocking: z.boolean(),
-  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
-  file: z.string().min(1).optional(),
-  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
-  line: z.number().int().positive().optional(),
-  /**
-   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
-   * a finding with no quote cannot be citation-verified, so we reject it loudly
-   * rather than admit an unverifiable claim. (An empty string is rejected by
-   * `.min(1)`.)
-   */
-  quote: z.string().min(1),
-  /**
-   * The reviewer's ONE-SENTENCE checkable assertion (≤300 chars) — what the
-   * independent finding-verifier confirms. Deliberately distinct from
-   * `description`: the claim states WHAT is wrong in verifiable form; the
-   * description carries the reasoning chain, which must never reach the
-   * verifier (anti-anchoring — the verifier confirms independently, it is not
-   * led). Required and bounded LOUDLY: an old-format finding without a claim
-   * is a ZodError, never a silent fallback to truncated description.
-   */
-  claim: z.string().min(1).max(300),
-  /** Human-facing description of the concern (the reasoning; producer-facing). */
-  description: z.string().min(1),
-});
+    /** Which panel reviewer raised this (free-form; the role string). */
+    reviewer: z.string().min(1),
+    /** Closed severity. */
+    severity: FindingSeverityEnum,
+    /** True iff this finding, if upheld, BLOCKS the merge gate. */
+    blocking: z.boolean(),
+    /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
+    file: z.string().min(1).optional(),
+    /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
+    line: z.number().int().positive().optional(),
+    /**
+     * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
+     * a finding with no quote cannot be citation-verified, so we reject it loudly
+     * rather than admit an unverifiable claim. (An empty string is rejected by
+     * `.min(1)`.)
+     */
+    quote: z.string().min(1),
+    /**
+     * The reviewer's ONE-SENTENCE checkable assertion (≤300 chars) — what the
+     * independent finding-verifier confirms. Deliberately distinct from
+     * `description`: the claim states WHAT is wrong in verifiable form; the
+     * description carries the reasoning chain, which must never reach the
+     * verifier (anti-anchoring — the verifier confirms independently, it is not
+     * led). Required and bounded LOUDLY: an old-format finding without a claim
+     * is a ZodError, never a silent fallback to truncated description.
+     */
+    claim: z.string().min(1).max(300),
+    /** Human-facing description of the concern (the reasoning; producer-facing). */
+    description: z.string().min(1),
+})
 
 export const FindingSchema = FindingBaseSchema.superRefine((finding, ctx) => {
-  // T4: file and line are both-or-neither. A half-citation (file without line, or
-  // line without file) parses as a valid Finding but isCitable() drops it silently —
-  // indistinguishable from an intentionally non-localised concern. Reject loudly so
-  // reviewers get a schema error instead of a silent drop.
-  const hasFile = finding.file !== undefined;
-  const hasLine = finding.line !== undefined;
-  if (hasFile && !hasLine) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["line"],
-      message: `finding has 'file' but no 'line' — provide both or neither for a citable finding`,
-    });
-  }
-  if (hasLine && !hasFile) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["file"],
-      message: `finding has 'line' but no 'file' — provide both or neither for a citable finding`,
-    });
-  }
-});
-export type Finding = z.infer<typeof FindingSchema>;
+    // T4: file and line are both-or-neither. A half-citation (file without line, or
+    // line without file) parses as a valid Finding but isCitable() drops it silently —
+    // indistinguishable from an intentionally non-localised concern. Reject loudly so
+    // reviewers get a schema error instead of a silent drop.
+    const hasFile = finding.file !== undefined
+    const hasLine = finding.line !== undefined
+    if (hasFile && !hasLine) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['line'],
+            message: `finding has 'file' but no 'line' — provide both or neither for a citable finding`,
+        })
+    }
+    if (hasLine && !hasFile) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['file'],
+            message: `finding has 'line' but no 'file' — provide both or neither for a citable finding`,
+        })
+    }
+})
+export type Finding = z.infer<typeof FindingSchema>
 
-export const RawReviewVerdictEnum = z.enum(["approve", "blocked", "error"]);
-export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>;
+export const RawReviewVerdictEnum = z.enum(['approve', 'blocked', 'error'])
+export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>
 
 /**
  * Compile-time drift pin. `RawReviewVerdict` is a deliberately LOCAL enum (no
@@ -106,9 +106,9 @@ export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>;
  * catching the divergence at COMPILE time, not just in a test. The `import type`
  * keeps this a type-only edge: zero runtime coupling.
  */
-type _VerdictsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-const _verdictPin: _VerdictsEqual<RawReviewVerdict, PanelVerdict> = true;
-void _verdictPin;
+type _VerdictsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+const _verdictPin: _VerdictsEqual<RawReviewVerdict, PanelVerdict> = true
+void _verdictPin
 
 /**
  * A raw reviewer output: the reviewer's own verdict plus its findings. `verdict`
@@ -126,21 +126,21 @@ void _verdictPin;
  * finding to uncitable is surfaced, not buried).
  */
 export const RawReviewSchema = z.object({
-  /** The reviewer identity (role string). */
-  reviewer: z.string().min(1),
-  /** The reviewer's self-reported verdict. */
-  verdict: RawReviewVerdictEnum,
-  /** Findings raised. May be empty (an `approve` with no findings). */
-  findings: z.array(FindingSchema),
-  /**
-   * How many findings the reviewer dropped to stay under the findings cap
-   * (self-reported per the review-protocol contract). {@link parseRawReview} adds
-   * any engine-side truncation overflow on top, so silent cap truncation is
-   * always visible rather than reading as full coverage.
-   */
-  dropped_by_cap: z.number().int().min(0).optional(),
-});
-export type RawReview = z.infer<typeof RawReviewSchema>;
+    /** The reviewer identity (role string). */
+    reviewer: z.string().min(1),
+    /** The reviewer's self-reported verdict. */
+    verdict: RawReviewVerdictEnum,
+    /** Findings raised. May be empty (an `approve` with no findings). */
+    findings: z.array(FindingSchema),
+    /**
+     * How many findings the reviewer dropped to stay under the findings cap
+     * (self-reported per the review-protocol contract). {@link parseRawReview} adds
+     * any engine-side truncation overflow on top, so silent cap truncation is
+     * always visible rather than reading as full coverage.
+     */
+    dropped_by_cap: z.number().int().min(0).optional(),
+})
+export type RawReview = z.infer<typeof RawReviewSchema>
 
 /**
  * Hard per-review findings cap (Decision 43). The charter instructs reviewers to
@@ -150,46 +150,50 @@ export type RawReview = z.infer<typeof RawReviewSchema>;
  * entries (the reviewer's own ranking) rather than rejected, because a ZodError on
  * finding #11 would burn an escalation rung on noise.
  */
-export const MAX_FINDINGS_PER_REVIEW = 10;
+export const MAX_FINDINGS_PER_REVIEW = 10
 
 // Known top-level keys — derived from schema shape, not hand-maintained.
-const KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
+const KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape))
 // Known per-finding keys — derived from schema shape, not hand-maintained.
-const KNOWN_FINDING_KEYS = new Set(Object.keys(FindingBaseSchema.shape));
+const KNOWN_FINDING_KEYS = new Set(Object.keys(FindingBaseSchema.shape))
 
 /** Detect and warn on unknown keys stripped by Zod in a plain-object value. */
 function warnStrippedKeys(
-  context: string,
-  topObj: unknown,
-  topKnown: Set<string>,
-  findingsArr: unknown,
-  findingKnown: Set<string>,
+    context: string,
+    topObj: unknown,
+    topKnown: Set<string>,
+    findingsArr: unknown,
+    findingKnown: Set<string>
 ): void {
-  const topUnknown: string[] = [];
-  const findingUnknown: string[] = [];
+    const topUnknown: string[] = []
+    const findingUnknown: string[] = []
 
-  if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
-    for (const k of Object.keys(topObj as Record<string, unknown>)) {
-      if (!topKnown.has(k)) topUnknown.push(k);
-    }
-  }
-
-  if (Array.isArray(findingsArr)) {
-    for (const f of findingsArr) {
-      if (f !== null && typeof f === "object" && !Array.isArray(f)) {
-        for (const k of Object.keys(f as Record<string, unknown>)) {
-          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
+    if (topObj !== null && typeof topObj === 'object' && !Array.isArray(topObj)) {
+        for (const k of Object.keys(topObj)) {
+            if (!topKnown.has(k)) {
+                topUnknown.push(k)
+            }
         }
-      }
     }
-  }
 
-  if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log.warn(
-      `review parse: stripped unknown keys from reviewer '${context}' payload: ` +
-        `top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`,
-    );
-  }
+    if (Array.isArray(findingsArr)) {
+        for (const f of findingsArr) {
+            if (f !== null && typeof f === 'object' && !Array.isArray(f)) {
+                for (const k of Object.keys(f as Record<string, unknown>)) {
+                    if (!findingKnown.has(k) && !findingUnknown.includes(k)) {
+                        findingUnknown.push(k)
+                    }
+                }
+            }
+        }
+    }
+
+    if (topUnknown.length > 0 || findingUnknown.length > 0) {
+        log.warn(
+            `review parse: stripped unknown keys from reviewer '${context}' payload: ` +
+                `top[${topUnknown.join(', ')}] findings[${findingUnknown.join(', ')}]`
+        )
+    }
 }
 
 /**
@@ -202,37 +206,38 @@ function warnStrippedKeys(
  * JSDoc) and logged via `log.warn` for observability.
  */
 export function parseRawReview(raw: unknown): RawReview {
-  let result = RawReviewSchema.parse(raw);
-  // Derive reviewer label for the warn context (raw may have it before or after parse).
-  const reviewerLabel =
-    raw !== null && typeof raw === "object" && !Array.isArray(raw)
-      ? String((raw as Record<string, unknown>).reviewer ?? result.reviewer)
-      : result.reviewer;
-  const rawFindings =
-    raw !== null && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>).findings
-      : undefined;
-  warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
-  if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
-    const overflow = result.findings.length - MAX_FINDINGS_PER_REVIEW;
-    log.warn(
-      `review parse: reviewer '${reviewerLabel}' exceeded the findings cap ` +
-        `(${result.findings.length} > ${MAX_FINDINGS_PER_REVIEW}) — kept the first ` +
-        `${MAX_FINDINGS_PER_REVIEW}, ${overflow} truncated into dropped_by_cap`,
-    );
-    result = {
-      ...result,
-      findings: result.findings.slice(0, MAX_FINDINGS_PER_REVIEW),
-      dropped_by_cap: (result.dropped_by_cap ?? 0) + overflow,
-    };
-  }
-  if (result.dropped_by_cap !== undefined && result.dropped_by_cap > 0) {
-    log.warn(
-      `review parse: reviewer '${reviewerLabel}' dropped ${result.dropped_by_cap} finding(s) ` +
-        `by cap — coverage is truncated, not exhaustive`,
-    );
-  }
-  return result;
+    let result = RawReviewSchema.parse(raw)
+    // Derive reviewer label for the warn context (raw may have it before or after parse).
+    const rawReviewer =
+        raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>).reviewer
+            : undefined
+    const reviewerLabel = typeof rawReviewer === 'string' ? rawReviewer : result.reviewer
+    const rawFindings =
+        raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>).findings
+            : undefined
+    warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS)
+    if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
+        const overflow = result.findings.length - MAX_FINDINGS_PER_REVIEW
+        log.warn(
+            `review parse: reviewer '${reviewerLabel}' exceeded the findings cap ` +
+                `(${result.findings.length} > ${MAX_FINDINGS_PER_REVIEW}) — kept the first ` +
+                `${MAX_FINDINGS_PER_REVIEW}, ${overflow} truncated into dropped_by_cap`
+        )
+        result = {
+            ...result,
+            findings: result.findings.slice(0, MAX_FINDINGS_PER_REVIEW),
+            dropped_by_cap: (result.dropped_by_cap ?? 0) + overflow,
+        }
+    }
+    if (result.dropped_by_cap !== undefined && result.dropped_by_cap > 0) {
+        log.warn(
+            `review parse: reviewer '${reviewerLabel}' dropped ${result.dropped_by_cap} finding(s) ` +
+                `by cap — coverage is truncated, not exhaustive`
+        )
+    }
+    return result
 }
 
 /** Parse + validate a single {@link Finding}. LOUD on malformed input.
@@ -240,9 +245,9 @@ export function parseRawReview(raw: unknown): RawReview {
  * Unknown keys are stripped (deliberate LLM tolerance) and logged via `log.warn`.
  */
 export function parseFinding(raw: unknown): Finding {
-  const result = FindingSchema.parse(raw);
-  warnStrippedKeys(result.reviewer, raw, KNOWN_FINDING_KEYS, undefined, KNOWN_FINDING_KEYS);
-  return result;
+    const result = FindingSchema.parse(raw)
+    warnStrippedKeys(result.reviewer, raw, KNOWN_FINDING_KEYS, undefined, KNOWN_FINDING_KEYS)
+    return result
 }
 
 /**
@@ -251,6 +256,6 @@ export function parseFinding(raw: unknown): Finding {
  * machine-verified against ground truth and is dropped by citation-verify (Δ K),
  * never silently upheld.
  */
-export function isCitable(f: Finding): f is Finding & { file: string; line: number } {
-  return f.file !== undefined && f.line !== undefined;
+export function isCitable(f: Finding): f is Finding & {file: string; line: number} {
+    return f.file !== undefined && f.line !== undefined
 }

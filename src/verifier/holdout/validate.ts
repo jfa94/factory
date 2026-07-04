@@ -19,52 +19,52 @@
  *     appends to the deterministic gate evidence, so the holdout result is recorded
  *     into the risk-invariant merge gate via the existing `deriveMergeGateVerdict`.
  */
-import type { GateEvidence } from "../../types/index.js";
-import type { HoldoutRecord } from "./store.js";
+import type {GateEvidence} from '../../types/index.js'
+import type {HoldoutRecord} from './store.js'
 
 /** One reviewer verdict on a single withheld criterion. */
 export interface HoldoutVerdict {
-  /** The criterion text the verdict is FOR (must match the withheld text). */
-  readonly criterion: string;
-  /** Whether the implementation satisfies it. */
-  readonly satisfied: boolean;
-  /** Cited evidence (file:line / rationale). Blank ⇒ the verdict does not count. */
-  readonly evidence: string;
+    /** The criterion text the verdict is FOR (must match the withheld text). */
+    readonly criterion: string
+    /** Whether the implementation satisfies it. */
+    readonly satisfied: boolean
+    /** Cited evidence (file:line / rationale). Blank ⇒ the verdict does not count. */
+    readonly evidence: string
 }
 
 /** Per-criterion scored outcome (audit trail for the report). */
 export interface HoldoutCriterionResult {
-  readonly criterion: string;
-  /** Credited only when matched 1:1 with non-blank evidence and satisfied=true. */
-  readonly satisfied: boolean;
-  readonly evidence: string | null;
+    readonly criterion: string
+    /** Credited only when matched 1:1 with non-blank evidence and satisfied=true. */
+    readonly satisfied: boolean
+    readonly evidence: string | null
 }
 
 /** The deterministic holdout-gate result. */
 export interface HoldoutCheckResult {
-  readonly status: "pass" | "fail";
-  /** Count of credited (satisfied) withheld criteria. */
-  readonly satisfied: number;
-  /** Total withheld criteria. */
-  readonly withheld: number;
-  /** Integer pass percentage (`floor(satisfied×100/withheld)`). */
-  readonly passPct: number;
-  /** The effective threshold applied (clamped ≥ 1). */
-  readonly threshold: number;
-  readonly criteria: readonly HoldoutCriterionResult[];
+    readonly status: 'pass' | 'fail'
+    /** Count of credited (satisfied) withheld criteria. */
+    readonly satisfied: number
+    /** Total withheld criteria. */
+    readonly withheld: number
+    /** Integer pass percentage (`floor(satisfied×100/withheld)`). */
+    readonly passPct: number
+    /** The effective threshold applied (clamped ≥ 1). */
+    readonly threshold: number
+    readonly criteria: readonly HoldoutCriterionResult[]
 }
 
 /** Inputs to one holdout-validator spawn (the loop-owned agent boundary). */
 export interface HoldoutValidateInput {
-  readonly taskId: string;
-  /** The worktree the validator inspects. */
-  readonly worktree: string;
-  /** The withheld criteria to verify, in answer-key order. */
-  readonly withheldCriteria: readonly string[];
-  /** Fixed review model (risk-invariant, like the panel — D26). */
-  readonly model: string;
-  /** Turn budget. */
-  readonly maxTurns: number;
+    readonly taskId: string
+    /** The worktree the validator inspects. */
+    readonly worktree: string
+    /** The withheld criteria to verify, in answer-key order. */
+    readonly withheldCriteria: readonly string[]
+    /** Fixed review model (risk-invariant, like the panel — D26). */
+    readonly model: string
+    /** Turn budget. */
+    readonly maxTurns: number
 }
 
 /**
@@ -75,16 +75,16 @@ export interface HoldoutValidateInput {
  * criterion then scores as a FAIL — fail-closed), never throw.
  */
 export interface HoldoutValidatorRunner {
-  validate(input: HoldoutValidateInput): Promise<readonly HoldoutVerdict[]>;
+    validate(input: HoldoutValidateInput): Promise<readonly HoldoutVerdict[]>
 }
 
 /** Clamp the configured pass-rate to a sane, non-vacuous threshold (≥ 1). */
 function clampThreshold(raw: number): number {
-  if (!Number.isFinite(raw)) {
-    return 80;
-  }
-  const t = Math.floor(raw);
-  return t < 1 ? 1 : t;
+    if (!Number.isFinite(raw)) {
+        return 80
+    }
+    const t = Math.floor(raw)
+    return t < 1 ? 1 : t
 }
 
 /**
@@ -92,73 +92,69 @@ function clampThreshold(raw: number): number {
  * criteria; verify each against the diff and answer in a strict per-criterion JSON
  * shape (one entry per criterion, same order — a missing entry is a FAIL).
  */
-export function buildHoldoutPrompt(
-  record: HoldoutRecord,
-  worktree?: string,
-  baseRef?: string,
-): string {
-  const lines: string[] = [];
-  if (worktree !== undefined && worktree.length > 0) {
-    // The worktree forks from the per-run staging base (origin/staging-<run-id>);
-    // diffing a hardcoded `origin/staging` resolves to an unrelated/colliding ref
-    // after a repo branch rename. Fail loud rather than silently emit the wrong ref.
-    if (baseRef === undefined || baseRef.length === 0) {
-      throw new Error(
-        "buildHoldoutPrompt: baseRef is required when a worktree is provided " +
-          "(the per-run staging base ref the worktree forked from)",
-      );
+export function buildHoldoutPrompt(record: HoldoutRecord, worktree?: string, baseRef?: string): string {
+    const lines: string[] = []
+    if (worktree !== undefined && worktree.length > 0) {
+        // The worktree forks from the per-run staging base (origin/staging-<run-id>);
+        // diffing a hardcoded `origin/staging` resolves to an unrelated/colliding ref
+        // after a repo branch rename. Fail loud rather than silently emit the wrong ref.
+        if (baseRef === undefined || baseRef.length === 0) {
+            throw new Error(
+                'buildHoldoutPrompt: baseRef is required when a worktree is provided ' +
+                    '(the per-run staging base ref the worktree forked from)'
+            )
+        }
+        lines.push(
+            `The implementation lives in the task worktree at: ${worktree}`,
+            `Inspect it with: git -C ${worktree} diff ${baseRef}`,
+            `Do NOT rely on your own working directory — it is a fresh checkout with no diff.`,
+            ''
+        )
     }
     lines.push(
-      `The implementation lives in the task worktree at: ${worktree}`,
-      `Inspect it with: git -C ${worktree} diff ${baseRef}`,
-      `Do NOT rely on your own working directory — it is a fresh checkout with no diff.`,
-      "",
-    );
-  }
-  lines.push(
-    `Holdout validation for task ${record.task_id}.`,
-    "",
-    "The implementer was NOT shown the following acceptance criteria during execution.",
-    "Independently verify whether the current diff satisfies each one.",
-    "",
-    `Withheld criteria (${record.withheld_count} of ${record.total_criteria} total):`,
-    ...record.withheld_criteria.map((c, i) => `  ${i + 1}. ${c}`),
-    "",
-    "Respond with a single JSON object, no prose, exactly this shape:",
-    '{ "criteria": [ { "criterion": "<exact text from above>", "satisfied": true|false, "evidence": "<file:line or short rationale>" }, ... ] }',
-    "",
-    "One entry per withheld criterion, in the same order. A missing entry is treated as a failure.",
-  );
-  return lines.join("\n");
+        `Holdout validation for task ${record.task_id}.`,
+        '',
+        'The implementer was NOT shown the following acceptance criteria during execution.',
+        'Independently verify whether the current diff satisfies each one.',
+        '',
+        `Withheld criteria (${record.withheld_count} of ${record.total_criteria} total):`,
+        ...record.withheld_criteria.map((c, i) => `  ${i + 1}. ${c}`),
+        '',
+        'Respond with a single JSON object, no prose, exactly this shape:',
+        '{ "criteria": [ { "criterion": "<exact text from above>", "satisfied": true|false, "evidence": "<file:line or short rationale>" }, ... ] }',
+        '',
+        'One entry per withheld criterion, in the same order. A missing entry is treated as a failure.'
+    )
+    return lines.join('\n')
 }
 
 /** Extract the `{criteria:[…]}` object from possibly prose/fence-wrapped output. */
 function extractCriteria(raw: string): unknown[] {
-  const candidates: string[] = [raw];
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    candidates.push(fenced[1]);
-  }
-  const first = raw.indexOf("{");
-  const last = raw.lastIndexOf("}");
-  if (first !== -1 && last > first) {
-    candidates.push(raw.slice(first, last + 1));
-  }
-  for (const candidate of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(candidate);
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        Array.isArray((parsed as { criteria?: unknown }).criteria)
-      ) {
-        return (parsed as { criteria: unknown[] }).criteria;
-      }
-    } catch {
-      // try the next candidate
+    const candidates: string[] = [raw]
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw)
+    if (fenced?.[1] != null && fenced[1].length > 0) {
+        candidates.push(fenced[1])
     }
-  }
-  throw new Error("holdout validator output has no parseable JSON object with .criteria");
+    const first = raw.indexOf('{')
+    const last = raw.lastIndexOf('}')
+    if (first !== -1 && last > first) {
+        candidates.push(raw.slice(first, last + 1))
+    }
+    for (const candidate of candidates) {
+        try {
+            const parsed: unknown = JSON.parse(candidate)
+            if (
+                parsed != null &&
+                typeof parsed === 'object' &&
+                Array.isArray((parsed as {criteria?: unknown}).criteria)
+            ) {
+                return (parsed as {criteria: unknown[]}).criteria
+            }
+        } catch {
+            // try the next candidate
+        }
+    }
+    throw new Error('holdout validator output has no parseable JSON object with .criteria')
 }
 
 /**
@@ -167,14 +163,14 @@ function extractCriteria(raw: string): unknown[] {
  * this and fails closed; never silently treats unparseable output as a pass.
  */
 export function parseHoldoutVerdicts(raw: string): readonly HoldoutVerdict[] {
-  return extractCriteria(raw).map((entry) => {
-    const e = (entry ?? {}) as Record<string, unknown>;
-    return {
-      criterion: typeof e.criterion === "string" ? e.criterion : "",
-      satisfied: e.satisfied === true,
-      evidence: typeof e.evidence === "string" ? e.evidence : "",
-    };
-  });
+    return extractCriteria(raw).map((entry) => {
+        const e = (entry ?? {}) as Record<string, unknown>
+        return {
+            criterion: typeof e.criterion === 'string' ? e.criterion : '',
+            satisfied: e.satisfied === true,
+            evidence: typeof e.evidence === 'string' ? e.evidence : '',
+        }
+    })
 }
 
 /**
@@ -184,38 +180,34 @@ export function parseHoldoutVerdicts(raw: string): readonly HoldoutVerdict[] {
  * missing or misaligned verdict is a FAIL. Passes when `passPct ≥ threshold`.
  */
 export function checkHoldout(
-  record: HoldoutRecord,
-  verdicts: readonly HoldoutVerdict[],
-  rawThreshold: number,
+    record: HoldoutRecord,
+    verdicts: readonly HoldoutVerdict[],
+    rawThreshold: number
 ): HoldoutCheckResult {
-  const threshold = clampThreshold(rawThreshold);
-  const criteria: HoldoutCriterionResult[] = record.withheld_criteria.map((criterion, i) => {
-    const r = verdicts[i];
-    const satisfied =
-      r !== undefined &&
-      r.criterion === criterion &&
-      r.satisfied === true &&
-      r.evidence.trim().length > 0;
-    return { criterion, satisfied, evidence: r?.evidence ?? null };
-  });
-  const satisfied = criteria.filter((c) => c.satisfied).length;
-  const withheld = record.withheld_count;
-  const passPct = withheld > 0 ? Math.floor((satisfied * 100) / withheld) : 100;
-  return {
-    status: passPct >= threshold ? "pass" : "fail",
-    satisfied,
-    withheld,
-    passPct,
-    threshold,
-    criteria,
-  };
+    const threshold = clampThreshold(rawThreshold)
+    const criteria: HoldoutCriterionResult[] = record.withheld_criteria.map((criterion, i) => {
+        const r = verdicts[i]
+        const satisfied = r?.criterion === criterion && r.satisfied && r.evidence.trim().length > 0
+        return {criterion, satisfied, evidence: r?.evidence ?? null}
+    })
+    const satisfied = criteria.filter((c) => c.satisfied).length
+    const withheld = record.withheld_count
+    const passPct = withheld > 0 ? Math.floor((satisfied * 100) / withheld) : 100
+    return {
+        status: passPct >= threshold ? 'pass' : 'fail',
+        satisfied,
+        withheld,
+        passPct,
+        threshold,
+        criteria,
+    }
 }
 
 /** Map a holdout result to the {@link GateEvidence} the loop records into the merge gate. */
 export function holdoutEvidence(result: HoldoutCheckResult): GateEvidence {
-  return {
-    gate: "holdout",
-    observed: result.status === "pass",
-    detail: `holdout ${result.satisfied}/${result.withheld} (${result.passPct}% ${result.status === "pass" ? "≥" : "<"} ${result.threshold}%)`,
-  };
+    return {
+        gate: 'holdout',
+        observed: result.status === 'pass',
+        detail: `holdout ${result.satisfied}/${result.withheld} (${result.passPct}% ${result.status === 'pass' ? '≥' : '<'} ${result.threshold}%)`,
+    }
 }

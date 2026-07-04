@@ -23,8 +23,9 @@
  *     surfaced/persisted, so a secret a reviewer pasted into a finding never
  *     leaks downstream.
  */
-import { redactSecrets } from "../../shared/secret-patterns.js";
-import { isCitable, type Finding } from "./finding.js";
+import {redactSecrets} from '../../shared/secret-patterns.js'
+import {isCitable, type Finding} from './finding.js'
+import {at} from '../../shared/index.js'
 
 /**
  * Reads source so the filter can check a quote against real code. Injected so the
@@ -33,23 +34,23 @@ import { isCitable, type Finding } from "./finding.js";
  * — a missing file means every citation into it is unverifiable (dropped).
  */
 export interface SourceReader {
-  readLines(file: string): readonly string[] | null;
+    readLines(file: string): readonly string[] | null
 }
 
 /** The ±N-line window the quote is matched within. The spec's rule is ±2. */
-export const CITATION_WINDOW = 2 as const;
+export const CITATION_WINDOW = 2 as const
 
 /** Why a finding was dropped (audit trail; never silent). */
 export type FailReason =
-  | "uncitable" // no file:line
-  | "file-not-found" // SourceReader returned null
-  | "line-out-of-range" // cited line past EOF / < 1 even after windowing
-  | "quote-not-in-window"; // quote does not substring-match within ±2
+    | 'uncitable' // no file:line
+    | 'file-not-found' // SourceReader returned null
+    | 'line-out-of-range' // cited line past EOF / < 1 even after windowing
+    | 'quote-not-in-window' // quote does not substring-match within ±2
 
 /** A dropped finding paired with the machine-checkable reason it was dropped. */
 export interface DroppedFinding {
-  readonly finding: Finding;
-  readonly reason: FailReason;
+    readonly finding: Finding
+    readonly reason: FailReason
 }
 
 /**
@@ -59,33 +60,33 @@ export interface DroppedFinding {
  * in-window keep has no `citedLine`.
  */
 export interface KeptFinding {
-  readonly finding: Finding;
-  readonly citedLine?: number;
+    readonly finding: Finding
+    readonly citedLine?: number
 }
 
 /** The result of one citation-verify pass. No verdict is computed here. */
 export interface CitationVerifyResult {
-  /** Findings whose quote was confirmed against real source (possibly redacted). */
-  readonly kept: readonly KeptFinding[];
-  /** Findings dropped, each with its reason. */
-  readonly dropped: readonly DroppedFinding[];
-  /** Per-finding audit line (kept|dropped + reason) for the report. */
-  readonly audit: readonly string[];
+    /** Findings whose quote was confirmed against real source (possibly redacted). */
+    readonly kept: readonly KeptFinding[]
+    /** Findings dropped, each with its reason. */
+    readonly dropped: readonly DroppedFinding[]
+    /** Per-finding audit line (kept|dropped + reason) for the report. */
+    readonly audit: readonly string[]
 }
 
 /** Options for {@link verifyCitations}. */
 export interface VerifyCitationsOptions {
-  /**
-   * Redact secrets from RETAINED finding text before it is surfaced/persisted
-   * (Δ K, gated by `quality.securityRedactFindings`). Defaults to `true` — the
-   * safe default; a caller must opt OUT explicitly.
-   */
-  readonly redact?: boolean;
+    /**
+     * Redact secrets from RETAINED finding text before it is surfaced/persisted
+     * (Δ K, gated by `quality.securityRedactFindings`). Defaults to `true` — the
+     * safe default; a caller must opt OUT explicitly.
+     */
+    readonly redact?: boolean
 }
 
 /** Redact a finding's free text (quote + description) in place-by-copy. */
 function redactFinding(f: Finding): Finding {
-  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
+    return {...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description)}
 }
 
 /**
@@ -95,22 +96,24 @@ function redactFinding(f: Finding): Finding {
  * past EOF (no in-range line exists) that is `line-out-of-range`.
  */
 function checkQuote(quote: string, line: number, lines: readonly string[]): FailReason | null {
-  // 1-based cited line → 0-based index. Window is [line-2, line+2] (1-based),
-  // clamped to [1, lines.length].
-  const lo = Math.max(1, line - CITATION_WINDOW);
-  const hi = Math.min(lines.length, line + CITATION_WINDOW);
-  if (lo > hi) {
-    // No line in the window exists at all (e.g. cited line 9999 in a 3-line file,
-    // or an empty file) — the citation cannot point at real code.
-    return "line-out-of-range";
-  }
-  for (let n = lo; n <= hi; n++) {
-    // `noUncheckedIndexedAccess`: the index is provably in [lo-1, hi-1] ⊆ bounds,
-    // but the type is `string | undefined`; guard rather than non-null-assert.
-    const text = lines[n - 1];
-    if (text !== undefined && text.includes(quote)) return null;
-  }
-  return "quote-not-in-window";
+    // 1-based cited line → 0-based index. Window is [line-2, line+2] (1-based),
+    // clamped to [1, lines.length].
+    const lo = Math.max(1, line - CITATION_WINDOW)
+    const hi = Math.min(lines.length, line + CITATION_WINDOW)
+    if (lo > hi) {
+        // No line in the window exists at all (e.g. cited line 9999 in a 3-line file,
+        // or an empty file) — the citation cannot point at real code.
+        return 'line-out-of-range'
+    }
+    for (let n = lo; n <= hi; n++) {
+        // `noUncheckedIndexedAccess`: the index is provably in [lo-1, hi-1] ⊆ bounds,
+        // but the type is `string | undefined`; guard rather than non-null-assert.
+        const text = lines[n - 1]
+        if (text?.includes(quote) === true) {
+            return null
+        }
+    }
+    return 'quote-not-in-window'
 }
 
 /**
@@ -121,16 +124,22 @@ function checkQuote(quote: string, line: number, lines: readonly string[]): Fail
  * matches stay fail-closed and drop as before.
  */
 function rescueLine(quote: string, reason: FailReason, lines: readonly string[]): number | null {
-  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") return null;
-  const needle = quote.trim();
-  // Trimmed-empty would `includes`-match every line; inner \n can never sit on one line.
-  if (needle === "" || needle.includes("\n")) return null;
-  const matches: number[] = [];
-  for (let n = 1; n <= lines.length; n++) {
-    const text = lines[n - 1];
-    if (text !== undefined && text.includes(needle)) matches.push(n);
-  }
-  return matches.length === 1 ? matches[0]! : null;
+    if (reason !== 'quote-not-in-window' && reason !== 'line-out-of-range') {
+        return null
+    }
+    const needle = quote.trim()
+    // Trimmed-empty would `includes`-match every line; inner \n can never sit on one line.
+    if (needle === '' || needle.includes('\n')) {
+        return null
+    }
+    const matches: number[] = []
+    for (let n = 1; n <= lines.length; n++) {
+        const text = lines[n - 1]
+        if (text?.includes(needle) === true) {
+            matches.push(n)
+        }
+    }
+    return matches.length === 1 ? at(matches, 0) : null
 }
 
 /**
@@ -138,47 +147,47 @@ function rescueLine(quote: string, reason: FailReason, lines: readonly string[])
  * access goes through `source`. See module header for the rule.
  */
 export function verifyCitations(
-  findings: readonly Finding[],
-  source: SourceReader,
-  options: VerifyCitationsOptions = {},
+    findings: readonly Finding[],
+    source: SourceReader,
+    options: VerifyCitationsOptions = {}
 ): CitationVerifyResult {
-  const redact = options.redact ?? true;
-  const kept: KeptFinding[] = [];
-  const dropped: DroppedFinding[] = [];
-  const audit: string[] = [];
+    const redact = options.redact ?? true
+    const kept: KeptFinding[] = []
+    const dropped: DroppedFinding[] = []
+    const audit: string[] = []
 
-  for (const f of findings) {
-    if (!isCitable(f)) {
-      dropped.push({ finding: f, reason: "uncitable" });
-      audit.push(`DROP uncitable: ${f.reviewer} — ${f.description}`);
-      continue;
+    for (const f of findings) {
+        if (!isCitable(f)) {
+            dropped.push({finding: f, reason: 'uncitable'})
+            audit.push(`DROP uncitable: ${f.reviewer} — ${f.description}`)
+            continue
+        }
+        const lines = source.readLines(f.file)
+        if (lines === null) {
+            dropped.push({finding: f, reason: 'file-not-found'})
+            audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`)
+            continue
+        }
+        const reason = checkQuote(f.quote, f.line, lines)
+        if (reason !== null) {
+            const found = rescueLine(f.quote, reason, lines)
+            if (found === null) {
+                dropped.push({finding: f, reason})
+                audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`)
+                continue
+            }
+            const relocated: Finding = {...f, line: found}
+            kept.push({
+                finding: redact ? redactFinding(relocated) : relocated,
+                citedLine: f.line,
+            })
+            audit.push(`RELOCATE relocated_ok ${f.file}:${f.line}→${found}: ${f.reviewer}`)
+            continue
+        }
+        const retained = redact ? redactFinding(f) : f
+        kept.push({finding: retained})
+        audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`)
     }
-    const lines = source.readLines(f.file);
-    if (lines === null) {
-      dropped.push({ finding: f, reason: "file-not-found" });
-      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
-      continue;
-    }
-    const reason = checkQuote(f.quote, f.line, lines);
-    if (reason !== null) {
-      const found = rescueLine(f.quote, reason, lines);
-      if (found === null) {
-        dropped.push({ finding: f, reason });
-        audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
-        continue;
-      }
-      const relocated: Finding = { ...f, line: found };
-      kept.push({
-        finding: redact ? redactFinding(relocated) : relocated,
-        citedLine: f.line,
-      });
-      audit.push(`RELOCATE relocated_ok ${f.file}:${f.line}→${found}: ${f.reviewer}`);
-      continue;
-    }
-    const retained = redact ? redactFinding(f) : f;
-    kept.push({ finding: retained });
-    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
-  }
 
-  return { kept, dropped, audit };
+    return {kept, dropped, audit}
 }

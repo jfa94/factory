@@ -3,14 +3,14 @@ name: implementer
 model: sonnet
 maxTurns: 60
 description: "Implements a single task: writes the minimal code that turns the test-writer's failing tests green, or patches forward over independently-confirmed review blockers. The factory's `exec` producer stage."
-whenToUse: "When the pipeline needs to execute a coding task against pre-committed failing tests"
+whenToUse: 'When the pipeline needs to execute a coding task against pre-committed failing tests'
 tools:
-  - Bash
-  - Read
-  - Write
-  - Edit
-  - Grep
-  - Glob
+    - Bash
+    - Read
+    - Write
+    - Edit
+    - Grep
+    - Glob
 ---
 
 # Task Executor — GREEN phase

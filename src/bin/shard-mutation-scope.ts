@@ -14,30 +14,31 @@
  * the "Mutation Testing" branch-protection check; do not make it dynamic without
  * also reworking that contract.
  */
-import { readFileSync } from "node:fs";
+/* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
+import {readFileSync} from 'node:fs'
 
-import { shardByCost, sloc } from "../verifier/deterministic/shard.js";
+import {shardByCost, sloc} from '../verifier/deterministic/shard.js'
 
 /** Matches the static `mutation` matrix in templates/.github/workflows/quality-gate.yml. */
-export const SHARD_COUNT = 4;
+export const SHARD_COUNT = 4
 
 /** Read `file`'s sloc weight; any failure (missing/unreadable) defaults to 1. */
 function weightOf(file: string): number {
-  try {
-    return sloc(readFileSync(file, "utf8")) || 1;
-  } catch {
-    return 1;
-  }
+    try {
+        return sloc(readFileSync(file, 'utf8')) || 1
+    } catch {
+        return 1
+    }
 }
 
 function main(scopeCsv: string): void {
-  const files = scopeCsv
-    .split(",")
-    .map((f) => f.trim())
-    .filter((f) => f !== "");
-  const weights = files.map(weightOf);
-  const shards = shardByCost(files, weights, SHARD_COUNT);
-  process.stdout.write(JSON.stringify(shards) + "\n");
+    const files = scopeCsv
+        .split(',')
+        .map((f) => f.trim())
+        .filter((f) => f !== '')
+    const weights = files.map(weightOf)
+    const shards = shardByCost(files, weights, SHARD_COUNT)
+    process.stdout.write(JSON.stringify(shards) + '\n')
 }
 
-main(process.argv[2] ?? process.env.SCOPE ?? "");
+main(process.argv[2] ?? process.env.SCOPE ?? '')

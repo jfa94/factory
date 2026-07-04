@@ -172,12 +172,12 @@ The incompleteness count is itself reported as its own regression signal.
    and the orchestrator emits `run.ci` when the rollup PR resolves, with
    `{status: green | red | timeout, checks: [...]}`.
 3. **Backfill script.** One-time `tools/score-run.sh backfill <run-id>`:
-   - If `.version` missing, resolve it by mapping `.started_at` against
-     `git log --follow -- .claude-plugin/plugin.json` history (find the
-     version active at that timestamp). If unresolvable, prompt the user.
-   - If `.final_pr_number` / `.tasks.*.pr_number` missing, scan
-     `gh pr list --search "head:task/*"` and `gh pr list --search "base:develop head:staging"` to recover. Scope the search to the project repo detected from `.orchestrator.project_root` + `git remote`.
-   - Emit synthetic `task.ci` / `run.ci` events from `gh pr view`.
+    - If `.version` missing, resolve it by mapping `.started_at` against
+      `git log --follow -- .claude-plugin/plugin.json` history (find the
+      version active at that timestamp). If unresolvable, prompt the user.
+    - If `.final_pr_number` / `.tasks.*.pr_number` missing, scan
+      `gh pr list --search "head:task/*"` and `gh pr list --search "base:develop head:staging"` to recover. Scope the search to the project repo detected from `.orchestrator.project_root` + `git remote`.
+    - Emit synthetic `task.ci` / `run.ci` events from `gh pr view`.
 4. **Scribe metric.** `scribe` agent spawn records a `agent.scribe.end` event
    in `metrics.jsonl` (new line in `run.md` Step "After all groups complete").
 

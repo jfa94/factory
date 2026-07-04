@@ -13,24 +13,24 @@
  * The {@link SpecAgentRunner} interface lets the pipeline unit test with fakes —
  * no real LLM spawn.
  */
-import { z } from "zod";
-import type { Prd } from "./gh.js";
-import { SpecTasksSchema, type SpecTask } from "./schema.js";
-import type { ReviewVerdict } from "./review.js";
+import {z} from 'zod'
+import type {Prd} from './gh.js'
+import {SpecTasksSchema, type SpecTask} from './schema.js'
+import type {ReviewVerdict} from './review.js'
 
 /** Decision-21 apex pin — invariant by construction, deliberately NOT config. */
-const APEX_MODEL = "opus";
-const APEX_EFFORT = "max";
+const APEX_MODEL = 'opus'
+const APEX_EFFORT = 'max'
 
 /** The two spec-agent roles. */
-export type SpecAgentRole = "spec-generator" | "spec-reviewer";
+export type SpecAgentRole = 'spec-generator' | 'spec-reviewer'
 
 /** PRD context every generator spawn carries (fresh generate AND revise). */
 export interface GenerateContext {
-  issue_number: number;
-  title: string;
-  body: string;
-  labels: string[];
+    issue_number: number
+    title: string
+    body: string
+    labels: string[]
 }
 
 /**
@@ -41,17 +41,17 @@ export interface GenerateContext {
  * from scratch and dropped previously-satisfied requirements.
  */
 export interface ReviseContext extends GenerateContext {
-  prior_spec_md: string;
-  prior_tasks: SpecTask[];
-  review_feedback: readonly string[];
+    prior_spec_md: string
+    prior_tasks: SpecTask[]
+    review_feedback: readonly string[]
 }
 
 /** Reviewer spawn context: the PRD + the generated spec under review. */
 export interface ReviewContext {
-  issue_number: number;
-  prd_body: string;
-  spec_md: string;
-  tasks: SpecTask[];
+    issue_number: number
+    prd_body: string
+    spec_md: string
+    tasks: SpecTask[]
 }
 
 /**
@@ -66,21 +66,21 @@ export interface ReviewContext {
  * agent by string key, the same boundary every prompt context crosses.
  */
 export interface SpecSpawnSpec<C = Record<string, unknown>> {
-  role: SpecAgentRole;
-  /** Apex pin (Decision 21) — always {@link APEX_MODEL}. */
-  model: string;
-  /** Apex pin (Decision 21) — always {@link APEX_EFFORT}. */
-  effort: string;
-  /** Structured context handed to the agent prompt. */
-  context: C;
+    role: SpecAgentRole
+    /** Apex pin (Decision 21) — always {@link APEX_MODEL}. */
+    model: string
+    /** Apex pin (Decision 21) — always {@link APEX_EFFORT}. */
+    effort: string
+    /** Structured context handed to the agent prompt. */
+    context: C
 }
 
 /** Result of a generate pass: the markdown + the structured task list. */
 export interface GenerateResult {
-  specMd: string;
-  /** Proposed slug for the spec (named by the generator at creation). */
-  slug: string;
-  tasks: SpecTask[];
+    specMd: string
+    /** Proposed slug for the spec (named by the generator at creation). */
+    slug: string
+    tasks: SpecTask[]
 }
 
 /**
@@ -92,16 +92,16 @@ export interface GenerateResult {
  * error — never a silently-coerced spec.
  */
 export const GenerateResultSchema = z
-  .object({
-    specMd: z.string().min(1),
-    slug: z.string().min(1),
-    tasks: SpecTasksSchema,
-  })
-  .strict();
+    .object({
+        specMd: z.string().min(1),
+        slug: z.string().min(1),
+        tasks: SpecTasksSchema,
+    })
+    .strict()
 
 /** Parse raw generator output into a validated {@link GenerateResult}. LOUD on any violation. */
 export function parseGenerateResult(raw: unknown): GenerateResult {
-  return GenerateResultSchema.parse(raw);
+    return GenerateResultSchema.parse(raw)
 }
 
 /**
@@ -110,29 +110,29 @@ export function parseGenerateResult(raw: unknown): GenerateResult {
  * fake.
  */
 export interface SpecAgentRunner {
-  /** Generate spec.md + tasks for a PRD (apex-pinned). */
-  generate(prd: Prd, spawn: SpecSpawnSpec): Promise<GenerateResult>;
-  /**
-   * Review a generated spec against its PRD (apex-pinned). Returns the parsed
-   * 6-dimension verdict (the runner is responsible for parsing the agent's raw
-   * verdict block via {@link parseReviewVerdict}).
-   */
-  review(prd: Prd, generated: GenerateResult, spawn: SpecSpawnSpec): Promise<ReviewVerdict>;
+    /** Generate spec.md + tasks for a PRD (apex-pinned). */
+    generate(prd: Prd, spawn: SpecSpawnSpec): Promise<GenerateResult>
+    /**
+     * Review a generated spec against its PRD (apex-pinned). Returns the parsed
+     * 6-dimension verdict (the runner is responsible for parsing the agent's raw
+     * verdict block via {@link parseReviewVerdict}).
+     */
+    review(prd: Prd, generated: GenerateResult, spawn: SpecSpawnSpec): Promise<ReviewVerdict>
 }
 
 /** Build the apex-pinned spawn spec for the spec GENERATOR (Decision 21). */
 export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec<GenerateContext> {
-  return {
-    role: "spec-generator",
-    model: APEX_MODEL,
-    effort: APEX_EFFORT,
-    context: {
-      issue_number: prd.issue_number,
-      title: prd.title,
-      body: prd.body,
-      labels: prd.labels,
-    },
-  };
+    return {
+        role: 'spec-generator',
+        model: APEX_MODEL,
+        effort: APEX_EFFORT,
+        context: {
+            issue_number: prd.issue_number,
+            title: prd.title,
+            body: prd.body,
+            labels: prd.labels,
+        },
+    }
 }
 
 /**
@@ -144,36 +144,33 @@ export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec<GenerateContext> {
  * {@link buildGenerateSpawn}; role stays `spec-generator`.
  */
 export function buildReviseSpawn(
-  prd: Prd,
-  prior: GenerateResult,
-  feedback: readonly string[],
+    prd: Prd,
+    prior: GenerateResult,
+    feedback: readonly string[]
 ): SpecSpawnSpec<ReviseContext> {
-  const base = buildGenerateSpawn(prd);
-  return {
-    ...base,
-    context: {
-      ...base.context,
-      prior_spec_md: prior.specMd,
-      prior_tasks: prior.tasks,
-      review_feedback: feedback,
-    },
-  };
+    const base = buildGenerateSpawn(prd)
+    return {
+        ...base,
+        context: {
+            ...base.context,
+            prior_spec_md: prior.specMd,
+            prior_tasks: prior.tasks,
+            review_feedback: feedback,
+        },
+    }
 }
 
 /** Build the apex-pinned spawn spec for the spec REVIEWER (Decision 21). */
-export function buildReviewSpawn(
-  prd: Prd,
-  generated: GenerateResult,
-): SpecSpawnSpec<ReviewContext> {
-  return {
-    role: "spec-reviewer",
-    model: APEX_MODEL,
-    effort: APEX_EFFORT,
-    context: {
-      issue_number: prd.issue_number,
-      prd_body: prd.body,
-      spec_md: generated.specMd,
-      tasks: generated.tasks,
-    },
-  };
+export function buildReviewSpawn(prd: Prd, generated: GenerateResult): SpecSpawnSpec<ReviewContext> {
+    return {
+        role: 'spec-reviewer',
+        model: APEX_MODEL,
+        effort: APEX_EFFORT,
+        context: {
+            issue_number: prd.issue_number,
+            prd_body: prd.body,
+            spec_md: generated.specMd,
+            tasks: generated.tasks,
+        },
+    }
 }

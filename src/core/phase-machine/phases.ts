@@ -14,31 +14,31 @@
  * transition shape ONLY — they are RENAMED here (`tests`/`exec`/`verify`/`ship`/
  * `finalize`), never ported. Human-gate phases are gone (Decision 5).
  */
-import { z } from "zod";
-import { TaskStatusEnum, type TaskStatus } from "../state/index.js";
-import { TASK_PHASES } from "../../types/phases-vocab.js";
+import {z} from 'zod'
+import {TaskStatusEnum, type TaskStatus} from '../state/index.js'
+import {TASK_PHASES} from '../../types/phases-vocab.js'
 
 /**
  * The per-task phases, in execution order. CLOSED set — a value outside it is a
  * LOUD parse error (mirrors the WS1 closed-enum discipline). Renamed from the
  * bash taxonomy: `preexec_tests→tests`, `postexec→exec`, `postreview→verify`.
  */
-export const TaskPhaseEnum = z.enum(TASK_PHASES);
-export type TaskPhase = z.infer<typeof TaskPhaseEnum>;
+export const TaskPhaseEnum = z.enum(TASK_PHASES)
+export type TaskPhase = z.infer<typeof TaskPhaseEnum>
 
 /**
  * The run-level phase(s). Deliberately a separate enum from {@link TaskPhaseEnum}:
  * `finalize` is not part of the per-task order and must never be reachable by
  * `nextPhase` walking past `ship`.
  */
-export const RunPhaseEnum = z.enum(["finalize"]);
-export type RunPhase = z.infer<typeof RunPhaseEnum>;
+export const RunPhaseEnum = z.enum(['finalize'])
+export type RunPhase = z.infer<typeof RunPhaseEnum>
 
 /**
  * The canonical per-task phase order. `nextPhase` walks this; the engine and the
  * runner share it so the transition logic has ONE home.
  */
-export const TASK_PHASE_ORDER: readonly TaskPhase[] = TASK_PHASES;
+export const TASK_PHASE_ORDER: readonly TaskPhase[] = TASK_PHASES
 
 /**
  * The phase that follows `s` in {@link TASK_PHASE_ORDER}, or `null` when `s` is the
@@ -46,13 +46,13 @@ export const TASK_PHASE_ORDER: readonly TaskPhase[] = TASK_PHASES;
  * thing is a terminal result, not another phase.
  */
 export function nextPhase(s: TaskPhase): TaskPhase | null {
-  const i = TASK_PHASE_ORDER.indexOf(s);
-  if (i < 0) {
-    // Unreachable for a validly-typed TaskPhase; loud if a bad value is forced in.
-    throw new Error(`nextPhase: '${s}' is not a known task phase`);
-  }
-  const next = TASK_PHASE_ORDER[i + 1];
-  return next ?? null;
+    const i = TASK_PHASE_ORDER.indexOf(s)
+    if (i < 0) {
+        // Unreachable for a validly-typed TaskPhase; loud if a bad value is forced in.
+        throw new Error(`nextPhase: '${s}' is not a known task phase`)
+    }
+    const next = TASK_PHASE_ORDER[i + 1]
+    return next ?? null
 }
 
 /**
@@ -70,16 +70,16 @@ export function nextPhase(s: TaskPhase): TaskPhase | null {
  * from a `task-terminal` result, not from a phase.
  */
 export function phaseToInFlightStatus(s: TaskPhase): TaskStatus {
-  switch (s) {
-    case "preflight":
-      return TaskStatusEnum.enum.pending;
-    case "tests":
-      return TaskStatusEnum.enum.executing;
-    case "exec":
-      return TaskStatusEnum.enum.executing;
-    case "verify":
-      return TaskStatusEnum.enum.reviewing;
-    case "ship":
-      return TaskStatusEnum.enum.shipping;
-  }
+    switch (s) {
+        case 'preflight':
+            return TaskStatusEnum.enum.pending
+        case 'tests':
+            return TaskStatusEnum.enum.executing
+        case 'exec':
+            return TaskStatusEnum.enum.executing
+        case 'verify':
+            return TaskStatusEnum.enum.reviewing
+        case 'ship':
+            return TaskStatusEnum.enum.shipping
+    }
 }

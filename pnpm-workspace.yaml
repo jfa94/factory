@@ -8,6 +8,6 @@
 # `onlyBuiltDependencies` list is kept for forward/back compatibility. Both name
 # esbuild as the sole package allowed to run install scripts.
 allowBuilds:
-  esbuild: true
+    esbuild: true
 onlyBuiltDependencies:
-  - esbuild
+    - esbuild

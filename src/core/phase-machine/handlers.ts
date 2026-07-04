@@ -11,8 +11,8 @@
  * passes in) and returns a `Promise<PhaseResult>`. Handlers do not write state and
  * do not decide transitions — they report a decision; the orchestrator acts on it.
  */
-import type { RunState, TaskState } from "../state/index.js";
-import type { PhaseResult } from "./result.js";
+import type {RunState, TaskState} from '../state/index.js'
+import type {PhaseResult} from './result.js'
 
 /**
  * The read-only inputs a handler needs. The engine passes WS1 state in; handlers
@@ -20,15 +20,15 @@ import type { PhaseResult } from "./result.js";
  * the run-level `finalize` handler and present for every per-task phase.
  */
 export interface PhaseContext {
-  /** The whole run (spec pointer + task map + status). Read-only to handlers. */
-  readonly run: RunState;
-  /** The task this phase acts on; absent for the run-level `finalize` phase. */
-  readonly task?: TaskState;
-  /**
-   * The current attempt number for a bounded `wait-retry`, when the orchestrator is
-   * re-invoking the same phase. Absent on a first invocation (treated as 1).
-   */
-  readonly attempt?: number;
+    /** The whole run (spec pointer + task map + status). Read-only to handlers. */
+    readonly run: RunState
+    /** The task this phase acts on; absent for the run-level `finalize` phase. */
+    readonly task?: TaskState
+    /**
+     * The current attempt number for a bounded `wait-retry`, when the orchestrator is
+     * re-invoking the same phase. Absent on a first invocation (treated as 1).
+     */
+    readonly attempt?: number
 }
 
 /**
@@ -37,11 +37,11 @@ export interface PhaseContext {
  * fake.
  */
 export interface PhaseHandlers {
-  preflight(ctx: PhaseContext): Promise<PhaseResult>;
-  tests(ctx: PhaseContext): Promise<PhaseResult>;
-  exec(ctx: PhaseContext): Promise<PhaseResult>;
-  verify(ctx: PhaseContext): Promise<PhaseResult>;
-  ship(ctx: PhaseContext): Promise<PhaseResult>;
-  /** Run-level; ALWAYS returns a `finalize-terminal` (or throws). Never spins. */
-  finalize(ctx: PhaseContext): Promise<PhaseResult>;
+    preflight(ctx: PhaseContext): Promise<PhaseResult>
+    tests(ctx: PhaseContext): Promise<PhaseResult>
+    exec(ctx: PhaseContext): Promise<PhaseResult>
+    verify(ctx: PhaseContext): Promise<PhaseResult>
+    ship(ctx: PhaseContext): Promise<PhaseResult>
+    /** Run-level; ALWAYS returns a `finalize-terminal` (or throws). Never spins. */
+    finalize(ctx: PhaseContext): Promise<PhaseResult>
 }

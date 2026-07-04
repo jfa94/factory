@@ -19,35 +19,35 @@
  * {@link TransitionDeps} (just the {@link StateManager}).
  */
 import {
-  classifyFailure,
-  ESCALATION_CAP,
-  phaseToInFlightStatus,
-  type ClassifyDecision,
-  type FailureClass,
-  type ProducerOutcome,
-  type ProducerRole,
-  type RunState,
-  type StateManager,
-  type TaskPhase,
-} from "./deps.js";
-import { nowIso, createLogger } from "../shared/index.js";
+    classifyFailure,
+    ESCALATION_CAP,
+    phaseToInFlightStatus,
+    type ClassifyDecision,
+    type FailureClass,
+    type ProducerOutcome,
+    type ProducerRole,
+    type RunState,
+    type StateManager,
+    type TaskPhase,
+} from './deps.js'
+import {nowIso, createLogger} from '../shared/index.js'
 
-const log = createLogger("transitions");
+const log = createLogger('transitions')
 
 /** The narrow dependency the transitions need: only the state write path. */
 export interface TransitionDeps {
-  readonly state: StateManager;
+    readonly state: StateManager
 }
 
 /** A terminal task outcome (mirrors the WS2 TaskTerminalResult.outcome shape). */
 export type TaskOutcome =
-  | { readonly outcome: "done" }
-  | { readonly outcome: "failed"; readonly failure_class: FailureClass; readonly reason: string };
+    | {readonly outcome: 'done'}
+    | {readonly outcome: 'failed'; readonly failure_class: FailureClass; readonly reason: string}
 
 /** One step of the per-task loop: keep going at `phase`, or stop with an outcome. */
 export type TaskStep =
-  | { readonly done: false; readonly phase: TaskPhase }
-  | { readonly done: true; readonly outcome: TaskOutcome };
+    | {readonly done: false; readonly phase: TaskPhase}
+    | {readonly done: true; readonly outcome: TaskOutcome}
 
 /**
  * Persist the in-flight {@link import("./deps.js").TaskStatus} for `phase`,
@@ -60,40 +60,31 @@ export type TaskStep =
  * so the orchestrator can consume it directly instead of issuing a redundant `state.read`
  * — discarding callers (persistStepCursor) ignore it safely.
  */
-export function markInFlight(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-  phase: TaskPhase,
-): Promise<RunState> {
-  const status = phaseToInFlightStatus(phase);
-  return deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    status,
-    phase,
-    started_at: t.started_at ?? nowIso(),
-  }));
+export function markInFlight(deps: TransitionDeps, runId: string, taskId: string, phase: TaskPhase): Promise<RunState> {
+    const status = phaseToInFlightStatus(phase)
+    return deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        status,
+        phase,
+        started_at: t.started_at ?? nowIso(),
+    }))
 }
 
 /** Persist a task as `done` (stamping ended_at once) and end the loop. */
-export async function completeTask(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-): Promise<TaskStep> {
-  await deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    status: "done",
-    ended_at: t.ended_at ?? nowIso(),
-    spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
-    // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
-    // the schema's own field comment ("cleared once the task ships again").
-    e2e_feedback: undefined,
-    // D5: a stale fix-forward record from an earlier blocked rung must not
-    // outlive the task it was for.
-    fix_findings: undefined,
-  }));
-  return { done: true, outcome: { outcome: "done" } };
+export async function completeTask(deps: TransitionDeps, runId: string, taskId: string): Promise<TaskStep> {
+    await deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        status: 'done',
+        ended_at: t.ended_at ?? nowIso(),
+        spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
+        // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
+        // the schema's own field comment ("cleared once the task ships again").
+        e2e_feedback: undefined,
+        // D5: a stale fix-forward record from an earlier blocked rung must not
+        // outlive the task it was for.
+        fix_findings: undefined,
+    }))
+    return {done: true, outcome: {outcome: 'done'}}
 }
 
 /**
@@ -102,33 +93,33 @@ export async function completeTask(
  * non-empty). A loud fail, never a silent done.
  */
 export async function failTask(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-  failureClass: FailureClass,
-  reason: string,
+    deps: TransitionDeps,
+    runId: string,
+    taskId: string,
+    failureClass: FailureClass,
+    reason: string
 ): Promise<void> {
-  log.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
-  await deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    status: "failed",
-    failure_class: failureClass,
-    failure_reason: reason,
-    ended_at: t.ended_at ?? nowIso(),
-    spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
-  }));
+    log.warn(`task '${taskId}' failed (${failureClass}): ${reason}`)
+    await deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        status: 'failed',
+        failure_class: failureClass,
+        failure_reason: reason,
+        ended_at: t.ended_at ?? nowIso(),
+        spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
+    }))
 }
 
 /** Persist a classified failure and end the loop with the failed outcome. */
 export async function failStep(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-  failureClass: FailureClass,
-  reason: string,
+    deps: TransitionDeps,
+    runId: string,
+    taskId: string,
+    failureClass: FailureClass,
+    reason: string
 ): Promise<TaskStep> {
-  await failTask(deps, runId, taskId, failureClass, reason);
-  return { done: true, outcome: { outcome: "failed", failure_class: failureClass, reason } };
+    await failTask(deps, runId, taskId, failureClass, reason)
+    return {done: true, outcome: {outcome: 'failed', failure_class: failureClass, reason}}
 }
 
 /**
@@ -144,51 +135,49 @@ export async function failStep(
  * persistStepCursor).
  */
 export async function escalateOrFail(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-  decision: ClassifyDecision,
-  resumePhase: TaskPhase,
+    deps: TransitionDeps,
+    runId: string,
+    taskId: string,
+    decision: ClassifyDecision,
+    resumePhase: TaskPhase
 ): Promise<TaskStep> {
-  if (decision.action === "fail") {
-    return failStep(deps, runId, taskId, decision.failureClass, decision.reason);
-  }
-  const run = await deps.state.read(runId);
-  const task = run.tasks[taskId];
-  if (task === undefined) {
-    throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
-  }
-  if (task.escalation_rung >= ESCALATION_CAP) {
-    return failStep(
-      deps,
-      runId,
-      taskId,
-      "capability-budget",
-      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the merge gate: ${decision.reason}`,
-    );
-  }
-  const nextRung = task.escalation_rung + 1;
-  await deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    escalation_rung: nextRung,
-    reviewers: [],
-  }));
-  log.info(
-    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`,
-  );
-  return { done: false, phase: resumePhase };
+    if (decision.action === 'fail') {
+        return failStep(deps, runId, taskId, decision.failureClass, decision.reason)
+    }
+    const run = await deps.state.read(runId)
+    const task = run.tasks[taskId]
+    if (task === undefined) {
+        throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`)
+    }
+    if (task.escalation_rung >= ESCALATION_CAP) {
+        return failStep(
+            deps,
+            runId,
+            taskId,
+            'capability-budget',
+            `producer escalation cap (${ESCALATION_CAP}) reached without clearing the merge gate: ${decision.reason}`
+        )
+    }
+    const nextRung = task.escalation_rung + 1
+    await deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        escalation_rung: nextRung,
+        reviewers: [],
+    }))
+    log.info(`task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`)
+    return {done: false, phase: resumePhase}
 }
 
 /** Map a non-`done` {@link ProducerOutcome} to a classify decision (Δ D). */
 export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecision {
-  if (outcome.status === "done") {
-    throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
-  }
-  return classifyFailure({
-    kind: "producer-status",
-    status: outcome.status,
-    reason: outcome.reason,
-  });
+    if (outcome.status === 'done') {
+        throw new Error("transitions: classifyProducerFailure called on a 'done' outcome")
+    }
+    return classifyFailure({
+        kind: 'producer-status',
+        status: outcome.status,
+        reason: outcome.reason,
+    })
 }
 
 /**
@@ -207,47 +196,47 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
  * into state + the next step.
  */
 export async function applyProducerOutcome(
-  deps: TransitionDeps,
-  runId: string,
-  taskId: string,
-  opts: { readonly role: ProducerRole; readonly phase: TaskPhase; readonly resumePhase: TaskPhase },
-  outcome: ProducerOutcome,
+    deps: TransitionDeps,
+    runId: string,
+    taskId: string,
+    opts: {readonly role: ProducerRole; readonly phase: TaskPhase; readonly resumePhase: TaskPhase},
+    outcome: ProducerOutcome
 ): Promise<TaskStep> {
-  if (outcome.status === "done") {
-    await deps.state.updateTask(runId, taskId, (t) => ({
-      ...t,
-      producer_role: opts.role,
-      // A completed test-writer re-run resolves any pending defect feedback — clear
-      // it so a stale note never leaks into a later rung's regeneration.
-      ...(opts.role === "test-writer" ? { test_revision_feedback: undefined } : {}),
-    }));
-    return { done: false, phase: opts.resumePhase };
-  }
-  // A `test-defective` escalation (only the implementer raises it) recovers by
-  // RE-RUNNING THE TEST-WRITER: persist the defect feedback and resume at `tests`
-  // (not the implementer's own `exec` phase). The escalation cap still bounds it.
-  if (outcome.status === "test-defective") {
-    if (opts.phase !== "exec") {
-      // The parser is role-blind, so a non-exec role can emit 'test-defective'.
-      // That signal is nonsensical for the role: classify as a producer error so
-      // the ladder records + caps it instead of escaping next-action's catch.
-      return escalateOrFail(
-        deps,
-        runId,
-        taskId,
-        classifyFailure({
-          kind: "producer-status",
-          status: "error",
-          reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`,
-        }),
-        opts.phase,
-      );
+    if (outcome.status === 'done') {
+        await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            producer_role: opts.role,
+            // A completed test-writer re-run resolves any pending defect feedback — clear
+            // it so a stale note never leaks into a later rung's regeneration.
+            ...(opts.role === 'test-writer' ? {test_revision_feedback: undefined} : {}),
+        }))
+        return {done: false, phase: opts.resumePhase}
     }
-    await deps.state.updateTask(runId, taskId, (t) => ({
-      ...t,
-      test_revision_feedback: outcome.reason,
-    }));
-    return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), "tests");
-  }
-  return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase);
+    // A `test-defective` escalation (only the implementer raises it) recovers by
+    // RE-RUNNING THE TEST-WRITER: persist the defect feedback and resume at `tests`
+    // (not the implementer's own `exec` phase). The escalation cap still bounds it.
+    if (outcome.status === 'test-defective') {
+        if (opts.phase !== 'exec') {
+            // The parser is role-blind, so a non-exec role can emit 'test-defective'.
+            // That signal is nonsensical for the role: classify as a producer error so
+            // the ladder records + caps it instead of escaping next-action's catch.
+            return escalateOrFail(
+                deps,
+                runId,
+                taskId,
+                classifyFailure({
+                    kind: 'producer-status',
+                    status: 'error',
+                    reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`,
+                }),
+                opts.phase
+            )
+        }
+        await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            test_revision_feedback: outcome.reason,
+        }))
+        return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), 'tests')
+    }
+    return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase)
 }

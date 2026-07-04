@@ -10,29 +10,29 @@
 
 // Injectable producer-agent boundary + outcome parse.
 export {
-  parseProducerStatus,
-  type ProducerAgentRunner,
-  type ProducerSpawn,
-  type ProducerOutcome,
-  type ProducerRole,
-} from "./agents.js";
+    parseProducerStatus,
+    type ProducerAgentRunner,
+    type ProducerSpawn,
+    type ProducerOutcome,
+    type ProducerRole,
+} from './agents.js'
 
 // The model dial + escalation derivation (the "change a variable" source).
-export { dialForRung, type DialResult } from "./model-dial.js";
+export {dialForRung, type DialResult} from './model-dial.js'
 
 // Structured producer prompt-context assembly (holdout-safe).
 export {
-  buildProducerContext,
-  type BuildProducerContextInput,
-  type ProducerContext,
-  type FixInstruction,
-  type PriorFailureNote,
-  type ConfirmedBlocker,
-} from "./prompt-context.js";
+    buildProducerContext,
+    type BuildProducerContextInput,
+    type ProducerContext,
+    type FixInstruction,
+    type PriorFailureNote,
+    type ConfirmedBlocker,
+} from './prompt-context.js'
 
 // Classify-before-retry (Δ D).
-export { classifyFailure, type FailureSignal, type ClassifyDecision } from "./classify.js";
+export {classifyFailure, type FailureSignal, type ClassifyDecision} from './classify.js'
 
 // The escalation cap. The bounded nuke-and-retry ladder is re-expressed by the
 // orchestrator via the persisted `escalation_rung` (src/orchestrator/transitions.ts), capped here.
-export { ESCALATION_CAP } from "./escalation.js";
+export {ESCALATION_CAP} from './escalation.js'

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import {test, expect} from '@playwright/test'
 
 /**
  * Seeded by `factory scaffold` (Decision 39) — then PROJECT-OWNED. This file
@@ -14,14 +14,14 @@ import { test, expect } from "@playwright/test";
  * other assertion RED — proof the app booted, not that it's broken.
  * See skills/e2e-authoring/SKILL.md for the full discipline.
  */
-test("control: app shell renders", async ({ page }) => {
-  await page.goto("/");
-  await expect(page).toHaveTitle(/.+/);
-});
+test('control: app shell renders', async ({page}) => {
+    await page.goto('/')
+    await expect(page).toHaveTitle(/.+/)
+})
 
 // eslint-disable-next-line playwright/no-skipped-test -- placeholder journey, replace or delete
-test.skip("example journey: replace with a real money-path", async ({ page }) => {
-  await page.goto("/");
-  // await page.getByRole("link", { name: "Sign up" }).click();
-  // await expect(page.getByRole("heading", { name: "Welcome" })).toBeVisible();
-});
+test.skip('example journey: replace with a real money-path', async ({page}) => {
+    await page.goto('/')
+    // await page.getByRole("link", { name: "Sign up" }).click();
+    // await expect(page.getByRole("heading", { name: "Welcome" })).toBeVisible();
+})

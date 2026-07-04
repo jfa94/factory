@@ -91,7 +91,7 @@ present-and-equal is _skipped_ (idempotent); present-and-different is reported a
 left untouched. Detection fails an entry — never silently — before it reaches `gateEnv`:
 
 - **value `${{ … }}`** — a GitHub expression ref (`${{ secrets.* }}`, `${{ matrix.* }}`, unusable
-  - unsafe at gate time) → reported under `skippedExpressionRefs`;
+    - unsafe at gate time) → reported under `skippedExpressionRefs`;
 - **secret-shaped value** — anything the secret scanner flags (defense-in-depth: placeholders, not
   secrets) → reported under `droppedSecrets`;
 - **reserved KEY** — a loader / path-injection name (`PATH`, `NODE_PATH`, `LD_PRELOAD`,

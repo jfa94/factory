@@ -17,13 +17,13 @@
  * (the runner bootstrap), always passes `--run` on the hot path, and its
  * no-`--run` fallback is guarded against a foreign run by `--assert-owner`.
  */
-import { DefaultGitClient, resolveRepo, type GitClient } from "../git/index.js";
-import type { RunState, StateManager } from "../core/state/index.js";
+import {DefaultGitClient, resolveRepo, type GitClient} from '../git/index.js'
+import type {RunState, StateManager} from '../core/state/index.js'
 
 /** Test seam: inject the git client + cwd (parity with {@link RunCreateOverrides}). */
 export interface CurrentRunOverrides {
-  readonly gitClient?: GitClient;
-  readonly cwd?: string;
+    readonly gitClient?: GitClient
+    readonly cwd?: string
 }
 
 /**
@@ -32,17 +32,17 @@ export interface CurrentRunOverrides {
  * pointer when the repo cannot be derived. Never throws on repo resolution itself.
  */
 export async function readCurrentForCwd(
-  state: StateManager,
-  overrides: CurrentRunOverrides = {},
+    state: StateManager,
+    overrides: CurrentRunOverrides = {}
 ): Promise<RunState | null> {
-  const cwd = overrides.cwd ?? process.cwd();
-  const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  let repo: string;
-  try {
-    repo = await resolveRepo({ cwd, gitClient });
-  } catch {
-    // Not a checkout / no origin remote → repo-less legacy "most-recent" pointer.
-    return state.readCurrent();
-  }
-  return state.readCurrentForRepo(repo);
+    const cwd = overrides.cwd ?? process.cwd()
+    const gitClient = overrides.gitClient ?? new DefaultGitClient()
+    let repo: string
+    try {
+        repo = await resolveRepo({cwd, gitClient})
+    } catch {
+        // Not a checkout / no origin remote → repo-less legacy "most-recent" pointer.
+        return state.readCurrent()
+    }
+    return state.readCurrentForRepo(repo)
 }

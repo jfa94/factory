@@ -43,10 +43,10 @@ And the hole **bigger than storage** — why perfect zoning is still insufficien
 - **Keep:** the diagnosis (P1–P4 are real), the _organizing_ value of trust-class zoning (coherence, dedup, audit clarity), and the spec store's _goal_ (kill regeneration).
 - **Demote:** zoning from "security control" to "hygiene + precondition." It delivers P2/P3 only when paired with the primitives below.
 - **Add — the actual security work, none of it locational:**
-  1. **Derive-don't-store verdicts** + guard `task-write` of `*_gate*`/`security_gate*`/`coverage*` fields. _(highest severity)_
-  2. **Recompute executor-produced gate evidence in TCB space** — the coverage gate reads `cov_after` from `$wt/coverage/...` in the executor's _own_ worktree (`stages.sh:699`); re-run coverage on the _committed_ code orchestrator-side. The ladder has no class for "executor-produced evidence a gate must trust" — same gap as the holdout, only noticed for the holdout.
-  3. **Harden `CLAUDE_PLUGIN_DATA` resolution** — abort on an env value that disagrees with the canonical dir, instead of honoring out-of-tree paths.
-  4. **Narrow `Bash(*)` or accept best-effort (Q-C1)** — without this, every write/read-deny is bypassable and the trust ladder is decorative. This is now the _gating_ decision, not a footnote.
+    1. **Derive-don't-store verdicts** + guard `task-write` of `*_gate*`/`security_gate*`/`coverage*` fields. _(highest severity)_
+    2. **Recompute executor-produced gate evidence in TCB space** — the coverage gate reads `cov_after` from `$wt/coverage/...` in the executor's _own_ worktree (`stages.sh:699`); re-run coverage on the _committed_ code orchestrator-side. The ladder has no class for "executor-produced evidence a gate must trust" — same gap as the holdout, only noticed for the holdout.
+    3. **Harden `CLAUDE_PLUGIN_DATA` resolution** — abort on an env value that disagrees with the canonical dir, instead of honoring out-of-tree paths.
+    4. **Narrow `Bash(*)` or accept best-effort (Q-C1)** — without this, every write/read-deny is bypassable and the trust ladder is decorative. This is now the _gating_ decision, not a footnote.
 - **Holdout:** go **L3 (off-host) or call it advisory** — L2 leaks the secret and the secret is derivable anyway.
 
 The body below is the original draft, **uncorrected inline except where flagged `(see §0)`**, so the discussion can start from the decisions this verdict surfaces (§12, reframed).

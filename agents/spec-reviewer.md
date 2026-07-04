@@ -6,9 +6,9 @@ maxTurns: 20
 isolation: worktree
 description: "Independently reviews a generated spec (spec markdown + task list) for granularity, dependency correctness, acceptance-criteria testability, test coverage, vertical-slice integrity, and spec↔PRD alignment. Spawned by the runner's spec loop on a fresh context; returns a ReviewVerdict JSON. Apex-pinned (Opus / max effort, Decision 21)."
 tools:
-  - Read
-  - Grep
-  - Glob
+    - Read
+    - Grep
+    - Glob
 ---
 
 # Spec Reviewer
@@ -87,18 +87,18 @@ an out-of-range score, or any extra field is a LOUD parse error.
 
 ```json
 {
-  "decision": "PASS | NEEDS_REVISION",
-  "score": 56,
-  "per_dimension": {
-    "granularity": 9,
-    "dependencies": 9,
-    "acceptance_criteria": 10,
-    "tests": 9,
-    "vertical_slices": 9,
-    "alignment": 10
-  },
-  "blockers": ["Exact, fixable hard-rule violations — empty when none"],
-  "concerns": ["Non-blocking issues with specific fix suggestions"]
+    "decision": "PASS | NEEDS_REVISION",
+    "score": 56,
+    "per_dimension": {
+        "granularity": 9,
+        "dependencies": 9,
+        "acceptance_criteria": 10,
+        "tests": 9,
+        "vertical_slices": 9,
+        "alignment": 10
+    },
+    "blockers": ["Exact, fixable hard-rule violations — empty when none"],
+    "concerns": ["Non-blocking issues with specific fix suggestions"]
 }
 ```
 

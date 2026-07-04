@@ -12,83 +12,70 @@
 
 // Durable on-disk spec artifact.
 export {
-  SpecTaskSchema,
-  SpecTasksSchema,
-  SpecManifestSchema,
-  parseSpecTasks,
-  parseSpecManifest,
-  type SpecTask,
-  type SpecManifest,
-} from "./schema.js";
+    SpecTaskSchema,
+    SpecTasksSchema,
+    SpecManifestSchema,
+    parseSpecTasks,
+    parseSpecManifest,
+    type SpecTask,
+    type SpecManifest,
+} from './schema.js'
 
 // PRD fetch (injectable gh wrapper).
-export {
-  RealGhClient,
-  GhAuthError,
-  IssueNotFoundError,
-  type GhClient,
-  type Prd,
-  type ExecFn,
-} from "./gh.js";
+export {RealGhClient, GhAuthError, IssueNotFoundError, type GhClient, type Prd, type ExecFn} from './gh.js'
 
 // Durable spec store (Δ X reuse-by-issue).
-export { SpecStore, makeSpecId } from "./store.js";
+export {SpecStore, makeSpecId} from './store.js'
 
 // Apex-pinned spec-agent boundary (Decision 21).
 export {
-  buildGenerateSpawn,
-  buildReviewSpawn,
-  buildReviseSpawn,
-  GenerateResultSchema,
-  parseGenerateResult,
-  type SpecAgentRunner,
-  type SpecAgentRole,
-  type SpecSpawnSpec,
-  type GenerateContext,
-  type ReviseContext,
-  type ReviewContext,
-  type GenerateResult,
-} from "./agents.js";
+    buildGenerateSpawn,
+    buildReviewSpawn,
+    buildReviseSpawn,
+    GenerateResultSchema,
+    parseGenerateResult,
+    type SpecAgentRunner,
+    type SpecAgentRole,
+    type SpecSpawnSpec,
+    type GenerateContext,
+    type ReviseContext,
+    type ReviewContext,
+    type GenerateResult,
+} from './agents.js'
 
 // Deterministic spec gates.
 export {
-  verticalSliceGate,
-  testabilityGate,
-  traceabilityGate,
-  runSpecGates,
-  combineGates,
-  extractPrdRequirements,
-  specifiabilityGate,
-  type GateResult,
-} from "./gates.js";
+    verticalSliceGate,
+    testabilityGate,
+    traceabilityGate,
+    runSpecGates,
+    combineGates,
+    extractPrdRequirements,
+    specifiabilityGate,
+    type GateResult,
+} from './gates.js'
 
 // Review adjudication (single 56/60 threshold + floor, Δ I) + rubric constants.
 export {
-  parseReviewVerdict,
-  decideSpecReview,
-  ReviewVerdictSchema,
-  PerDimensionSchema,
-  REVIEW_DIMENSION_COUNT,
-  REVIEW_MAX_TOTAL,
-  type ReviewVerdict,
-  type PerDimension,
-  type SpecReviewResult,
-  type SpecReviewDecision,
-  type DecideOptions,
-} from "./review.js";
+    parseReviewVerdict,
+    decideSpecReview,
+    ReviewVerdictSchema,
+    PerDimensionSchema,
+    REVIEW_DIMENSION_COUNT,
+    REVIEW_MAX_TOTAL,
+    type ReviewVerdict,
+    type PerDimension,
+    type SpecReviewResult,
+    type SpecReviewDecision,
+    type DecideOptions,
+} from './review.js'
 
 // Durable spec-request builder (shared by the `spec store` CLI seam).
-export { buildManifest } from "./pipeline.js";
+export {buildManifest} from './pipeline.js'
 
 // Deterministic spec-build seam (resolve → gate → store; the `factory spec`
 // CLI + `/factory:debug`'s synthetic-PRD deps both drive these unchanged).
-export {
-  resolveSpec,
-  gateSpec,
-  storeSpec,
-  type SpecBuildDeps,
-  type SpecBuildEnvelope,
-} from "./build.js";
+export {resolveSpec, gateSpec, storeSpec, type SpecBuildDeps, type SpecBuildEnvelope} from './build.js'
 
 // Spec-pipeline defaults now live in the canonical config schema (src/config).
-export { SPEC_DEFAULTS, type SpecConfig } from "../config/index.js";
+export {SPEC_DEFAULTS, type SpecConfig} from '../config/index.js'

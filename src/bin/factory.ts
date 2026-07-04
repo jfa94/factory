@@ -6,13 +6,13 @@
  * in `src/cli/main.ts`) means tests can import `dispatch` without triggering a
  * real `process.exit`. esbuild bundles THIS file into `dist/factory.js`.
  */
-import { dispatch } from "../cli/main.js";
-import { EXIT } from "../shared/exit-codes.js";
+import {dispatch} from '../cli/main.js'
+import {EXIT} from '../shared/exit-codes.js'
 
 dispatch(process.argv.slice(2))
-  .then((code) => process.exit(code))
-  .catch((err: unknown) => {
-    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    process.stderr.write(detail + "\n");
-    process.exit(EXIT.ERROR);
-  });
+    .then((code) => process.exit(code))
+    .catch((err: unknown) => {
+        const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+        process.stderr.write(detail + '\n')
+        process.exit(EXIT.ERROR)
+    })

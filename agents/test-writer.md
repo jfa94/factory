@@ -91,12 +91,12 @@ literal>")` against a source/migration file). If the artifact under test is **no
    one test (more if edge cases demand). You may Read public type signatures / JSDoc and
    non-scope code for patterns — never the in-scope implementation.
 3. **Cover the shape of correctness**, not just the happy path:
-   - Happy path — normal inputs produce the criterion's expected output.
-   - Edge cases — empty / zero / null / undefined where the types allow.
-   - Boundaries — off-by-one, max values, empty strings, single-element collections.
-   - Error paths — invalid inputs that must throw or return an error state.
-   - State transitions — verify before/after when the behavior changes state.
-   - Time-dependent behavior — freeze the clock (e.g. vitest `vi.setSystemTime(NOW)` / jest fake timers) so "expires in 1h" style assertions are deterministic, not racing wall-clock.
+    - Happy path — normal inputs produce the criterion's expected output.
+    - Edge cases — empty / zero / null / undefined where the types allow.
+    - Boundaries — off-by-one, max values, empty strings, single-element collections.
+    - Error paths — invalid inputs that must throw or return an error state.
+    - State transitions — verify before/after when the behavior changes state.
+    - Time-dependent behavior — freeze the clock (e.g. vitest `vi.setSystemTime(NOW)` / jest fake timers) so "expires in 1h" style assertions are deterministic, not racing wall-clock.
 4. **Property / invariant tests when the project supports them.** When `fast-check` is
    already a dependency and the input domain fits (parsers, serializers, normalizers, pure
    math — anything with a broad input space), PREFER fast-check properties over enumerated
