@@ -505,6 +505,43 @@ export const DocsPhaseSchema = z.object({
 export type DocsPhase = z.infer<typeof DocsPhaseSchema>;
 
 // ---------------------------------------------------------------------------
+// Traceability phase marker (S9, Decision 47 — PRD-traceability audit)
+// ---------------------------------------------------------------------------
+
+/**
+ * One recorded auditor verdict for one PRD requirement. `requirement` is the
+ * requirement TEXT (never an index) — the row stays meaningful even if the
+ * deterministic extractor's numbering drifts across versions.
+ */
+export const TraceabilityVerdictRowSchema = z.object({
+  requirement: z.string().min(1),
+  verdict: z.enum(["met", "partial", "unmet"]),
+  evidence: z.string().min(1),
+});
+export type TraceabilityVerdictRow = z.infer<typeof TraceabilityVerdictRowSchema>;
+
+/**
+ * Run-level PRD-traceability phase marker (S9). Runs between e2e and docs.
+ * `done` — audit concluded with no `unmet` requirement (`partial` passes but
+ * surfaces in the report). `failed` — either a concluded audit found `unmet`
+ * requirements (verdicts non-empty; blocks rollup, never retried) or the
+ * auditor crashed out of its attempt cap (verdicts empty — the anti-docs
+ * delta: traceability is a delivery gate, never best-effort-done). Verdicts
+ * live IN the marker (recorded agent judgment, like `task.failure_reason`) —
+ * a sidecar file would add a parse seam that can desync from `status`.
+ */
+export const TraceabilityPhaseSchema = z.object({
+  status: z.enum(["done", "failed"]),
+  reason: z.string().optional(),
+  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
+  attempts: z.number().int().nonnegative().optional(),
+  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+  verdicts: z.array(TraceabilityVerdictRowSchema).default([]),
+  ended_at: z.string(),
+});
+export type TraceabilityPhase = z.infer<typeof TraceabilityPhaseSchema>;
+
+// ---------------------------------------------------------------------------
 // E2E phase marker + author manifest (engine-owned e2e phase, Decision 39)
 // ---------------------------------------------------------------------------
 
@@ -760,6 +797,9 @@ export const RunStateSchema = z.object({
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
 
+  /** PRD-traceability phase marker (S9); absent until the phase runs. */
+  traceability: TraceabilityPhaseSchema.optional(),
+
   /**
    * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
    * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
@@ -877,6 +917,29 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
       status: run.docs.status,
       reason: run.docs.reason,
     });
+  }
+
+  // T4: TraceabilityPhase "reason set IFF failed" + a `done` marker may never
+  // carry an `unmet` verdict — unmet blocks rollup, so recording it `done` is a
+  // logic bug upstream; reject at parse time rather than let a condemned run roll up.
+  if (run.traceability !== undefined) {
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["traceability", "reason"],
+      label: "traceability phase",
+      status: run.traceability.status,
+      reason: run.traceability.reason,
+    });
+    if (
+      run.traceability.status === "done" &&
+      run.traceability.verdicts.some((v) => v.verdict === "unmet")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["traceability", "verdicts"],
+        message: `run '${run.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`,
+      });
+    }
   }
 
   // T2: E2ePhase "reason set IFF failed" — mirrors the DocsPhase check above. Unlike
