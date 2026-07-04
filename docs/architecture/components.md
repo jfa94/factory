@@ -90,9 +90,14 @@ and is stepped verbatim by the runner (the in-session event loop).
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
   run-completion coordinator (report → PRD-issue fails comment → rollup → flip
   terminal, in resume-safe order).
-- `docs.ts` / `e2e.ts` / `assessment.ts` — the run-level **coroutines** behind `factory run
-docs` / `factory run e2e` / `factory run e2e-assess`, each an emit/record pair symmetric with
-  `nextAction`. `docs.ts` runs once before finalize (Decision 37); `assessment.ts` runs once at
+- `docs.ts` / `e2e.ts` / `assessment.ts` / `traceability.ts` — the run-level **coroutines**
+  behind `factory run docs` / `factory run e2e` / `factory run e2e-assess` / `factory run
+traceability`, each an emit/record pair symmetric with
+  `nextAction`. `traceability.ts` runs once on every **non-debug** run between the e2e phase
+  and docs (Decision 47) — it spawns the read-only `traceability-auditor` in a detached
+  worktree to deliver one met/partial/unmet verdict per numbered PRD requirement; any `unmet`
+  condemns the run (finalize blocks the rollup), a crash retries once
+  (`MAX_TRACE_ATTEMPTS` = 2) then fails the run. `docs.ts` runs once before finalize (Decision 37); `assessment.ts` runs once at
   run START before any task on an `--e2e` run (Decision 40 D3) — it spawns the `e2e-assessor` to
   resolve boot config into `playwright.config.ts`, forecast affected specs, and fail the run
   loud if the app can't boot; `e2e.ts` runs before docs on an `--e2e` run (Decision 39/40) — it
@@ -150,9 +155,13 @@ branch-protection probe/provision, the per-run staging deriver
 
 ## Spec (`src/spec`)
 
-The spec-build pipeline: the deterministic spec gates, the 56/60 +
+The spec-build pipeline: the deterministic spec gates — including the
+**specifiability gate** (`gates.ts`) that `factory spec resolve` runs on the PRD body
+before any generation and refuses an underspecified PRD (Decision 47) — the 56/60 +
 dimension-floor review adjudication, the durable `SpecStore` (keyed by repo +
-spec-id), and the spawn-spec builders the `factory spec` reporter actions emit.
+spec-id) that persists the **PRD snapshot** (`prd.json`) alongside `spec.md`/`tasks.json`
+so the end-of-run traceability audit judges the frozen PRD, and the spawn-spec builders
+the `factory spec` reporter actions emit.
 
 ## Scoring (`src/scoring`)
 

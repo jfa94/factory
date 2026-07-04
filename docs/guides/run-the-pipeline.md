@@ -35,16 +35,17 @@ branch at create — there is no shared `staging` branch to protect.)
 existing run](#start-fresh-vs-continue-an-existing-run) below for what happens when
 an active run already exists for the spec.
 
-| Flag                  | Required | Notes                                                                                                                                                                                   |
-| --------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                                                                                                        |
-| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                                                                                                 |
-| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                                                                                                    |
-| `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop.                                                                                 |
-| `--e2e`               | no       | Opt into the run-level e2e phase — author + run Playwright journeys against staging before docs. Create-only + immutable on resume. See [Run with end-to-end tests](./run-with-e2e.md). |
-| `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.                                                                                            |
-| `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.                                                                                               |
-| `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).                                                                                     |
+| Flag                  | Required | Notes                                                                                                                                                                                                                                                             |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                                                                                                                                                                                  |
+| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                                                                                                                                                                           |
+| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                                                                                                                                                                              |
+| `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop.                                                                                                                                                           |
+| `--e2e`               | no       | Opt into the run-level e2e phase — author + run Playwright journeys against staging before docs. Create-only + immutable on resume. See [Run with end-to-end tests](./run-with-e2e.md).                                                                           |
+| `--approve-spec`      | no       | Create-only opt-in (default OFF). Create the run in full, then park it `suspended` for human spec sign-off **before any agent runs**; `/factory:resume` is the sign-off. See [Approve a spec before the run starts](#approve-a-spec-before-the-run-starts) below. |
+| `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.                                                                                                                                                                      |
+| `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.                                                                                                                                                                         |
+| `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).                                                                                                                                                               |
 
 The runner (`skills/pipeline-runner/SKILL.md`) is a parallel event loop in your
 Claude Code session: every `factory` call runs foreground (one-driver-per-task by
@@ -89,6 +90,28 @@ to override the wall and proceed. `--ignore-quota` also disables per-step quota 
 for the run (it persists on the run) — use it only
 to override a mistaken suspend or after a manual quota reset.
 
+### Approve a spec before the run starts
+
+By default a run drives straight from a stored spec into the tasks. To inspect the
+generated `spec.md` and sign off before any agent spends quota, opt in at create:
+
+```
+/factory:run --repo <owner/name> --issue <N> --approve-spec
+```
+
+The engine still creates the run in full — cuts the `staging-<run-id>` branch and seeds
+the tasks — then parks it `suspended` **before the first task runs**, with no quota
+checkpoint written. The create envelope reports the `spec.md` path to review. Read it,
+and when you are satisfied, sign off by resuming:
+
+```
+/factory:resume [--run <id>]
+```
+
+`resume` **is** the sign-off — it clears the park and drives the run. `--approve-spec`
+is create-only and rejected if paired with `--resume`. See
+[Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park).
+
 ## 3. What happens (the four phases)
 
 The runner follows `skills/pipeline-runner/SKILL.md`:
@@ -96,7 +119,10 @@ The runner follows `skills/pipeline-runner/SKILL.md`:
 1. **Preconditions** — `factory scaffold` (idempotent re-check).
 2. **Spec** — the bounded generate ⇄ review loop (`factory spec
 resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
-   spec is `reuse`d or `stored`.
+   spec is `reuse`d or `stored`. `factory spec resolve` first runs a deterministic
+   **specifiability gate** over the PRD body and **refuses** (exit 1) an underspecified
+   PRD — too little prose, no extractable requirement, or no acceptance-criteria heading
+   (Decision 47). Flesh out the PRD issue and re-run.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
 4. **Drive** — the runner steps the seam as an event loop. `factory next-task` returns
@@ -119,7 +145,15 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    unmappable pre-existing failure is **adjudicated** (regression → fail; intentional change →
    update the spec). On a run created without `--e2e` both phases are skipped entirely. See
    [Run with end-to-end tests](./run-with-e2e.md).
-6. **Docs** — once all tasks are terminal (and the e2e phase, if any, is `done`) and the
+6. **Traceability** (every non-debug run) — after the e2e phase and before docs,
+   `factory next-task` schedules the PRD-traceability audit (Decision 47). The runner runs
+   `factory run traceability`, which spawns the read-only `traceability-auditor` in a detached
+   worktree; it reads the run's whole staging diff and returns one **met / partial / unmet**
+   verdict per numbered PRD requirement — judging only the shipped code and tests, never task
+   statuses or review outcomes. `partial` verdicts pass but surface as gaps in the run report;
+   any **unmet** condemns the run — finalize blocks the rollup and docs never runs. A crashed
+   audit retries once; a crash at the cap fails the run.
+7. **Docs** — once all tasks are terminal (and the e2e + traceability phases are `done`) and the
    PRD would be `completed`,
    `factory next-task` returns `document` (not yet `finalize`) if the repo keeps a
    `/docs` directory and docs aren't opted out. The runner runs `factory run docs`,
@@ -128,7 +162,7 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    emit `finalize`. A docs failure suspends the run (resumable via
    `/factory:resume`). On a `failed` run, or when docs are opted out, this phase is
    skipped.
-7. **Completion** — `factory run finalize` builds the report; on a `failed` run it
+8. **Completion** — `factory run finalize` builds the report; on a `failed` run it
    posts one comment on the PRD issue listing the failed tasks; **only when the
    whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (which
    includes the docs commit, since it landed on staging before finalize), comment on
