@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runStatusline } from "./statusline.js";
 import { usageCachePath, StatuslineUsageSignal } from "../../quota/usage-source.js";
 import { EXIT } from "../../shared/exit-codes.js";
+import { StateManager } from "../../core/state/index.js";
+import { currentLinkPath, STATE_FILE } from "../../core/state/paths.js";
+import type { SpecPointer, TaskState } from "../../types/index.js";
 
 /** A representative Claude Code statusline payload with rate_limits. */
 function ccPayload(overrides: Record<string, unknown> = {}): string {
@@ -250,5 +253,106 @@ describe("runStatusline (passthrough)", () => {
     expect(seenTimeout).toBe(3000);
     // The cache write is independent of the passthrough outcome.
     expect(existsSync(usageCachePath(dataDir))).toBe(true);
+  });
+});
+
+describe("runStatusline (run-progress suffix, S11)", () => {
+  let dataDir: string;
+  let state: StateManager;
+  const FIXED_NOW = 8_999_999_000; // epoch seconds
+  const SPEC: SpecPointer = { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 };
+  const RUN = "run-progress";
+
+  function task(
+    seed: Partial<TaskState> & { task_id: string; status: TaskState["status"] },
+  ): TaskState {
+    return {
+      depends_on: [],
+      escalation_rung: 0,
+      reviewers: [],
+      merge_resyncs: 0,
+      ...seed,
+    };
+  }
+
+  /** Run the statusline with a captured display and no passthrough/cache noise. */
+  async function display(env: NodeJS.ProcessEnv = {}, now = FIXED_NOW): Promise<string> {
+    let displayed = "";
+    const code = await runStatusline([], {
+      dataDirOptions: { dataDir },
+      now: () => now,
+      readStdin: () => Promise.resolve(""),
+      env,
+      writeStdout: (s) => {
+        displayed += s;
+      },
+    });
+    expect(code).toBe(EXIT.OK);
+    return displayed;
+  }
+
+  beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), "factory-statusline-progress-"));
+    state = new StateManager({ dataDir });
+    await state.create({ run_id: RUN, spec: SPEC });
+    await state.update(RUN, (s) => ({
+      ...s,
+      status: "running",
+      tasks: {
+        a: task({ task_id: "a", status: "done" }),
+        b: task({ task_id: "b", status: "executing", phase: "exec" }),
+        c: task({ task_id: "c", status: "pending" }),
+      },
+    }));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("appends done/total + phase + run id + status for the current run", async () => {
+    expect(await display()).toBe(`[factory 1/3 exec ${RUN} running]`);
+  });
+
+  it("shows no suffix when no current-run pointer exists", async () => {
+    rmSync(join(dataDir, "runs"), { recursive: true, force: true });
+    expect(await display()).toBe("");
+  });
+
+  it("degrades to no suffix on a torn/truncated state.json (never throws)", async () => {
+    writeFileSync(join(currentLinkPath(dataDir), STATE_FILE), '{"run_id":"tor');
+    expect(await display()).toBe("");
+  });
+
+  it("keeps a terminal run's suffix within the 30-min linger, then drops it", async () => {
+    const endedAt = new Date((FIXED_NOW - 60) * 1000).toISOString(); // 1 min ago
+    await state.update(RUN, (s) => ({
+      ...s,
+      status: "completed",
+      ended_at: endedAt,
+      tasks: { a: task({ task_id: "a", status: "done" }) },
+    }));
+    expect(await display()).toBe(`[factory 1/1 ${RUN} completed]`);
+    // Same run seen 31 min after ended_at → gone.
+    expect(await display({}, FIXED_NOW + 31 * 60)).toBe("");
+  });
+
+  it("is disabled by FACTORY_STATUSLINE_PROGRESS=0", async () => {
+    expect(await display({ FACTORY_STATUSLINE_PROGRESS: "0" })).toBe("");
+  });
+
+  it("composes with the passthrough display (suffix after original stdout)", async () => {
+    let displayed = "";
+    const code = await runStatusline([], {
+      dataDirOptions: { dataDir },
+      now: () => FIXED_NOW,
+      readStdin: () => Promise.resolve("hello-statusline"),
+      originalStatusline: "cat",
+      env: {},
+      writeStdout: (s) => {
+        displayed += s;
+      },
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(displayed).toBe(`hello-statusline [factory 1/3 exec ${RUN} running]`);
   });
 });

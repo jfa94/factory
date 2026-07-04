@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile19;
-      function readFile19(path6, options, cb) {
+      fs2.readFile = readFile20;
+      function readFile20(path6, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path6, options, cb);
@@ -17979,6 +17979,10 @@ var nextCommand = {
   run: withUsageGuard("next-task", run9)
 };
 
+// src/cli/subcommands/statusline.ts
+import { readFile as readFile18 } from "node:fs/promises";
+import { join as join27 } from "node:path";
+
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
@@ -18003,6 +18007,33 @@ Usage:
 
 This is a side-effecting passthrough, not a machine subcommand: stdout is the
 displayed statusline text, NOT a JSON envelope.`;
+function progressEnabled(env = process.env) {
+  return env.FACTORY_STATUSLINE_PROGRESS !== "0";
+}
+var TERMINAL_LINGER_SEC = 30 * 60;
+async function renderProgress(deps) {
+  try {
+    if (!progressEnabled(deps.env ?? process.env)) return "";
+    const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
+    const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const run11 = JSON.parse(raw);
+    if (typeof run11.run_id !== "string" || typeof run11.status !== "string") return "";
+    if (run11.status === "completed" || run11.status === "failed" || run11.status === "superseded") {
+      const endedMs = typeof run11.ended_at === "string" ? Date.parse(run11.ended_at) : NaN;
+      const nowSec = (deps.now ?? nowEpoch)();
+      if (!Number.isFinite(endedMs) || nowSec - endedMs / 1e3 > TERMINAL_LINGER_SEC) return "";
+    }
+    const tasks = Object.values(run11.tasks ?? {});
+    const done = tasks.filter((t) => t?.status === "done").length;
+    const inFlight = tasks.find(
+      (t) => t?.status === "executing" || t?.status === "reviewing" || t?.status === "shipping"
+    );
+    const phase = typeof inFlight?.phase === "string" ? `${inFlight.phase} ` : "";
+    return ` [factory ${done}/${tasks.length} ${phase}${run11.run_id} ${run11.status}]`;
+  } catch {
+    return "";
+  }
+}
 function rateLimitsOf(payload) {
   if (typeof payload !== "object" || payload === null) return null;
   const rl = payload.rate_limits;
@@ -18060,8 +18091,10 @@ async function runStatusline(argv = [], deps = {}) {
   const rateLimits = rateLimitsOf(parsed);
   const cacheFailure = rateLimits !== null ? await writeCache(rateLimits, deps) : null;
   const displayed = await passthrough(payload, deps);
+  const progress = await renderProgress(deps);
   const write = deps.writeStdout ?? ((text) => process.stdout.write(text));
-  write(cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`.trimStart());
+  const base = cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`;
+  write(`${base}${progress}`.trimStart());
   return EXIT.OK;
 }
 var statuslineCommand = {
@@ -18071,8 +18104,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync10 } from "node:fs";
-import { readFile as readFile18 } from "node:fs/promises";
-import { join as join27 } from "node:path";
+import { readFile as readFile19 } from "node:fs/promises";
+import { join as join28 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -18110,7 +18143,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join27(dataDir, "merged-settings.json");
+  return join28(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -18186,10 +18219,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path6 = join27(pluginRoot, ".claude-plugin", "plugin.json");
+  const path6 = join28(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile18(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -18199,20 +18232,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join27(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join28(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync10(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile18(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join27(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile18(templatePath, "utf8");
+  const templatePath = join28(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile19(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -18274,7 +18307,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
 async function readOnDiskVersion(path6) {
   if (!existsSync10(path6)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile18(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path6, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }

@@ -19,12 +19,15 @@
  * `rate_limits`, unresolvable data dir, a broken original statusline command) is
  * a clean no-op that still returns {@link EXIT.OK}; nothing here throws.
  */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExitCode } from "../../shared/exit-codes.js";
 import { EXIT } from "../../shared/exit-codes.js";
 import { parseArgs } from "../args.js";
 import { emitLine } from "../io.js";
 import { readStdin } from "../../shared/stdin.js";
 import { resolveDataDir, type DataDirOptions } from "../../config/index.js";
+import { currentLinkPath, STATE_FILE } from "../../core/state/paths.js";
 import { usageCachePath } from "../../quota/usage-source.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
@@ -69,6 +72,62 @@ export interface StatuslineDeps {
    * the fail-soft branches without spawning a real (slow) process.
    */
   exec?: typeof exec;
+  /** Env override for the progress kill-switch (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** S11 kill-switch: `FACTORY_STATUSLINE_PROGRESS=0` hides the progress suffix. */
+export function progressEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FACTORY_STATUSLINE_PROGRESS !== "0";
+}
+
+/** How long a terminal run's suffix lingers after `ended_at` (30 min). */
+const TERMINAL_LINGER_SEC = 30 * 60;
+
+/**
+ * S11 — the run-progress suffix appended to the displayed statusline, e.g.
+ * ` [factory 3/7 exec run-20260704-101500 running]` (done/total tasks, the first
+ * in-flight task's phase, run id, run status). Terminal runs show only for
+ * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
+ *
+ * DELIBERATELY raw reads: the legacy GLOBAL `runs/current` symlink dereferenced
+ * straight to `state.json` + a plain `JSON.parse` — never `parseRunState`. A
+ * torn/partial concurrent write, a schema mismatch, or a missing pointer must
+ * degrade to "no suffix", not a Zod throw: the statusline NEVER breaks.
+ * ponytail: accepted limit — under two concurrent runs in different repos the
+ * global pointer shows the most recent writer (a statusline tick has no cwd to
+ * key the per-repo pointer from).
+ */
+async function renderProgress(deps: StatuslineDeps): Promise<string> {
+  try {
+    if (!progressEnabled(deps.env ?? process.env)) return "";
+    const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
+    // Read THROUGH the symlink — no readlink dance, a dangling pointer just throws.
+    const raw = await readFile(join(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const run = JSON.parse(raw) as {
+      run_id?: unknown;
+      status?: unknown;
+      ended_at?: unknown;
+      tasks?: Record<string, { status?: unknown; phase?: unknown } | undefined>;
+    };
+    if (typeof run.run_id !== "string" || typeof run.status !== "string") return "";
+
+    if (run.status === "completed" || run.status === "failed" || run.status === "superseded") {
+      const endedMs = typeof run.ended_at === "string" ? Date.parse(run.ended_at) : NaN;
+      const nowSec = (deps.now ?? defaultNowEpoch)();
+      if (!Number.isFinite(endedMs) || nowSec - endedMs / 1000 > TERMINAL_LINGER_SEC) return "";
+    }
+
+    const tasks = Object.values(run.tasks ?? {});
+    const done = tasks.filter((t) => t?.status === "done").length;
+    const inFlight = tasks.find(
+      (t) => t?.status === "executing" || t?.status === "reviewing" || t?.status === "shipping",
+    );
+    const phase = typeof inFlight?.phase === "string" ? `${inFlight.phase} ` : "";
+    return ` [factory ${done}/${tasks.length} ${phase}${run.run_id} ${run.status}]`;
+  } catch {
+    return ""; // no run / unreadable state / anything — the suffix just vanishes.
+  }
 }
 
 /** Whether a parsed payload carries a usable `rate_limits` object. */
@@ -180,8 +239,10 @@ export async function runStatusline(
   //    cache failure IN the visible text — the quota pacer is silently reading a
   //    stale cache until this is fixed, so the operator must actually see it.
   const displayed = await passthrough(payload, deps);
+  const progress = await renderProgress(deps); // S11: "" unless a current run exists
   const write = deps.writeStdout ?? ((text: string) => process.stdout.write(text));
-  write(cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`.trimStart());
+  const base = cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`;
+  write(`${base}${progress}`.trimStart());
 
   return EXIT.OK;
 }
