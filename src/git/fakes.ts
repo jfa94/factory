@@ -165,6 +165,13 @@ export class FakeGitClient implements GitClient {
     return this.commitsAheadByBranch.get(branch) ?? 0;
   }
 
+  /** Paths {@link isTracked} reports as git-tracked (test-seeded). */
+  readonly trackedPaths = new Set<string>();
+
+  async isTracked(relPath: string, _opts?: GitOpts): Promise<boolean> {
+    return this.trackedPaths.has(relPath);
+  }
+
   async checkoutB(branch: string, startPoint: string, _opts?: GitOpts): Promise<void> {
     this.calls.push(`checkout -B ${branch} ${startPoint}`);
     const startSha = await this.revParse(startPoint).catch(() => this.nextSha());

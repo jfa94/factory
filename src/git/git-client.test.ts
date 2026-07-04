@@ -62,6 +62,18 @@ describe("DefaultGitClient over an injectable runner (no real git)", () => {
     await expect(bad.refExists("x")).rejects.toThrow(/rev-parse/);
   });
 
+  it("isTracked treats code 0 as YES, code 1 as a normal NO, code > 1 as an error", async () => {
+    const yes = new DefaultGitClient(async (args) => {
+      expect(args).toEqual(["ls-files", "--error-unmatch", "--", ".factory/gates.json"]);
+      return result({ code: 0, stdout: ".factory/gates.json\n" });
+    });
+    await expect(yes.isTracked(".factory/gates.json")).resolves.toBe(true);
+    const no = new DefaultGitClient(async () => result({ code: 1, stderr: "did not match" }));
+    await expect(no.isTracked(".factory/gates.json")).resolves.toBe(false);
+    const bad = new DefaultGitClient(async () => result({ code: 128, stderr: "not a repo" }));
+    await expect(bad.isTracked("x")).rejects.toThrow(/ls-files/);
+  });
+
   it("commitsAhead runs rev-list --count <base>..<branch> and parses the int", async () => {
     const git = new DefaultGitClient(async (args) => {
       expect(args).toEqual(["rev-list", "--count", "origin/staging-run-1..factory/run-1/task-a"]);

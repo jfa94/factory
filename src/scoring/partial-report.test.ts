@@ -393,6 +393,29 @@ describe("plain-language e2e narrative (Decision 40 D12)", () => {
   });
 });
 
+describe("general warnings (S7, Decision 46 legacy pre-contract warn)", () => {
+  const WARN = "gates ran without a .factory/gates.json contract (legacy pre-contract run)";
+
+  it("threads opts.warnings into the report and renders the ## Warnings section", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], { status: "completed" });
+    const report = buildPartialReport(run, spec, { now: NOW, warnings: [WARN] });
+    expect(report.warnings).toEqual([WARN]);
+    const md = renderPartialReportMarkdown(report);
+    expect(md).toContain("## Warnings");
+    expect(md).toContain(`- ${WARN}`);
+  });
+
+  it("field + section are absent when no warnings (incl. an explicit empty array)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], { status: "completed" });
+    expect(buildPartialReport(run, spec, { now: NOW }).warnings).toBeUndefined();
+    const report = buildPartialReport(run, spec, { now: NOW, warnings: [] });
+    expect(report.warnings).toBeUndefined();
+    expect(renderPartialReportMarkdown(report)).not.toContain("## Warnings");
+  });
+});
+
 describe("cross-vendor absences (Δ U/S5 review independence)", () => {
   it("builds cross_vendor_absences in spec order from persisted task.cross_vendor_absent + renders the section", () => {
     const spec = makeSpec([specTask("t1"), specTask("t2"), specTask("t3")]);

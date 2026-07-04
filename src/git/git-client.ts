@@ -50,6 +50,13 @@ export interface GitClient {
    */
   refExists(ref: string, opts?: GitOpts): Promise<boolean>;
   /**
+   * True iff `relPath` is TRACKED by git (`git ls-files --error-unmatch <path>`).
+   * An untracked/ignored path is a normal NO, not an error. Used by `run create`
+   * to require the gate contract be committed (an untracked contract never
+   * reaches agent worktrees).
+   */
+  isTracked(relPath: string, opts?: GitOpts): Promise<boolean>;
+  /**
    * Count commits reachable from `branch` but not `base`
    * (`git rev-list --count <base>..<branch>`). Both refs must resolve — guard with
    * {@link refExists}; fatal otherwise. Read-only; used by rescue to report how much
@@ -165,6 +172,15 @@ export class DefaultGitClient implements GitClient {
     if (r.code === 0) return true;
     if (r.code === 1) return false;
     throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+
+  async isTracked(relPath: string, opts?: GitOpts): Promise<boolean> {
+    // ls-files --error-unmatch exits 1 when the path is untracked — that is the
+    // ANSWER, not an error. Only a >1 code is a real failure.
+    const r = await this.exec(["ls-files", "--error-unmatch", "--", relPath], opts);
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw new Error(`git ls-files failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
 
   async commitsAhead(base: string, branch: string, opts?: GitOpts): Promise<number> {

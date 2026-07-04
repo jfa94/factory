@@ -64,6 +64,7 @@ import {
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
+import { loadGateContract, GATE_CONTRACT_REL } from "../../verifier/deterministic/index.js";
 
 const RUN_HELP = `factory run — create or resume a run
 
@@ -671,6 +672,33 @@ async function assertE2ePrereqs(cwd: string): Promise<void> {
   }
 }
 
+/**
+ * Create-time gate-contract precondition (S7, Decision 46): a run may only be
+ * born in a repo whose `.factory/gates.json` contract is present, valid, AND
+ * git-tracked. Tracked matters — an uncommitted contract never reaches the
+ * task worktrees, so every gate sweep would run the legacy pre-contract path
+ * despite the file existing at the root. Resume paths skip this: in-flight
+ * runs created pre-contract are covered by the GateRunner legacy warn.
+ */
+async function assertGateContract(cwd: string, gitClient: GitClient): Promise<void> {
+  const load = await loadGateContract(cwd);
+  if (load.state === "absent") {
+    throw new UsageError(
+      `run create: missing ${GATE_CONTRACT_REL} gate contract — run \`factory scaffold\` and commit the contract.`,
+    );
+  }
+  if (load.state === "invalid") {
+    throw new UsageError(
+      `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) — fix it or delete it and re-run \`factory scaffold\`.`,
+    );
+  }
+  if (!(await gitClient.isTracked(GATE_CONTRACT_REL, { cwd }))) {
+    throw new UsageError(
+      `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked — commit it so task worktrees see the contract.`,
+    );
+  }
+}
+
 export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
@@ -754,6 +782,10 @@ export async function runCreate(
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
   if (e2e) await assertE2ePrereqs(cwd);
+  // Contract precondition applies to run BIRTH only — `--resume` continues an
+  // existing run, and pre-contract in-flight runs must stay resumable (their
+  // sweeps take the GateRunner legacy path + warn instead).
+  if (intent !== "resume") await assertGateContract(cwd, gitClient);
   const hasDataDirOverride = overrides.dataDir !== undefined;
 
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});

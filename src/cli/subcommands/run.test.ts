@@ -10,7 +10,7 @@
  *      against a real StateManager + SpecStore temp dir, with an injected reading.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -57,16 +57,48 @@ beforeEach(() => {
   priorSessionId = process.env.CLAUDE_CODE_SESSION_ID;
   process.env.CLAUDE_CODE_SESSION_ID = "test-session";
 });
-afterEach(() => {
+afterEach(async () => {
   if (priorAutonomous === undefined) delete process.env.FACTORY_AUTONOMOUS_MODE;
   else process.env.FACTORY_AUTONOMOUS_MODE = priorAutonomous;
   if (priorSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
   else process.env.CLAUDE_CODE_SESSION_ID = priorSessionId;
+  await Promise.all(contractCwds.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-/** Temp cwd carrying the three static `--e2e` prerequisites (Decision 40 D2). */
-async function playwrightReadyCwd(): Promise<string> {
-  const cwd = await mkdtemp(join(tmpdir(), "factory-e2e-cwd-"));
+/** Minimal valid npm gate contract — the S7 `run create` precondition fixture. */
+const GATES_JSON = JSON.stringify({
+  version: 1,
+  stack: "npm",
+  gates: {
+    test: { contracted: true },
+    tdd: { contracted: true },
+    coverage: { contracted: false, reason: "not wired yet" },
+    mutation: { contracted: false, reason: "waived via --waive mutation" },
+    sast: { contracted: false, reason: "no security command" },
+    type: { contracted: true },
+    lint: { contracted: false, reason: "no eslint config" },
+    build: { contracted: true },
+  },
+});
+
+/**
+ * Temp cwd carrying a valid `.factory/gates.json`, marked git-tracked on the
+ * fake — satisfies the S7 create precondition (present + valid + tracked).
+ * Dirs are cleaned in the file-level afterEach.
+ */
+const contractCwds: string[] = [];
+async function contractReadyCwd(git: FakeGitClient): Promise<string> {
+  const cwd = await mkdtemp(join(tmpdir(), "factory-contract-cwd-"));
+  contractCwds.push(cwd);
+  await mkdir(join(cwd, ".factory"), { recursive: true });
+  await writeFile(join(cwd, ".factory", "gates.json"), GATES_JSON);
+  git.trackedPaths.add(".factory/gates.json");
+  return cwd;
+}
+
+/** Temp cwd carrying the three static `--e2e` prerequisites (Decision 40 D2) + the gate contract. */
+async function playwrightReadyCwd(git: FakeGitClient): Promise<string> {
+  const cwd = await contractReadyCwd(git);
   await writeFile(
     join(cwd, "package.json"),
     JSON.stringify({ name: "t", devDependencies: { "@playwright/test": "^1.0.0" } }),
@@ -737,11 +769,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
     // run-a is created with the defaults (session + live).
     await runCreate(["--issue", "42", "--run-id", "run-a"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/x",
+      cwd,
       dataDir,
     });
 
@@ -759,7 +792,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       exitCode = await runCreate(["--issue", "42"], {
         gitClient: git,
         ghClient: gh,
-        cwd: "/x",
+        cwd,
         dataDir,
       });
     } finally {
@@ -794,13 +827,14 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
 
     let exitCode: number | undefined;
     try {
       exitCode = await runCreate(["--issue", "42"], {
         gitClient: git,
         ghClient: gh,
-        cwd: "/x",
+        cwd,
         dataDir,
       });
     } finally {
@@ -865,10 +899,11 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
     await runCreate(["--issue", "42", "--run-id", "run-old"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/x",
+      cwd,
       dataDir,
     });
     // No --run-id on the supersede call: an explicit id means "fresh" and would
@@ -877,7 +912,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const code = await runCreate(["--issue", "42", "--supersede"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/x",
+      cwd,
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -893,7 +928,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-iq", "--ignore-quota"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/x",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -904,19 +939,15 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
-    const cwd = await playwrightReadyCwd();
-    try {
-      const code = await runCreate(["--issue", "42", "--run-id", "run-e2e", "--e2e"], {
-        gitClient: git,
-        ghClient: gh,
-        cwd,
-        dataDir,
-      });
-      expect(code).toBe(EXIT.OK);
-      expect((await state.read("run-e2e")).e2e).toBe(true);
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
+    const cwd = await playwrightReadyCwd(git);
+    const code = await runCreate(["--issue", "42", "--run-id", "run-e2e", "--e2e"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd,
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-e2e")).e2e).toBe(true);
   });
 
   it("runCreate: --e2e in a repo WITHOUT the Playwright prerequisites → UsageError naming factory scaffold (Decision 40 D2 eager check)", async () => {
@@ -972,11 +1003,101 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-no-e2e"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/x",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
     expect((await state.read("run-no-e2e")).e2e).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // gate-contract precondition (S7, Decision 46) — present + valid + tracked
+  // -------------------------------------------------------------------------
+
+  it("runCreate: ABSENT .factory/gates.json → UsageError naming factory scaffold", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const bare = await mkdtemp(join(tmpdir(), "factory-nocontract-"));
+    contractCwds.push(bare);
+    await expect(
+      runCreate(["--issue", "42", "--run-id", "run-nc"], {
+        gitClient: git,
+        ghClient: new FakeGhClient(),
+        cwd: bare,
+        dataDir,
+      }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/missing \.factory\/gates\.json.*factory scaffold/s),
+    });
+  });
+
+  it("runCreate: INVALID contract → UsageError surfacing the parse error", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const cwd = await contractReadyCwd(git);
+    await writeFile(join(cwd, ".factory", "gates.json"), "{ nope");
+    await expect(
+      runCreate(["--issue", "42", "--run-id", "run-ic"], {
+        gitClient: git,
+        ghClient: new FakeGhClient(),
+        cwd,
+        dataDir,
+      }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/invalid \.factory\/gates\.json.*not JSON/s),
+    });
+  });
+
+  it("runCreate: present + valid but NOT git-tracked → UsageError naming commit", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const cwd = await contractReadyCwd(git);
+    git.trackedPaths.delete(".factory/gates.json");
+    await expect(
+      runCreate(["--issue", "42", "--run-id", "run-ut"], {
+        gitClient: git,
+        ghClient: new FakeGhClient(),
+        cwd,
+        dataDir,
+      }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/not git-tracked.*commit it/s),
+    });
+  });
+
+  it("runCreate: --resume skips the contract precondition (pre-contract in-flight runs stay resumable)", async () => {
+    // Born WITH a contract, resumed from a cwd WITHOUT one — the resume path
+    // must not demand the contract (GateRunner's legacy warn covers the sweeps).
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await runCreate(["--issue", "42", "--run-id", "run-pre"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: await contractReadyCwd(git),
+      dataDir,
+    });
+    const bare = await mkdtemp(join(tmpdir(), "factory-resume-bare-"));
+    contractCwds.push(bare);
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      // Resolving (any exit code) proves the contract guard did not fire.
+      await expect(
+        runCreate(["--issue", "42", "--resume"], {
+          gitClient: git,
+          ghClient: gh,
+          cwd: bare,
+          dataDir,
+        }),
+      ).resolves.toBeTypeOf("number");
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -1082,10 +1203,11 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
   it("no --repo flag → derives the repo from origin and creates the run", async () => {
+    const git = gitWithOrigin(REPO);
     const code = await runCreate(["--issue", "42", "--run-id", "run-derive"], {
-      gitClient: gitWithOrigin(REPO),
+      gitClient: git,
       ghClient: new FakeGhClient(),
-      cwd: "/wherever",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -1098,10 +1220,11 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     // absent — optionalString coerces ""→undefined (unit-tested in args.test.ts) AND
     // resolveRepo treats an empty explicit as not-derivable — so either way resolution
     // falls through to the origin-derive path. This pins the user-visible outcome.
+    const git = gitWithOrigin(REPO);
     const code = await runCreate(["--repo", "", "--issue", "42", "--run-id", "run-empty"], {
-      gitClient: gitWithOrigin(REPO),
+      gitClient: git,
       ghClient: new FakeGhClient(),
-      cwd: "/wherever",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -1112,10 +1235,11 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   it("an explicit --repo that MATCHES the origin (case-insensitively) creates the run", async () => {
     // REPO is "acme/widgets"; the origin canonical casing wins, so the spec stored
     // under REPO is found and the run is keyed to the canonical repo id.
+    const git = gitWithOrigin(REPO);
     const code = await runCreate(["--repo", "Acme/Widgets", "--issue", "42", "--run-id", "run-m"], {
-      gitClient: gitWithOrigin(REPO),
+      gitClient: git,
       ghClient: new FakeGhClient(),
-      cwd: "/wherever",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -1148,10 +1272,11 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   });
 
   it("no ship flag → persists the no-flag default: live", async () => {
+    const git = gitWithOrigin(REPO);
     const code = await runCreate(["--issue", "42", "--run-id", "run-def"], {
-      gitClient: gitWithOrigin(REPO),
+      gitClient: git,
       ghClient: new FakeGhClient(),
-      cwd: "/wherever",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -1160,10 +1285,11 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   });
 
   it("--no-ship flips ship_mode to no-merge", async () => {
+    const git = gitWithOrigin(REPO);
     await runCreate(["--issue", "42", "--run-id", "run-ns", "--no-ship"], {
-      gitClient: gitWithOrigin(REPO),
+      gitClient: git,
       ghClient: new FakeGhClient(),
-      cwd: "/wherever",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     const run = await new StateManager({ dataDir }).read("run-ns");
@@ -1674,7 +1800,7 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-20260618-101500"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/target",
+      cwd: await contractReadyCwd(git),
       dataDir,
     });
     expect(code).toBe(EXIT.OK);
@@ -1699,12 +1825,13 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     // --supersede/--resume/--new flag was given. The staging branch must NOT be cut.
     const git = gitWithDevelop();
     const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
 
     // First create — cuts the branch.
     await runCreate(["--issue", "42", "--run-id", "run-first"], {
       gitClient: git,
       ghClient: gh,
-      cwd: "/target",
+      cwd,
       dataDir,
     });
     const callsAfterFirst = [...git.calls];
@@ -1719,7 +1846,7 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
       exitCode = await runCreate(["--issue", "42"], {
         gitClient: git,
         ghClient: gh,
-        cwd: "/target",
+        cwd,
         dataDir,
       });
     } finally {

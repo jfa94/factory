@@ -8233,6 +8233,12 @@ var DefaultGitClient = class {
     if (r.code === 1) return false;
     throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
+  async isTracked(relPath, opts) {
+    const r = await this.exec(["ls-files", "--error-unmatch", "--", relPath], opts);
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw new Error(`git ls-files failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
   async commitsAhead(base, branch, opts) {
     const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
     const n = Number.parseInt(r.stdout.trim(), 10);
@@ -9131,7 +9137,8 @@ function buildPartialReport(run10, request, opts = {}) {
     ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
     ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {},
     ...buildE2eNarrative(run10),
-    ...buildCrossVendorAbsences(run10, bySpecOrder)
+    ...buildCrossVendorAbsences(run10, bySpecOrder),
+    ...opts.warnings !== void 0 && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}
   };
 }
 function buildCrossVendorAbsences(run10, bySpecOrder) {
@@ -9224,6 +9231,11 @@ function renderPartialReportMarkdown(report) {
   if (report.e2e_warnings !== void 0) {
     out.push("## End-to-end warnings");
     for (const w of report.e2e_warnings) out.push(`- ${w}`);
+    out.push("");
+  }
+  if (report.warnings !== void 0) {
+    out.push("## Warnings");
+    for (const w of report.warnings) out.push(`- ${w}`);
     out.push("");
   }
   if (report.cross_vendor_absences !== void 0) {
@@ -12556,7 +12568,11 @@ async function finalizeRun(deps, runId) {
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
   const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" ? "failed" : taskTerminal;
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
+  const contract = await loadGateContract(process.cwd());
+  const warnings = contract.state === "absent" ? [
+    "gates ran without a .factory/gates.json contract (legacy pre-contract run) \u2014 run `factory scaffold` and commit the contract"
+  ] : [];
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now, warnings });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -15285,6 +15301,24 @@ async function assertE2ePrereqs(cwd) {
     );
   }
 }
+async function assertGateContract(cwd, gitClient) {
+  const load = await loadGateContract(cwd);
+  if (load.state === "absent") {
+    throw new UsageError(
+      `run create: missing ${GATE_CONTRACT_REL} gate contract \u2014 run \`factory scaffold\` and commit the contract.`
+    );
+  }
+  if (load.state === "invalid") {
+    throw new UsageError(
+      `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) \u2014 fix it or delete it and re-run \`factory scaffold\`.`
+    );
+  }
+  if (!await gitClient.isTracked(GATE_CONTRACT_REL, { cwd })) {
+    throw new UsageError(
+      `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked \u2014 commit it so task worktrees see the contract.`
+    );
+  }
+}
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
     booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
@@ -15341,6 +15375,7 @@ async function runCreate(argv, overrides = {}) {
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
   if (e2e) await assertE2ePrereqs(cwd);
+  if (intent !== "resume") await assertGateContract(cwd, gitClient);
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
