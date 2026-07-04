@@ -1,6 +1,6 @@
 ---
 description: "Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)"
-argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--no-ship] [--e2e] [--supersede | --resume] [--ignore-quota]"
+argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--no-ship] [--e2e] [--approve-spec] [--supersede | --resume] [--ignore-quota]"
 arguments:
   - name: "--repo"
     description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
@@ -16,6 +16,9 @@ arguments:
     required: false
   - name: "--e2e"
     description: "Opt into run-level e2e (Decisions 39/40): create checks the static Playwright prerequisites (scaffold provides them); a run-start e2e-assessment resolves boot config + authors seed/auth machinery BEFORE any task; once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --no-ship"
+    required: false
+  - name: "--approve-spec"
+    description: "Park the fully-created run (suspended, no quota checkpoint) for human spec sign-off BEFORE any agent runs (S9, Decision 47). The envelope names the spec.md to review; `/factory:resume` IS the sign-off. CREATE-ONLY, default off"
     required: false
   - name: "--supersede"
     description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)"
@@ -60,6 +63,13 @@ LOUD otherwise. When `--supersede` is set, forward it to Phase 1's `factory spec
 so the stale durable spec is deleted before the reuse check — Phase 1 will always regenerate
 from the PRD in this case (never reuse). `--supersede` has no effect on the spec when combined
 with `--spec-id` (Phase 1 is skipped).
+
+Forward `--approve-spec` verbatim too. When set, the `created`/`superseded` envelope
+carries `spec_approval` and the run is already parked (`suspended`, no quota checkpoint) —
+**STOP immediately**: print `spec_approval.spec_path` + "review the spec, then run
+`/factory:resume`" and do NOT call `next-task` or enter THE LOOP (its quota-gate step
+clears suspensions once it proceeds, which would silently un-park the run). Resume IS the
+sign-off (S9, Decision 47).
 
 If Phase 1's `spec resolve` emits `{kind:"unspecifiable"}` (exit 1), the PRD cannot support
 spec generation — STOP before any agent spawn, relay `blockers` verbatim, and tell the user

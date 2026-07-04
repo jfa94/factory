@@ -864,6 +864,101 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(env.run_id).toBe("run-old");
   });
 
+  // -------------------------------------------------------------------------
+  // runCreate --approve-spec (S9, Decision 47): opt-in human sign-off park
+  // -------------------------------------------------------------------------
+
+  async function captureCreate(argv: string[], overrides: Record<string, unknown>) {
+    const stdoutChunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runCreate(argv, overrides);
+      return { exitCode, env: JSON.parse(stdoutChunks.join("")) as Record<string, unknown> };
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+  }
+
+  it("--approve-spec parks the fully-created run: suspended, NO quota (A2), spec_approval envelope, EXIT.OK", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
+
+    const { exitCode, env } = await captureCreate(
+      ["--issue", "42", "--run-id", "run-park", "--approve-spec"],
+      { gitClient: git, ghClient: gh, cwd, dataDir },
+    );
+
+    expect(exitCode).toBe(EXIT.OK); // a park is success, not an error
+    expect(env.kind).toBe("created");
+    const approval = env.spec_approval as Record<string, unknown>;
+    expect(String(approval.spec_path)).toMatch(/42-checkout[/\\]spec\.md$/);
+    expect(String(approval.note)).toContain("factory resume");
+
+    const parked = await state.read("run-park");
+    expect(parked.status).toBe("suspended");
+    expect(parked.quota).toBeUndefined(); // A2: non-quota park NEVER writes a checkpoint
+    // Full creation happened BEFORE the park — staging cut + tasks seeded.
+    expect(Object.keys(parked.tasks).length).toBeGreaterThan(0);
+  });
+
+  it("--approve-spec is default OFF: plain create stays running with no spec_approval", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
+
+    const { exitCode, env } = await captureCreate(["--issue", "42", "--run-id", "run-plain"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd,
+      dataDir,
+    });
+
+    expect(exitCode).toBe(EXIT.OK);
+    expect(env.spec_approval).toBeUndefined();
+    expect((await state.read("run-plain")).status).toBe("running");
+  });
+
+  it("--approve-spec --resume → UsageError (approval is create-only; resume IS the sign-off)", async () => {
+    await expect(runCreate(["--issue", "42", "--approve-spec", "--resume"])).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/approve-spec/),
+    });
+  });
+
+  it("--approve-spec composes with --supersede: the FRESH run is parked", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const cwd = await contractReadyCwd(git);
+    await runCreate(["--issue", "42", "--run-id", "run-old-a"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd,
+      dataDir,
+    });
+
+    // No --run-id: an explicit id selects the `fresh` intent, which excludes --supersede.
+    const { exitCode, env } = await captureCreate(
+      ["--issue", "42", "--supersede", "--approve-spec"],
+      { gitClient: git, ghClient: gh, cwd, dataDir },
+    );
+
+    expect(exitCode).toBe(EXIT.OK);
+    expect(env.kind).toBe("superseded");
+    expect((env.spec_approval as Record<string, unknown>).spec_path).toBeDefined();
+    const freshId = (env.run as Record<string, unknown>).run_id as string;
+    expect((await state.read(freshId)).status).toBe("suspended");
+    expect((await state.read("run-old-a")).status).toBe("superseded");
+  });
+
   it("runCreate: without session id → UsageError (Stop hook needs an owner; no exemptions)", async () => {
     // The file-level beforeEach sets CLAUDE_CODE_SESSION_ID; delete it to simulate a
     // bare invocation with no owner available.

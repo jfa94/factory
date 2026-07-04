@@ -73,7 +73,7 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--no-ship] [--ignore-quota] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--no-ship] [--ignore-quota] [--approve-spec] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 `--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
@@ -101,6 +101,14 @@ exists for the spec, it exits `3`. Two distinct envelopes — check `kind` first
   and do NOT hand-pick the existing run — the flag is the only sanctioned escape.
 
 Pass `--new` (or an explicit `--run-id`) to force an unconditional fresh run with a distinct id.
+
+**`--approve-spec` (S9, Decision 47).** Forward the invoking command's flag verbatim. When set,
+creation completes in full (staging cut, tasks seeded) and the run is then parked — `suspended`
+with NO quota checkpoint — before any envelope reaches the loop; the `created`/`superseded`
+envelope carries `spec_approval: {spec_path, note}`. **STOP there**: report `spec_path` and tell
+the user to review the spec and run `/factory:resume` (resume IS the sign-off). Do NOT call
+`next-task` on a parked run — its quota-gate step clears suspensions and would silently un-park.
+Runners are otherwise unchanged.
 
 **Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the runner
 session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the deterministic engine refusing to
