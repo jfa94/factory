@@ -67,4 +67,19 @@ describe("parseProducerStatus — closed outcome from the terminal STATUS line",
     expect(parseProducerStatus("STATUS: DONE — all tests green").status).toBe("done");
     expect(parseProducerStatus("DONE. shipped.").status).toBe("done");
   });
+
+  // S12 smoke defect: the scribe's documented DONE_WITH_CONCERNS status
+  // (agents/scribe.md) is a success-with-note, but the `_` broke the old `DONE\b`
+  // anchor → the docs stage suspended a run the scribe had actually finished.
+  it("DONE_WITH_CONCERNS is done — the scribe's documented success-with-note variant", () => {
+    expect(
+      parseProducerStatus("STATUS: DONE_WITH_CONCERNS — version.ts differs from package.json")
+        .status,
+    ).toBe("done");
+    expect(parseProducerStatus("DONE_WITH_CONCERNS").status).toBe("done");
+  });
+
+  it("DONE followed by an undocumented _SUFFIX stays error — narrow acceptance, not a DONE-prefix free pass", () => {
+    expect(parseProducerStatus("STATUS: DONE_SOMETHING_ELSE").status).toBe("error");
+  });
 });

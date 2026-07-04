@@ -89,7 +89,7 @@ export interface ProducerAgentRunner {
 /**
  * Parse an implementer's terminal STATUS line into a {@link ProducerOutcome}
  * (agents/implementer.md). LOUD-ish but tolerant of trailing detail:
- *   - `STATUS: DONE`                                  → `done`
+ *   - `STATUS: DONE` / `STATUS: DONE_WITH_CONCERNS`   → `done`
  *   - `STATUS: BLOCKED — escalate: test requires revision` → `test-defective`
  *   - `STATUS: BLOCKED — escalate`                    → `blocked-escalate` (spec-defect)
  *   - `STATUS: NEEDS_CONTEXT`                         → `needs-context`
@@ -119,10 +119,13 @@ export function parseProducerStatus(raw: string): ProducerOutcome {
     return { status: "needs-context", reason: line };
   }
   // Leading-keyword anchor: must start with (optional "STATUS:") then "DONE" as a
-  // whole word. A bare includes("DONE") silently matches "NOT DONE" and "ABANDONED"
-  // (contains "done" in "aban-DONE-d"). The strict direction is correct: a false-
-  // negative is a loud producer error retry; a false-positive is a silent wrong success.
-  if (/^(?:STATUS\s*:\s*)?DONE\b/.test(upper)) {
+  // whole word, OR the scribe's documented `DONE_WITH_CONCERNS` success-with-note
+  // variant (agents/scribe.md) — `_` is a word char, so a bare `DONE\b` rejects it
+  // and would suspend a docs stage the scribe actually finished (S12 smoke defect).
+  // A bare includes("DONE") silently matches "NOT DONE" and "ABANDONED" (contains
+  // "done" in "aban-DONE-d"). The strict direction is correct: a false-negative is a
+  // loud producer error retry; a false-positive is a silent wrong success.
+  if (/^(?:STATUS\s*:\s*)?DONE(?:_WITH_CONCERNS)?\b/.test(upper)) {
     return { status: "done" };
   }
   return {
