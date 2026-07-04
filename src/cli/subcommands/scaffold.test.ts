@@ -44,12 +44,31 @@ let root: string;
 let templatesDir: string;
 let dataDir: string;
 
+/**
+ * A minimal npm fixture that satisfies the gate-contract FLOOR (S7, Decision 46):
+ * vitest (test), tsconfig.json (type), scripts.build (build) + stryker (mutation).
+ * Without it every runScaffold call would refuse on the 'custom'/below-floor stack.
+ */
+async function seedNpmFixture(dir: string): Promise<void> {
+  await writeFile(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      scripts: { build: "tsc -p ." },
+      devDependencies: { vitest: "^2.0.0", "@stryker-mutator/core": "^8.0.0" },
+    }) + "\n",
+    "utf8",
+  );
+  await writeFile(join(dir, "tsconfig.json"), "{}\n", "utf8");
+}
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "factory-scaffold-"));
   // Isolated config-overlay dir so CI build-env detection's gateEnv write (and the
   // no-op read when nothing is detected) never touches the host data dir.
   dataDir = await mkdtemp(join(tmpdir(), "factory-scaffold-data-"));
   templatesDir = resolveTemplatesDir();
+  await seedNpmFixture(root);
 });
 
 afterEach(async () => {
@@ -144,26 +163,32 @@ describe("runScaffold", () => {
   });
 
   it("copies the Node gate configs ONLY when package.json exists", async () => {
-    // No package.json → stryker/depcruise are skipped.
-    const noPkg = await runScaffold({
-      targetRoot: root,
-      templatesDir,
-      owner: "acme",
-      repo: "widgets",
-      config: cfg,
-      dataDirRules: DATA_DIR_RULES,
-      dataDir,
-      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
-      provision: false,
-    });
-    expect(noPkg.files_created).not.toContain(".stryker.config.json");
-    expect(noPkg.files_created).not.toContain("eslint.config.mjs");
-    expect(noPkg.files_created).not.toContain("playwright.config.ts");
-    expect(noPkg.files_created).not.toContain("e2e/example.spec.ts");
-    expect(existsSync(join(root, ".stryker.config.json"))).toBe(false);
+    // No package.json → stryker/depcruise are skipped; the run then REFUSES on the
+    // 'custom' stack (gate-contract floor, S7) — but the nodeOnly skip already
+    // happened (templates run before the contract step) and is observable on disk.
+    const bare = await mkdtemp(join(tmpdir(), "factory-scaffold-bare-"));
+    try {
+      await expect(
+        runScaffold({
+          targetRoot: bare,
+          templatesDir,
+          owner: "acme",
+          repo: "widgets",
+          config: cfg,
+          dataDirRules: DATA_DIR_RULES,
+          dataDir,
+          ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
+          provision: false,
+        }),
+      ).rejects.toThrow(/custom/);
+      expect(existsSync(join(bare, ".stryker.config.json"))).toBe(false);
+      expect(existsSync(join(bare, "eslint.config.mjs"))).toBe(false);
+      expect(existsSync(join(bare, "playwright.config.ts"))).toBe(false);
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
 
-    // With package.json → both gate configs copied.
-    await writeFile(join(root, "package.json"), "{}\n", "utf8");
+    // With package.json (the fixture) → the gate configs are copied.
     const withPkg = await runScaffold({
       targetRoot: root,
       templatesDir,
@@ -243,8 +268,7 @@ describe("runScaffold", () => {
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
-    await writeFile(join(root, "package.json"), "{}\n", "utf8");
-    await runScaffold(args); // seeds .stryker.config.json
+    await runScaffold(args); // seeds .stryker.config.json (root is the npm fixture)
 
     // The project grows its own (user-owned) gate config — exactly the outsidey
     // case where the repo's config has diverged into a richer superset.
@@ -468,6 +492,112 @@ describe("runScaffold", () => {
     expect(report.gateEnv).toBeDefined();
     expect(report.gateEnv?.warnings.map((w) => w.workflow)).toContain("bad.yml");
   });
+
+  describe("gate contract (S7, Decision 46)", () => {
+    const gatesPath = () => join(root, ".factory", "gates.json");
+
+    it("writes the npm contract: floor gates contracted, waivers carry reasons", async () => {
+      const report = await runScaffold(baseArgs());
+      expect(report.stack).toBe("npm");
+      expect(report.gates_contract).toBe("created");
+      expect(report.files_created).toContain(".factory/gates.json");
+      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
+      expect(contract.gates.test).toEqual({ contracted: true });
+      expect(contract.gates.type).toEqual({ contracted: true });
+      expect(contract.gates.build).toEqual({ contracted: true });
+      expect(contract.gates.tdd).toEqual({ contracted: true });
+      expect(contract.gates.mutation).toEqual({ contracted: true }); // stryker devDep in fixture
+      expect(contract.gates.coverage.contracted).toBe(false);
+      expect(contract.gates.coverage.reason).toMatch(/not wired yet/);
+      expect(contract.gates.sast.contracted).toBe(false); // no securityCommand configured
+      // eslint.config.mjs was seeded this run but eslint itself is not a dep.
+      expect(contract.gates.lint.contracted).toBe(false);
+      expect(contract.gates.lint.reason).toMatch(/eslint not installed/);
+    });
+
+    it("contracts sast when quality.securityCommand is configured", async () => {
+      const secured = {
+        ...cfg,
+        quality: { ...cfg.quality, securityCommand: "semgrep --config auto --error" },
+      };
+      const report = await runScaffold({ ...baseArgs(), config: secured });
+      expect(report.gates_contract).toBe("created");
+      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
+      expect(contract.gates.sast).toEqual({ contracted: true });
+    });
+
+    it("REFUSES below the npm floor, naming every shortfall; writes nothing", async () => {
+      await writeFile(join(root, "package.json"), JSON.stringify({ name: "x" }), "utf8");
+      await rm(join(root, "tsconfig.json"));
+      await expect(runScaffold(baseArgs())).rejects.toThrow(
+        /vitest[\s\S]*tsconfig\.json[\s\S]*scripts\.build/,
+      );
+      expect(existsSync(gatesPath())).toBe(false);
+    });
+
+    it("npm without stryker REFUSES naming install-or-waive; --waive mutation records the waiver", async () => {
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "x",
+          scripts: { build: "b" },
+          devDependencies: { vitest: "^2.0.0" },
+        }),
+        "utf8",
+      );
+      await expect(runScaffold(baseArgs())).rejects.toThrow(/--waive mutation/);
+      expect(existsSync(gatesPath())).toBe(false);
+
+      const report = await runScaffold({ ...baseArgs(), waiveMutation: true });
+      expect(report.gates_contract).toBe("created");
+      const contract = JSON.parse(await readFile(gatesPath(), "utf8"));
+      expect(contract.gates.mutation).toEqual({
+        contracted: false,
+        reason: "waived via --waive mutation",
+      });
+    });
+
+    it("deno target: command overrides, build waived-by-stack, nodeOnly seeds skipped", async () => {
+      const deno = await mkdtemp(join(tmpdir(), "factory-scaffold-deno-"));
+      try {
+        await writeFile(join(deno, "deno.json"), JSON.stringify({ tasks: {} }) + "\n", "utf8");
+        const report = await runScaffold({ ...baseArgs(), targetRoot: deno });
+        expect(report.stack).toBe("deno");
+        expect(report.gates_contract).toBe("created");
+        const contract = JSON.parse(await readFile(join(deno, ".factory", "gates.json"), "utf8"));
+        expect(contract.gates.test).toEqual({ contracted: true, command: "deno test" });
+        expect(contract.gates.type).toEqual({ contracted: true, command: "deno check ." });
+        expect(contract.gates.lint).toEqual({ contracted: true, command: "deno lint" });
+        expect(contract.gates.build.contracted).toBe(false);
+        expect(contract.gates.build.reason).toMatch(/waived-by-stack/);
+        expect(contract.gates.mutation.reason).toMatch(/waived-by-stack/);
+        expect(contract.gates.coverage.reason).toMatch(/waived-by-stack/);
+        // A deno target is not a Node package — nodeOnly seeds are skipped.
+        expect(existsSync(join(deno, ".stryker.config.json"))).toBe(false);
+        expect(existsSync(join(deno, "eslint.config.mjs"))).toBe(false);
+      } finally {
+        await rm(deno, { recursive: true, force: true });
+      }
+    });
+
+    it("is idempotent: an existing VALID contract is project-owned — untouched, 'present'", async () => {
+      await runScaffold(baseArgs());
+      const first = await readFile(gatesPath(), "utf8");
+      const second = await runScaffold(baseArgs());
+      expect(second.gates_contract).toBe("present");
+      expect(second.files_created).not.toContain(".factory/gates.json");
+      expect(second.files_present).toContain(".factory/gates.json");
+      expect(await readFile(gatesPath(), "utf8")).toBe(first);
+    });
+
+    it("REFUSES on a present-but-INVALID contract (fix or delete, never regenerate)", async () => {
+      await mkdir(join(root, ".factory"), { recursive: true });
+      await writeFile(gatesPath(), '{"version": 1}', "utf8");
+      await expect(runScaffold(baseArgs())).rejects.toThrow(/INVALID/);
+      // The corrupt file is left for the user — scaffold never clobbers it.
+      expect(await readFile(gatesPath(), "utf8")).toBe('{"version": 1}');
+    });
+  });
 });
 
 describe("scaffoldCommand.run", () => {
@@ -482,6 +612,19 @@ describe("scaffoldCommand.run", () => {
       process.stdout.write = orig;
     }
     expect(out.join("")).toMatch(/factory scaffold/);
+  });
+
+  it("--waive with anything but 'mutation' is a USAGE error", async () => {
+    const err: string[] = [];
+    const spy = (c: unknown): boolean => (err.push(String(c)), true);
+    const orig = process.stderr.write;
+    (process.stderr as unknown as { write: typeof spy }).write = spy;
+    try {
+      expect(await scaffoldCommand.run(["--waive", "coverage"])).toBe(EXIT.USAGE);
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(err.join("")).toMatch(/--waive accepts only 'mutation'/);
   });
 
   it("a malformed --repo is a USAGE error", async () => {

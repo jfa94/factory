@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile17;
-      function readFile17(path5, options, cb) {
+      fs2.readFile = readFile18;
+      function readFile18(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path5, options, cb);
@@ -546,8 +546,8 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$writeFile = fs2.writeFile;
-      fs2.writeFile = writeFile3;
-      function writeFile3(path5, data, options, cb) {
+      fs2.writeFile = writeFile4;
+      function writeFile4(path5, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$writeFile(path5, data, options, cb);
@@ -15266,13 +15266,13 @@ async function assertE2ePrereqs(cwd) {
     missing.push("package.json");
   }
   if (pkgRaw !== void 0) {
-    let hasDep = false;
+    let hasDep2 = false;
     try {
       const pkg = JSON.parse(pkgRaw);
-      hasDep = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
+      hasDep2 = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
     } catch {
     }
-    if (!hasDep) missing.push("@playwright/test (dependencies or devDependencies)");
+    if (!hasDep2) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
     await access4(join21(cwd, "playwright.config.ts"));
@@ -16375,10 +16375,10 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir11, readFile as readFile15, writeFile as writeFile2 } from "node:fs/promises";
-import { existsSync as existsSync8 } from "node:fs";
+import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
+import { existsSync as existsSync9 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join24, relative } from "node:path";
+import { dirname as dirname10, join as join25, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
@@ -16476,12 +16476,149 @@ async function ensureTargetSettings(opts) {
   return { settings, changed, created, path: path5 };
 }
 
+// src/cli/subcommands/scaffold-gates.ts
+import { existsSync as existsSync8 } from "node:fs";
+import { mkdir as mkdir11, readFile as readFile15, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname9, join as join24 } from "node:path";
+function detectStack(targetRoot) {
+  if (existsSync8(join24(targetRoot, "deno.json")) || existsSync8(join24(targetRoot, "deno.jsonc"))) {
+    return "deno";
+  }
+  if (existsSync8(join24(targetRoot, "package.json"))) return "npm";
+  return "custom";
+}
+async function readPackageJson(targetRoot) {
+  const raw = await readFile15(join24(targetRoot, "package.json"), "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`scaffold: package.json is not valid JSON: ${err.message}`);
+  }
+}
+function hasDep(pkg, name) {
+  return pkg.dependencies?.[name] !== void 0 || pkg.devDependencies?.[name] !== void 0;
+}
+function stripJsoncComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+async function denoHasBuildTask(targetRoot) {
+  const jsonc = existsSync8(join24(targetRoot, "deno.jsonc"));
+  const file = jsonc ? "deno.jsonc" : "deno.json";
+  const raw = await readFile15(join24(targetRoot, file), "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
+  } catch (err) {
+    throw new Error(`scaffold: ${file} is not parseable JSON: ${err.message}`);
+  }
+  const tasks = parsed.tasks;
+  return typeof tasks?.build === "string";
+}
+var yes = { contracted: true };
+var no = (reason) => ({ contracted: false, reason });
+async function resolveNpm(opts) {
+  const pkg = await readPackageJson(opts.targetRoot);
+  const floor = [];
+  if (!hasDep(pkg, "vitest")) floor.push("test gate: no vitest dependency \u2014 install vitest");
+  if (!existsSync8(join24(opts.targetRoot, "tsconfig.json"))) {
+    floor.push("type gate: no tsconfig.json \u2014 add one");
+  }
+  if (pkg.scripts?.build === void 0) {
+    floor.push("build gate: no scripts.build \u2014 add a build script");
+  }
+  if (floor.length > 0) {
+    throw new Error(
+      `scaffold: gate contract below floor for stack 'npm':
+  - ${floor.join("\n  - ")}`
+    );
+  }
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join24(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  let mutation;
+  if (strykerResolvable) {
+    mutation = yes;
+  } else if (opts.waiveMutation) {
+    mutation = no("waived via --waive mutation");
+  } else {
+    throw new Error(
+      "scaffold: mutation gate: stryker not installed \u2014 install @stryker-mutator/core or pass --waive mutation to record the waiver"
+    );
+  }
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join24(opts.targetRoot, c)));
+  let lint;
+  if (!eslintConfig) {
+    lint = no("no eslint config");
+  } else if (hasDep(pkg, "eslint") || existsSync8(join24(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+    lint = yes;
+  } else {
+    lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
+  }
+  return {
+    version: 1,
+    stack: "npm",
+    gates: {
+      test: yes,
+      tdd: yes,
+      coverage: no(
+        "coverage measurement not wired yet \u2014 re-scaffold after the coverage tool lands"
+      ),
+      mutation,
+      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      type: yes,
+      lint,
+      build: yes
+    }
+  };
+}
+async function resolveDeno(opts) {
+  const build = await denoHasBuildTask(opts.targetRoot) ? { contracted: true, command: "deno task build" } : no("waived-by-stack: no emit step \u2014 deno check covers compilation");
+  return {
+    version: 1,
+    stack: "deno",
+    gates: {
+      test: { contracted: true, command: "deno test" },
+      tdd: yes,
+      coverage: no("waived-by-stack: coverage measurement not wired for deno"),
+      mutation: no("waived-by-stack: stryker does not support deno"),
+      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      type: { contracted: true, command: "deno check ." },
+      lint: { contracted: true, command: "deno lint" },
+      build
+    }
+  };
+}
+async function resolveGateContract(opts) {
+  const stack = detectStack(opts.targetRoot);
+  if (stack === "custom") {
+    throw new Error(
+      "scaffold: gate contract floor unsatisfiable for stack 'custom' \u2014 no package.json (npm) or deno.json/deno.jsonc (deno) detected; the factory requires contractable test + type + build gates"
+    );
+  }
+  const contract = stack === "npm" ? await resolveNpm(opts) : await resolveDeno(opts);
+  return GateContractSchema.parse(contract);
+}
+async function ensureGateContract(opts) {
+  const load = await loadGateContract(opts.targetRoot);
+  if (load.state === "invalid") {
+    throw new Error(
+      `scaffold: ${GATE_CONTRACT_REL} is INVALID (${load.error}) \u2014 fix it or delete it and re-run factory scaffold`
+    );
+  }
+  if (load.state === "ok") {
+    return { status: "present", stack: load.contract.stack };
+  }
+  const contract = await resolveGateContract(opts);
+  const dest = join24(opts.targetRoot, GATE_CONTRACT_REL);
+  await mkdir11(dirname9(dest), { recursive: true });
+  await writeFile2(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
+  return { status: "created", stack: contract.stack };
+}
+
 // src/cli/subcommands/scaffold.ts
 var log30 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold [--repo <owner/name>] [--provision]
+  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation]
 
 Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
@@ -16495,7 +16632,14 @@ Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
                         Auto-derived from the 'origin' remote when omitted; an
                         explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse)`;
+  --provision           Write branch protection if missing (default: refuse)
+  --waive mutation      Record the mutation gate as deliberately waived in the gate
+                        contract instead of refusing when stryker is not installed
+
+Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
+committed per-gate applicability agreement. Refuses below the floor (test + type +
+build equivalents must be contractable). COMMIT the file \u2014 'factory run' requires
+it tracked.`;
 var GITIGNORE_ENTRIES = [
   "# Claude Code local state (factory scaffold guarantee)",
   ".claude/worktrees/",
@@ -16523,13 +16667,13 @@ var GITIGNORE_ENTRIES = [
   "*.worktree"
 ];
 function resolveTemplatesDir() {
-  let dir = dirname9(fileURLToPath(import.meta.url));
+  let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join24(dir, "templates");
-    if (existsSync8(join24(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join25(dir, "templates");
+    if (existsSync9(join25(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -16550,19 +16694,19 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join24(templatesDir, ...segs);
-  const dest = join24(targetRoot, ...segs);
-  if (!existsSync8(src)) {
+  const src = join25(templatesDir, ...segs);
+  const dest = join25(targetRoot, ...segs);
+  if (!existsSync9(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
-    const text = await readFile15(src, "utf8");
+    const text = await readFile16(src, "utf8");
     return transform ? transform(text) : text;
   };
-  if (!existsSync8(dest)) {
-    await mkdir11(dirname9(dest), { recursive: true });
-    await writeFile2(dest, await render(), "utf8");
+  if (!existsSync9(dest)) {
+    await mkdir12(dirname10(dest), { recursive: true });
+    await writeFile3(dest, await render(), "utf8");
     lists.created.push(entry.rel);
     return;
   }
@@ -16570,30 +16714,30 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile15(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile16(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  await writeFile2(dest, rendered, "utf8");
+  await writeFile3(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path5 = join24(root, ".gitignore");
+  const path5 = join25(root, ".gitignore");
   const rel = relative(root, path5);
-  if (!existsSync8(path5)) {
-    await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  if (!existsSync9(path5)) {
+    await writeFile3(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile15(path5, "utf8");
+  const current = await readFile16(path5, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile2(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
+  await writeFile3(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -16607,7 +16751,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync8(join24(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync9(join25(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
@@ -16617,6 +16761,19 @@ async function runScaffold(opts) {
     log30.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
+  }
+  const gates = await ensureGateContract({
+    targetRoot: opts.targetRoot,
+    securityCommand: opts.config.quality.securityCommand,
+    waiveMutation: opts.waiveMutation === true
+  });
+  if (gates.status === "created") {
+    lists.created.push(GATE_CONTRACT_REL);
+    log30.info(
+      `wrote ${GATE_CONTRACT_REL} (stack: ${gates.stack}) \u2014 COMMIT it; 'factory run' requires the contract tracked`
+    );
+  } else {
+    lists.present.push(GATE_CONTRACT_REL);
   }
   await ensureGitignore(opts.targetRoot, lists);
   const settings = await ensureTargetSettings({
@@ -16659,6 +16816,8 @@ async function runScaffold(opts) {
       provisioned
     },
     settings: { created: settings.created, changed: settings.changed },
+    stack: gates.stack,
+    gates_contract: gates.status,
     // Include the detection report whenever a key was detected OR any anomaly
     // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
     // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
@@ -16681,6 +16840,12 @@ async function run5(argv) {
     emitLine(HELP3);
     return EXIT.OK;
   }
+  const waived = args.all("waive").map(String);
+  for (const w of waived) {
+    if (w !== "mutation") {
+      throw new UsageError(`--waive accepts only 'mutation' (got '${w}')`);
+    }
+  }
   const { owner, repo } = await resolveScaffoldRepo(args);
   const dataDir = resolveDataDir();
   const report = await runScaffold({
@@ -16694,7 +16859,8 @@ async function run5(argv) {
     // into CI build-env detection's config write.
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
     dataDir,
-    provision: args.flag("provision") === true
+    provision: args.flag("provision") === true,
+    waiveMutation: waived.includes("mutation")
   });
   emitJson(report);
   return EXIT.OK;
@@ -17052,9 +17218,9 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync9 } from "node:fs";
-import { readFile as readFile16 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { existsSync as existsSync10 } from "node:fs";
+import { readFile as readFile17 } from "node:fs/promises";
+import { join as join26 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -17092,7 +17258,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join25(dataDir, "merged-settings.json");
+  return join26(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -17168,10 +17334,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join25(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync9(path5)) return void 0;
+  const path5 = join26(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync10(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile16(path5, "utf8"));
+    const parsed = JSON.parse(await readFile17(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -17181,20 +17347,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join25(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join26(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync9(userSettingsPath)) {
+  if (existsSync10(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile16(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile17(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join25(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile16(templatePath, "utf8");
+  const templatePath = join26(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile17(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -17230,7 +17396,7 @@ async function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path5.length > 0 && existsSync9(path5),
+    mergedSettingsPresent: path5.length > 0 && existsSync10(path5),
     mergedSettingsPath: path5
   };
   if (opts.json === true) {
@@ -17254,9 +17420,9 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absen
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
 async function readOnDiskVersion(path5) {
-  if (!existsSync9(path5)) return void 0;
+  if (!existsSync10(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile16(path5, "utf8"));
+    const parsed = JSON.parse(await readFile17(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -17297,7 +17463,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path5 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path5.length > 0 && existsSync9(path5);
+  const mergedSettingsPresent = path5.length > 0 && existsSync10(path5);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path5) : void 0;
   const decision = decideAutonomyPreflight({
