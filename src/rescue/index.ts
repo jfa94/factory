@@ -16,3 +16,5 @@ export type { WorkProbe, WorkAssessment, TaskWork } from "./assess.js";
 
 export { applyRescue, resetTaskRow } from "./apply.js";
 export type { RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts } from "./apply.js";
+
+export { effectiveAutoResets } from "./auto.js";

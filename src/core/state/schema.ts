@@ -794,6 +794,21 @@ export const RunStateSchema = z.object({
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
 
+  /**
+   * Bounded auto-rescue ledger (S10, Decision 48). Stamped INSIDE the same locked
+   * `applyRescue` mutation that performs an `--auto` reset. A sanctioned
+   * stored-EVENT exception to derive-don't-store (precedent: the retired
+   * `paused_minutes`): "how many self-heal cycles already ran" is history no
+   * state/git re-derivation can recover. `factory recover --auto` requires
+   * `attempts === 0`, bounding the self-heal loop to ONE cycle per run.
+   */
+  self_heal: z
+    .object({
+      attempts: z.number().int().nonnegative(),
+      last_at: z.string(),
+    })
+    .optional(),
+
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
 

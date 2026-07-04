@@ -532,6 +532,98 @@ describe("applyRescue", () => {
     const run = await state.read(RUN_ID);
     expect(run.tasks.d!.e2e_feedback).toBe("checkout: expected order confirmation, got 500");
   });
+
+  describe("auto (the bounded self-heal path — `factory recover --auto`, S10 / Decision 48)", () => {
+    const AT = "2026-07-04T00:00:00.000Z";
+
+    it("resets the EFFECTIVE set only, stamps self_heal in the same write, and reopens", async () => {
+      await seed(
+        [
+          { task_id: "dead", status: "failed", failure_class: "spec-defect" },
+          {
+            task_id: "doomed",
+            status: "failed",
+            failure_class: "blocked-environmental",
+            depends_on: ["dead"],
+          },
+          { task_id: "fine", status: "failed", failure_class: "blocked-environmental" },
+        ],
+        "failed",
+      );
+
+      const result = await applyRescue(state, RUN_ID, { auto: { at: AT } });
+      expect(result.reset).toEqual(["fine"]); // doomed excluded: dep on a dead-end
+      expect(result.reopened).toBe(true);
+      expect(result.run_status).toBe("running");
+      expect(result.auto_blocked).toBeUndefined();
+      expect(result.self_heal_attempts).toBe(1);
+
+      const run = await state.read(RUN_ID);
+      expect(run.self_heal).toEqual({ attempts: 1, last_at: AT });
+      expect(run.status).toBe("running");
+      expect(run.tasks.fine!.status).toBe("pending");
+      expect(run.tasks.doomed!.status).toBe("failed"); // untouched — would just re-cascade
+      expect(run.tasks.dead!.status).toBe("failed");
+    });
+
+    it("requires attempts === 0: a second auto is a no-op flagged auto_blocked:'attempts'", async () => {
+      await seed(
+        [{ task_id: "a", status: "failed", failure_class: "blocked-environmental" }],
+        "failed",
+      );
+      await applyRescue(state, RUN_ID, { auto: { at: AT } });
+      // The re-driven task fails again and the run re-finalizes to failed.
+      await state.update(RUN_ID, (s) => ({
+        ...s,
+        status: "failed",
+        ended_at: "2026-07-04T01:00:00.000Z",
+        tasks: {
+          a: task({ task_id: "a", status: "failed", failure_class: "blocked-environmental" }),
+        },
+      }));
+
+      const second = await applyRescue(state, RUN_ID, { auto: { at: "2026-07-04T02:00:00.000Z" } });
+      expect(second.auto_blocked).toBe("attempts");
+      expect(second.reset).toEqual([]);
+      expect(second.reopened).toBe(false);
+      expect(second.run_status).toBe("failed");
+
+      const run = await state.read(RUN_ID);
+      expect(run.self_heal).toEqual({ attempts: 1, last_at: AT }); // NOT re-stamped
+      expect(run.status).toBe("failed");
+      expect(run.tasks.a!.status).toBe("failed");
+    });
+
+    it("auto with an empty effective set is a no-op flagged 'empty' and does NOT stamp self_heal", async () => {
+      await seed([{ task_id: "dead", status: "failed", failure_class: "spec-defect" }], "failed");
+
+      const result = await applyRescue(state, RUN_ID, { auto: { at: AT } });
+      expect(result.auto_blocked).toBe("empty");
+      expect(result.reset).toEqual([]);
+      expect(result.reopened).toBe(false);
+      expect(result.run_status).toBe("failed");
+      expect((await state.read(RUN_ID)).self_heal).toBeUndefined();
+    });
+
+    it("auto never touches a failed e2e verdict (task-level, state-only — no silent e2e retry)", async () => {
+      await seed([{ task_id: "a", status: "done" }], "failed");
+      await state.update(RUN_ID, (s) => ({
+        ...s,
+        e2e_phase: { status: "failed", reason: "cap exhausted", manifest: [], reopen_counts: {} },
+      }));
+
+      const result = await applyRescue(state, RUN_ID, { auto: { at: AT } });
+      expect(result.auto_blocked).toBe("empty");
+      expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
+    });
+
+    it("auto is mutually exclusive with the manual target options (loud throw)", async () => {
+      await seed([{ task_id: "a", status: "executing" }]);
+      await expect(
+        applyRescue(state, RUN_ID, { auto: { at: AT }, includeDeadEnds: true }),
+      ).rejects.toThrow(/mutually exclusive/);
+    });
+  });
 });
 
 describe("resetTaskRow (Decision 39 — e2e reopen reuse)", () => {

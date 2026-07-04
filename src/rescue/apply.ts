@@ -24,6 +24,7 @@
  * writer cannot race the scan against the write.
  */
 import { scanRun } from "./scan.js";
+import { effectiveAutoResets } from "./auto.js";
 import type { StateManager } from "../core/state/index.js";
 import { isTerminalRunStatus } from "../types/index.js";
 import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js";
@@ -112,6 +113,18 @@ export interface RescueApplyOptions {
    * auto-polled. Alone sufficient to reopen a terminal run.
    */
   recheckRollup?: boolean;
+  /**
+   * The bounded self-heal path (`factory recover --auto`, S10 / Decision 48).
+   * Mutually exclusive with every manual option above (a LOUD error, not a
+   * merge): the auto-safe target set is computed INSIDE the locked mutator via
+   * {@link effectiveAutoResets} — stuck ∪ recoverable, filtered to tasks that
+   * are actionable post-reset. Requires `(run.self_heal?.attempts ?? 0) === 0`
+   * and a non-empty effective set; otherwise the apply is a no-op and the
+   * result carries `auto_blocked` so the CLI pages instead of resetting.
+   * On success, `self_heal: {attempts: +1, last_at: at}` is stamped in the SAME
+   * mutation as the resets (the sanctioned stored-event exception).
+   */
+  auto?: { at: string };
 }
 
 /** What a `rescue apply` did. */
@@ -125,6 +138,14 @@ export interface RescueApplyResult {
   reopened: boolean;
   /** Explicitly-named ids that were no-ops because already `pending`. */
   skipped: string[];
+  /**
+   * Why an `auto` apply refused to reset: the one self-heal cycle already ran
+   * (`attempts`) or nothing is effectively resettable (`empty`). Absent on a
+   * successful auto and on every non-auto apply.
+   */
+  auto_blocked?: "attempts" | "empty";
+  /** `self_heal.attempts` AFTER a successful auto apply; absent otherwise. */
+  self_heal_attempts?: number;
 }
 
 /** Optional overrides applied on top of a plain {@link resetTaskRow} reset. */
@@ -236,7 +257,59 @@ export async function applyRescue(
 ): Promise<RescueApplyResult> {
   let result: RescueApplyResult | null = null;
 
+  if (
+    opts.auto !== undefined &&
+    ((opts.tasks?.length ?? 0) > 0 ||
+      opts.includeDeadEnds === true ||
+      opts.resetE2e === true ||
+      opts.recheckRollup === true)
+  ) {
+    throw new Error(
+      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup)",
+    );
+  }
+
   const updated = await state.update(runId, (run) => {
+    // The bounded self-heal path: targets + gating computed on the LOCKED snapshot,
+    // and the self_heal ledger stamped in the same mutation as the resets.
+    if (opts.auto !== undefined) {
+      const attempts = run.self_heal?.attempts ?? 0;
+      const noop = (blocked: "attempts" | "empty"): RunState => {
+        result = {
+          run_id: runId,
+          run_status: run.status,
+          reset: [],
+          reopened: false,
+          skipped: [],
+          auto_blocked: blocked,
+        };
+        return run;
+      };
+      if (attempts > 0) return noop("attempts");
+      const targets = effectiveAutoResets(run, scanRun(run));
+      if (targets.length === 0) return noop("empty");
+
+      const reopen = isTerminalRunStatus(run.status);
+      result = {
+        run_id: runId,
+        run_status: reopen ? "running" : run.status,
+        reset: targets,
+        reopened: reopen,
+        skipped: [],
+        self_heal_attempts: attempts + 1,
+      };
+      const nextTasks: Record<string, TaskState> = { ...run.tasks };
+      for (const id of targets) {
+        nextTasks[id] = resetTaskRow(run.tasks[id]!);
+      }
+      return {
+        ...run,
+        tasks: nextTasks,
+        self_heal: { attempts: attempts + 1, last_at: opts.auto.at },
+        ...(reopen ? { status: "running" as const, ended_at: null } : {}),
+      };
+    }
+
     const { targets, skipped } = selectTargets(run, opts);
     const wasTerminal = isTerminalRunStatus(run.status);
     // A failed e2e_phase verdict, when the human asserts (via resetE2e) it's worth
