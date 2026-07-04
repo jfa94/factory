@@ -175,6 +175,11 @@ export async function resolveSpec(
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
+    // S9 backfill: a pre-snapshot spec gains its durable prd.json on first
+    // reuse (one fetch; no gate re-run — the spec was already adjudicated).
+    if (!(await deps.store.hasPrd(repo, existing.spec_id))) {
+      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
+    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
 
@@ -291,6 +296,9 @@ export async function storeSpec(
   }
 
   const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
+  // S9: snapshot the PRD durably beside the spec — the traceability stage reads
+  // it at finalize time (no gh re-fetch; scratch prd.json is transient).
+  const prd = await readJsonFile<Prd>(prdPath);
+  const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }

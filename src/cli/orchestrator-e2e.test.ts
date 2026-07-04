@@ -53,7 +53,7 @@ import {
   type DriveResults,
 } from "../orchestrator/index.js";
 
-import { greenProbe, makeSpec, NOW } from "../orchestrator/orchestrator-fixtures.js";
+import { greenProbe, makePrd, makeSpec, NOW } from "../orchestrator/orchestrator-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -281,7 +281,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("drives a task PRD→shipped (no-merge), holdout holdout recorded, panel all-approve", async () => {
     const request = specManifestSingle();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     const run = await createRun(state, specStore, {
       repo: REPO,
@@ -338,7 +338,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("serial-merges the task PR in live ship mode (same chain)", async () => {
     const request = specManifestSingle();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     await createRun(state, specStore, {
       repo: REPO,
@@ -369,7 +369,7 @@ describe("runner orchestrator seam — golden contract E2E", () => {
 
   it("fails a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
     const request = specManifestTwo();
-    await specStore.write(request, "# checkout spec\n\nvertical slice.");
+    await specStore.write(request, "# checkout spec\n\nvertical slice.", makePrd());
 
     await createRun(state, specStore, {
       repo: REPO,

@@ -9779,11 +9779,12 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
+import { access as access2, readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
 import { join as join8 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
+var PRD_FILE = "prd.json";
 function makeSpecId(issueNumber, slug) {
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
     throw new Error(`makeSpecId: issue number must be a positive integer, got ${issueNumber}`);
@@ -9897,16 +9898,22 @@ var SpecStore = class {
    *
    * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
    * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
-   * subset (no `spec.meta.json` holdout): the holdout is a dataDir reconstruction
-   * detail, and the canonical read-path never consults the mirror. Reruns still
-   * resolve by issue number against the dataDir store (unchanged).
+   * subset (no `spec.meta.json` holdout, no `prd.json` — the PRD is already
+   * public on the issue): the holdout is a dataDir reconstruction detail, and
+   * the canonical read-path never consults the mirror. Reruns still resolve by
+   * issue number against the dataDir store (unchanged).
+   *
+   * S9 (Decision 47): `prd` is REQUIRED — the durable PRD snapshot is what the
+   * traceability stage audits at finalize time (never a `gh` re-fetch: network
+   * at the most expensive moment, and a possibly-edited PRD is a TOCTOU audit).
    */
-  async write(request, specMd) {
+  async write(request, specMd, prd) {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
     await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
     await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join8(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
       join8(dir, META_FILE),
       stringifyJson({
@@ -9931,6 +9938,40 @@ var SpecStore = class {
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
+  }
+  /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
+  async hasPrd(repo, specId) {
+    try {
+      await access2(join8(specDir(this.dataDir, repo, specId), PRD_FILE));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
+   * spec predates the snapshot — never a silent null (traceability would audit
+   * nothing).
+   */
+  async readPrd(repo, specId) {
+    const path6 = join8(specDir(this.dataDir, repo, specId), PRD_FILE);
+    let raw;
+    try {
+      raw = await readFile4(path6, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        throw new Error(
+          `spec ${specId} predates the S9 PRD snapshot \u2014 run \`factory spec resolve --issue ${issueOf(specId) ?? "<n>"}\` to backfill, or \`--supersede\` to regenerate`
+        );
+      }
+      throw err;
+    }
+    return parseJson(raw, path6);
+  }
+  /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
+  async writePrd(repo, specId, prd) {
+    await atomicWriteFile(join8(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd));
+    log17.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`);
   }
   /** Build the run-facing {@link SpecPointer} from a request. */
   toPointer(request) {
@@ -10280,13 +10321,13 @@ function buildManifest(repo, issueNumber, generated) {
 
 // src/spec/build.ts
 import { join as join9 } from "node:path";
-var PRD_FILE = "prd.json";
+var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join9(dir, PRD_FILE),
+    prdPath: join9(dir, PRD_FILE2),
     generatedPath: join9(dir, GENERATED_FILE),
     verdictPath: join9(dir, VERDICT_FILE)
   };
@@ -10297,6 +10338,9 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
+    if (!await deps.store.hasPrd(repo, existing.spec_id)) {
+      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
+    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
@@ -10359,7 +10403,7 @@ async function storeSpec(deps, repo, issue) {
   });
   if (decision.decision === "NEEDS_REVISION") {
     const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
-    const prd = await readJsonFile(prdPath);
+    const prd2 = await readJsonFile(prdPath);
     return {
       kind: "revise",
       repo,
@@ -10367,12 +10411,13 @@ async function storeSpec(deps, repo, issue) {
       source: "review",
       reason: decision.reason,
       blockers,
-      spawn: buildReviseSpawn(prd, generated, blockers),
+      spawn: buildReviseSpawn(prd2, generated, blockers),
       generated_path: generatedPath
     };
   }
   const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
+  const prd = await readJsonFile(prdPath);
+  const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }
 
@@ -11358,7 +11403,7 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
+import { access as access3, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
@@ -11373,7 +11418,7 @@ function assertNotTruncated(r, what) {
 }
 async function pathExists(absPath) {
   try {
-    await access2(absPath);
+    await access3(absPath);
     return true;
   } catch {
     return false;
@@ -11593,7 +11638,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
 var DefaultFsProbe = class {
   async exists(relPath, opts) {
     try {
-      await access2(path3.join(opts.cwd, relPath));
+      await access3(path3.join(opts.cwd, relPath));
       return true;
     } catch {
       return false;
@@ -12390,11 +12435,11 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passR
 
 // src/verifier/e2e/runner.ts
 import path5 from "node:path";
-import { access as access3 } from "node:fs/promises";
+import { access as access4 } from "node:fs/promises";
 var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 async function pathExists2(p) {
   try {
-    await access3(p);
+    await access4(p);
     return true;
   } catch {
     return false;
@@ -15174,7 +15219,7 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
-import { access as access4, readFile as readFile14 } from "node:fs/promises";
+import { access as access5, readFile as readFile14 } from "node:fs/promises";
 import { join as join21 } from "node:path";
 
 // src/cli/current.ts
@@ -15339,16 +15384,18 @@ function seedTasksFromSpec(request) {
   return tasks;
 }
 async function resolveSpec2(specStore, opts) {
-  if (opts.specId !== void 0) {
-    return specStore.read(opts.repo, opts.specId);
-  }
-  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (resolved === null) {
+  const request = opts.specId !== void 0 ? await specStore.read(opts.repo, opts.specId) : await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (request === null) {
     throw new Error(
       `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
     );
   }
-  return resolved;
+  if (!await specStore.hasPrd(request.repo, request.spec_id)) {
+    throw new Error(
+      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
+    );
+  }
+  return request;
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   const seeded = seedTasksFromSpec(request);
@@ -15494,7 +15541,7 @@ async function assertE2ePrereqs(cwd) {
     if (!hasDep2) missing.push("@playwright/test (dependencies or devDependencies)");
   }
   try {
-    await access4(join21(cwd, "playwright.config.ts"));
+    await access5(join21(cwd, "playwright.config.ts"));
   } catch {
     missing.push("playwright.config.ts");
   }

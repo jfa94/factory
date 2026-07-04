@@ -6,6 +6,16 @@ import { SpecStore, makeSpecId } from "./store.js";
 import { specDir } from "../core/state/paths.js";
 import { parseSpecManifest, type SpecManifest } from "./schema.js";
 import { SpecPointerSchema } from "../types/index.js";
+import type { Prd } from "./gh.js";
+
+/** The durable PRD snapshot every S9 write persists beside spec.md. */
+const PRD: Prd = {
+  issue_number: 123,
+  title: "Checkout Redesign",
+  body: "## Requirements\n\n- checkout must work\n\n## Acceptance Criteria\n\n- returns 201",
+  labels: ["prd"],
+  body_truncated: false,
+};
 
 let dataDir: string;
 // A throwaway docs root so the F-specloc in-repo reviewable copy never lands in
@@ -66,7 +76,7 @@ describe("SpecStore.write — durable bare-array tasks.json + pointer", () => {
   it("writes spec.md + a BARE tasks.json array and returns a SpecPointer", async () => {
     const store = newStore();
     const m = request();
-    const pointer = await store.write(m, "# Checkout spec");
+    const pointer = await store.write(m, "# Checkout spec", PRD);
 
     const dir = specDir(dataDir, m.repo, m.spec_id);
     expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# Checkout spec");
@@ -89,7 +99,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     try {
       const store = new SpecStore({ dataDir, docsRoot });
       const m = request();
-      await store.write(m, "# Checkout spec");
+      await store.write(m, "# Checkout spec", PRD);
 
       const reviewDir = join(docsRoot, "factory", m.spec_id);
       expect(await readFile(join(reviewDir, "spec.md"), "utf8")).toBe("# Checkout spec");
@@ -106,7 +116,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     try {
       const store = new SpecStore({ dataDir, docsRoot });
       const m = request();
-      await store.write(m, "# spec");
+      await store.write(m, "# spec", PRD);
       // Blow away the in-repo copy: the canonical read still resolves from dataDir.
       await rm(join(docsRoot, "factory"), { recursive: true, force: true });
       const read = await store.read(m.repo, m.spec_id);
@@ -131,7 +141,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     const m = request();
 
     // write() must RESOLVE — the mirror failure is swallowed-but-warned, not fatal.
-    const pointer = await store.write(m, "# Checkout spec");
+    const pointer = await store.write(m, "# Checkout spec", PRD);
     expect(SpecPointerSchema.parse(pointer)).toEqual({
       repo: "owner/name",
       spec_id: "123-checkout",
@@ -163,7 +173,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     try {
       const store = new SpecStore({ dataDir, docsRoot });
       const m = request();
-      await store.write(m, "# spec");
+      await store.write(m, "# spec", PRD);
       const reviewDir = join(docsRoot, "factory", m.spec_id);
       // Sidecar is a dataDir reconstruction detail — keep it out of the repo copy.
       await expect(readFile(join(reviewDir, "spec.meta.json"), "utf8")).rejects.toThrow();
@@ -178,10 +188,54 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
   });
 });
 
+describe("SpecStore PRD snapshot (S9, Decision 47)", () => {
+  it("write persists prd.json beside spec.md — canonical only, NOT mirrored to docs/", async () => {
+    const store = newStore();
+    const m = request();
+    await store.write(m, "# spec", PRD);
+
+    const dir = specDir(dataDir, m.repo, m.spec_id);
+    const persisted = JSON.parse(await readFile(join(dir, "prd.json"), "utf8"));
+    expect(persisted).toEqual(PRD);
+    // The PRD is already public on the issue — no in-repo mirror copy.
+    await expect(
+      readFile(join(docsRoot, "factory", m.spec_id, "prd.json"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("hasPrd: false before write, true after; readPrd round-trips", async () => {
+    const store = newStore();
+    const m = request();
+    expect(await store.hasPrd(m.repo, m.spec_id)).toBe(false);
+    await store.write(m, "# spec", PRD);
+    expect(await store.hasPrd(m.repo, m.spec_id)).toBe(true);
+    expect(await store.readPrd(m.repo, m.spec_id)).toEqual(PRD);
+  });
+
+  it("readPrd fails loud with the backfill remedy on a pre-S9 spec (no snapshot)", async () => {
+    const store = newStore();
+    const m = request();
+    await store.write(m, "# spec", PRD);
+    await rm(join(specDir(dataDir, m.repo, m.spec_id), "prd.json")); // fabricate a pre-S9 dir
+    await expect(store.readPrd(m.repo, m.spec_id)).rejects.toThrow(
+      /predates the S9 PRD snapshot.*factory spec resolve --issue 123/s,
+    );
+  });
+
+  it("writePrd backfills a spec dir that lacks the snapshot", async () => {
+    const store = newStore();
+    const m = request();
+    await store.write(m, "# spec", PRD);
+    await rm(join(specDir(dataDir, m.repo, m.spec_id), "prd.json"));
+    await store.writePrd(m.repo, m.spec_id, PRD);
+    expect(await store.readPrd(m.repo, m.spec_id)).toEqual(PRD);
+  });
+});
+
 describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   it("Δ X: returns an existing request for a known issue number", async () => {
     const store = newStore();
-    await store.write(request(), "# spec");
+    await store.write(request(), "# spec", PRD);
 
     const found = await store.resolveByIssue("owner/name", 123);
     expect(found).not.toBeNull();
@@ -192,7 +246,7 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   it("Δ X: looks up by ISSUE NUMBER even when the slug would differ", async () => {
     const store = newStore();
     // Stored slug is "checkout"; a rerun would never re-derive it — issue is the key.
-    await store.write(request({ spec_id: "123-checkout", slug: "checkout" }), "# spec");
+    await store.write(request({ spec_id: "123-checkout", slug: "checkout" }), "# spec", PRD);
     const found = await store.resolveByIssue("owner/name", 123);
     expect(found!.spec_id).toBe("123-checkout");
   });
@@ -209,14 +263,14 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
 
   it("does not confuse issue 12 with issue 123 (exact issue match)", async () => {
     const store = newStore();
-    await store.write(request({ spec_id: "123-checkout", issue_number: 123 }), "# spec");
+    await store.write(request({ spec_id: "123-checkout", issue_number: 123 }), "# spec", PRD);
     expect(await store.resolveByIssue("owner/name", 12)).toBeNull();
   });
 
   it("throws loudly on two dirs for the same issue (store-integrity defect)", async () => {
     const store = newStore();
-    await store.write(request({ spec_id: "123-checkout" }), "# spec");
-    await store.write(request({ spec_id: "123-checkout-v2", slug: "checkout-v2" }), "# spec");
+    await store.write(request({ spec_id: "123-checkout" }), "# spec", PRD);
+    await store.write(request({ spec_id: "123-checkout-v2", slug: "checkout-v2" }), "# spec", PRD);
     await expect(store.resolveByIssue("owner/name", 123)).rejects.toThrow(/multiple specs/);
   });
 
@@ -230,7 +284,7 @@ describe("SpecStore.read — round-trips through the durable store", () => {
   it("reconstructs the request from the on-disk bare array + holdout", async () => {
     const store = newStore();
     const m = request();
-    await store.write(m, "# spec");
+    await store.write(m, "# spec", PRD);
     const read = await store.read("owner/name", "123-checkout");
     expect(read.issue_number).toBe(123);
     expect(read.slug).toBe("checkout");
@@ -258,7 +312,7 @@ describe("SpecStore.read — round-trips through the durable store", () => {
 describe("SpecStore.deleteByIssue — supersede spec deletion", () => {
   it("deletes the canonical spec dir and returns true when a spec exists", async () => {
     const store = newStore();
-    await store.write(request(), "# spec");
+    await store.write(request(), "# spec", PRD);
 
     const deleted = await store.deleteByIssue("owner/name", 123);
     expect(deleted).toBe(true);
@@ -278,7 +332,7 @@ describe("SpecStore.deleteByIssue — supersede spec deletion", () => {
 
   it("is idempotent — a second call returns false and does not throw", async () => {
     const store = newStore();
-    await store.write(request(), "# spec");
+    await store.write(request(), "# spec", PRD);
     await store.deleteByIssue("owner/name", 123);
     expect(await store.deleteByIssue("owner/name", 123)).toBe(false);
   });

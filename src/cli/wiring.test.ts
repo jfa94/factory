@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { loadCliDeps } from "./wiring.js";
 import { StateManager } from "../core/state/index.js";
 import { SpecStore } from "../spec/index.js";
+import { makePrd } from "../orchestrator/orchestrator-fixtures.js";
 import { parseSpecManifest, type SpecManifest } from "../spec/index.js";
 
 const RUN_ID = "run-1";
@@ -60,7 +61,7 @@ describe("loadCliDeps", () => {
 
   /** Write a durable spec + create a run pointing at it. */
   async function seedRun(repo: string, specId: string, issue: number) {
-    await specs.write(makeManifest(repo, specId, issue), "# spec\n");
+    await specs.write(makeManifest(repo, specId, issue), "# spec\n", makePrd());
     await state.create({
       run_id: RUN_ID,
       spec: { repo, spec_id: specId, issue_number: issue },
@@ -102,7 +103,7 @@ describe("loadCliDeps", () => {
   it("falls back to the run's persisted ship_mode when no override is given (live run)", async () => {
     // Regression for the silent live→no-merge downgrade: a resumed/manual `drive`
     // or `finalize` that omits `--ship-mode` must keep the run's persisted `live`.
-    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n");
+    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n", makePrd());
     await state.create({
       run_id: RUN_ID,
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
@@ -114,7 +115,7 @@ describe("loadCliDeps", () => {
   });
 
   it("lets an explicit override win over the persisted ship_mode", async () => {
-    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n");
+    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n", makePrd());
     await state.create({
       run_id: RUN_ID,
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },

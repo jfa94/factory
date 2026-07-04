@@ -32,6 +32,8 @@ import { EXIT } from "../../shared/exit-codes.js";
 import { NotAutonomousError } from "../../autonomy/mode.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore, parseSpecManifest, type SpecManifest } from "../../spec/index.js";
+import { makePrd } from "../../orchestrator/orchestrator-fixtures.js";
+import { specDir } from "../../core/state/paths.js";
 import { FakeGitClient, FakeGhClient } from "../../git/index.js";
 import { defaultConfig } from "../../config/schema.js";
 import {
@@ -330,7 +332,7 @@ describe("createRun", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n", makePrd());
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -426,6 +428,16 @@ describe("createRun", () => {
     const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-nodebug" });
     expect(run.debug).toBe(false);
   });
+
+  it("Δ S9 preflight: refuses to create a run on a spec with no durable PRD snapshot", async () => {
+    // Fabricate a pre-S9 spec dir: written normally, snapshot removed.
+    await rm(join(specDir(dataDir, REPO, "42-checkout"), "prd.json"));
+    await expect(
+      createRun(state, store, { repo: REPO, specId: "42-checkout", runId: "run-pre-s9" }),
+    ).rejects.toThrow(/no durable PRD snapshot.*factory spec resolve --issue 42/s);
+    // Nothing was created — the refusal is pre-run (no paid-run-then-fail).
+    await expect(state.read("run-pre-s9")).rejects.toThrow();
+  });
 });
 
 describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
@@ -440,7 +452,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n", makePrd());
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -1198,7 +1210,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-run-derive-"));
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(request([task("t1", [])]), "# spec\n");
+    await store.write(request([task("t1", [])]), "# spec\n", makePrd());
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -1345,7 +1357,7 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n", makePrd());
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -1442,6 +1454,7 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
         tasks: [task("t1", [])],
       }),
       "# spec\n",
+      makePrd(),
     );
     await seed("run-A", "sess-1");
     await createRun(state, store, {
@@ -1475,6 +1488,7 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
         tasks: [task("t1", [])],
       }),
       "# spec\n",
+      makePrd(),
     );
     await seed("run-m1", "sess-multi");
     await createRun(state, store, {
@@ -1789,7 +1803,7 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-run-staging-"));
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(request([task("t1", [])]), "# spec\n");
+    await store.write(request([task("t1", [])]), "# spec\n", makePrd());
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 

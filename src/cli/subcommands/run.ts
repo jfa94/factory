@@ -279,16 +279,27 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
   // neither/both case can reach here, so no defensive fallback is needed). Narrow
   // on the VALUE (`specId !== undefined`): the `?: never` padding keeps the unused
   // key structurally present, so `"specId" in opts` would not discriminate cleanly.
-  if (opts.specId !== undefined) {
-    return specStore.read(opts.repo, opts.specId);
-  }
-  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (resolved === null) {
+  const request =
+    opts.specId !== undefined
+      ? await specStore.read(opts.repo, opts.specId)
+      : await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (request === null) {
     throw new Error(
       `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
     );
   }
-  return resolved;
+  // S9 preflight: the traceability stage reads the durable PRD snapshot at the
+  // END of the run — refuse NOW rather than fail a fully-paid run. In-protocol
+  // Phase 1 (`spec resolve`) always backfills first; this guards the
+  // off-protocol `--spec-id` path onto a pre-S9 spec.
+  if (!(await specStore.hasPrd(request.repo, request.spec_id))) {
+    throw new Error(
+      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) — ` +
+        `run \`factory spec resolve --issue ${request.issue_number}\` to backfill, ` +
+        `or \`--supersede\` to regenerate`,
+    );
+  }
+  return request;
 }
 
 /**

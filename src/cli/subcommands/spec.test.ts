@@ -16,7 +16,7 @@ import { parseArgs } from "../args.js";
 import { FakeGitClient } from "../../git/index.js";
 import { loadConfig } from "../../config/index.js";
 import { stringifyJson } from "../../shared/json.js";
-import { specBuildDir } from "../../core/state/paths.js";
+import { specBuildDir, specDir } from "../../core/state/paths.js";
 import {
   SpecStore,
   buildManifest,
@@ -51,6 +51,15 @@ const PRD_BODY = [
 
 /** A body the specifiability gate refuses on all three checks. */
 const TRIVIAL_BODY = "Make login better please.";
+
+/** The durable PRD snapshot matching PRD_BODY (S9 — SpecStore.write's third param). */
+const PRD: Prd = {
+  issue_number: ISSUE,
+  title: "Login",
+  body: PRD_BODY,
+  labels: [],
+  body_truncated: false,
+};
 
 const PASS_TASK = {
   task_id: "T1",
@@ -166,13 +175,44 @@ afterEach(async () => {
 describe("resolveSpec", () => {
   it("reuses an existing spec by issue number (Δ X — no generation)", async () => {
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD);
 
     const env = await resolveSpec(deps(), REPO, ISSUE);
     expect(env.kind).toBe("reuse");
     if (env.kind !== "reuse") throw new Error("unreachable");
     expect(env.pointer.issue_number).toBe(ISSUE);
     expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
+  });
+
+  it("Δ S9: reuse backfills a missing PRD snapshot exactly once (pre-S9 spec)", async () => {
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    const pointer = await store.write(
+      buildManifest(REPO, ISSUE, PASS_GENERATED),
+      PASS_GENERATED.specMd,
+      PRD,
+    );
+    await rm(join(specDir(dataDir, REPO, pointer.spec_id), "prd.json")); // fabricate pre-S9
+
+    let fetches = 0;
+    const countingDeps: SpecBuildDeps = {
+      ...deps(),
+      gh: {
+        async fetchPrd(n: number): Promise<Prd> {
+          fetches++;
+          return { ...PRD, issue_number: n };
+        },
+      },
+    };
+
+    const env = await resolveSpec(countingDeps, REPO, ISSUE);
+    expect(env.kind).toBe("reuse");
+    expect(fetches).toBe(1);
+    expect((await store.readPrd(REPO, pointer.spec_id)).body).toBe(PRD_BODY);
+
+    // Second resolve: the snapshot now exists → reuse without a fetch.
+    const env2 = await resolveSpec(countingDeps, REPO, ISSUE);
+    expect(env2.kind).toBe("reuse");
+    expect(fetches).toBe(1);
   });
 
   it("emits the apex-pinned generate spawn + writes prd.json when no spec exists", async () => {
@@ -215,7 +255,7 @@ describe("resolveSpec specifiability refusal (S9 — Δ pre-generation, zero age
 
   it("Δ the reuse path never runs the gate (an existing spec wins)", async () => {
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD);
 
     const env = await resolveSpec(depsWithBody(TRIVIAL_BODY), REPO, ISSUE);
     expect(env.kind).toBe("reuse");
@@ -233,7 +273,7 @@ describe("resolveSpec specifiability refusal (S9 — Δ pre-generation, zero age
 describe("resolveSpec with regenerate:true (--supersede)", () => {
   it("deletes the existing spec and emits generate — never reuse", async () => {
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD);
 
     const env = await resolveSpec(deps(), REPO, ISSUE, { regenerate: true });
     expect(env.kind).toBe("generate");
@@ -241,7 +281,7 @@ describe("resolveSpec with regenerate:true (--supersede)", () => {
 
   it("after deletion resolveByIssue returns null", async () => {
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD);
 
     await resolveSpec(deps(), REPO, ISSUE, { regenerate: true });
     expect(await store.resolveByIssue(REPO, ISSUE)).toBeNull();
@@ -249,7 +289,7 @@ describe("resolveSpec with regenerate:true (--supersede)", () => {
 
   it("regenerate:false still reuses an existing spec", async () => {
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD);
 
     const env = await resolveSpec(deps(), REPO, ISSUE, { regenerate: false });
     expect(env.kind).toBe("reuse");
@@ -350,7 +390,8 @@ describe("storeSpec", () => {
     expect(env.spawn.context.review_feedback).toEqual(env.blockers);
   });
 
-  it("persists the spec on PASS and returns a reusable pointer", async () => {
+  it("persists the spec on PASS (incl. the durable PRD snapshot) and returns a reusable pointer", async () => {
+    await resolveSpec(deps(), REPO, ISSUE); // writes scratch prd.json (S9: store snapshots it)
     await writeScratch("generated.json", PASS_GENERATED);
     await writeScratch("verdict.json", PASS_VERDICT);
 
@@ -360,12 +401,14 @@ describe("storeSpec", () => {
     expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
 
     // The durable spec is now readable + a subsequent resolve reuses it.
-    const request = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(
-      REPO,
-      env.pointer.spec_id,
-    );
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    const request = await store.read(REPO, env.pointer.spec_id);
     expect(request.tasks).toHaveLength(1);
     expect(request.tasks[0]!.task_id).toBe("T1");
+
+    // Δ S9: the PRD snapshot landed durably beside the spec.
+    expect(await store.hasPrd(REPO, env.pointer.spec_id)).toBe(true);
+    expect((await store.readPrd(REPO, env.pointer.spec_id)).body).toBe(PRD_BODY);
 
     const reResolve = await resolveSpec(deps(), REPO, ISSUE);
     expect(reResolve.kind).toBe("reuse");

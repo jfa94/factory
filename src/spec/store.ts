@@ -22,7 +22,7 @@
  * `specsRoot` / `repoKey` / `docsFactoryDir`); this module never hand-joins a
  * path segment. Writes go through the atomic-write seam.
  */
-import { readFile, readdir, rm } from "node:fs/promises";
+import { access, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteFile } from "../shared/atomic-write.js";
 import { parseJson, stringifyJson } from "../shared/json.js";
@@ -31,12 +31,14 @@ import { createLogger } from "../shared/logging.js";
 import { resolveDataDir, type DataDirOptions } from "../config/index.js";
 import { specDir, specsRoot, repoKey, docsFactoryDir } from "../core/state/paths.js";
 import type { SpecPointer } from "../types/index.js";
+import type { Prd } from "./gh.js";
 import { parseSpecManifest, parseSpecTasks, type SpecManifest } from "./schema.js";
 
 const log = createLogger("spec:store");
 
 const SPEC_MD_FILE = "spec.md";
 const TASKS_FILE = "tasks.json";
+const PRD_FILE = "prd.json";
 
 /**
  * Construct a `spec_id` from the (stable) issue number + a human slug.
@@ -192,11 +194,16 @@ export class SpecStore {
    *
    * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
    * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
-   * subset (no `spec.meta.json` holdout): the holdout is a dataDir reconstruction
-   * detail, and the canonical read-path never consults the mirror. Reruns still
-   * resolve by issue number against the dataDir store (unchanged).
+   * subset (no `spec.meta.json` holdout, no `prd.json` — the PRD is already
+   * public on the issue): the holdout is a dataDir reconstruction detail, and
+   * the canonical read-path never consults the mirror. Reruns still resolve by
+   * issue number against the dataDir store (unchanged).
+   *
+   * S9 (Decision 47): `prd` is REQUIRED — the durable PRD snapshot is what the
+   * traceability stage audits at finalize time (never a `gh` re-fetch: network
+   * at the most expensive moment, and a possibly-edited PRD is a TOCTOU audit).
    */
-  async write(request: SpecManifest, specMd: string): Promise<SpecPointer> {
+  async write(request: SpecManifest, specMd: string, prd: Prd): Promise<SpecPointer> {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
@@ -204,6 +211,7 @@ export class SpecStore {
     await atomicWriteFile(join(dir, SPEC_MD_FILE), specMd);
     // tasks.json is the BARE array — the canonical consumer contract.
     await atomicWriteFile(join(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
       join(dir, META_FILE),
       stringifyJson({
@@ -249,6 +257,44 @@ export class SpecStore {
         (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED — see warning)`),
     );
     return this.toPointer(parsed);
+  }
+
+  /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
+  async hasPrd(repo: string, specId: string): Promise<boolean> {
+    try {
+      await access(join(specDir(this.dataDir, repo, specId), PRD_FILE));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
+   * spec predates the snapshot — never a silent null (traceability would audit
+   * nothing).
+   */
+  async readPrd(repo: string, specId: string): Promise<Prd> {
+    const path = join(specDir(this.dataDir, repo, specId), PRD_FILE);
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `spec ${specId} predates the S9 PRD snapshot — run \`factory spec resolve ` +
+            `--issue ${issueOf(specId) ?? "<n>"}\` to backfill, or \`--supersede\` to regenerate`,
+        );
+      }
+      throw err;
+    }
+    return parseJson<Prd>(raw, path);
+  }
+
+  /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
+  async writePrd(repo: string, specId: string, prd: Prd): Promise<void> {
+    await atomicWriteFile(join(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd));
+    log.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`);
   }
 
   /** Build the run-facing {@link SpecPointer} from a request. */
