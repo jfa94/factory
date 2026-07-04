@@ -10517,7 +10517,13 @@ function validateCommand(command, isAllowedRunner) {
 // src/verifier/deterministic/gate-contract.ts
 var GATE_CONTRACT_REL = ".factory/gates.json";
 var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint"];
+var COMMAND_GATES = [
+  "test",
+  "type",
+  "build",
+  "lint",
+  "coverage"
+];
 function isAllowedGateRunner(argv) {
   const runner = runnerName(argv);
   const a1 = argv[1];

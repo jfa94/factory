@@ -13,10 +13,12 @@
  *   - SCOPE skips (nothing in the diff for this gate to act on) stay excluded —
  *     they are properties of the task, not broken tooling.
  *
- * `command` is allowed ONLY on the gates that execute it (test/type/build/lint)
- * — a command on any other gate is rejected at parse so the key can never be
- * declared-but-not-wired (the `redTestCommand` cautionary tale this contract
- * replaces).
+ * `command` is allowed ONLY on the gates that execute it (test/type/build/lint/
+ * coverage) — a command on any other gate is rejected at parse so the key can
+ * never be declared-but-not-wired (the `redTestCommand` cautionary tale this
+ * contract replaces). A coverage override must itself write
+ * `coverage/coverage-summary.json` (istanbul json-summary shape) — that file is
+ * the measurement the gate parses (S8).
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,7 +38,13 @@ export const GATE_CONTRACT_STACKS = ["npm", "deno", "custom"] as const;
 export type GateContractStack = (typeof GATE_CONTRACT_STACKS)[number];
 
 /** Gates whose strategies EXECUTE a contracted `command` override. */
-export const COMMAND_GATES: readonly GateId[] = ["test", "type", "build", "lint"] as const;
+export const COMMAND_GATES: readonly GateId[] = [
+  "test",
+  "type",
+  "build",
+  "lint",
+  "coverage",
+] as const;
 
 /**
  * The RUNNER policy for contracted gate commands (charset validation is the
