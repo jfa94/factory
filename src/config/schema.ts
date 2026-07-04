@@ -50,11 +50,6 @@ export const QualitySchema = z
     /** Redact secrets from the persisted findings artifact (on by default). */
     securityRedactFindings: z.boolean().default(true),
     /**
-     * Custom "red test" verification command for exotic runners (Go, Ruby,
-     * Deno, …) so TDD enforcement need not be bypassed. Optional.
-     */
-    redTestCommand: z.string().optional(),
-    /**
      * Per-worktree environment-prep command run once after the task worktree is
      * created, BEFORE the deterministic command-gates (test/type/build). When
      * unset, a lockfile in the worktree is auto-detected (`package-lock.json` →
@@ -250,7 +245,8 @@ export const GitSchema = z
  * writes it into the repo's `playwright.config.ts`; a value set here wins over the
  * assessment's (`resolveBootConfig` in `src/orchestrator/e2e.ts`). The runner module
  * actually reads every key below — no declared-but-never-load-bearing keys (the
- * `redTestCommand` cautionary tale must NOT repeat here).
+ * `redTestCommand` cautionary tale — declared for years, read by nothing, pruned
+ * in S7/Decision 46 — must NOT repeat here).
  */
 export const E2eConfigSchema = z
   .object({

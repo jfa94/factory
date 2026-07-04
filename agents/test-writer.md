@@ -64,8 +64,9 @@ literal>")` against a source/migration file). If the artifact under test is **no
    executable at RED time** (e.g. a SQL migration whose pgTAP harness ships in a later task),
    either assert behavior through a runnable probe the criteria already imply, or — if no
    executable assertion is yet possible — emit `STATUS: NEEDS_CONTEXT` and defer rather than
-   fabricate a source pin. (`tdd_exempt` on the task / `.quality.redTestCommand` in config are
-   the sanctioned escapes for exotic or deferred runners — never a text pin.)
+   fabricate a source pin. (`tdd_exempt` on the task / a contracted gate `command` in the
+   repo's `.factory/gates.json` are the sanctioned escapes for exotic or deferred runners —
+   never a text pin.)
 
 ## Red Flags — STOP and re-read this prompt
 

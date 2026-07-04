@@ -18,6 +18,7 @@
 export type TcbCategory =
   | "ci-workflows"
   | "gate-config"
+  | "gate-contract"
   | "hooks"
   | "data-runs"
   | "data-specs"

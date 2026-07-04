@@ -6444,11 +6444,6 @@ var QualitySchema = external_exports.object({
   /** Redact secrets from the persisted findings artifact (on by default). */
   securityRedactFindings: external_exports.boolean().default(true),
   /**
-   * Custom "red test" verification command for exotic runners (Go, Ruby,
-   * Deno, …) so TDD enforcement need not be bypassed. Optional.
-   */
-  redTestCommand: external_exports.string().optional(),
-  /**
    * Per-worktree environment-prep command run once after the task worktree is
    * created, BEFORE the deterministic command-gates (test/type/build). When
    * unset, a lockfile in the worktree is auto-detected (`package-lock.json` →
@@ -6787,6 +6782,11 @@ function buildTcbRules(ctx = {}) {
     category: "docs-factory",
     describe: "docs/factory/** (in-repo reviewable spec copy \u2014 F-specloc)",
     test: (p) => hasAdjacentComponents(p, "docs", "factory")
+  });
+  rules.push({
+    category: "gate-contract",
+    describe: ".factory/gates.json (the committed gate contract \u2014 Decision 46)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json")
   });
   rules.push({
     category: "gate-config",

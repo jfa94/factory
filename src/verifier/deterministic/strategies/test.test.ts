@@ -9,7 +9,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { defaultConfig, type Config } from "../../../config/schema.js";
-import { FakeGitProbe, FakeVitest, makeFakeTools, proc } from "../fakes.js";
+import { FakeCommandRunner, FakeGitProbe, FakeVitest, makeFakeTools, proc } from "../fakes.js";
+import { GateContractSchema } from "../gate-contract.js";
+import { validContract } from "../gate-contract.test.js";
 import type { GateRan, GateSkip, StrategyContext } from "../strategy.js";
 import type { GateTools } from "../tools.js";
 import { isVitestRunnable, testStrategy } from "./test.js";
@@ -126,5 +128,51 @@ describe("isVitestRunnable extension matrix", () => {
   it("returns false for .d.ts declaration files (.ts$ matches but excluded)", () => {
     expect(isVitestRunnable("tests/globals.d.ts")).toBe(false);
     expect(isVitestRunnable("src/types/foo.d.ts")).toBe(false);
+  });
+});
+
+describe("testStrategy — contract command (S7, Decision 46)", () => {
+  function denoContract() {
+    const raw = validContract();
+    raw.stack = "deno";
+    (raw.gates as Record<string, unknown>).test = { contracted: true, command: "deno test" };
+    return GateContractSchema.parse(raw);
+  }
+
+  it("runs the contracted command FULL — vitest and diff-scoping not consulted", async () => {
+    const fakeVitest = new FakeVitest(proc(1)); // would fail if called
+    const command = new FakeCommandRunner(proc(0));
+    // The deno trap: a pure non-vitest diff previously skipped (scope) — with a
+    // contracted command the full suite runs instead.
+    const tools = makeFakeTools({
+      git: probe(["supabase/tests/x.test.sql"]),
+      vitest: fakeVitest,
+      command,
+    });
+    const out = await testStrategy.run({ ...ctx(tools), contract: denoContract() });
+    expect(out.kind).toBe("ran");
+    expect((out as GateRan).evidence.observed).toBe(true);
+    expect((out as GateRan).evidence.detail).toContain("contract:deno test");
+    expect(command.calls).toEqual([["deno", "test"]]);
+    expect(fakeVitest.calls).toHaveLength(0);
+  });
+
+  it("contracted command exit≠0 → observed false", async () => {
+    const command = new FakeCommandRunner(proc(1, "", "1 test failed"));
+    const tools = makeFakeTools({ git: probe(["src/foo.test.ts"]), command });
+    const out = await testStrategy.run({ ...ctx(tools), contract: denoContract() });
+    expect(out.kind).toBe("ran");
+    expect((out as GateRan).evidence.observed).toBe(false);
+  });
+
+  it("contract WITHOUT a test command → vitest path unchanged", async () => {
+    const fakeVitest = new FakeVitest(proc(0));
+    const command = new FakeCommandRunner(proc(1)); // would fail if called
+    const tools = makeFakeTools({ git: probe(["src/foo.test.ts"]), vitest: fakeVitest, command });
+    const contract = GateContractSchema.parse(validContract()); // test contracted, no command
+    const out = await testStrategy.run({ ...ctx(tools), contract });
+    expect((out as GateRan).evidence.observed).toBe(true);
+    expect(fakeVitest.calls).toHaveLength(1);
+    expect(command.calls).toHaveLength(0);
   });
 });

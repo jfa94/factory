@@ -15,42 +15,22 @@
  * BEFORE the detail is surfaced/persisted (Δ K, M14).
  */
 import { redactSecrets } from "../../../shared/index.js";
+import {
+  runnerName,
+  validateCommand,
+  type CommandValidation,
+} from "../../../shared/command-allowlist.js";
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
 import { ran, skip } from "../strategy.js";
 import type { GateTools } from "../tools.js";
 
-/** A token is safe iff it matches the allowlist charset (no shell metacharacters). */
-const SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+export type { CommandValidation };
 
-/** Runner-prefix allowlist outcome. */
-export type CommandValidation =
-  | { readonly ok: true; readonly argv: readonly string[] }
-  | {
-      readonly ok: false;
-      readonly reason: "unsafe_command" | "unallowed_runner";
-      readonly detail: string;
-    };
-
-/**
- * Validate a configured security command string against the token + runner-prefix
- * allowlists (bin/pipeline-security-gate:96-122). Pure — exported for unit vectors.
- */
-export function validateSecurityCommand(command: string): CommandValidation {
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
-  for (const t of tokens) {
-    if (!SAFE_TOKEN.test(t)) {
-      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
-    }
-  }
-  const bin = tokens[0];
-  if (bin === undefined) {
-    return { ok: false, reason: "unsafe_command", detail: "empty command" };
-  }
-  // Strip any path prefix from the runner name (bash `${cmd_array[0]##*/}`).
-  const runner = bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-  const a1 = tokens[1];
-  const a2 = tokens[2];
-  let allowed = false;
+/** The sast RUNNER policy over a charset-validated argv (bin/pipeline-security-gate:96-122). */
+function isAllowedSecurityRunner(argv: readonly string[]): boolean {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  const a2 = argv[2];
   switch (runner) {
     case "semgrep":
     case "pytest":
@@ -59,23 +39,25 @@ export function validateSecurityCommand(command: string): CommandValidation {
     case "mocha":
     case "phpunit":
     case "rspec":
-      allowed = true;
-      break;
+      return true;
     case "go":
     case "cargo":
     case "deno":
-      allowed = a1 === "test";
-      break;
+      return a1 === "test";
     case "bundle":
-      allowed = a1 === "exec" && a2 === "rspec";
-      break;
+      return a1 === "exec" && a2 === "rspec";
     default:
-      allowed = false;
+      return false;
   }
-  if (!allowed) {
-    return { ok: false, reason: "unallowed_runner", detail: `runner '${runner}' not allowlisted` };
-  }
-  return { ok: true, argv: tokens };
+}
+
+/**
+ * Validate a configured security command string against the shared token
+ * allowlist (src/shared/command-allowlist.ts) + the sast runner policy.
+ * Pure — exported for unit vectors.
+ */
+export function validateSecurityCommand(command: string): CommandValidation {
+  return validateCommand(command, isAllowedSecurityRunner);
 }
 
 export const sastStrategy: GateStrategy<GateTools> = {

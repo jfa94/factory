@@ -110,12 +110,20 @@ export interface PartialRunReport {
    * not just a buried log.warn.
    */
   cross_vendor_absences?: { task_id: string; reason: string }[];
+  /**
+   * General non-fatal run warnings supplied by the finalize coordinator (S7,
+   * Decision 46) — e.g. gates ran on the legacy pre-contract path because the
+   * repo has no `.factory/gates.json`. Present IFF non-empty.
+   */
+  warnings?: string[];
 }
 
 /** Options for {@link buildPartialReport}. */
 export interface BuildPartialReportOptions {
   /** Override the `generated_at` stamp (tests pin this). Defaults to `nowIso()`. */
   now?: string;
+  /** General run warnings from the finalize coordinator (omitted when empty). */
+  warnings?: string[];
 }
 
 /**
@@ -201,6 +209,7 @@ export function buildPartialReport(
       : {}),
     ...buildE2eNarrative(run),
     ...buildCrossVendorAbsences(run, bySpecOrder),
+    ...(opts.warnings !== undefined && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}),
   };
 }
 
@@ -348,6 +357,12 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
   if (report.e2e_warnings !== undefined) {
     out.push("## End-to-end warnings");
     for (const w of report.e2e_warnings) out.push(`- ${w}`);
+    out.push("");
+  }
+
+  if (report.warnings !== undefined) {
+    out.push("## Warnings");
+    for (const w of report.warnings) out.push(`- ${w}`);
     out.push("");
   }
 

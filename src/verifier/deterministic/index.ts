@@ -31,6 +31,24 @@ export {
   type GateReportEntry,
 } from "./gate-runner.js";
 
+// the gate contract (S7, Decision 46)
+export {
+  GATE_CONTRACT_REL,
+  GATE_CONTRACT_STACKS,
+  COMMAND_GATES,
+  GateContractSchema,
+  loadGateContract,
+  validateGateCommand,
+  isAllowedGateRunner,
+  classifySkip,
+  contractCommand,
+  type GateContract,
+  type GateContractEntry,
+  type GateContractLoad,
+  type GateContractStack,
+  type SkipClass,
+} from "./gate-contract.js";
+
 // per-gate strategies
 export { testStrategy } from "./strategies/test.js";
 export { tddStrategy } from "./strategies/tdd.js";
@@ -89,6 +107,7 @@ export {
   DefaultStrykerTool,
   DefaultCoverageReader,
   DefaultFsProbe,
+  DefaultCommandRunner,
   parseCoverageSummary,
   extractMutationScore,
   type GateTools,
@@ -103,6 +122,7 @@ export {
   type EslintTool,
   type BuildTool,
   type SemgrepTool,
+  type CommandRunner,
   type StrykerTool,
   type StrykerResult,
   type StrykerReport,
@@ -124,6 +144,7 @@ export {
   FakeEslint,
   FakeBuild,
   FakeSemgrep,
+  FakeCommandRunner,
   FakeStryker,
   FakeCoverageReader,
   FakeFs,

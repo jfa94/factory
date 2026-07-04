@@ -7,10 +7,12 @@
  * reports the machine result. When there are no changed test files the run is
  * un-scoped (full suite), matching "un-scoped integration" semantics.
  */
+import { contractCommand } from "../gate-contract.js";
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
 import { ran, skip } from "../strategy.js";
 import { diffScopedTestFiles } from "../scope.js";
 import type { GateTools } from "../tools.js";
+import { procOutcome } from "./proc-strategy.js";
 
 /**
  * Can vitest execute this file? Only the JS/TS family. pgTAP (`*.test.sql`),
@@ -25,6 +27,17 @@ export function isVitestRunnable(file: string): boolean {
 export const testStrategy: GateStrategy<GateTools> = {
   id: "test",
   async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
+    // Gate contract (S7, Decision 46): a contracted `command` override runs the
+    // FULL suite — no vitest diff-scoping (`deno test` etc. cannot be scoped by
+    // vitest file rules, and scoping to zero files must never read as "passed").
+    const command = contractCommand(ctx.contract, "test");
+    if (command !== undefined) {
+      return procOutcome(
+        "test",
+        `contract:${command.join(" ")}`,
+        await ctx.tools.command.run(command, { cwd: ctx.worktree }),
+      );
+    }
     const base = `origin/${ctx.baseRef}`;
     const changed = await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree });
     const scoped = diffScopedTestFiles(changed);

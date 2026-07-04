@@ -34,6 +34,7 @@
 import {
   decideFinalize,
   rollup,
+  loadGateContract,
   buildPartialReport,
   renderPartialReportMarkdown,
   renderFailureComment,
@@ -187,7 +188,18 @@ export async function finalizeRun(
       : taskTerminal;
 
   // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
-  const report = buildPartialReport({ ...run, status: terminal }, deps.spec, { now });
+  // TODO(remove after one release): legacy pre-contract fallback warning (S7,
+  // Decision 46). Derived at finalize from the contract's absence at the target
+  // root (derive-don't-store) — mirrors GateRunner's per-sweep legacy path.
+  const contract = await loadGateContract(process.cwd());
+  const warnings =
+    contract.state === "absent"
+      ? [
+          "gates ran without a .factory/gates.json contract (legacy pre-contract run) — " +
+            "run `factory scaffold` and commit the contract",
+        ]
+      : [];
+  const report = buildPartialReport({ ...run, status: terminal }, deps.spec, { now, warnings });
   const markdown = renderPartialReportMarkdown(report);
 
   // 3. persist report.md (atomic full-file replace).

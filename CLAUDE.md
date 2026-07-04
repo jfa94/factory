@@ -17,7 +17,7 @@ This plugin enforces test-driven development (TDD) at the harness layer:
 - Tasks run through two phases: `test-writer` commits failing tests first, then `implementer` commits the minimal implementation.
 - The TDD gate (`src/verifier/deterministic/strategies/tdd.ts`) enforces test-before-impl commit ordering on the pre-squash task branch, memoized by tip SHA. Violations block the task.
 - See `skills/test-driven-development/SKILL.md` for the full discipline.
-- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.factory.tddExempt` (`src/verifier/deterministic/tdd-exempt.ts`). For repos with exotic test runners (Go, Ruby, Deno, etc.), set `.quality.redTestCommand` in config instead of bypassing enforcement.
+- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.factory.tddExempt` (`src/verifier/deterministic/tdd-exempt.ts`). For repos with exotic test runners (Go, Ruby, Deno, etc.), contract the gate's `command` in the repo's committed `.factory/gates.json` (Decision 46) instead of bypassing enforcement.
 - `tdd_exempt` is read from the spec's `tasks.json` + the repo's `package.json` — never from `state.json` (derive-don't-store).
 
 Reviewer roles (risk-invariant panel — every reviewer runs on every task):

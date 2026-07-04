@@ -163,6 +163,17 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     test: (p) => hasAdjacentComponents(p, "docs", "factory"),
   });
 
+  // 1c. The gate contract (S7, Decision 46): `.factory/gates.json`. The committed
+  //     scaffold-time agreement on which gates apply — a producer that could edit
+  //     it could waive its own gates (the exact silent-skip the contract kills).
+  //     Component-pair anchored like docs/factory so a benign `my.factory/gates.json`
+  //     is not caught and both in-repo and absolute forms fire.
+  rules.push({
+    category: "gate-contract",
+    describe: ".factory/gates.json (the committed gate contract — Decision 46)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json"),
+  });
+
   // 2. Gate/CI config files at the repo root (matched by basename so the rule is
   //    location-tolerant; an implementer cannot dodge it by passing an absolute
   //    path). The scaffold templates that seed these live under templates/.

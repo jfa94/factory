@@ -1,0 +1,220 @@
+/**
+ * Scaffold-time gate-contract resolution (S7, Decision 46).
+ *
+ * `factory scaffold` detects the target's stack and writes `.factory/gates.json`
+ * — the committed, TCB-write-denied agreement on which gates apply. Every gate id
+ * gets an EXPLICIT entry; a below-FLOOR resolution (no test / type-equivalent /
+ * build-equivalent gate) REFUSES rather than writing a contract that would let
+ * "nothing ran" pass a task.
+ *
+ * Seed-like semantics: absent → resolve + write; present + valid → project-owned,
+ * untouched; present + invalid → refuse (never silently regenerate a corrupt
+ * committed contract).
+ */
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import {
+  GATE_CONTRACT_REL,
+  GateContractSchema,
+  loadGateContract,
+  type GateContract,
+  type GateContractEntry,
+  type GateContractStack,
+} from "../../verifier/deterministic/gate-contract.js";
+import { ESLINT_CONFIGS } from "../../verifier/deterministic/strategies/lint.js";
+
+/** Detect the target's stack. Deno FIRST: deno repos often carry a package.json
+ * for tooling; npm repos never carry a deno.json. */
+export function detectStack(targetRoot: string): GateContractStack {
+  if (existsSync(join(targetRoot, "deno.json")) || existsSync(join(targetRoot, "deno.jsonc"))) {
+    return "deno";
+  }
+  if (existsSync(join(targetRoot, "package.json"))) return "npm";
+  return "custom";
+}
+
+interface PackageJson {
+  readonly scripts?: Record<string, string>;
+  readonly dependencies?: Record<string, string>;
+  readonly devDependencies?: Record<string, string>;
+}
+
+async function readPackageJson(targetRoot: string): Promise<PackageJson> {
+  const raw = await readFile(join(targetRoot, "package.json"), "utf8");
+  try {
+    return JSON.parse(raw) as PackageJson;
+  } catch (err) {
+    throw new Error(`scaffold: package.json is not valid JSON: ${(err as Error).message}`);
+  }
+}
+
+function hasDep(pkg: PackageJson, name: string): boolean {
+  return pkg.dependencies?.[name] !== undefined || pkg.devDependencies?.[name] !== undefined;
+}
+
+/**
+ * Strip `//` line comments and block comments from deno.jsonc for the build-task
+ * probe. Line comments are only stripped when the line STARTS with `//` so a
+ * `"https://deno.land/..."` import-map value is never clobbered.
+ */
+function stripJsoncComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Does deno.json / deno.jsonc define a `build` task? Throws loud on unparseable. */
+async function denoHasBuildTask(targetRoot: string): Promise<boolean> {
+  const jsonc = existsSync(join(targetRoot, "deno.jsonc"));
+  const file = jsonc ? "deno.jsonc" : "deno.json";
+  const raw = await readFile(join(targetRoot, file), "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
+  } catch (err) {
+    throw new Error(`scaffold: ${file} is not parseable JSON: ${(err as Error).message}`);
+  }
+  const tasks = (parsed as { tasks?: Record<string, unknown> }).tasks;
+  return typeof tasks?.build === "string";
+}
+
+/** Inputs to contract resolution — pure of process/argv, unit-testable. */
+export interface ResolveGatesOptions {
+  readonly targetRoot: string;
+  /** `config.quality.securityCommand` — contracts the sast gate when set. */
+  readonly securityCommand?: string;
+  /** `--waive mutation`: record mutation as deliberately waived instead of refusing. */
+  readonly waiveMutation: boolean;
+}
+
+const yes: GateContractEntry = { contracted: true };
+const no = (reason: string): GateContractEntry => ({ contracted: false, reason });
+
+async function resolveNpm(opts: ResolveGatesOptions): Promise<GateContract> {
+  const pkg = await readPackageJson(opts.targetRoot);
+  // FLOOR: test + type + build must all be contractable — collect every shortfall
+  // into ONE refusal so the user fixes the lot in one pass.
+  const floor: string[] = [];
+  if (!hasDep(pkg, "vitest")) floor.push("test gate: no vitest dependency — install vitest");
+  if (!existsSync(join(opts.targetRoot, "tsconfig.json"))) {
+    floor.push("type gate: no tsconfig.json — add one");
+  }
+  if (pkg.scripts?.build === undefined) {
+    floor.push("build gate: no scripts.build — add a build script");
+  }
+  if (floor.length > 0) {
+    throw new Error(
+      `scaffold: gate contract below floor for stack 'npm':\n  - ${floor.join("\n  - ")}`,
+    );
+  }
+  const strykerResolvable =
+    hasDep(pkg, "@stryker-mutator/core") ||
+    existsSync(join(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  let mutation: GateContractEntry;
+  if (strykerResolvable) {
+    mutation = yes;
+  } else if (opts.waiveMutation) {
+    mutation = no("waived via --waive mutation");
+  } else {
+    throw new Error(
+      "scaffold: mutation gate: stryker not installed — install @stryker-mutator/core " +
+        "or pass --waive mutation to record the waiver",
+    );
+  }
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync(join(opts.targetRoot, c)));
+  let lint: GateContractEntry;
+  if (!eslintConfig) {
+    lint = no("no eslint config");
+  } else if (
+    hasDep(pkg, "eslint") ||
+    existsSync(join(opts.targetRoot, "node_modules", ".bin", "eslint"))
+  ) {
+    lint = yes;
+  } else {
+    // Config present (often the scaffold seed) but eslint itself not installed —
+    // contracting would fail every task as contracted-but-unrunnable.
+    lint = no("eslint config present but eslint not installed — install eslint and re-scaffold");
+  }
+  return {
+    version: 1,
+    stack: "npm",
+    gates: {
+      test: yes,
+      tdd: yes,
+      coverage: no(
+        "coverage measurement not wired yet — re-scaffold after the coverage tool lands",
+      ),
+      mutation,
+      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      type: yes,
+      lint,
+      build: yes,
+    },
+  };
+}
+
+async function resolveDeno(opts: ResolveGatesOptions): Promise<GateContract> {
+  const build = (await denoHasBuildTask(opts.targetRoot))
+    ? ({ contracted: true, command: "deno task build" } as const)
+    : no("waived-by-stack: no emit step — deno check covers compilation");
+  return {
+    version: 1,
+    stack: "deno",
+    gates: {
+      test: { contracted: true, command: "deno test" },
+      tdd: yes,
+      coverage: no("waived-by-stack: coverage measurement not wired for deno"),
+      mutation: no("waived-by-stack: stryker does not support deno"),
+      sast: opts.securityCommand ? yes : no("no quality.securityCommand configured"),
+      type: { contracted: true, command: "deno check ." },
+      lint: { contracted: true, command: "deno lint" },
+      build,
+    },
+  };
+}
+
+/**
+ * Resolve the contract for the detected stack. Throws with a precise, per-gate
+ * message when the floor is unsatisfiable (custom stack, missing npm tooling) or
+ * when mutation is neither resolvable nor explicitly waived.
+ */
+export async function resolveGateContract(opts: ResolveGatesOptions): Promise<GateContract> {
+  const stack = detectStack(opts.targetRoot);
+  if (stack === "custom") {
+    throw new Error(
+      "scaffold: gate contract floor unsatisfiable for stack 'custom' — no package.json (npm) " +
+        "or deno.json/deno.jsonc (deno) detected; the factory requires contractable " +
+        "test + type + build gates",
+    );
+  }
+  const contract = stack === "npm" ? await resolveNpm(opts) : await resolveDeno(opts);
+  // Structural self-check: scaffold must never emit a contract the loader rejects.
+  return GateContractSchema.parse(contract);
+}
+
+/** Outcome of {@link ensureGateContract} for the scaffold report. */
+export interface GateContractResult {
+  readonly status: "created" | "present";
+  readonly stack: GateContractStack;
+}
+
+/**
+ * Seed-like ensure: absent → resolve + write `.factory/gates.json`; present +
+ * valid → untouched (project-owned); present + invalid → refuse loud (fix or
+ * delete and re-scaffold — never silently regenerate a committed contract).
+ */
+export async function ensureGateContract(opts: ResolveGatesOptions): Promise<GateContractResult> {
+  const load = await loadGateContract(opts.targetRoot);
+  if (load.state === "invalid") {
+    throw new Error(
+      `scaffold: ${GATE_CONTRACT_REL} is INVALID (${load.error}) — fix it or delete it and re-run factory scaffold`,
+    );
+  }
+  if (load.state === "ok") {
+    return { status: "present", stack: load.contract.stack };
+  }
+  const contract = await resolveGateContract(opts);
+  const dest = join(opts.targetRoot, GATE_CONTRACT_REL);
+  await mkdir(dirname(dest), { recursive: true });
+  await writeFile(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
+  return { status: "created", stack: contract.stack };
+}

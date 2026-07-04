@@ -88,6 +88,13 @@ export interface StrategyContext<TTools> {
    * may memoize evidence by tree SHA. Optional — absent means no memoization.
    */
   readonly memo?: import("./memo.js").GateMemo;
+  /**
+   * The repo's gate contract (S7, Decision 46), when `.factory/gates.json` is
+   * present in the worktree. Command gates (test/type/build/lint) execute a
+   * contracted `command` override instead of their built-in tool. Absent =
+   * legacy pre-contract repo — built-in behavior.
+   */
+  readonly contract?: import("./gate-contract.js").GateContract;
 }
 
 /**

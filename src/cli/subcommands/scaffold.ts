@@ -51,6 +51,10 @@ import {
   buildTargetDataDirRules,
   type TargetDataDirRules,
 } from "./target-settings.js";
+import { ensureGateContract } from "./scaffold-gates.js";
+import { GATE_CONTRACT_REL } from "../../verifier/deterministic/gate-contract.js";
+import type { GateContractStack } from "../../verifier/deterministic/gate-contract.js";
+import { UsageError } from "../../shared/usage-error.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const log = createLogger("scaffold");
@@ -58,7 +62,7 @@ const log = createLogger("scaffold");
 const HELP = `factory scaffold — prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold [--repo <owner/name>] [--provision]
+  factory scaffold [--repo <owner/name>] [--provision] [--waive mutation]
 
 Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
@@ -72,7 +76,14 @@ Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
                         Auto-derived from the 'origin' remote when omitted; an
                         explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse)`;
+  --provision           Write branch protection if missing (default: refuse)
+  --waive mutation      Record the mutation gate as deliberately waived in the gate
+                        contract instead of refusing when stryker is not installed
+
+Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
+committed per-gate applicability agreement. Refuses below the floor (test + type +
+build equivalents must be contractable). COMMIT the file — 'factory run' requires
+it tracked.`;
 
 /**
  * The `.gitignore` lines scaffold guarantees. Two invariants drive the list:
@@ -145,6 +156,8 @@ export interface ScaffoldOptions {
   readonly dataDir: string;
   /** --provision: write protection when missing instead of refusing. */
   readonly provision: boolean;
+  /** --waive mutation: record the mutation gate as waived instead of refusing. */
+  readonly waiveMutation?: boolean;
 }
 
 /** Machine-readable scaffold report (emitted as JSON). */
@@ -170,6 +183,10 @@ export interface ScaffoldReport {
    * per-call permission prompts for interactive `/factory:run` in this repo.
    */
   readonly settings: { readonly created: boolean; readonly changed: boolean };
+  /** Detected stack driving the gate-contract resolution (S7, Decision 46). */
+  readonly stack: GateContractStack;
+  /** Whether `.factory/gates.json` was freshly resolved+written or already present. */
+  readonly gates_contract: "created" | "present";
   /**
    * CI build-env auto-detection: the gateEnv gap-fill run BEFORE the managed
    * `quality-gate.yml` template overwrites the repo's own workflow, capturing the
@@ -385,6 +402,25 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     );
   }
 
+  // 2b. The GATE CONTRACT (S7, Decision 46): resolve the stack + write
+  //     `.factory/gates.json` (seed-like — an existing VALID contract is
+  //     project-owned; an invalid one refuses). AFTER templates so the freshly
+  //     seeded eslint config participates in the npm lint resolution. Throws
+  //     loud below the floor (test/type/build equivalents uncontractable).
+  const gates = await ensureGateContract({
+    targetRoot: opts.targetRoot,
+    securityCommand: opts.config.quality.securityCommand,
+    waiveMutation: opts.waiveMutation === true,
+  });
+  if (gates.status === "created") {
+    lists.created.push(GATE_CONTRACT_REL);
+    log.info(
+      `wrote ${GATE_CONTRACT_REL} (stack: ${gates.stack}) — COMMIT it; 'factory run' requires the contract tracked`,
+    );
+  } else {
+    lists.present.push(GATE_CONTRACT_REL);
+  }
+
   // 3. .gitignore guard (factory state must never be committed).
   await ensureGitignore(opts.targetRoot, lists);
 
@@ -441,6 +477,8 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
       provisioned,
     },
     settings: { created: settings.created, changed: settings.changed },
+    stack: gates.stack,
+    gates_contract: gates.status,
     // Include the detection report whenever a key was detected OR any anomaly
     // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
     // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
@@ -490,6 +528,14 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK;
   }
 
+  // --waive takes exactly the value "mutation" (the only waivable gate at scaffold).
+  const waived = args.all("waive").map(String);
+  for (const w of waived) {
+    if (w !== "mutation") {
+      throw new UsageError(`--waive accepts only 'mutation' (got '${w}')`);
+    }
+  }
+
   const { owner, repo } = await resolveScaffoldRepo(args);
   // Resolve the CANONICAL data dir ONCE at the command boundary (corrects the
   // foreign-plugin env-var leak). resolveDataDir() throwing on an unresolvable dir
@@ -507,6 +553,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir() }),
     dataDir,
     provision: args.flag("provision") === true,
+    waiveMutation: waived.includes("mutation"),
   });
   emitJson(report);
   return EXIT.OK;
