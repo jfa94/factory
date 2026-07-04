@@ -17545,126 +17545,6 @@ var scaffoldCommand = {
   run: withUsageGuard("scaffold", run5)
 };
 
-// src/cli/subcommands/rescue.ts
-var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
-
-Usage:
-  factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
-
-Actions:
-  scan    Classify every task (read-only); report what a re-drive would do.
-  apply   Reset the resettable tasks to pending; reopen a terminal run.`;
-var SCAN_HELP = `factory rescue scan \u2014 classify a stalled run (read-only)
-
-Usage:
-  factory rescue scan [--run <id>]
-
-  --run   The run to scan (defaults to runs/current).
-
-Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
-needs_rescue, e2e_failed, rollup_pending, would_deadlock, summary, per-task lines).
-Writes nothing.`;
-var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
-
-Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
-
-  --run                The run to recover (defaults to runs/current).
-  --task               Reset exactly this task (repeatable). Overrides the default
-                       resettable set; a 'done' task is a loud error, a 'pending'
-                       one is skipped. An explicitly-named dead-end IS reset.
-  --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
-                       Use only after the root cause is actually fixed.
-  --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
-                       and re-derives on the next pass; ALSO drops a failed run-start
-                       e2e assessment (Decision 40) so it re-fires fresh. Use only
-                       once the underlying cause (flaky infra, an app bug, a
-                       since-fixed reopen-cap exhaustion) no longer applies. Alone
-                       sufficient to reopen a terminal run even when no task itself
-                       is resettable.
-  --recheck-rollup     Reopen a 'completed' run whose rollup ARMED but never landed
-                       (e.g. the "auto-armed" branch-policy fallback) so a re-drive
-                       re-enters finalize and picks up the (by-then) merged PR. Use
-                       once you've confirmed the queued merge landed. Alone
-                       sufficient to reopen a terminal run.
-
-Default (no --task): resets stuck (crashed in-flight) + recoverable
-(blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, or
---recheck-rollup targets an armed-not-landed rollup). Idempotent.
-
-Emits ONE JSON document:
-  { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
-async function resolveRunId2(state, args, action, overrides) {
-  const explicit = args.flag("run");
-  if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`rescue ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
-}
-async function runScan(argv, overrides = {}) {
-  const args = parseArgs(argv);
-  if (args.flag("help") === true) {
-    emitLine(SCAN_HELP);
-    return EXIT.OK;
-  }
-  const state = new StateManager();
-  const runId = await resolveRunId2(state, args, "scan", overrides);
-  const run11 = await state.read(runId);
-  const git = overrides.gitClient ?? new DefaultGitClient();
-  const probe = {
-    refExists: (ref) => git.refExists(ref),
-    commitsAhead: (base, branch) => git.commitsAhead(base, branch)
-  };
-  const work = await assessWork(run11, probe);
-  emitJson({ ...scanRun(run11), work });
-  return EXIT.OK;
-}
-async function runApply(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup"] });
-  if (args.flag("help") === true) {
-    emitLine(APPLY_HELP);
-    return EXIT.OK;
-  }
-  const state = new StateManager();
-  const runId = await resolveRunId2(state, args, "apply", overrides);
-  const tasks = args.all("task");
-  const includeDeadEnds = args.flag("include-dead-ends") === true;
-  const resetE2e = args.flag("reset-e2e") === true;
-  const recheckRollup = args.flag("recheck-rollup") === true;
-  const result = await applyRescue(state, runId, {
-    ...tasks.length > 0 ? { tasks } : {},
-    includeDeadEnds,
-    resetE2e,
-    recheckRollup
-  });
-  emitJson(result);
-  return EXIT.OK;
-}
-async function run6(argv) {
-  const action = argv[0];
-  if (action === void 0 || action === "--help" || action === "-h") {
-    emitLine(RESCUE_HELP);
-    return EXIT.OK;
-  }
-  const rest = argv.slice(1);
-  switch (action) {
-    case "scan":
-      return runScan(rest);
-    case "apply":
-      return runApply(rest);
-    default:
-      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`);
-  }
-}
-var rescueCommand = {
-  describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
-  run: withUsageGuard("rescue", run6)
-};
-
 // src/cli/subcommands/recover.ts
 var RECOVER_HELP = `factory recover \u2014 one self-routing repair verb for a stalled run
 
@@ -17721,7 +17601,7 @@ async function resumeRun(state, runId, dataDir) {
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch());
 }
-async function run7(argv, overrides = {}) {
+async function run6(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["auto", "dry-run"] });
   if (args.flag("help") === true) {
     emitLine(RECOVER_HELP);
@@ -17843,9 +17723,123 @@ function probeFrom(overrides) {
     commitsAhead: (base, branch) => git.commitsAhead(base, branch)
   };
 }
+async function runRecover(argv, overrides = {}) {
+  return run6(argv, overrides);
+}
 var recoverCommand = {
   describe: "Self-routing repair: resume, rescue, or page \u2014 whatever the run needs",
-  run: withUsageGuard("recover", (argv) => run7(argv))
+  run: withUsageGuard("recover", (argv) => run6(argv))
+};
+
+// src/cli/subcommands/rescue.ts
+var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
+
+Usage:
+  factory rescue scan  [--run <id>]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+
+Actions:
+  scan    Classify every task (read-only); report what a re-drive would do.
+  apply   Reset the resettable tasks to pending; reopen a terminal run.`;
+var SCAN_HELP = `factory rescue scan \u2014 classify a stalled run (read-only)
+
+Usage:
+  factory rescue scan [--run <id>]
+
+  --run   The run to scan (defaults to runs/current).
+
+Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
+RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
+rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
+survey (\`work\`) + the recover \`route\`. Writes nothing.`;
+var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
+
+Usage:
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+
+  --run                The run to recover (defaults to runs/current).
+  --task               Reset exactly this task (repeatable). Overrides the default
+                       resettable set; a 'done' task is a loud error, a 'pending'
+                       one is skipped. An explicitly-named dead-end IS reset.
+  --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
+                       Use only after the root cause is actually fixed.
+  --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
+                       and re-derives on the next pass; ALSO drops a failed run-start
+                       e2e assessment (Decision 40) so it re-fires fresh. Use only
+                       once the underlying cause (flaky infra, an app bug, a
+                       since-fixed reopen-cap exhaustion) no longer applies. Alone
+                       sufficient to reopen a terminal run even when no task itself
+                       is resettable.
+  --recheck-rollup     Reopen a 'completed' run whose rollup ARMED but never landed
+                       (e.g. the "auto-armed" branch-policy fallback) so a re-drive
+                       re-enters finalize and picks up the (by-then) merged PR. Use
+                       once you've confirmed the queued merge landed. Alone
+                       sufficient to reopen a terminal run.
+
+Default (no --task): resets stuck (crashed in-flight) + recoverable
+(blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, or
+--recheck-rollup targets an armed-not-landed rollup). Idempotent.
+
+Emits ONE JSON document:
+  { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
+async function resolveRunId2(state, args, action, overrides) {
+  const explicit = args.flag("run");
+  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  const current = await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    throw new UsageError(`rescue ${action}: no --run given and no current run`);
+  }
+  return current.run_id;
+}
+async function runScan(argv, overrides = {}) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(SCAN_HELP);
+    return EXIT.OK;
+  }
+  return runRecover([...argv, "--dry-run"], overrides);
+}
+async function runApply(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup"] });
+  if (args.flag("help") === true) {
+    emitLine(APPLY_HELP);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = await resolveRunId2(state, args, "apply", overrides);
+  const tasks = args.all("task");
+  const includeDeadEnds = args.flag("include-dead-ends") === true;
+  const resetE2e = args.flag("reset-e2e") === true;
+  const recheckRollup = args.flag("recheck-rollup") === true;
+  const result = await applyRescue(state, runId, {
+    ...tasks.length > 0 ? { tasks } : {},
+    includeDeadEnds,
+    resetE2e,
+    recheckRollup
+  });
+  emitJson(result);
+  return EXIT.OK;
+}
+async function run7(argv) {
+  const action = argv[0];
+  if (action === void 0 || action === "--help" || action === "-h") {
+    emitLine(RESCUE_HELP);
+    return EXIT.OK;
+  }
+  const rest = argv.slice(1);
+  switch (action) {
+    case "scan":
+      return runScan(rest);
+    case "apply":
+      return runApply(rest);
+    default:
+      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`);
+  }
+}
+var rescueCommand = {
+  describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
+  run: withUsageGuard("rescue", run7)
 };
 
 // src/cli/subcommands/score.ts

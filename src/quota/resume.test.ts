@@ -82,7 +82,7 @@ describe("Δ F resume from checkpoint — under-curve reading resumes from the l
 });
 
 describe("Δ F resume from checkpoint — still-over reading stays blocked (fail-closed)", () => {
-  it("a still-over 7d reading → still-blocked carrying the suspend decision", () => {
+  it("a still-over 7d reading → pause carrying the suspend decision", () => {
     const plan = planResume(suspendedRun(), stillOver7dReading(), CONFIG, NOW);
     expect(plan.kind).toBe("pause");
     if (plan.kind === "pause") {
@@ -90,7 +90,7 @@ describe("Δ F resume from checkpoint — still-over reading stays blocked (fail
     }
   });
 
-  it("an unavailable reading → still-blocked (never resumes blind)", () => {
+  it("an unavailable reading → pause (never resumes blind)", () => {
     const plan = planResume(
       suspendedRun(),
       { kind: "unavailable", reason: "usage-cache-missing" },

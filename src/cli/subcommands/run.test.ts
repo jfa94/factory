@@ -1774,7 +1774,7 @@ describe("applyResume", () => {
     return env;
   }
   function asBlocked(env: ResumeResult): Extract<ResumeResult, { kind: "pause" }> {
-    if (env.kind !== "pause") throw new Error(`expected still-blocked, got ${env.kind}`);
+    if (env.kind !== "pause") throw new Error(`expected pause, got ${env.kind}`);
     return env;
   }
 
@@ -1813,7 +1813,7 @@ describe("applyResume", () => {
     expect(reread.quota).toBeDefined();
   });
 
-  it("fails closed (still-blocked, no reset horizon) when usage is unobservable", async () => {
+  it("fails closed (pause, no reset horizon) when usage is unobservable", async () => {
     await createBareRun("r1");
     await setStatus("r1", "paused", "5h");
 

@@ -12,40 +12,28 @@ arguments:
 
 # /factory:resume
 
-Continue an **existing** run. Resume only re-checks the live quota gate and re-enters the
-loop — it never touches task state. (To start fresh use `/factory:run`; to repair a run that
-resume cannot untangle — tasks stuck mid-stage, or git/GitHub drift — use `/factory:rescue`,
-which reconciles, then hands back to resume.)
+Continue an **existing** run — this is `/factory:recover`'s resume route with a manual
+override flag. Prefer **`/factory:recover`**, which routes itself (resume, rescue, or page);
+use this directly only for `--ignore-quota` or when you know the run is purely parked.
 
-A terminal run (`completed` / `failed` / `superseded`) is a LOUD error — there is nothing to
-resume. A `failed` run keeps its `staging/<run-id>` branch banked for `/factory:rescue`.
-
-A run parked by `--approve-spec` (suspended, NO quota checkpoint) clears here
-unconditionally — **resume IS the spec sign-off** (S9, Decision 47). The same
-unconditional clear covers docs/e2e/traceability crash parks.
+Resume only re-checks the live quota gate and re-enters the loop — it never touches task
+state. A run parked WITHOUT a quota checkpoint (spec-approval, docs/e2e/traceability crash
+parks) clears **unconditionally** — resume IS the sign-off (S9, Decision 47). A terminal run
+is a LOUD error.
 
 ## How it runs
-
-Invoke the runner skill, then run its resume entry against the target run:
 
 ```
 Skill(pipeline-runner)   # then: factory resume [--run <id>] [--ignore-quota]
 ```
 
-`factory resume [--run <id>]` emits one envelope:
-
-- `{ kind: "resumed", run }` → the quota window is open (or already running): re-enter the
-  skill's Phase 3 event loop (up to `maxParallelTasks` tasks in flight) and Phase 4.
-  Resume itself takes **no** ship flag
-  (`factory resume --no-ship` is rejected loud — a run keeps the `ship_mode` it was
-  created with).
-- `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
-  has not recovered. Report `reason` (and `resets_at_epoch` if present) and STOP. The run
-  state is durable — a later `/factory:resume` continues from exactly here.
+- `{ kind: "resumed", run }` → re-enter the skill's Phase 3 event loop. Resume takes **no**
+  ship flag (`--no-ship`/`--e2e` are rejected loud — a run keeps what it was created with).
+- `{ kind: "pause", run_id, status, reason, resets_at_epoch? }` → the quota window has not
+  recovered (fail-closed). Report and STOP; state is durable.
 
 ## Autonomous mode (MANDATORY)
 
-Like `factory run create`, `factory resume` **HALTS loud** (`NotAutonomousError`, non-zero
-exit) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The runner skill's
-Phase 0 (`factory autonomy preflight`) runs first and prints the relaunch command when needed
-— see `/factory:run` for the full autonomy contract. Never retry blindly past the gate.
+`factory resume` HALTS loud (`NotAutonomousError`) unless `FACTORY_AUTONOMOUS_MODE=1`. The
+runner skill's Phase 0 preflight prints the relaunch command when needed — see
+`/factory:run` for the full autonomy contract. Never retry blindly past the gate.

@@ -16,8 +16,8 @@ import { parseArgs, UsageError } from "../args.js";
 import { emitJson, emitLine } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
-import { scanRun, applyRescue, assessWork, type WorkProbe } from "../../rescue/index.js";
-import { DefaultGitClient } from "../../git/index.js";
+import { applyRescue } from "../../rescue/index.js";
+import { runRecover } from "./recover.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const RESCUE_HELP = `factory rescue — scan or recover a stalled run
@@ -37,9 +37,10 @@ Usage:
 
   --run   The run to scan (defaults to runs/current).
 
-Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
-needs_rescue, e2e_failed, rollup_pending, would_deadlock, summary, per-task lines).
-Writes nothing.`;
+Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
+RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
+rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
+survey (\`work\`) + the recover \`route\`. Writes nothing.`;
 
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
@@ -101,23 +102,10 @@ export async function runScan(
     emitLine(SCAN_HELP);
     return EXIT.OK;
   }
-
-  const state = new StateManager();
-  const runId = await resolveRunId(state, args, "scan", overrides);
-  const run = await state.read(runId);
-
-  // Read-only recoverable-work survey, appended additively. Reuse the same git
-  // client resolved for current-run lookup; it runs in the target-repo cwd (where
-  // the local `factory/...` branches + `origin/staging-<run-id>` ref live).
-  const git = overrides.gitClient ?? new DefaultGitClient();
-  const probe: WorkProbe = {
-    refExists: (ref) => git.refExists(ref),
-    commitsAhead: (base, branch) => git.commitsAhead(base, branch),
-  };
-  const work = await assessWork(run, probe);
-
-  emitJson({ ...scanRun(run), work });
-  return EXIT.OK;
+  // S10 (Decision 48): scan IS `recover --dry-run` — one envelope, one code path.
+  // The recover path additionally reports the chosen `route`, and a missing
+  // current run is a routed {kind:"nothing"} answer instead of a usage error.
+  return runRecover([...argv, "--dry-run"], overrides);
 }
 
 export async function runApply(
