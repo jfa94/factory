@@ -136,7 +136,8 @@ impl-before-test ordering blocks the task.
 - **Exemptions**: `tdd_exempt: true` on a task in the spec's `tasks.json` (per
   task), or `package.json.factory.tddExempt` (globally). Read from those sources,
   **never** from `state.json` (derive-don't-store). For exotic test runners (Go,
-  Ruby, Deno…), set `quality.redTestCommand` rather than bypassing enforcement.
+  Ruby, Deno…), contract the test gate's `command` in the repo's committed
+  `.factory/gates.json` (Decision 46) rather than bypassing enforcement.
 
 ## The mutation gate in detail
 

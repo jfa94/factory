@@ -29,6 +29,7 @@ describe("ConfigSchema", () => {
       quota: { maxStaleCycles: 6 },
       e2e: { enabled: true },
       spec: { specModel: "opus", specEffort: "max" },
+      quality: { redTestCommand: "go test ./..." },
     });
     expect(cfg).toEqual(defaultConfig());
   });

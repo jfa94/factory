@@ -72,8 +72,8 @@ async function defaultRun(command: string, cwd: string): Promise<ProvisionRunRes
 /**
  * Resolve the provisioning command for a worktree: an explicit, non-blank
  * `setupCommand` wins; else the first matching lockfile's install command; else
- * `null` (a no-op — non-JS repos with no lockfile rely on their own runner /
- * `quality.redTestCommand`).
+ * `null` (a no-op — non-JS repos with no lockfile rely on their own runner via
+ * the gate contract's per-gate `command`, Decision 46).
  */
 export async function resolveSetupCommand(
   worktreePath: string,

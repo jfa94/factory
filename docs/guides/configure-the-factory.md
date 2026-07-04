@@ -55,18 +55,20 @@ change to its default.
 
 ## Common adjustments
 
-| Goal                                                | Command                                                             |
-| --------------------------------------------------- | ------------------------------------------------------------------- |
-| Hold back more acceptance criteria                  | `factory configure --set quality.holdoutPercent=30`                 |
-| Raise the mutation bar                              | `factory configure --set quality.mutationScoreTarget=90`            |
-| Use a custom security scanner                       | `factory configure --set quality.securityCommand="my-sast --json"`  |
-| Support an exotic test runner without bypassing TDD | `factory configure --set quality.redTestCommand="go test ./..."`    |
-| Auto-provision branch protection                    | `factory configure --set git.provision=true`                        |
-| Re-tier producer models                             | `factory configure --set quota.producerModels.high=claude-opus-4-6` |
+| Goal                               | Command                                                             |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| Hold back more acceptance criteria | `factory configure --set quality.holdoutPercent=30`                 |
+| Raise the mutation bar             | `factory configure --set quality.mutationScoreTarget=90`            |
+| Use a custom security scanner      | `factory configure --set quality.securityCommand="my-sast --json"`  |
+| Auto-provision branch protection   | `factory configure --set git.provision=true`                        |
+| Re-tier producer models            | `factory configure --set quota.producerModels.high=claude-opus-4-6` |
 
 ## Notes
 
 - `--get` cannot be combined with `--set`/`--unset`.
+- Exotic test runners (Go, Ruby, Deno…) are not config: contract the gate's
+  `command` in the repo's committed `.factory/gates.json` (written by
+  `factory scaffold`, [Decision 46](../explanation/decisions.md#decision-46--the-gate-contract-scaffold-time-applicability-committed-and-enforced)).
 - The spec apex pin (the model/effort the spec generator + reviewer run at) is
   not config — it is hard consts in `src/spec/agents.ts`, invariant by
   construction — see the [configuration reference](../reference/configuration.md).

@@ -54,17 +54,16 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 
 ### Quality gates (`quality.*`)
 
-| Key                              | Default | Meaning                                                |
-| -------------------------------- | ------- | ------------------------------------------------------ |
-| `holdoutPercent`                 | 20      | % of acceptance criteria held out as an answer-key     |
-| `holdoutPassRate`                | 80      | Min % of withheld criteria that must pass              |
-| `mutationScoreTarget`            | 80      | Min mutation score (%)                                 |
-| `coverageRegressionTolerancePct` | 0.5     | Max coverage drop (pp) before the gate fails           |
-| `securityCommand`                | —       | Custom SAST command (else built-in semgrep)            |
-| `securityAllowFailures`          | false   | Treat security findings as non-blocking                |
-| `securityRedactFindings`         | true    | Redact secrets from the persisted findings artifact    |
-| `redTestCommand`                 | —       | Custom red-test command for exotic runners (Go/Ruby/…) |
-| `gateEnv`                        | {}      | Env vars injected into every gate command (CI parity)  |
+| Key                              | Default | Meaning                                               |
+| -------------------------------- | ------- | ----------------------------------------------------- |
+| `holdoutPercent`                 | 20      | % of acceptance criteria held out as an answer-key    |
+| `holdoutPassRate`                | 80      | Min % of withheld criteria that must pass             |
+| `mutationScoreTarget`            | 80      | Min mutation score (%)                                |
+| `coverageRegressionTolerancePct` | 0.5     | Max coverage drop (pp) before the gate fails          |
+| `securityCommand`                | —       | Custom SAST command (else built-in semgrep)           |
+| `securityAllowFailures`          | false   | Treat security findings as non-blocking               |
+| `securityRedactFindings`         | true    | Redact secrets from the persisted findings artifact   |
+| `gateEnv`                        | {}      | Env vars injected into every gate command (CI parity) |
 
 > **`quality.gateEnv`** mirrors your CI build step's env so the verifier floor measures the
 > code, not a missing-env build crash. The gates run `build`/`test`/`type`/`lint`/`security`

@@ -1427,6 +1427,64 @@ contains keys the engine actually branches on.
 
 ---
 
+## Decision 46 — The Gate Contract: Scaffold-Time Applicability, Committed and Enforced
+
+**Date:** 2026-07-04
+
+**Context:** Redesign session S7 (workstream B3). Gate applicability was decided
+ad-hoc inside each deterministic strategy: a missing eslint binary, absent coverage
+data, or unconfigured security command silently SKIPPED the gate (excluded from the
+merge conjunction). On a Deno repo every tool-probe gate skipped — "nothing ran"
+could quietly pass a task. The one prior attempt at stack flexibility,
+`quality.redTestCommand`, was declared in the schema and read by nothing.
+
+**Decision:**
+
+- **The contract.** `factory scaffold` detects the stack (deno-first, then npm,
+  else refuse) and writes `.factory/gates.json` into the target repo: `{version,
+stack, gates}` with ALL 8 gate ids as REQUIRED keys — each `{contracted: true}`
+  (optionally a stack `command` for test/type/build/lint, e.g. `deno test`) or
+  `{contracted: false, reason}` (the committed audit trail). Strict zod schema; a
+  `command` on a non-command gate is rejected at parse (never
+  declared-but-not-wired); commands pass the shared charset allowlist +
+  a modest runner policy (`src/shared/command-allowlist.ts`,
+  `isAllowedGateRunner`). The file is TCB-write-denied (hook rule
+  `gate-contract`) so producers cannot weaken their own gates.
+- **Skip taxonomy.** `classifySkip` splits skip reasons: SCOPE
+  (`no-vitest-runnable-tests-in-scope`, `no-mutable-changes` — properties of the
+  task) stay excluded as today; everything else is TOOLING (missing
+  binary/config/data), and unknown reasons classify as tooling (fail-closed). At
+  gate time: an uncontracted gate skips cleanly WITHOUT invoking its strategy
+  (`uncontracted: <reason>`); a TOOLING skip on a CONTRACTED gate converts to a
+  loud FAIL (`contracted-but-unrunnable: <reason>`), NOT memoized (installing a
+  tool changes node_modules, not the tree SHA).
+- **Commands execute.** test/type/build/lint honor the contracted `command` via a
+  `CommandRunner` gate tool (argv spawn, no shell). A contracted test command runs
+  the FULL suite — no vitest diff-scoping — killing the Deno trap where a
+  non-JS diff scope-skipped a contracted test gate.
+- **Floor + waiver.** Scaffold refuses to write a below-floor contract (npm floor:
+  vitest dep + tsconfig.json + scripts.build; deno's `deno check` is
+  build-equivalent when no build task exists). Mutation on npm requires stryker or
+  an explicit `--waive mutation`; coverage is waived until S8 wires measurement.
+  Seed semantics: absent → write; valid → untouched; invalid → refuse.
+- **`run create` precondition.** A run is only born when the contract is present,
+  valid, AND git-tracked (an uncommitted contract never reaches task worktrees).
+  `--resume` is exempt; pre-contract in-flight runs take GateRunner's legacy path
+  (absent contract → today's semantics + one warn per sweep) and the run report
+  derives a `## Warnings` legacy-run line from contract absence at finalize
+  (derive-don't-store; TODO remove after one release).
+- **Pruned `quality.redTestCommand`** — zero code consumers; exotic runners now go
+  through the contract's per-gate `command`. Stale overlays keep loading
+  (ConfigSchema strips unknown keys; regression fixture extended).
+
+**Consequences:** A gate can no longer silently vanish from the merge conjunction:
+every non-run is either a committed, reasoned waiver or a loud failure naming the
+broken tooling. Non-npm stacks get first-class gates instead of a skip cascade.
+The contract is repo-owned, reviewed in PRs, and protected from the producers it
+judges.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
