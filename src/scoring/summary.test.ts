@@ -34,7 +34,12 @@ function task(seed: TaskSeed): TaskState {
 
 function mkRun(
   seeds: readonly TaskSeed[],
-  opts: { status?: RunStatus; started_at?: string; ended_at?: string | null } = {},
+  opts: {
+    status?: RunStatus;
+    started_at?: string;
+    ended_at?: string | null;
+    human_touches?: RunState["human_touches"];
+  } = {},
 ): RunState {
   const status = opts.status ?? "failed";
   return parseRunState({
@@ -43,6 +48,7 @@ function mkRun(
     execution_mode: "balanced",
     spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
+    ...(opts.human_touches !== undefined ? { human_touches: opts.human_touches } : {}),
     started_at: opts.started_at ?? "2026-06-08T00:00:00.000Z",
     ...(opts.ended_at !== undefined
       ? { ended_at: opts.ended_at }
@@ -313,5 +319,57 @@ describe("tasks_without_cross_vendor (Δ U/S5)", () => {
     );
     expect(summary.tasks_without_cross_vendor).toBe(0);
     expect(renderRunSummaryMarkdown(summary)).not.toContain("Review independence");
+  });
+});
+
+describe("touch metric (S11 — derived, never stored)", () => {
+  const launch = { kind: "launch" as const, at: "2026-06-08T00:00:00.000Z" };
+  const resume = { kind: "resume" as const, at: "2026-06-08T01:00:00.000Z" };
+
+  it("a clean lights-out completed run (launch only) scores exactly 1.0", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "done" }], { status: "completed", human_touches: [launch] }),
+      report({ run_status: "completed" }),
+      { now: NOW },
+    );
+    expect(summary.touches).toBe(1);
+    expect(summary.touch_metric).toBe(1);
+    expect(renderRunSummaryMarkdown(summary)).toContain("**Human touches:** 1 · touch metric 1.00");
+  });
+
+  it("a completed 2-touch run scores 0.5", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "done" }], {
+        status: "completed",
+        human_touches: [launch, resume],
+      }),
+      report({ run_status: "completed" }),
+      { now: NOW },
+    );
+    expect(summary.touches).toBe(2);
+    expect(summary.touch_metric).toBe(0.5);
+  });
+
+  it("a failed run scores 0 regardless of touches", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "failed" }], {
+        status: "failed",
+        human_touches: [launch, resume],
+      }),
+      report(),
+      { now: NOW },
+    );
+    expect(summary.touch_metric).toBe(0);
+  });
+
+  it("a legacy run without the ledger reads n/a (null) — never a fabricated number", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "done" }], { status: "completed" }),
+      report({ run_status: "completed" }),
+      { now: NOW },
+    );
+    expect(summary.touches).toBeNull();
+    expect(summary.touch_metric).toBeNull();
+    expect(renderRunSummaryMarkdown(summary)).not.toContain("Human touches");
   });
 });

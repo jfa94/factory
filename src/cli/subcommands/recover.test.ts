@@ -19,7 +19,7 @@ import { EXIT } from "../../shared/exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
 import { scanRun } from "../../rescue/index.js";
 import { FakeGitClient, FakeGhClient } from "../../git/index.js";
-import { selfHealCommentMarker } from "../../scoring/index.js";
+import { selfHealCommentMarker, readMetrics } from "../../scoring/index.js";
 import type { SpecPointer, TaskState } from "../../types/index.js";
 
 const SPEC: SpecPointer = { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 };
@@ -351,6 +351,58 @@ describe("factory recover", () => {
     const run = await state.read(RUN);
     expect(run.self_heal).toBeUndefined(); // a blocked auto never spends the cycle
     expect(run.status).toBe("failed");
+  });
+
+  // S11 — the touch ledger: ONE human action = ONE touch, mirrored to metrics.jsonl.
+  it("route 3 (resume) appends ONE 'resume' touch and mirrors it to metrics.jsonl", async () => {
+    await state.update(RUN, (s) => ({
+      ...s,
+      status: "suspended",
+      tasks: { a: task({ task_id: "a", status: "pending" }) },
+    }));
+    const code = await recoverCommand.run(["--run", RUN]);
+    expect(code).toBe(EXIT.OK);
+    const run = await state.read(RUN);
+    expect(run.human_touches?.map((t) => t.kind)).toEqual(["resume"]);
+    const mirrors = (await readMetrics(dataDir, RUN)).filter((m) => m.event === "human_touch");
+    expect(mirrors).toHaveLength(1);
+    expect(mirrors[0]!.data).toEqual({ kind: "resume" });
+  });
+
+  it("route 4 (rescue + resume tail) appends exactly ONE 'recover' touch — never a second 'resume'", async () => {
+    // Parked + stuck work: the ONE human `factory recover` both resets and clears
+    // the park — the ledger must show one touch, not two.
+    await state.update(RUN, (s) => ({
+      ...s,
+      status: "suspended",
+      tasks: { a: task({ task_id: "a", status: "executing" }) },
+    }));
+    const code = await runRecover(["--run", RUN], { gitClient: new FakeGitClient() });
+    expect(code).toBe(EXIT.OK);
+    expect(out().kind).toBe("rescued");
+    const run = await state.read(RUN);
+    expect(run.status).toBe("running");
+    expect(run.human_touches?.map((t) => t.kind)).toEqual(["recover"]);
+    const mirrors = (await readMetrics(dataDir, RUN)).filter((m) => m.event === "human_touch");
+    expect(mirrors.map((m) => m.data)).toEqual([{ kind: "recover" }]);
+  });
+
+  it("--auto appends NO human touch (self-heal is not a human)", async () => {
+    await state.update(RUN, (s) => ({
+      ...s,
+      status: "failed",
+      ended_at: AT,
+      tasks: {
+        a: task({ task_id: "a", status: "failed", failure_class: "blocked-environmental" }),
+      },
+    }));
+    const code = await runRecover(["--auto", "--run", RUN], { now: () => AT });
+    expect(code).toBe(EXIT.OK);
+    expect(out().kind).toBe("recovered");
+    expect((await state.read(RUN)).human_touches).toBeUndefined();
+    expect((await readMetrics(dataDir, RUN)).filter((m) => m.event === "human_touch")).toHaveLength(
+      0,
+    );
   });
 
   it("chooseRoute prefers rescue over resume when a parked run has resettable work", async () => {

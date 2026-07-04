@@ -19,17 +19,45 @@ const HELP = `factory score — report a run's outcome summary (read-only)
 
 Usage:
   factory score [--run <id>]
+  factory score --fleet
 
   --run            The run to score (defaults to runs/current).
+  --fleet          Report the touch metric across EVERY run in the store (S11):
+                   per-run touches + metric, and the fleet aggregate
+                   sum(completed) / sum(touches) over runs carrying the ledger.
 
 Emits ONE JSON document:
-  { kind:"score", summary }`;
+  { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
+
+/** S11 — `(completed ? 1 : 0) / touches`, or null without a ledger (legacy run). */
+function touchMetricOf(run: { status: string; human_touches?: unknown[] }): number | null {
+  const touches = run.human_touches?.length;
+  if (touches === undefined || touches === 0) return null;
+  return (run.status === "completed" ? 1 : 0) / touches;
+}
+
+/** `factory score --fleet` — the store-wide touch-metric roll-up (read-only). */
+async function runFleet(state: StateManager): Promise<ExitCode> {
+  const all = await state.listRuns(); // malformed dirs already warn + skip in listRuns
+  const runs = all.map((r) => ({
+    run_id: r.run_id,
+    status: r.status,
+    touches: r.human_touches?.length ?? null,
+    metric: touchMetricOf(r),
+  }));
+  const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0);
+  const totalTouches = withLedger.reduce((n, r) => n + r.human_touches!.length, 0);
+  const completed = withLedger.filter((r) => r.status === "completed").length;
+  const aggregate = totalTouches === 0 ? null : completed / totalTouches;
+  emitJson({ kind: "fleet-score", runs, aggregate });
+  return EXIT.OK;
+}
 
 export async function runScore(
   argv: string[],
   overrides: CurrentRunOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["fleet"] });
   if (args.flag("help") === true) {
     emitLine(HELP);
     return EXIT.OK;
@@ -37,6 +65,7 @@ export async function runScore(
 
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
+  if (args.flag("fleet") === true) return runFleet(state);
 
   const explicitRun = optionalString(args.flag("run"));
   const runState =

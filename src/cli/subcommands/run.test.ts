@@ -432,6 +432,15 @@ describe("createRun", () => {
     expect(run.debug).toBe(false);
   });
 
+  it("stamps the launch human touch at create (S11 — every run costs one touch)", async () => {
+    const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-touch" });
+    expect(run.human_touches).toEqual([{ kind: "launch", at: run.started_at }]);
+    // Persisted: round-trips through a fresh read.
+    expect((await state.read("run-touch")).human_touches).toEqual([
+      { kind: "launch", at: run.started_at },
+    ]);
+  });
+
   it("Δ S9 preflight: refuses to create a run on a spec with no durable PRD snapshot", async () => {
     // Fabricate a pre-S9 spec dir: written normally, snapshot removed.
     await rm(join(specDir(dataDir, REPO, "42-checkout"), "prd.json"));
@@ -637,6 +646,30 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(gh.calls.indexOf("api DELETE protection staging-run-old")).toBeLessThan(
       gh.calls.indexOf("api DELETE refs/heads/staging-run-old"),
     );
+  });
+
+  it("--supersede stamps launch + conflict touches on the FRESH run (S11)", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const { defaultConfig } = await import("../../config/schema.js");
+    const r = await resolveOrCreateRun(
+      state,
+      store,
+      { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+      {
+        gitClient: git,
+        ghClient: new FakeGhClient(),
+        config: defaultConfig(),
+        targetRoot: "/target",
+        owner: "acme",
+        repo: "widgets",
+      },
+    );
+    if (r.kind !== "superseded") throw new Error("narrowing");
+    expect(r.run.human_touches?.map((t) => t.kind)).toEqual(["launch", "conflict"]);
+    // The OLD run's ledger is untouched (launch only).
+    expect((await state.read("run-old")).human_touches?.map((t) => t.kind)).toEqual(["launch"]);
   });
 
   it("--supersede tears down the OLD run's PINNED branch, not a recompute (revert guard)", async () => {
@@ -1826,6 +1859,30 @@ describe("applyResume", () => {
     await createBareRun("r1"); // create → status running
     const env = asResumed(await applyResume(state, "r1", UNAVAILABLE, defaultConfig(), NOW));
     expect(env.run.status).toBe("running");
+    // S11: no park was cleared → no `cleared` flag, no human touch appended.
+    expect(env.cleared).toBeUndefined();
+    expect((await state.read("r1")).human_touches).toBeUndefined();
+  });
+
+  it("appends the 'resume' human touch on a real clear, flagged cleared:true (S11)", async () => {
+    await createBareRun("r1");
+    await setStatus("r1", "paused", "5h");
+    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
+    expect(env.cleared).toBe(true);
+    expect(env.run.human_touches).toEqual([
+      { kind: "resume", at: new Date(NOW * 1000).toISOString() },
+    ]);
+  });
+
+  it("opts.touch:false clears the park WITHOUT appending a touch (recover route-4 tail)", async () => {
+    await createBareRun("r1");
+    await setStatus("r1", "paused", "5h");
+    const env = asResumed(
+      await applyResume(state, "r1", underCurve(), defaultConfig(), NOW, { touch: false }),
+    );
+    expect(env.cleared).toBe(true);
+    expect(env.run.status).toBe("running");
+    expect(env.run.human_touches).toBeUndefined();
   });
 
   it.each(["completed", "failed", "superseded"] as const)(

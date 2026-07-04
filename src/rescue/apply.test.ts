@@ -617,11 +617,53 @@ describe("applyRescue", () => {
       expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
     });
 
+    it("auto NEVER appends a human touch — self-heal is not a human (S11)", async () => {
+      await seed(
+        [{ task_id: "a", status: "executing", started_at: "2026-06-08T00:00:00.000Z" }],
+        "failed",
+      );
+      const result = await applyRescue(state, RUN_ID, { auto: { at: "2026-07-04T00:00:00.000Z" } });
+      expect(result.reset).toEqual(["a"]);
+      expect(result.touched).toBe(false);
+      expect((await state.read(RUN_ID)).human_touches).toBeUndefined();
+    });
+
     it("auto is mutually exclusive with the manual target options (loud throw)", async () => {
       await seed([{ task_id: "a", status: "executing" }]);
       await expect(
         applyRescue(state, RUN_ID, { auto: { at: AT }, includeDeadEnds: true }),
       ).rejects.toThrow(/mutually exclusive/);
+    });
+  });
+
+  describe("human_touches (S11 — the manual-apply 'recover' touch)", () => {
+    it("a manual apply that did work appends ONE 'recover' touch and reports touched:true", async () => {
+      await seed([{ task_id: "a", status: "executing", started_at: "2026-06-08T00:00:00.000Z" }]);
+      const result = await applyRescue(state, RUN_ID, { at: "2026-07-04T00:00:00.000Z" });
+      expect(result.touched).toBe(true);
+      expect((await state.read(RUN_ID)).human_touches).toEqual([
+        { kind: "recover", at: "2026-07-04T00:00:00.000Z" },
+      ]);
+    });
+
+    it("a pure no-op apply appends nothing (touched:false)", async () => {
+      await seed([{ task_id: "a", status: "done" }]);
+      const result = await applyRescue(state, RUN_ID);
+      expect(result.touched).toBe(false);
+      expect((await state.read(RUN_ID)).human_touches).toBeUndefined();
+    });
+
+    it("appends AFTER an existing ledger, never clobbering it", async () => {
+      await state.update(RUN_ID, (s) => ({
+        ...s,
+        human_touches: [{ kind: "launch" as const, at: "2026-06-08T00:00:00.000Z" }],
+      }));
+      await seed([{ task_id: "a", status: "executing", started_at: "2026-06-08T00:00:00.000Z" }]);
+      await applyRescue(state, RUN_ID, { at: "2026-07-04T00:00:00.000Z" });
+      expect((await state.read(RUN_ID)).human_touches?.map((t) => t.kind)).toEqual([
+        "launch",
+        "recover",
+      ]);
     });
   });
 });
