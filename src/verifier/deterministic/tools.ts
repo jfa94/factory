@@ -10,7 +10,8 @@
  * reader) MUST throw when ExecResult.truncated is set, rather than mis-parse a
  * clipped payload (exec.ts ExecResult.truncated contract).
  */
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { exec, type ExecResult } from "../../shared/index.js";
 import { escapeStrykerGlob } from "./scope.js";
@@ -183,6 +184,55 @@ export type CoverageRead =
  */
 export interface CoverageReader {
   read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageRead>;
+}
+
+/**
+ * How a coverage measurement is invoked (S8):
+ *   - `vitest` — the worktree-local `node_modules/.bin/vitest` with these args
+ *     (the built-in npm path; falls closed via {@link missingBinResult} when no
+ *     local bin resolves).
+ *   - `argv`   — a contracted `gates.coverage.command` override (already
+ *     allowlist-validated by contractCommand), exec'd directly. The command must
+ *     itself write `coverage/coverage-summary.json`.
+ */
+export type CoverageCommand =
+  | { readonly kind: "vitest"; readonly args: readonly string[] }
+  | { readonly kind: "argv"; readonly argv: readonly string[] };
+
+/**
+ * The outcome of ONE coverage measurement, as a discriminated union so the
+ * strategy can name exactly what went wrong (fail-closed, loud):
+ *   - `measured`        — command exited 0 AND a valid summary was produced.
+ *   - `command-failed`  — non-zero exit (carries the ProcResult for the excerpt).
+ *   - `summary-missing` — exit 0 but no `coverage/coverage-summary.json` appeared.
+ *   - `summary-invalid` — a summary file appeared but is corrupt / missing a metric.
+ * "Half a measurement" is never representable as a pass.
+ */
+export type CoverageMeasurement =
+  | { readonly kind: "measured"; readonly summary: CoverageSummary }
+  | { readonly kind: "command-failed"; readonly proc: ProcResult }
+  | { readonly kind: "summary-missing" }
+  | { readonly kind: "summary-invalid" };
+
+/**
+ * Runs a REAL coverage measurement (S8 — replaces the dead before/after file
+ * reader): execute the coverage command in a tree, then parse the
+ * `coverage/coverage-summary.json` it wrote.
+ */
+export interface CoverageTool {
+  /** Measure the tree checked out at `opts.cwd` (the task worktree). */
+  measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement>;
+  /**
+   * Measure at a BASE commit: an ephemeral detached worktree is created from the
+   * repo at `opts.cwd`, reusing its installed `node_modules` (symlink). Plumbing
+   * failures (worktree add) THROW; command failures inside the checkout are a
+   * normal `command-failed` answer.
+   */
+  measureAtBase(
+    baseSha: string,
+    cmd: CoverageCommand,
+    opts: ToolRunOpts,
+  ): Promise<CoverageMeasurement>;
 }
 
 /**
@@ -534,6 +584,93 @@ export class DefaultCoverageReader implements CoverageReader {
     }
     const summary = parseCoverageSummary(parsed);
     return summary === null ? { state: "invalid" } : { state: "ok", summary };
+  }
+}
+
+/**
+ * Default {@link CoverageTool}: run the coverage command, then parse the
+ * `coverage/coverage-summary.json` it wrote.
+ *
+ * Truncation note: unlike stryker, pass/fail here is judged from the summary
+ * FILE, never from the process streams — the streams only feed the (already
+ * capped) failure excerpt — so a truncated stream needs no loud throw.
+ */
+export class DefaultCoverageTool implements CoverageTool {
+  /** Where every measurement must land, relative to the measured tree's root. */
+  static readonly SUMMARY_PATH = path.join("coverage", "coverage-summary.json");
+
+  constructor(
+    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+    private readonly env: Record<string, string> = {},
+  ) {}
+
+  async measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
+    const summaryPath = path.join(opts.cwd, DefaultCoverageTool.SUMMARY_PATH);
+    // Stale-summary guard: a command that "succeeds" without writing the summary
+    // must be judged summary-missing, never from a prior measurement's file.
+    await rm(summaryPath, { force: true });
+    let result: ExecResult;
+    if (cmd.kind === "vitest") {
+      result = await runTool(this.resolve, "vitest", cmd.args, opts, this.env);
+    } else {
+      const [bin, ...rest] = cmd.argv;
+      if (bin === undefined) {
+        throw new Error("DefaultCoverageTool: empty command");
+      }
+      result = await exec(bin, rest, { cwd: opts.cwd, env: this.env });
+    }
+    if (result.code !== 0) return { kind: "command-failed", proc: toProc(result) };
+    let raw: string;
+    try {
+      raw = await readFile(summaryPath, "utf8");
+    } catch {
+      return { kind: "summary-missing" };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { kind: "summary-invalid" };
+    }
+    const summary = parseCoverageSummary(parsed);
+    return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
+  }
+
+  async measureAtBase(
+    baseSha: string,
+    cmd: CoverageCommand,
+    opts: ToolRunOpts,
+  ): Promise<CoverageMeasurement> {
+    const scratch = await mkdtemp(path.join(tmpdir(), "factory-cov-base-"));
+    const wt = path.join(scratch, "wt");
+    try {
+      const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
+        cwd: opts.cwd,
+      });
+      if (add.code !== 0) {
+        // Plumbing failure — structural, THROW (the strategy cannot answer without a base).
+        throw new Error(
+          `coverage base measurement: git worktree add --detach ${baseSha} failed ` +
+            `(code=${add.code ?? "null"}): ${add.stderr.trim()}`,
+        );
+      }
+      // Reuse the task worktree's installed deps: the base tree's imports are
+      // normally a subset of head's node_modules. A dep-removing/upgrading task
+      // can break the base run — that surfaces as command-failed (loud), never
+      // silently. node:fs rm/worktree-remove below do NOT follow the symlink.
+      if (await pathExists(path.join(opts.cwd, "node_modules"))) {
+        await symlink(path.join(opts.cwd, "node_modules"), path.join(wt, "node_modules"), "dir");
+      }
+      return await this.measure(cmd, { cwd: wt });
+    } finally {
+      // Best-effort cleanup; never masks the primary error. Racing sweeps use
+      // distinct mkdtemp paths, so concurrent base measures cannot collide.
+      await exec("git", ["-C", opts.cwd, "worktree", "remove", "--force", wt], {
+        cwd: opts.cwd,
+      }).catch(() => {});
+      await rm(scratch, { recursive: true, force: true }).catch(() => {});
+      await exec("git", ["-C", opts.cwd, "worktree", "prune"], { cwd: opts.cwd }).catch(() => {});
+    }
   }
 }
 

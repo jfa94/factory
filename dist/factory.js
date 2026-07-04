@@ -11250,7 +11250,8 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, readFile as readFile7 } from "node:fs/promises";
+import { access as access2, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -11434,6 +11435,70 @@ var DefaultCoverageReader = class {
     }
     const summary = parseCoverageSummary(parsed);
     return summary === null ? { state: "invalid" } : { state: "ok", summary };
+  }
+};
+var DefaultCoverageTool = class _DefaultCoverageTool {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve2;
+    this.env = env;
+  }
+  /** Where every measurement must land, relative to the measured tree's root. */
+  static SUMMARY_PATH = path3.join("coverage", "coverage-summary.json");
+  async measure(cmd, opts) {
+    const summaryPath = path3.join(opts.cwd, _DefaultCoverageTool.SUMMARY_PATH);
+    await rm3(summaryPath, { force: true });
+    let result;
+    if (cmd.kind === "vitest") {
+      result = await runTool(this.resolve, "vitest", cmd.args, opts, this.env);
+    } else {
+      const [bin, ...rest] = cmd.argv;
+      if (bin === void 0) {
+        throw new Error("DefaultCoverageTool: empty command");
+      }
+      result = await exec(bin, rest, { cwd: opts.cwd, env: this.env });
+    }
+    if (result.code !== 0) return { kind: "command-failed", proc: toProc(result) };
+    let raw;
+    try {
+      raw = await readFile7(summaryPath, "utf8");
+    } catch {
+      return { kind: "summary-missing" };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { kind: "summary-invalid" };
+    }
+    const summary = parseCoverageSummary(parsed);
+    return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
+  }
+  async measureAtBase(baseSha, cmd, opts) {
+    const scratch = await mkdtemp(path3.join(tmpdir(), "factory-cov-base-"));
+    const wt = path3.join(scratch, "wt");
+    try {
+      const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
+        cwd: opts.cwd
+      });
+      if (add.code !== 0) {
+        throw new Error(
+          `coverage base measurement: git worktree add --detach ${baseSha} failed (code=${add.code ?? "null"}): ${add.stderr.trim()}`
+        );
+      }
+      if (await pathExists(path3.join(opts.cwd, "node_modules"))) {
+        await symlink2(path3.join(opts.cwd, "node_modules"), path3.join(wt, "node_modules"), "dir");
+      }
+      return await this.measure(cmd, { cwd: wt });
+    } finally {
+      await exec("git", ["-C", opts.cwd, "worktree", "remove", "--force", wt], {
+        cwd: opts.cwd
+      }).catch(() => {
+      });
+      await rm3(scratch, { recursive: true, force: true }).catch(() => {
+      });
+      await exec("git", ["-C", opts.cwd, "worktree", "prune"], { cwd: opts.cwd }).catch(() => {
+      });
+    }
   }
 };
 var DefaultFsProbe = class {

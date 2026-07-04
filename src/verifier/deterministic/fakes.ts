@@ -7,12 +7,16 @@
  * coverage delta tolerance, TDD commit classification, SAST allowlist) are
  * reproduced exactly with zero real CLI invocation.
  */
+import type { CoverageStore } from "./coverage-store.js";
 import type {
   CommandRunner,
   CommitInfo,
+  CoverageCommand,
+  CoverageMeasurement,
   CoverageRead,
   CoverageReader,
   CoverageSummary,
+  CoverageTool,
   EslintTool,
   BuildTool,
   FsProbe,
@@ -152,6 +156,46 @@ export class FakeCoverageReader implements CoverageReader {
   ) {}
   async read(label: "before" | "after", _opts: ToolRunOpts): Promise<CoverageRead> {
     return this.reads[label];
+  }
+}
+
+/** A coverage measurement in the MEASURED state. */
+export function measured(summary: CoverageSummary): CoverageMeasurement {
+  return { kind: "measured", summary };
+}
+
+/** Scripted CoverageTool: seeded head/base measurements; records every call. */
+export class FakeCoverageTool implements CoverageTool {
+  readonly measureCalls: Array<{ cwd: string; cmd: CoverageCommand }> = [];
+  readonly baseCalls: Array<{ baseSha: string; cmd: CoverageCommand }> = [];
+  constructor(
+    private readonly results: {
+      head: CoverageMeasurement;
+      base: CoverageMeasurement;
+    },
+  ) {}
+  async measure(cmd: CoverageCommand, opts: ToolRunOpts): Promise<CoverageMeasurement> {
+    this.measureCalls.push({ cwd: opts.cwd, cmd });
+    return this.results.head;
+  }
+  async measureAtBase(
+    baseSha: string,
+    cmd: CoverageCommand,
+    _opts: ToolRunOpts,
+  ): Promise<CoverageMeasurement> {
+    this.baseCalls.push({ baseSha, cmd });
+    return this.results.base;
+  }
+}
+
+/** In-memory {@link CoverageStore}; `entries` exposed for assertions. */
+export class MemoryCoverageStore implements CoverageStore {
+  readonly entries = new Map<string, CoverageSummary>();
+  async get(treeSha: string): Promise<CoverageSummary | null> {
+    return this.entries.get(treeSha) ?? null;
+  }
+  async put(treeSha: string, summary: CoverageSummary): Promise<void> {
+    this.entries.set(treeSha, summary);
   }
 }
 
