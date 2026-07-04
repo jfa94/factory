@@ -10,17 +10,17 @@ PR with zero human touches beyond launch → touch metric exactly 1.0.**
 
 ## Fixture
 
-| Thing | Value |
-| --- | --- |
-| Toy repo | `jfa94/tipsplit-factory-smoke` (**private**), local clone `/Users/Javier/Projects/factory-smoke-tipsplit` |
-| Stack | npm + TypeScript (ESM) + vitest; a tip-splitting calculator library |
-| Baseline | `src/version.ts` + test; `npm test` / `typecheck` / `build` / coverage all green pre-PRD |
-| Branches | `main` and `develop` synced at scaffold commit; **`develop` protected** (strict up-to-date, enforce_admins, no required checks) |
+| Thing         | Value                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Toy repo      | `jfa94/tipsplit-factory-smoke` (**private**), local clone `/Users/Javier/Projects/factory-smoke-tipsplit`                                                                    |
+| Stack         | npm + TypeScript (ESM) + vitest; a tip-splitting calculator library                                                                                                          |
+| Baseline      | `src/version.ts` + test; `npm test` / `typecheck` / `build` / coverage all green pre-PRD                                                                                     |
+| Branches      | `main` and `develop` synced at scaffold commit; **`develop` protected** (strict up-to-date, enforce_admins, no required checks)                                              |
 | Gate contract | `.factory/gates.json` (stack npm): **contracted** = test, tdd, coverage, type, build; **waived** = mutation (no stryker), lint (no eslint installed), sast (no security cmd) |
-| Config | `maxParallelTasks: 2` |
-| Healthy PRD | issue **#1** — "Tip-splitting calculator core", 5 requirements, AC section, `buildReceipt` depends on 4 primitives (the dependency edge) |
-| Junk PRD | issue **#2** — "Polish the library", deliberately unspecifiable (fails specifiability: <200 chars content, no AC section) |
-| Data dir | `$HOME/.claude/plugins/data/factory-jfa94` (auto-redirected; the smoke session inherits it) |
+| Config        | `maxParallelTasks: 2`                                                                                                                                                        |
+| Healthy PRD   | issue **#1** — "Tip-splitting calculator core", 5 requirements, AC section, `buildReceipt` depends on 4 primitives (the dependency edge)                                     |
+| Junk PRD      | issue **#2** — "Polish the library", deliberately unspecifiable (fails specifiability: <200 chars content, no AC section)                                                    |
+| Data dir      | `$HOME/.claude/plugins/data/factory-jfa94` (auto-redirected; the smoke session inherits it)                                                                                  |
 
 **Toolchain note (load-bearing).** This machine's `npm` occasionally delegates to
 pnpm; the fixture is pinned to real npm with a committed `package-lock.json`, and
@@ -58,6 +58,7 @@ the run there. Paste the handoff prompt below into that session.
 >
 > **Fault-injection sub-experiments** (run AFTER the clean run so they don't spoil
 > its 1.0 metric — each deliberately adds a human touch):
+>
 > - **Check 3 (pause/resume):** seed a near-limit `usage-cache.json` in the data dir
 >   (or tighten the pacing threshold) so the next task parks with `run.quota`
 >   written, confirm the run suspends, then `factory resume` and confirm it
@@ -101,20 +102,41 @@ echo '{"model":{"display_name":"x"},"workspace":{"current_dir":"'"$PWD"'"},"sess
 
 Fill each row with **PASS/FAIL + evidence** during the run.
 
-| # | Check | Result | Evidence |
-| - | ----- | ------ | -------- |
-| 1 | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run | ⬜ | |
-| 2 | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips) | ⬜ | |
-| 3 | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues | ⬜ | |
-| 4 | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1` | ⬜ | |
-| 5 | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent | ⬜ | |
-| 6 | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked | ⬜ | |
-| 7 | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete | ⬜ | |
-| 8 | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch) | ⬜ | |
-| 9 | **Statusline** — suffix live during the run; gone >30 min after terminal | ⬜ | |
-| 10 | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now) | ⬜ | |
+| #   | Check                                                                                                                                                                                                     | Result     | Evidence                                                          |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| 1   | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run                                                                                      | 🟡 partial | Junk #2 **PASS** (see below); healthy-#1 spec-gen pending the run |
+| 2   | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips)                                         | ⬜         |                                                                   |
+| 3   | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues                                                                                          | ⬜         |                                                                   |
+| 4   | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1`                                                 | ⬜         |                                                                   |
+| 5   | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent                                                              | ⬜         |                                                                   |
+| 6   | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked                                                    | ⬜         |                                                                   |
+| 7   | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete                                                                                                                                    | ⬜         |                                                                   |
+| 8   | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch)                                                                                   | ⬜         |                                                                   |
+| 9   | **Statusline** — suffix live during the run; gone >30 min after terminal                                                                                                                                  | ⬜         |                                                                   |
+| 10  | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now) | ⬜         |                                                                   |
 
 ---
+
+## Recorded so far (from the setup session)
+
+**Check 1b — junk PRD refused pre-run (PASS).** `factory spec resolve --issue 2`
+from the toy-repo cwd returned, with **no agent spawn** (the specifiability gate is
+deterministic and runs before generation, Decision 47):
+
+```json
+{
+  "kind": "unspecifiable",
+  "repo": "jfa94/tipsplit-factory-smoke",
+  "issue": 2,
+  "blockers": [
+    "specifiability: PRD body is trivial (154 chars of content, minimum 200) — …",
+    "specifiability: no acceptance-criteria-shaped section — add an \"## Acceptance Criteria\" … section"
+  ]
+}
+```
+
+Both PRD bodies were also verified directly against `specifiabilityGate` before the
+issues were filed: healthy #1 `passed: true`, junk #2 `passed: false`.
 
 ## Defects found
 
