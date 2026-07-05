@@ -254,6 +254,22 @@ describe('factory recover', () => {
         expect(env.hints).toEqual([`factory rescue apply --run ${RUN} --task a --include-dead-ends`])
     })
 
+    it('pages on a traceability-failed run (all tasks done) with a --reset-traceability hint (S9)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {a: task({task_id: 'a', status: 'done'})},
+            traceability: {status: 'failed', reason: 'PRD requirement 3 unmet', verdicts: [], ended_at: AT},
+        }))
+        const code = await recoverCommand.run(['--run', RUN])
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.kind).toBe('page')
+        expect(env.hints).toEqual([`factory rescue apply --run ${RUN} --reset-traceability`])
+        expect(env.reason).toMatch(/traceability/i)
+    })
+
     it("routes 'nothing' on a healthy running run", async () => {
         await state.update(RUN, (s) => ({
             ...s,

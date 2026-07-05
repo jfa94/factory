@@ -234,6 +234,19 @@ async function recordResults(
 }
 
 /**
+ * Collapse a terminal {@link TaskStep} into the `done` {@link NextAction}. The
+ * completeTask/failStep transitions at the loop's terminal arms ALWAYS return
+ * `done:true`; a non-terminal step there is an internal invariant break, so throw
+ * generically rather than thread the caller's transition name.
+ */
+function doneFromStep(runId: string, taskId: string, step: TaskStep): Extract<NextAction, {kind: 'done'}> {
+    if (!step.done) {
+        throw new Error('orchestrator: terminal transition returned a non-terminal step')
+    }
+    return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+}
+
+/**
  * Step one task: record results (if given), then run deterministic phases until a
  * spawn is needed or the task is terminal. See the module doc for the contract.
  */
@@ -355,16 +368,10 @@ export async function nextAction(
             case 'task-terminal': {
                 if (result.outcome.outcome === 'done') {
                     const step = await completeTask(deps, runId, taskId)
-                    if (!step.done) {
-                        throw new Error('orchestrator: completeTask returned non-terminal step')
-                    }
-                    return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                    return doneFromStep(runId, taskId, step)
                 }
                 const step = await failStep(deps, runId, taskId, result.outcome.failure_class, result.outcome.reason)
-                if (!step.done) {
-                    throw new Error('orchestrator: failStep returned non-terminal step')
-                }
-                return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                return doneFromStep(runId, taskId, step)
             }
             case 'wait-retry': {
                 if (result.phase === 'ship') {
@@ -389,10 +396,7 @@ export async function nextAction(
                             'blocked-environmental',
                             `staging re-sync: task worktree missing (${resyncWorktree})`
                         )
-                        if (!step.done) {
-                            throw new Error('orchestrator: failStep returned non-terminal step')
-                        }
-                        return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                        return doneFromStep(runId, taskId, step)
                     }
                     const resync = await resyncTaskBranchOntoStaging({
                         git: deps.git,
@@ -408,10 +412,7 @@ export async function nextAction(
                             'blocked-environmental',
                             `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
                         )
-                        if (!step.done) {
-                            throw new Error('orchestrator: failStep returned non-terminal step')
-                        }
-                        return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                        return doneFromStep(runId, taskId, step)
                     }
                     // Live-merge refusal → bounded re-sync through exec (persisted budget).
                     // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
@@ -447,10 +448,7 @@ export async function nextAction(
                             'blocked-environmental',
                             `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
                         )
-                        if (!step.done) {
-                            throw new Error('orchestrator: failStep returned non-terminal step')
-                        }
-                        return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                        return doneFromStep(runId, taskId, step)
                     }
                     log.info(
                         `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync ` +

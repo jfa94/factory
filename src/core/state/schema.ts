@@ -452,18 +452,19 @@ const TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields)
  * The minimal quota state a resumable run must persist. WS4 extends/owns the
  * pacing logic; the schema only freezes what `suspended`/`paused` resume needs.
  */
-export const QuotaCheckpointSchema = z.object({
-    /** Epoch (seconds) when the binding window resets — the resume horizon.
-     *  Absent for `unavailable` (no observed horizon; resume rechecks the live signal). */
-    resets_at_epoch: z.number().int().nonnegative().optional(),
-    /**
-     * Which window forced the last pause/suspend, if any. `unavailable` = the usage
-     * signal could not be read (fail-closed suspend). INVARIANT: `run.quota` is
-     * present ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase
-     * parks) never write a checkpoint, which is how planResume tells them apart.
-     */
-    binding_window: z.enum(['5h', '7d', 'unavailable']).optional(),
-})
+/**
+ * Discriminated on `binding_window` so illegal field combos are UNrepresentable: a
+ * windowed (`5h`/`7d`) pause/suspend ALWAYS carries its reset horizon (the resume
+ * signal); `unavailable` (the usage signal could not be read — fail-closed suspend)
+ * NEVER has one (resume rechecks the live signal). INVARIANT: `run.quota` is present
+ * ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase parks) never write
+ * a checkpoint, which is how planResume tells them apart.
+ */
+export const QuotaCheckpointSchema = z.discriminatedUnion('binding_window', [
+    z.object({binding_window: z.literal('5h'), resets_at_epoch: z.number().int().nonnegative()}),
+    z.object({binding_window: z.literal('7d'), resets_at_epoch: z.number().int().nonnegative()}),
+    z.object({binding_window: z.literal('unavailable')}),
+])
 export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>
 
 // ---------------------------------------------------------------------------
@@ -472,8 +473,10 @@ export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>
 
 /**
  * Run-level documentation phase marker (engine-owned docs phase). `done` once
- * scribe's output is committed onto staging (or a no-op pass); `failed` records a
- * one-attempt failure while the run sits `suspended` (resumable via /factory:resume).
+ * scribe's output is committed onto staging (or a no-op pass). `failed` suspends the
+ * run for a retry (resumable via /factory:resume) UNTIL the attempt cap
+ * (`MAX_DOCS_ATTEMPTS`); at the cap docs is best-effort, so a `failed` marker coexists
+ * with a run that finalizes `completed` (docs never gates the rollup).
  * Absent until the phase runs. Not applicable (no /docs, opted out) leaves it absent —
  * `next` decides applicability read-only, so there is no `skipped` value.
  */
@@ -613,7 +616,7 @@ export const E2ePhaseSchema = z.object({
     reason: z.string().optional(),
     /**
      * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-     * didn't block completion (Decision 9: only critical red gates). Distinct from
+     * didn't block completion (Decision 39: only critical red gates). Distinct from
      * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
      * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
      */

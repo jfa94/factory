@@ -89,6 +89,34 @@ describe('Δ L — serial writer (#1)', () => {
         expect(gh.merges).toHaveLength(0)
     })
 
+    it('non-mergeable/pending merge states are REFUSED, not squashed (no wedge)', async () => {
+        // Regression: merge() used to squash UNCONDITIONALLY once past the MERGED/
+        // CONFLICTING/BEHIND guards. So BLOCKED (required checks pending), UNKNOWN
+        // (mergeability still computing), DIRTY, and DRAFT threw ExecError out of
+        // merge()→shipTask→next-action (which catches only UsageError) and WEDGED the
+        // run on every drive. They must now refuse → ship turns it into a wait-retry.
+        for (const state of ['BLOCKED', 'UNKNOWN', 'DIRTY', 'DRAFT'] as const) {
+            const gh = new FakeGhClient({
+                prs: [openPr(500, 'factory/run-1/t1', {mergeStateStatus: state})],
+            })
+            const outcome = await serializer(gh).merge(500)
+            expect(outcome, state).toEqual({merged: false, reason: 'not-mergeable', number: 500})
+            expect(gh.merges, state).toHaveLength(0) // never squashed
+        }
+    })
+
+    it('genuinely-mergeable states beyond CLEAN (HAS_HOOKS, UNSTABLE) still squash — allowlist admits them', async () => {
+        for (const [number, state] of [
+            [510, 'HAS_HOOKS'],
+            [511, 'UNSTABLE'],
+        ] as const) {
+            const gh = new FakeGhClient({prs: [openPr(number, 'factory/run-1/t1', {mergeStateStatus: state})]})
+            const out = await serializer(gh).merge(number)
+            expect(out, state).toEqual({merged: true, via: 'app-level', number})
+            expect(gh.merges, state).toEqual([{number, auto: false, deleteBranch: false}])
+        }
+    })
+
     it('merge-queue probe upgrade: native support → enqueue via --auto; unsupported → app-level squash', async () => {
         // unsupported (default) → app-level
         const ghApp = new FakeGhClient({prs: [openPr(300, 'factory/run-1/t1')]})

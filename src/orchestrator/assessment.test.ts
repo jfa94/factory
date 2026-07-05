@@ -236,6 +236,19 @@ describe('runAssessmentRecord — ok / degraded', () => {
         }
         expect(env.warning).toBe('seed endpoint returns 500')
     })
+
+    it('degraded with NO warning AND NO reason still persists a non-empty warning (never launders to clean done)', async () => {
+        await runAssessmentEmit(deps(), RUN_ID)
+        const env = await runAssessmentRecord(deps(), RUN_ID, {
+            status: 'degraded',
+            affected_specs: [],
+        })
+        if (env.kind !== 'done') {
+            throw new Error('expected done')
+        }
+        expect(env.warning).toBeTruthy()
+        expect((await state.read(RUN_ID)).e2e_assessment?.warning).toBeTruthy()
+    })
 })
 
 describe('runAssessmentRecord — impossible verdicts (FINAL, no retry)', () => {

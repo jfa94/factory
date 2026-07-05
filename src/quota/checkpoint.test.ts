@@ -68,6 +68,9 @@ describe('Δ F checkpoint invariant — clearCheckpoint returns to running with 
     })
 
     it('the invariant is real: a quota checkpoint on a running run is REJECTED', () => {
-        expect(() => parseRunState({...baseRun(), status: 'running', quota: {binding_window: '5h'}})).toThrow()
+        // Horizon present so the rejection exercises the STATUS invariant, not the shape.
+        expect(() =>
+            parseRunState({...baseRun(), status: 'running', quota: {binding_window: '5h', resets_at_epoch: 9000}})
+        ).toThrow()
     })
 })

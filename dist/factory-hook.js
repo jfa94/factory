@@ -6645,7 +6645,7 @@ var E2eConfigSchema = external_exports.object({
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
   readyTimeoutMs: external_exports.number().int().positive().default(3e4),
   /**
-   * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+   * Per-task cap on e2e-triggered reopens (Decision 39). A critical spec still
    * red after this many reopens of its mapped task fails the run outright
    * instead of looping forever.
    */
@@ -7659,18 +7659,11 @@ function refineTaskCrossFields(task, ctx) {
   }
 }
 var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
-var QuotaCheckpointSchema = external_exports.object({
-  /** Epoch (seconds) when the binding window resets — the resume horizon.
-   *  Absent for `unavailable` (no observed horizon; resume rechecks the live signal). */
-  resets_at_epoch: external_exports.number().int().nonnegative().optional(),
-  /**
-   * Which window forced the last pause/suspend, if any. `unavailable` = the usage
-   * signal could not be read (fail-closed suspend). INVARIANT: `run.quota` is
-   * present ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase
-   * parks) never write a checkpoint, which is how planResume tells them apart.
-   */
-  binding_window: external_exports.enum(["5h", "7d", "unavailable"]).optional()
-});
+var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window", [
+  external_exports.object({ binding_window: external_exports.literal("5h"), resets_at_epoch: external_exports.number().int().nonnegative() }),
+  external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
+  external_exports.object({ binding_window: external_exports.literal("unavailable") })
+]);
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
@@ -7726,7 +7719,7 @@ var E2ePhaseSchema = external_exports.object({
   reason: external_exports.string().optional(),
   /**
    * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-   * didn't block completion (Decision 9: only critical red gates). Distinct from
+   * didn't block completion (Decision 39: only critical red gates). Distinct from
    * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
    * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
    */

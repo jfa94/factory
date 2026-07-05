@@ -35,7 +35,7 @@ import {StatuslineUsageSignal} from '../../quota/index.js'
 import {nowEpoch, nowIso} from '../../shared/time.js'
 import {emitMetric, selfHealCommentMarker} from '../../scoring/index.js'
 import {requireAutonomousMode} from '../../autonomy/mode.js'
-import {applyResume} from './run.js'
+import {applyResume} from '../../orchestrator/lifecycle.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
 import type {RunState} from '../../types/index.js'
 
@@ -118,6 +118,9 @@ function pageHints(runId: string, scan: RescueScan): string[] {
     const hints = scan.dead_ends.map((id) => `factory rescue apply --run ${runId} --task ${id} --include-dead-ends`)
     if (scan.e2e_failed || scan.e2e_assessment_failed) {
         hints.push(`factory rescue apply --run ${runId} --reset-e2e`)
+    }
+    if (scan.traceability_failed) {
+        hints.push(`factory rescue apply --run ${runId} --reset-traceability`)
     }
     return hints
 }

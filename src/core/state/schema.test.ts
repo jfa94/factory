@@ -189,10 +189,15 @@ describe('cross-field invariants are enforced (not just documented)', () => {
     })
 
     it('rejects a quota checkpoint on a non-paused/suspended run', () => {
-        // running (default) — quota is only valid while waiting on quota.
-        expect(() => parseRunState(minimalRun({quota: {binding_window: '5h'}}))).toThrow(/quota/)
+        // running (default) — quota is only valid while waiting on quota. (Horizon present
+        // so the throw exercises the STATUS invariant, not the windowed-needs-horizon shape.)
+        expect(() =>
+            parseRunState(minimalRun({quota: {binding_window: '5h', resets_at_epoch: 1_900_000_000}}))
+        ).toThrow(/quota/)
         // terminal failed must not carry a resume horizon.
-        expect(() => parseRunState(minimalRun({status: 'failed', quota: {binding_window: '7d'}}))).toThrow(/quota/)
+        expect(() =>
+            parseRunState(minimalRun({status: 'failed', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}}))
+        ).toThrow(/quota/)
     })
 
     it('accepts a quota checkpoint on paused / suspended runs', () => {
@@ -203,7 +208,9 @@ describe('cross-field invariants are enforced (not just documented)', () => {
             })
         )
         expect(paused.quota?.binding_window).toBe('5h')
-        const suspended = parseRunState(minimalRun({status: 'suspended', quota: {binding_window: '7d'}}))
+        const suspended = parseRunState(
+            minimalRun({status: 'suspended', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}})
+        )
         expect(suspended.quota?.binding_window).toBe('7d')
     })
 })

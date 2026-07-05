@@ -318,6 +318,47 @@ describe('applyRescue', () => {
         expect((await state.read(RUN_ID)).e2e_assessment).toBeUndefined()
     })
 
+    it('resetTraceability:true drops a FAILED traceability marker and reopens on it ALONE (S9, Decision 47)', async () => {
+        // A condemned run whose tasks are all done — stuck purely on the PRD-traceability
+        // audit. Only --reset-traceability reopens it, and it drops the WHOLE marker so
+        // wantsTraceability re-fires a fresh audit on the next drive.
+        await seed([{task_id: 'a', status: 'done'}], 'failed')
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            traceability: {
+                status: 'failed' as const,
+                reason: 'PRD requirement 3 unmet',
+                verdicts: [],
+                ended_at: '2026-06-08T00:00:00.000Z',
+            },
+        }))
+
+        const result = await applyRescue(state, RUN_ID, {resetTraceability: true})
+        expect(result.reopened).toBe(true)
+        expect(result.reset).toEqual([]) // every task already done
+
+        const run = await state.read(RUN_ID)
+        expect(run.status).toBe('running')
+        expect(run.traceability).toBeUndefined()
+    })
+
+    it('without resetTraceability, a failed traceability marker is left untouched (no silent re-audit)', async () => {
+        await seed([{task_id: 'a', status: 'done'}], 'failed')
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            traceability: {
+                status: 'failed' as const,
+                reason: 'unmet',
+                verdicts: [],
+                ended_at: '2026-06-08T00:00:00.000Z',
+            },
+        }))
+
+        const result = await applyRescue(state, RUN_ID)
+        expect(result.reopened).toBe(false)
+        expect((await state.read(RUN_ID)).traceability?.status).toBe('failed')
+    })
+
     it('without resetE2e, a failed e2e_assessment is left untouched (no silent auto-retry)', async () => {
         await seed([{task_id: 'a', status: 'done'}], 'failed')
         await state.update(RUN_ID, (s) => ({
@@ -427,7 +468,7 @@ describe('applyRescue', () => {
         await state.update(RUN_ID, (s) => ({
             ...s,
             status: 'suspended',
-            quota: {binding_window: '7d'},
+            quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000},
             tasks: {a: task({task_id: 'a', status: 'executing'})},
         }))
 
@@ -438,7 +479,7 @@ describe('applyRescue', () => {
 
         const run = await state.read(RUN_ID)
         expect(run.status).toBe('suspended')
-        expect(run.quota).toEqual({binding_window: '7d'}) // checkpoint preserved for resume
+        expect(run.quota).toEqual({binding_window: '7d', resets_at_epoch: 1_900_000_000}) // checkpoint preserved for resume
         expect(nonNull(run.tasks.a).status).toBe('pending')
     })
 
@@ -621,6 +662,9 @@ describe('applyRescue', () => {
         it('auto is mutually exclusive with the manual target options (loud throw)', async () => {
             await seed([{task_id: 'a', status: 'executing'}])
             await expect(applyRescue(state, RUN_ID, {auto: {at: AT}, includeDeadEnds: true})).rejects.toThrow(
+                /mutually exclusive/
+            )
+            await expect(applyRescue(state, RUN_ID, {auto: {at: AT}, resetTraceability: true})).rejects.toThrow(
                 /mutually exclusive/
             )
         })

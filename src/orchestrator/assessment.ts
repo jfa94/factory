@@ -345,7 +345,13 @@ export async function runAssessmentRecord(
     }
     await deps.git.worktreeRemove([worktree, '--force'])
 
-    const warning = results.status === 'degraded' ? (results.warning ?? results.reason) : undefined
+    // A degraded verdict ALWAYS retains a non-empty warning in durable state: neither
+    // `warning` nor `reason` is schema-required, so without this default a detail-less
+    // degraded verdict would persist as an indistinguishable-from-clean `done`.
+    const warning =
+        results.status === 'degraded'
+            ? (results.warning ?? results.reason ?? 'e2e assessment degraded (assessor gave no detail)')
+            : undefined
     await deps.state.update(runId, (s) => ({
         ...s,
         e2e_assessment: {
@@ -358,9 +364,14 @@ export async function runAssessmentRecord(
             ended_at: nowIso(),
         },
     }))
-    log.info(
+    const doneMsg =
         `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} ` +
-            `affected spec(s)${warning !== undefined ? `, warning: ${warning}` : ''})`
-    )
+        `affected spec(s)${warning !== undefined ? `, warning: ${warning}` : ''})`
+    // Surface a degraded completion at warn so it isn't lost in suppressed INFO output.
+    if (results.status === 'degraded') {
+        log.warn(doneMsg)
+    } else {
+        log.info(doneMsg)
+    }
     return {kind: 'done', run_id: runId, ...(warning !== undefined ? {warning} : {})}
 }

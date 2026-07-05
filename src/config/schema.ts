@@ -270,7 +270,7 @@ export const E2eConfigSchema = z
         /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
         readyTimeoutMs: z.number().int().positive().default(30_000),
         /**
-         * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+         * Per-task cap on e2e-triggered reopens (Decision 39). A critical spec still
          * red after this many reopens of its mapped task fails the run outright
          * instead of looping forever.
          */

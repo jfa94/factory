@@ -1059,4 +1059,18 @@ describe('buildWorktreeSource — ENOENT-only swallow (citation source loader)',
         await mkdir(join(wt, 'a-directory'), {recursive: true})
         await expect(buildWorktreeSource(wt, [citing('a-directory')])).rejects.toThrow()
     })
+
+    it('a traversal-escaping cited file (../) maps to null and is NEVER read outside the worktree', async () => {
+        // Untrusted reviewer JSON: a `../` file that resolves OUTSIDE the worktree
+        // must be dropped (null), not read. Plant a secret as a sibling of `wt`; a
+        // missing containment guard would leak its contents through readLines.
+        const secret = join(dirname(wt), 'factory-record-escape-secret.ts')
+        await writeFile(secret, 'TOP\nSECRET\n')
+        try {
+            const src = await buildWorktreeSource(wt, [citing('../factory-record-escape-secret.ts')])
+            expect(src.readLines('../factory-record-escape-secret.ts')).toBeNull()
+        } finally {
+            await rm(secret, {force: true})
+        }
+    })
 })

@@ -171,6 +171,27 @@ export class MergeSerializer {
                 return {merged: true, via: 'merge-queue', number: prNumber}
             }
 
+            // App-level squash NOW only when GitHub confirms the PR is actually mergeable.
+            // CLEAN, HAS_HOOKS, and UNSTABLE (only non-required checks red) all merge fine
+            // via `gh pr merge --squash`. Everything else — BLOCKED (required checks still
+            // pending), UNKNOWN (mergeability still computing), DIRTY, DRAFT — would make the
+            // squash exit nonzero and THROW out of merge()→shipTask→next-action (which catches
+            // only UsageError), WEDGING the run on every drive. Refuse instead: ship turns a
+            // {merged:false} into a bounded wait-retry (ship.ts) and re-checks on a later turn.
+            // NOTE: this is placed AFTER the merge-queue branch on purpose — a native queue's
+            // --auto legitimately waits out BLOCKED, so only the app-level path is gated.
+            const mergeableNow =
+                pr.mergeStateStatus === 'CLEAN' ||
+                pr.mergeStateStatus === 'HAS_HOOKS' ||
+                pr.mergeStateStatus === 'UNSTABLE'
+            if (!mergeableNow) {
+                log.warn(
+                    `PR #${prNumber} not mergeable now (mergeStateStatus=${pr.mergeStateStatus ?? 'unset'}) — ` +
+                        'refusing app-level squash; ship will wait-retry'
+                )
+                return {merged: false, reason: 'not-mergeable', number: prNumber}
+            }
+
             // Squash-merge NOW, then delete ONLY the remote head ref. We deliberately do
             // NOT pass --delete-branch: gh would also `git branch -D` the local branch,
             // which the per-task worktree holds checked-out (preflight `checkout -B`), so

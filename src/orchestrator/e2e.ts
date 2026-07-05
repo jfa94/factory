@@ -28,19 +28,17 @@
  * literal ordering ("commit; then prove") would otherwise permanently pollute the
  * committed suite with a rejected spec on the fail path.
  *
- * Reopen mechanics reuse `resetTaskRow` (Decision 7) — the SAME primitive rescue
+ * Reopen mechanics reuse `resetTaskRow` (Decision 39) — the SAME primitive rescue
  * uses — with a fresh `e2eFeedback` override; `e2e_feedback` then reaches both
  * producer roles via the existing `PriorFailureNote` channel (handlers.ts).
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {copyFile, mkdir, writeFile} from 'node:fs/promises'
 import {dirname, isAbsolute, join} from 'node:path'
-import {z} from 'zod'
 import {
     resolveStagingBranch,
     resetTaskRow,
     parseProducerStatus,
-    E2eManifestEntrySchema,
     runE2e,
     DefaultPlaywrightTool,
     provisionWorktree,
@@ -58,6 +56,25 @@ import {
     type ProvisionWorktreeFn,
 } from './deps.js'
 import {nonNull, nowIso, createLogger} from '../shared/index.js'
+import {CONTROL_TITLE_PREFIX, E2eResultsSchema, type E2eAuthorResults} from './e2e-schemas.js'
+import {
+    e2eWorktreePath,
+    e2eRunWorktreePath,
+    e2eBaseProofWorktreePath,
+    e2eThrowawayDir,
+    e2eAdjudicateWorktreePath,
+    e2eBranchName,
+    adjudicateBranchName,
+    resolveBootConfig,
+    scrubbedE2eEnv,
+    type BootConfig,
+} from './e2e-paths.js'
+
+// The public e2e surface now owned by the two leaf modules, re-exported so
+// `orchestrator/index.ts` and `e2e.test.ts` keep importing it from `./e2e.js`
+// (behavior-preserving motion — Decision 39/40 split).
+export {CONTROL_TITLE_PREFIX, E2eResultsSchema, type E2eAuthorResults}
+export {e2eWorktreePath, e2eRunWorktreePath, e2eBaseProofWorktreePath, e2eThrowawayDir}
 
 const log = createLogger('e2e')
 
@@ -141,144 +158,6 @@ const MAX_AUTHOR_ATTEMPTS = 2
 // ponytail: 90 (docs' 60 + a 50% margin) — live MCP exploration burns more turns
 // than a diff read; bump if the author routinely hits the ceiling.
 const E2E_AUTHOR_MAX_TURNS = 90
-
-/** Title prefix marking a spec's CONTROL assertion (fail-first-proof discipline). */
-export const CONTROL_TITLE_PREFIX = 'control:'
-
-/** One adjudicator ruling on a pre-existing failing spec (Decision 40 D7). */
-export const E2eAdjudicationVerdictSchema = z
-    .object({
-        spec_path: z.string().min(1),
-        verdict: z.enum(['regression', 'intentional-change']),
-        /** Plain-language explanation — surfaced verbatim on a regression fail. */
-        reason: z.string().min(1),
-        /**
-         * The authorizing task/spec language quoted verbatim. REQUIRED on every
-         * intentional-change verdict — enforced at record (retry), not here, so a
-         * missing citation reads as an incomplete response rather than a parse crash.
-         */
-        citation: z.string().optional(),
-    })
-    .strict()
-export type E2eAdjudicationVerdict = z.infer<typeof E2eAdjudicationVerdictSchema>
-
-export const E2eResultsSchema = z
-    .object({
-        status: z.string().min(1),
-        /** Empty when the author judged no task in this run to be UI-facing. */
-        manifest: z.array(E2eManifestEntrySchema).default([]),
-        /**
-         * Explicit "nothing UI-facing" signal — must be `true` whenever `manifest` is
-         * empty. Distinguishes a genuine no-op from a malformed/incomplete author
-         * response that the `manifest` field's own `.default([])` would otherwise
-         * silently paper over as an unremarkable green. Omitted/false + an empty
-         * manifest is treated as ambiguous, not a silent pass.
-         */
-        no_ui_surface: z.boolean().optional(),
-        /**
-         * The adjudication-results leg's payload (D7) — populated only when an
-         * adjudication cursor is in flight (the cursor's presence in run state, not
-         * any field here, is what routes the record; author results omit it).
-         */
-        verdicts: z.array(E2eAdjudicationVerdictSchema).optional(),
-    })
-    .strict()
-// Named distinctly from `verifier/e2e`'s `E2eResults` (the Playwright run outcome,
-// reachable via the same `./deps.js` barrel) — this is the author's `--results` envelope.
-export type E2eAuthorResults = z.infer<typeof E2eResultsSchema>
-
-// All four e2e dirs live under `<dataDir>/worktrees/<runId>/` — the agent-WRITABLE
-// sibling of the TCB-write-denied `runs/` tree (core/state/paths.ts). They originally
-// lived under `runs/<runId>/…`, where the `data-runs` deny rule blocked the e2e-author's
-// own Write calls into its worktree (verified live, Decision 40). The DOT prefix makes
-// collision with a task worktree `<runId>/<taskId>` impossible (task ids are
-// validateId-constrained to [a-zA-Z0-9_-], never a leading dot), and the pipeline-guards
-// write-scope arm resolves run `<runId>` (exists) / task `.e2e-…` (unknown → no scope).
-
-/** The e2e-phase author worktree path (torn down once its specs are merged/rejected). */
-export function e2eWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-author')
-}
-
-/** The persistent "run the suite against current staging" worktree — reused every pass. */
-export function e2eRunWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-run')
-}
-
-/** Scratch worktree used ONLY for the fail-first base-side proof (removed after use). */
-export function e2eBaseProofWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-base-proof')
-}
-
-/** The run's ephemeral, out-of-repo throwaway-spec directory — never committed, discarded at run end. */
-export function e2eThrowawayDir(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-throwaway')
-}
-
-/** The adjudicator's worktree (D7) — torn down once its spec updates are merged/rejected. */
-export function e2eAdjudicateWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-adjudicate')
-}
-
-function e2eBranchName(runId: string): string {
-    return `e2e-${runId}`
-}
-
-function adjudicateBranchName(runId: string): string {
-    return `e2e-adjudicate-${runId}`
-}
-
-/** The boot pair every Playwright invocation + author prompt needs. */
-export interface BootConfig {
-    readonly startCommand: string
-    readonly baseURL: string
-}
-
-/**
- * Single source of truth for boot config (Decision 40 D10): an operator config
- * override wins; otherwise the values the run-start ASSESSMENT resolved (and wrote
- * into the repo's `playwright.config.ts`). `null` = genuinely unknown — the caller
- * suspends/fails loud rather than booting with a fabricated command.
- */
-export function resolveBootConfig(cfg: Config['e2e'], run: RunState): BootConfig | null {
-    const startCommand = cfg.startCommand ?? run.e2e_assessment?.resolved?.start_command
-    const baseURL = cfg.baseURL ?? run.e2e_assessment?.resolved?.base_url
-    return startCommand !== undefined && baseURL !== undefined ? {startCommand, baseURL} : null
-}
-
-/**
- * The env every Playwright invocation gets — read by the scaffolded
- * `templates/playwright.config.ts`'s `webServer` block so the app boots the
- * SAME command/URL/timeout the engine resolved ({@link resolveBootConfig}),
- * fresh every run (`FACTORY_E2E=1` forces `reuseExistingServer: false`).
- */
-function e2eEnv(cfg: Config['e2e'], boot: BootConfig): Record<string, string> {
-    return {
-        BASE_URL: boot.baseURL,
-        FACTORY_E2E_START_COMMAND: boot.startCommand,
-        FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
-        FACTORY_E2E: '1',
-    }
-}
-
-/**
- * The env an AUTHORED SPEC actually executes with (Decision 39 W5). The spec file
- * is autonomously-authored, unreviewed code — it must not inherit the parent
- * process's full environment (CI tokens, cloud creds, ...). Allowlists exactly
- * PATH/HOME (so node/npm/the Playwright bin's shebang still resolves) plus the
- * {@link e2eEnv} vars the scaffolded `webServer` block reads. Pass alongside
- * `replaceEnv: true` so `exec` does NOT merge this over `process.env`.
- */
-function scrubbedE2eEnv(cfg: Config['e2e'], boot: BootConfig): Record<string, string> {
-    const env = e2eEnv(cfg, boot)
-    for (const key of ['PATH', 'HOME']) {
-        const v = process.env[key]
-        if (v !== undefined) {
-            env[key] = v
-        }
-    }
-    return env
-}
 
 /** Build the e2e-author prompt: the task list + config + the two spec destinations. */
 function buildAuthorPrompt(args: {
@@ -1091,19 +970,28 @@ function throwawayConfigContents(throwawayDir: string): string {
 
 /** One join hit: a failed spec + the manifest entry that names it, or `undefined` if unmapped. */
 function findEntry(manifest: readonly E2eManifestEntry[], spec: E2eSpecResult): E2eManifestEntry | undefined {
-    return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`))
+    return manifest.find((e) => specPathMatches(spec.file, e.spec_path))
 }
 
 /** Bidirectional suffix match — the Playwright reporter's `file` and the assessment
- * map's `spec_path` may each carry or lack the testDir prefix. */
+ * map's `spec_path` may each carry or lack the testDir prefix. The SINGLE join predicate
+ * for both the manifest (findEntry / criticalMisses) and assessment sides — a one-directional
+ * variant here false-misses a passing prefixed critical and reopens an all-green suite to death. */
 function specPathMatches(file: string, specPath: string): boolean {
     return file === specPath || file.endsWith(`/${specPath}`) || specPath.endsWith(`/${file}`)
+}
+
+/** A tooling-level failure (nonzero exit / reporter `errors[]`) that no individual spec's
+ * status explains — unattributable to any task, so the run fails outright rather than
+ * absorbing it into a critical-miss reopen. */
+function unattributableToolingFailure(r: {readonly ok: boolean; readonly specs: readonly E2eSpecResult[]}): boolean {
+    return !r.ok && r.specs.every((s) => s.status !== 'failed')
 }
 
 /**
  * The mechanical heart of the phase: sync the run-worktree to CURRENT staging, run
  * the full suite (critical + throwaway), join failures to tasks via the manifest,
- * and apply the cadence (Decision 8) + disposition (Decision 9) rules.
+ * and apply the cadence + disposition (Decision 39) rules.
  */
 async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAction> {
     const run = await deps.state.read(runId)
@@ -1175,7 +1063,7 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
                 await markFailed(deps, runId, reason, attempts)
                 return {kind: 'failed', run_id: runId, reason}
             }
-            // Pass 2+ throwaway is non-gating (Decision 8) — fold the crash into the
+            // Pass 2+ throwaway is non-gating (Decision 39) — fold the crash into the
             // advisory below instead of failing the run.
             throwawayThrew = errText(err)
         }
@@ -1188,16 +1076,14 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
     const criticalMisses = criticalEntries
         .map((entry) => ({
             entry,
-            spec: criticalResult.specs.find(
-                (s) => s.file === entry.spec_path || s.file.endsWith(`/${entry.spec_path}`)
-            ),
+            spec: criticalResult.specs.find((s) => specPathMatches(s.file, entry.spec_path)),
         }))
         .filter((m) => m.spec === undefined || (m.spec.status !== 'passed' && m.spec.status !== 'flaky'))
 
     // A tooling-level failure (nonzero exit / reporter errors[]) that no individual
     // spec's status explains can't be attributed to any task — fail the run outright
     // rather than silently absorbing it into a critical-miss reopen.
-    if (!criticalResult.ok && criticalResult.specs.every((s) => s.status !== 'failed')) {
+    if (unattributableToolingFailure(criticalResult)) {
         const reason =
             'e2e critical suite reported a tooling failure (nonzero exit code or reporter ' +
             'errors[]) with no individual spec marked failed — refusing to attribute to a task'
@@ -1208,14 +1094,9 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
     // Same tooling-failure blind spot as above, but for the throwaway run: a broken
     // throwaway config/tool invocation (`ok:false`, no spec marked `failed`) would
     // otherwise fall through to an empty `throwawayFailed` and silently `markDone`.
-    // Only gate on pass 1 — pass 2+ throwaway is already non-gating (Decision 8), so
+    // Only gate on pass 1 — pass 2+ throwaway is already non-gating (Decision 39), so
     // a tooling failure there is folded into the advisory instead (see below).
-    if (
-        firstPass &&
-        throwawayResult &&
-        !throwawayResult.ok &&
-        throwawayResult.specs.every((s) => s.status !== 'failed')
-    ) {
+    if (firstPass && throwawayResult && unattributableToolingFailure(throwawayResult)) {
         const reason =
             'e2e throwaway suite reported a tooling failure (nonzero exit code or reporter ' +
             'errors[]) with no individual spec marked failed — refusing to attribute to a task'
@@ -1283,7 +1164,7 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
         }
     }
 
-    // Cadence (Decision 8): pass 1 reopens for ANY mappable failure (critical + throwaway);
+    // Cadence (Decision 39): pass 1 reopens for ANY mappable failure (critical + throwaway);
     // pass 2+ reopens ONLY for critical. A still-red throwaway on pass 2+ is dropped here —
     // it never blocks (only critical red gates disposition) and never reopens.
     const throwawayCandidates = firstPass
@@ -1298,15 +1179,13 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
     ]
 
     if (mappable.length === 0) {
-        // Pass 2+ throwaway tooling failures never gate (Decision 8), but must still
+        // Pass 2+ throwaway tooling failures never gate (Decision 39), but must still
         // surface — otherwise this branch would silently `markDone` past a broken
         // throwaway run.
         const throwawayToolingFailed =
             !firstPass &&
             (throwawayThrew !== undefined ||
-                (throwawayResult !== undefined &&
-                    !throwawayResult.ok &&
-                    throwawayResult.specs.every((s) => s.status !== 'failed')))
+                (throwawayResult !== undefined && unattributableToolingFailure(throwawayResult)))
         const advisory =
             throwawayFailed.length > 0
                 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` +

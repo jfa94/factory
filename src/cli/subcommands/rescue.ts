@@ -26,7 +26,7 @@ const RESCUE_HELP = `factory rescue — scan or recover a stalled run
 
 Usage:
   factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
@@ -41,13 +41,13 @@ Usage:
 
 Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
 RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
-rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
+traceability_failed, rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
 survey (\`work\`) + the recover \`route\`. Writes nothing.`
 
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
@@ -67,11 +67,16 @@ Usage:
                        re-enters finalize and picks up the (by-then) merged PR. Use
                        once you've confirmed the queued merge landed. Alone
                        sufficient to reopen a terminal run.
+  --reset-traceability Clear a failed PRD-traceability audit (S9, Decision 47) so it
+                       re-enters and re-derives on the next drive. Use once the unmet
+                       PRD intent is addressed (or the auditor crash was transient).
+                       Alone sufficient to reopen a terminal run.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
 (blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, or
---recheck-rollup targets an armed-not-landed rollup). Idempotent.
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase,
+--reset-traceability clears a failed audit, or --recheck-rollup targets an
+armed-not-landed rollup). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`
@@ -110,7 +115,9 @@ export async function runScan(argv: string[], overrides: CurrentRunOverrides = {
 }
 
 export async function runApply(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
-    const args = parseArgs(argv, {booleans: ['include-dead-ends', 'reset-e2e', 'recheck-rollup']})
+    const args = parseArgs(argv, {
+        booleans: ['include-dead-ends', 'reset-e2e', 'recheck-rollup', 'reset-traceability'],
+    })
     if (args.flag('help') === true) {
         emitLine(APPLY_HELP)
         return EXIT.OK
@@ -123,12 +130,14 @@ export async function runApply(argv: string[], overrides: CurrentRunOverrides = 
     const includeDeadEnds = args.flag('include-dead-ends') === true
     const resetE2e = args.flag('reset-e2e') === true
     const recheckRollup = args.flag('recheck-rollup') === true
+    const resetTraceability = args.flag('reset-traceability') === true
 
     const result = await applyRescue(state, runId, {
         ...(tasks.length > 0 ? {tasks} : {}),
         includeDeadEnds,
         resetE2e,
         recheckRollup,
+        resetTraceability,
     })
     if (result.touched) {
         await emitMetric(dataDir, runId, 'human_touch', {kind: 'recover'}) // S11 mirror

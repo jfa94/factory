@@ -82,7 +82,7 @@ export interface PartialRunReport {
      */
     e2e_failure?: string | undefined
     /**
-     * Non-gating e2e note (Decision 9) — e.g. residual THROWAWAY red that did NOT
+     * Non-gating e2e note (Decision 39) — e.g. residual THROWAWAY red that did NOT
      * block completion. Present IFF `run.e2e_phase.status === "done"` and the phase
      * left an advisory. Mutually exclusive with {@link e2e_failure} (one phase
      * outcome, one note).

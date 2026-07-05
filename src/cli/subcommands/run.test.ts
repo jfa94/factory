@@ -14,20 +14,16 @@ import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
+import {runCommand, runCreate, runCancel, resolveOwnerSession, type RunCancelOverrides} from './run.js'
 import {
-    runCommand,
-    runCreate,
-    runCancel,
     seedTasksFromSpec,
     createRun,
     resolveOrCreateRun,
     applyResume,
-    resolveOwnerSession,
     type ResumeResult,
-    type RunCancelOverrides,
     type SpecSelector,
     type CreateRunOptions,
-} from './run.js'
+} from '../../orchestrator/lifecycle.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {nonNull} from '../../shared/index.js'
 import {NotAutonomousError} from '../../autonomy/mode.js'
@@ -689,6 +685,59 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         expect(git.calls.some((c) => c.startsWith('checkout -B'))).toBe(false)
     })
 
+    it('A3: a staging-provision failure persists NO run row — the retry creates fresh, not `exists`', async () => {
+        // Regression: createRunFromManifest used to persist the run row (state.create +
+        // update) BEFORE cutting+protecting staging. A provision throw (401/403/5xx/network)
+        // then stranded a `running` row over missing staging — and neither resume nor the
+        // task loop re-provisions — so the next `run create` returned `exists` and never
+        // retried setup. The reorder provisions FIRST, persists LAST: a provision failure
+        // writes nothing, so the retry is a clean fresh create.
+        const {defaultConfig} = await import('../../config/schema.js')
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        // Fail the first git op inside ensureStaging (fetch base) → provisioning throws.
+        git.fetch = () => Promise.reject(new Error('boom: HTTP 500 fetching origin/develop'))
+
+        await expect(
+            resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-a'},
+                {
+                    gitClient: git,
+                    ghClient: new FakeGhClient(),
+                    config: defaultConfig(),
+                    targetRoot: '/target',
+                    orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-a',
+                    owner: 'acme',
+                    repo: 'widgets',
+                }
+            )
+        ).rejects.toThrow(/boom/)
+
+        // No stranded active run — the row was never persisted.
+        expect(await state.findActiveBySpec(REPO, '42-checkout')).toBeNull()
+
+        // The retry (healthy deps) creates fresh — NOT `exists` (which the strand would force).
+        const healthy = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        healthy.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const retry = await resolveOrCreateRun(
+            state,
+            store,
+            {repo: REPO, issue: 42, runId: 'run-a'},
+            {
+                gitClient: healthy,
+                ghClient: new FakeGhClient(),
+                config: defaultConfig(),
+                targetRoot: '/target',
+                orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-a',
+                owner: 'acme',
+                repo: 'widgets',
+            }
+        )
+        expect(retry.kind).toBe('created')
+    })
+
     it('--supersede stamps launch + conflict touches on the FRESH run (S11)', async () => {
         await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
@@ -1172,6 +1221,30 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             })
             await expect(create).rejects.toMatchObject({isUsageError: true})
             await expect(create).rejects.toThrow(/@playwright\/test/)
+        } finally {
+            await rm(cwd, {recursive: true, force: true})
+        }
+    })
+
+    it('runCreate: --e2e with a MALFORMED package.json → UsageError names the parse failure, not a missing dep (report L128)', async () => {
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await mkdtemp(join(tmpdir(), 'factory-e2e-badpkg-'))
+        try {
+            // Trailing comma → won't parse, yet @playwright/test IS declared: the honest
+            // error must name the parse failure, never diagnose a missing dependency.
+            await writeFile(join(cwd, 'package.json'), '{"devDependencies": {"@playwright/test": "^1.0.0"},}')
+            await writeFile(join(cwd, 'playwright.config.ts'), 'export default {};\n')
+            const create = runCreate(['--issue', '42', '--run-id', 'run-e2e-badpkg', '--e2e'], {
+                gitClient: git,
+                ghClient: gh,
+                cwd,
+                dataDir,
+            })
+            await expect(create).rejects.toMatchObject({isUsageError: true})
+            await expect(create).rejects.toThrow(/not valid JSON/)
+            await expect(create).rejects.not.toThrow(/@playwright\/test \(dependencies/)
         } finally {
             await rm(cwd, {recursive: true, force: true})
         }

@@ -35,6 +35,14 @@
  *                                     edit the in-repo mirror could weaken its own
  *                                     gate, exactly as it could via the dataDir
  *                                     spec store — so this subtree is denied too.
+ *   - `e2e/**`                      — the committed critical e2e suite (Decision 39).
+ *                                     Only the e2e-author agent writes it; an
+ *                                     implementer that could edit a committed spec
+ *                                     could make its own failing journey pass without
+ *                                     fixing the underlying bug.
+ *   - `.factory/gates.json`         — the committed gate contract (Decision 46). An
+ *                                     implementer that could edit it could contract a
+ *                                     gate's command to a no-op and pass every gate.
  *
  * Matching defeats evasion: a candidate path is normalized AND, when it exists
  * on disk, realpath-resolved before matching, so `./`, `..`, and symlink

@@ -21,7 +21,7 @@ import {loadConfig} from '../../config/index.js'
 import {StateManager} from '../../core/state/index.js'
 import {SpecStore, buildManifest} from '../../spec/index.js'
 import {makePrd} from '../../orchestrator/orchestrator-fixtures.js'
-import {createRun} from './run.js'
+import {createRun} from '../../orchestrator/lifecycle.js'
 import type {ReviewerVerifications} from '../../orchestrator/record.js'
 
 const REPO = 'owner/app'

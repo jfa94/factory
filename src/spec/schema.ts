@@ -17,6 +17,7 @@
  */
 import {z} from 'zod'
 import {RiskTierEnum} from '../types/index.js'
+import type {Prd} from './gh.js'
 
 /**
  * One durable spec task. The `.strict()` shape is load-bearing: it makes a
@@ -92,4 +93,36 @@ export function parseSpecTasks(raw: unknown): SpecTask[] {
 /** Parse a {@link SpecManifest}. LOUD on any violation (same discipline). */
 export function parseSpecManifest(raw: unknown): SpecManifest {
     return SpecManifestSchema.parse(raw)
+}
+
+/**
+ * The persisted PRD snapshot (S9). `.strict()` is load-bearing: the only writers
+ * (`SpecStore.write`/`SpecStore.writePrd`) serialize EXACTLY these five keys, so an
+ * extra/typo'd key on disk is a corrupt/hand-edited snapshot, not a valid PRD. The
+ * `: Prd` return annotation on {@link parsePrd} pins the schema to the authored
+ * interface — they cannot silently drift.
+ */
+export const PrdSchema = z
+    .object({
+        issue_number: z.number(),
+        title: z.string(),
+        body: z.string(),
+        labels: z.array(z.string()),
+        body_truncated: z.boolean(),
+    })
+    .strict()
+
+/**
+ * Parse + validate a persisted PRD snapshot. LOUD (source-tagged) on a malformed/
+ * hand-edited `prd.json`, mirroring `parseHoldoutRecord`. The traceability gate
+ * consumes this snapshot, so a corrupt one must fail closed — never launder through
+ * an `as` cast into a typed {@link Prd}.
+ */
+export function parsePrd(raw: unknown, source?: string): Prd {
+    const result = PrdSchema.safeParse(raw)
+    if (!result.success) {
+        const where = source != null && source.length > 0 ? ` (${source})` : ''
+        throw new Error(`invalid PRD snapshot${where}: ${result.error.message}`)
+    }
+    return result.data
 }

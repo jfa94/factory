@@ -225,6 +225,15 @@ describe('SpecStore PRD snapshot (S9, Decision 47)', () => {
         await store.writePrd(m.repo, m.spec_id, PRD)
         expect(await store.readPrd(m.repo, m.spec_id)).toEqual(PRD)
     })
+
+    it('readPrd fails loud (source-tagged) on a malformed/hand-edited snapshot — never laundered', async () => {
+        const store = newStore()
+        const m = request()
+        await store.write(m, '# spec', PRD)
+        const path = join(specDir(dataDir, m.repo, m.spec_id), 'prd.json')
+        await writeFile(path, JSON.stringify({issue_number: 123, body: 'x', labels: [], body_truncated: false})) // no title
+        await expect(store.readPrd(m.repo, m.spec_id)).rejects.toThrow(/invalid PRD snapshot.*prd\.json/s)
+    })
 })
 
 describe('SpecStore.resolveByIssue — Δ X reuse-by-issue-number', () => {

@@ -237,6 +237,45 @@ describe('runE2eEmit', () => {
         expect(env.kind).toBe('done')
     })
 
+    it('bidirectional join: a PASSING critical whose manifest spec_path is testDir-prefixed but reporter file is bare does NOT false-miss (no reopen of a green suite)', async () => {
+        // Regression: findEntry/criticalMisses used a one-directional match
+        // (file===spec_path || file.endsWith('/'+spec_path)). Manifest 'e2e/checkout.spec.ts'
+        // vs reporter 'checkout.spec.ts' matched NEITHER arm → the passing critical
+        // false-missed → reopened every pass → reopenCap exhausted → an all-green suite
+        // FAILED. specPathMatches' third arm (specPath.endsWith('/'+file)) fixes it.
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            e2e_phase: {
+                manifest: [{task_ids: ['task-a'], spec_path: 'e2e/checkout.spec.ts', kind: 'critical' as const}],
+                reopen_counts: {},
+            },
+        }))
+        const tool = new ScriptedPlaywrightTool(() => [
+            {file: 'checkout.spec.ts', title: `${CONTROL_TITLE_PREFIX} loads`, status: 'passed'},
+        ])
+        const env = await runE2eEmit(deps({playwright: tool}), RUN_ID)
+        expect(env.kind).toBe('done')
+    })
+
+    it('bidirectional join: a FAILING critical with a prefixed manifest spec_path but bare reporter file reopens its real task (not misrouted to adjudication)', async () => {
+        // Same mismatch, failing spec: the old one-directional findEntry returned undefined
+        // → the failure landed in unmappableCritical → adjudicator (wrong owner). With the
+        // fix it maps to task-a → reopen.
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            tasks: {'task-a': taskRow({task_id: 'task-a', status: 'done'})},
+            e2e_phase: {
+                manifest: [{task_ids: ['task-a'], spec_path: 'e2e/checkout.spec.ts', kind: 'critical' as const}],
+                reopen_counts: {},
+            },
+        }))
+        const tool = new ScriptedPlaywrightTool(() => [
+            {file: 'checkout.spec.ts', title: 'user can check out', status: 'failed'},
+        ])
+        const env = await runE2eEmit(deps({playwright: tool}), RUN_ID)
+        expect(env.kind).toBe('reopen')
+    })
+
     it('provisions the author worktree right after creating it', async () => {
         const {calls, fn} = recordingProvision()
         const env = await runE2eEmit(deps({provision: fn}), RUN_ID)

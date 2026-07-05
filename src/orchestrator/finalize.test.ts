@@ -414,6 +414,40 @@ describe('finalizeRun', () => {
         expect(at(gh.issueComments, 0).body).toContain('t2')
     })
 
+    it('failed + self-heal ELIGIBLE (S10, Decision 48): recoverable task, attempts=0 → PRD comment carries the self-heal sentence', async () => {
+        // blocked-environmental → recoverable → resettable; no deps → clean closure;
+        // self_heal unset (attempts defaults 0): the ONE bounded `recover --auto` fires next.
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
+        await seed(tasks)
+
+        await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(gh.issueComments).toHaveLength(1)
+        expect(at(gh.issueComments, 0).body).toContain('Self-heal:')
+    })
+
+    it('failed + self-heal INELIGIBLE — cycle already burned (attempts>0): recoverable task, no self-heal sentence', async () => {
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
+        await seed(tasks)
+        await state.update(RUN_ID, (s) => ({...s, self_heal: {attempts: 1, last_at: NOW}}))
+
+        await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(gh.issueComments).toHaveLength(1)
+        expect(at(gh.issueComments, 0).body).not.toContain('Self-heal:')
+    })
+
+    it('failed + self-heal INELIGIBLE — nothing auto-resettable (dead-end only): no self-heal sentence', async () => {
+        // spec-defect → dead-end → effectiveAutoResets empty even at attempts=0.
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'spec-defect'}]
+        await seed(tasks)
+
+        await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(gh.issueComments).toHaveLength(1)
+        expect(at(gh.issueComments, 0).body).not.toContain('Self-heal:')
+    })
+
     it('persists report.md and run.finalized + per-fail telemetry', async () => {
         const tasks: TaskSeed[] = [
             {task_id: 't1', status: 'done', pr_number: 11},

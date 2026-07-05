@@ -34,7 +34,7 @@ import {resolveDataDir, type DataDirOptions} from '../config/index.js'
 import {specDir, specsRoot, repoKey, docsFactoryDir} from '../core/state/paths.js'
 import type {SpecPointer} from '../types/index.js'
 import type {Prd} from './gh.js'
-import {parseSpecManifest, parseSpecTasks, type SpecManifest} from './schema.js'
+import {parsePrd, parseSpecManifest, parseSpecTasks, type SpecManifest} from './schema.js'
 
 const log = createLogger('spec:store')
 
@@ -298,9 +298,9 @@ export class SpecStore {
             }
             throw err
         }
-        // Our OWN serialized snapshot (written by writePrd) — the cast names the shape
-        // at the read boundary; the writer guarantees it. Downstream consumers re-derive.
-        return parseJson(raw, path) as Prd
+        // Re-validate at the read boundary: a corrupt/hand-edited snapshot must fail
+        // LOUD here, not launder through an `as` cast into the traceability gate.
+        return parsePrd(parseJson(raw, path), path)
     }
 
     /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */

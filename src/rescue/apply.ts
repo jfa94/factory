@@ -118,6 +118,16 @@ export interface RescueApplyOptions {
      */
     recheckRollup?: boolean
     /**
+     * Clear a `failed` PRD-traceability verdict (S9, Decision 47) so `wantsTraceability`
+     * (orchestrator/next.ts) re-enters the audit and it re-derives on the next drive.
+     * Drops the WHOLE marker → `undefined` (like the assessment, no manifest worth
+     * preserving; the auditor re-reads the staging diff from scratch). Ignored when
+     * `run.traceability?.status !== "failed"`. The human is asserting the unmet PRD intent
+     * is now addressed (or the auditor crash was transient) — default `false` (never
+     * silently re-audit a condemned run). Alone sufficient to reopen a terminal run.
+     */
+    resetTraceability?: boolean
+    /**
      * The bounded self-heal path (`factory recover --auto`, S10 / Decision 48).
      * Mutually exclusive with every manual option above (a LOUD error, not a
      * merge): the auto-safe target set is computed INSIDE the locked mutator via
@@ -284,10 +294,12 @@ export async function applyRescue(
         ((opts.tasks?.length ?? 0) > 0 ||
             opts.includeDeadEnds === true ||
             opts.resetE2e === true ||
-            opts.recheckRollup === true)
+            opts.recheckRollup === true ||
+            opts.resetTraceability === true)
     ) {
         throw new Error(
-            'rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup)'
+            'rescue: `auto` is mutually exclusive with manual target options ' +
+                '(tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability)'
         )
     }
 
@@ -346,11 +358,12 @@ export async function applyRescue(
         // never have anything for a plain rescue apply to reset.
         const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === 'failed'
         const assessReset = opts.resetE2e === true && run.e2e_assessment?.status === 'failed'
+        const traceReset = opts.resetTraceability === true && run.traceability?.status === 'failed'
         const rollupRecheck = opts.recheckRollup === true && run.rollup?.merged === false
         // Only reopen a terminal run when there is actually work to pick back up —
         // reopening with nothing to do would just re-finalize to the same status.
-        const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck)
-        const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck
+        const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || traceReset || rollupRecheck)
+        const didWork = targets.length > 0 || reopen || e2eReset || assessReset || traceReset || rollupRecheck
 
         result = {
             run_id: runId,
@@ -383,6 +396,9 @@ export async function applyRescue(
             // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
             // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
             ...(assessReset ? {e2e_assessment: undefined} : {}),
+            // S9 (Decision 47): drop the WHOLE failed traceability marker so
+            // wantsTraceability re-fires a fresh audit on the next drive.
+            ...(traceReset ? {traceability: undefined} : {}),
             // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
             // so returning to `running` with `ended_at:null` satisfies every invariant.
             ...(reopen ? {status: 'running' as const, ended_at: null} : {}),

@@ -46,7 +46,8 @@ function mkRun(
     status: RunStatus = 'running',
     e2ePhase?: RunState['e2e_phase'],
     rollup?: RunState['rollup'],
-    assessment?: RunState['e2e_assessment']
+    assessment?: RunState['e2e_assessment'],
+    traceability?: RunState['traceability']
 ): RunState {
     return parseRunState({
         run_id: 'run-scan-1',
@@ -59,6 +60,7 @@ function mkRun(
         ...(e2ePhase !== undefined ? {e2e_phase: e2ePhase} : {}),
         ...(rollup !== undefined ? {rollup} : {}),
         ...(assessment !== undefined ? {e2e_assessment: assessment} : {}),
+        ...(traceability !== undefined ? {traceability} : {}),
     })
 }
 
@@ -187,6 +189,34 @@ describe('scanRun — resettable / dead_ends / needs_rescue', () => {
                     affected_specs: [],
                 })
             ).e2e_assessment_failed
+        ).toBe(false)
+    })
+
+    it('traceability_failed is true when the PRD-traceability audit failed, even with every task done — needs_rescue follows it (S9, Decision 47)', () => {
+        const scan = scanRun(
+            mkRun([{task_id: 'a', status: 'done'}], 'failed', undefined, undefined, undefined, {
+                status: 'failed',
+                reason: 'PRD requirement 3 unmet',
+                verdicts: [],
+                ended_at: '2026-06-08T01:00:00.000Z',
+            })
+        )
+        expect(scan.traceability_failed).toBe(true)
+        expect(scan.needs_rescue).toBe(true) // the traceability failure alone is enough
+        expect(scan.summary).toMatch(/traceability/i)
+        expect(scan.summary).toMatch(/reset-traceability/)
+    })
+
+    it('traceability_failed is false when the marker is unset or done', () => {
+        expect(scanRun(mkRun([{task_id: 'a', status: 'done'}], 'completed')).traceability_failed).toBe(false)
+        expect(
+            scanRun(
+                mkRun([{task_id: 'a', status: 'done'}], 'completed', undefined, undefined, undefined, {
+                    status: 'done',
+                    verdicts: [],
+                    ended_at: '2026-06-08T01:00:00.000Z',
+                })
+            ).traceability_failed
         ).toBe(false)
     })
 

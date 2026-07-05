@@ -88,6 +88,13 @@ export interface RescueScan {
      */
     e2e_assessment_failed: boolean
     /**
+     * True iff `run.traceability.status === "failed"` (S9, Decision 47) — the PRD-
+     * traceability audit condemned the run (an unmet requirement, or an auditor crash
+     * at cap). `apply --reset-traceability` drops the whole marker so a resumed re-drive
+     * re-fires the audit fresh. Alone flips `needs_rescue` true (route `page`).
+     */
+    traceability_failed: boolean
+    /**
      * True iff `run.rollup` is present with `merged:false` — a `completed` run whose
      * staging→develop rollup was ARMED but never landed (e.g. the "auto-armed"
      * branch-policy fallback, finding #5). Never auto-recovered: `apply
@@ -171,8 +178,10 @@ export function scanRun(run: RunState): RescueScan {
     const would_deadlock = !allTerminal && !actionablePending
     const e2e_failed = run.e2e_phase?.status === 'failed'
     const e2e_assessment_failed = run.e2e_assessment?.status === 'failed'
+    const traceability_failed = run.traceability?.status === 'failed'
     const rollup_pending = run.rollup?.merged === false
-    const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || rollup_pending
+    const needs_rescue =
+        resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending
 
     return {
         run_id: run.run_id,
@@ -190,6 +199,7 @@ export function scanRun(run: RunState): RescueScan {
         needs_rescue,
         e2e_failed,
         e2e_assessment_failed,
+        traceability_failed,
         rollup_pending,
         would_deadlock,
         summary: summarize(
@@ -199,6 +209,7 @@ export function scanRun(run: RunState): RescueScan {
             would_deadlock,
             e2e_failed,
             e2e_assessment_failed,
+            traceability_failed,
             rollup_pending
         ),
         tasks,
@@ -213,21 +224,23 @@ function summarize(
     wouldDeadlock: boolean,
     e2eFailed: boolean,
     e2eAssessmentFailed: boolean,
+    traceabilityFailed: boolean,
     rollupPending: boolean
 ): string {
     const e2eTail = e2eFailed ? ' (e2e phase failed — needs a fix + --reset-e2e)' : ''
     const assessTail = e2eAssessmentFailed ? ' (e2e assessment failed — needs a fix + --reset-e2e)' : ''
+    const traceTail = traceabilityFailed ? ' (PRD-traceability failed — needs a fix + --reset-traceability)' : ''
     const rollupTail = rollupPending
         ? ' (rollup armed, not landed — re-run finalize once merged via --recheck-rollup)'
         : ''
     if (resettable === 0) {
         const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) — need a fix + --include-dead-ends)` : ''
-        if (e2eFailed || e2eAssessmentFailed || rollupPending) {
-            return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${assessTail}${rollupTail}`
+        if (e2eFailed || e2eAssessmentFailed || traceabilityFailed || rollupPending) {
+            return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${assessTail}${traceTail}${rollupTail}`
         }
         return `run '${status}': no rescue needed${deadEndTail}`
     }
     const reopen = isTerminalRunStatus(status) ? ' (will reopen the run)' : ''
     const deadlock = wouldDeadlock ? '; a re-drive would deadlock without rescue' : ''
-    return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${assessTail}${rollupTail}`
+    return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${assessTail}${traceTail}${rollupTail}`
 }

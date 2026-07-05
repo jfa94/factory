@@ -35,12 +35,20 @@ import type {HoldoutVerdict} from './validate.js'
  * inferred type is assignable to {@link HoldoutVerdict}, so a drift in the validate-
  * domain type breaks this at compile time.
  */
-const HoldoutVerdictSchema = z.object({
-    criterion: z.string(),
-    satisfied: z.boolean(),
-    evidence: z.string(),
-})
+const HoldoutVerdictSchema = z
+    .object({
+        criterion: z.string(),
+        satisfied: z.boolean(),
+        evidence: z.string(),
+    })
+    .strict()
 const HoldoutVerdictsSchema = z.array(HoldoutVerdictSchema)
+
+// Compile-time drift pin: the schema's inferred output must stay assignable to the
+// validate-domain {@link HoldoutVerdict}. If either drifts this line fails to
+// typecheck — making the docblock's "breaks at compile time" guarantee real.
+const _holdoutVerdictPin: z.ZodType<HoldoutVerdict> = HoldoutVerdictSchema
+void _holdoutVerdictPin
 
 /**
  * Persist + retrieve the per-task holdout VERDICTS (the validator agent's parsed

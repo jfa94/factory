@@ -30,7 +30,7 @@ import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {createRun} from './subcommands/run.js'
+import {createRun} from '../orchestrator/lifecycle.js'
 
 import {defaultConfig} from '../config/schema.js'
 import {SpecStore, type SpecManifest} from '../spec/index.js'

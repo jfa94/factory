@@ -24,10 +24,11 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
-import {join} from 'node:path'
+import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
 import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
 import {taskWorktreePath} from './paths.js'
+import {canonicalizePath} from '../hooks/tcb.js'
 import {taskExemptReader} from './exempt.js'
 import {runCoverageDir} from '../core/state/index.js'
 import {classifyFailure, ESCALATION_CAP, parseProducerStatus} from '../producer/index.js'
@@ -284,9 +285,19 @@ export async function buildWorktreeSource(worktree: string, reviews: readonly Ra
         }
     }
     const lines = new Map<string, readonly string[] | null>()
+    const root = canonicalizePath(worktree)
     for (const file of files) {
+        // `finding.file` is untrusted reviewer JSON. Canonicalize it against the
+        // worktree (normalizes `..`, realpaths symlink escapes) and refuse anything
+        // that resolves outside the root — a traversal-escape is unverifiable, so it
+        // maps to `null` exactly like an absent file, never an out-of-tree read.
+        const resolved = canonicalizePath(file, worktree)
+        if (resolved !== root && !resolved.startsWith(root.endsWith(sep) ? root : root + sep)) {
+            lines.set(file, null)
+            continue
+        }
         try {
-            const text = await readFile(join(worktree, file), 'utf8')
+            const text = await readFile(resolved, 'utf8')
             lines.set(file, text.split('\n'))
         } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {

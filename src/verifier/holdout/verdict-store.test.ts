@@ -96,6 +96,16 @@ describe('FsHoldoutVerdictStore', () => {
         await expect(store.get(RUN_ID, TASK_ID)).rejects.toThrow()
     })
 
+    it('get() is LOUD on a forged file carrying an EXTRA key — .strict() refuses to silently strip it', async () => {
+        const path = join(runDir(dataDir, RUN_ID), 'holdouts', `${TASK_ID}.verdicts.json`)
+        await mkdir(dirname(path), {recursive: true})
+        // A well-typed entry with an unknown extra key is a forged/hand-edited file; strict
+        // rejects it rather than laundering it into a clean 3-key verdict.
+        await writeFile(path, JSON.stringify([{criterion: 'x', satisfied: true, evidence: 'z', forged: true}]))
+        const store = new FsHoldoutVerdictStore(dataDir)
+        await expect(store.get(RUN_ID, TASK_ID)).rejects.toThrow()
+    })
+
     it("a second process (fresh store, same dataDir) reads the first's verdicts", async () => {
         await new FsHoldoutVerdictStore(dataDir).put(RUN_ID, TASK_ID, VERDICTS)
         // A `drive` crash-resume can persist the holdout verdicts in one process and read

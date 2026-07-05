@@ -1536,12 +1536,12 @@ var require_adapter = __commonJS({
       return newFs;
     }
     function toPromise(method) {
-      return (...args) => new Promise((resolve2, reject) => {
+      return (...args) => new Promise((resolve3, reject) => {
         args.push((err, result) => {
           if (err) {
             reject(err);
           } else {
-            resolve2(result);
+            resolve3(result);
           }
         });
         method(...args);
@@ -5812,7 +5812,7 @@ import { spawn } from "node:child_process";
 var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 function exec(command, args = [], opts = {}) {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
@@ -5869,7 +5869,7 @@ function exec(command, args = [], opts = {}) {
         return;
       }
       settled = true;
-      resolve2({
+      resolve3({
         stdout: Buffer.concat(outChunks).toString("utf8"),
         stderr: Buffer.concat(errChunks).toString("utf8"),
         code,
@@ -6249,7 +6249,7 @@ var E2eConfigSchema = external_exports.object({
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
   readyTimeoutMs: external_exports.number().int().positive().default(3e4),
   /**
-   * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+   * Per-task cap on e2e-triggered reopens (Decision 39). A critical spec still
    * red after this many reopens of its mapped task fails the run outright
    * instead of looping forever.
    */
@@ -6722,18 +6722,11 @@ function refineTaskCrossFields(task, ctx) {
   }
 }
 var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
-var QuotaCheckpointSchema = external_exports.object({
-  /** Epoch (seconds) when the binding window resets — the resume horizon.
-   *  Absent for `unavailable` (no observed horizon; resume rechecks the live signal). */
-  resets_at_epoch: external_exports.number().int().nonnegative().optional(),
-  /**
-   * Which window forced the last pause/suspend, if any. `unavailable` = the usage
-   * signal could not be read (fail-closed suspend). INVARIANT: `run.quota` is
-   * present ⇔ the stop was quota-caused — non-quota suspends (docs/e2e phase
-   * parks) never write a checkpoint, which is how planResume tells them apart.
-   */
-  binding_window: external_exports.enum(["5h", "7d", "unavailable"]).optional()
-});
+var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window", [
+  external_exports.object({ binding_window: external_exports.literal("5h"), resets_at_epoch: external_exports.number().int().nonnegative() }),
+  external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
+  external_exports.object({ binding_window: external_exports.literal("unavailable") })
+]);
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
@@ -6789,7 +6782,7 @@ var E2ePhaseSchema = external_exports.object({
   reason: external_exports.string().optional(),
   /**
    * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-   * didn't block completion (Decision 9: only critical red gates). Distinct from
+   * didn't block completion (Decision 39: only critical red gates). Distinct from
    * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
    * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
    */
@@ -8120,7 +8113,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -8777,7 +8770,7 @@ var log7 = createLogger("git");
 var GIT_DEFAULTS = GitSchema.parse({});
 var DEFAULT_POLL_INTERVAL_MS = 15e3;
 var DEFAULT_MAX_POLLS = 80;
-var realSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+var realSleep = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
 function isBranchPolicyBlock(err) {
   return err instanceof Error && /base branch policy prohibits the merge/i.test(err.message);
 }
@@ -9090,6 +9083,13 @@ var MergeSerializer = class {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
         log11.info(`PR #${prNumber} enqueued via native merge-queue`);
         return { merged: true, via: "merge-queue", number: prNumber };
+      }
+      const mergeableNow = pr.mergeStateStatus === "CLEAN" || pr.mergeStateStatus === "HAS_HOOKS" || pr.mergeStateStatus === "UNSTABLE";
+      if (!mergeableNow) {
+        log11.warn(
+          `PR #${prNumber} not mergeable now (mergeStateStatus=${pr.mergeStateStatus ?? "unset"}) \u2014 refusing app-level squash; ship will wait-retry`
+        );
+        return { merged: false, reason: "not-mergeable", number: prNumber };
       }
       await this.ghClient.prMergeSquash(prNumber, {});
       log11.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
@@ -9944,6 +9944,21 @@ function parseSpecTasks(raw) {
 function parseSpecManifest(raw) {
   return SpecManifestSchema.parse(raw);
 }
+var PrdSchema = external_exports.object({
+  issue_number: external_exports.number(),
+  title: external_exports.string(),
+  body: external_exports.string(),
+  labels: external_exports.array(external_exports.string()),
+  body_truncated: external_exports.boolean()
+}).strict();
+function parsePrd(raw, source) {
+  const result = PrdSchema.safeParse(raw);
+  if (!result.success) {
+    const where = source != null && source.length > 0 ? ` (${source})` : "";
+    throw new Error(`invalid PRD snapshot${where}: ${result.error.message}`);
+  }
+  return result.data;
+}
 
 // src/spec/gh.ts
 var log16 = createLogger("spec:gh");
@@ -10224,7 +10239,7 @@ var SpecStore = class {
       }
       throw err;
     }
-    return parseJson(raw, path6);
+    return parsePrd(parseJson(raw, path6), path6);
   }
   /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
   async writePrd(repo, specId, prd) {
@@ -11404,6 +11419,12 @@ var STRYKER_CONFIG_BASENAMES = [
   ".stryker.config.mjs",
   ".stryker.config.cjs"
 ];
+var DEPENDENCY_CRUISER_CONFIG_BASENAMES = [
+  ".dependency-cruiser.json",
+  ".dependency-cruiser.js",
+  ".dependency-cruiser.cjs",
+  ".dependency-cruiser.mjs"
+];
 
 // src/verifier/deterministic/strategies/mutation.ts
 function scorePasses(score, target) {
@@ -11761,16 +11782,16 @@ function missingBinResult(tool, cwd) {
     truncated: false
   };
 }
-async function runTool(resolve2, tool, toolArgs, opts, env = {}) {
-  const localBin = await resolve2(tool, opts);
+async function runTool(resolve3, tool, toolArgs, opts, env = {}) {
+  const localBin = await resolve3(tool, opts);
   if (localBin === null) {
     return missingBinResult(tool, opts.cwd);
   }
   return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
 }
 var DefaultVitestTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async run(files, opts) {
@@ -11779,8 +11800,8 @@ var DefaultVitestTool = class {
   }
 };
 var DefaultTscTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async typecheck(opts) {
@@ -11788,8 +11809,8 @@ var DefaultTscTool = class {
   }
 };
 var DefaultEslintTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async lint(opts) {
@@ -11829,8 +11850,8 @@ var DefaultCommandRunner = class {
   }
 };
 var DefaultStrykerTool = class _DefaultStrykerTool {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   /** Report path relative to the worktree (stryker html/json reporter default). */
@@ -11899,8 +11920,8 @@ function computeMutationScore(report) {
   return valid > 0 ? detected / valid * 100 : null;
 }
 var DefaultCoverageTool = class _DefaultCoverageTool {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   /** Where every measurement must land, relative to the measured tree's root. */
@@ -12743,7 +12764,7 @@ var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
   evidence: external_exports.string()
-});
+}).strict();
 var HoldoutVerdictsSchema = external_exports.array(HoldoutVerdictSchema);
 var FsHoldoutVerdictStore = class {
   constructor(dataDir) {
@@ -12818,8 +12839,8 @@ function missingBinResult2(cwd) {
   };
 }
 var DefaultPlaywrightTool = class {
-  constructor(resolve2 = resolveLocalPlaywrightBin) {
-    this.resolve = resolve2;
+  constructor(resolve3 = resolveLocalPlaywrightBin) {
+    this.resolve = resolve3;
   }
   async run(opts) {
     const bin = await this.resolve(opts.cwd);
@@ -12965,8 +12986,9 @@ function scanRun(run11) {
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run11.e2e_phase?.status === "failed";
   const e2e_assessment_failed = run11.e2e_assessment?.status === "failed";
+  const traceability_failed = run11.traceability?.status === "failed";
   const rollup_pending = run11.rollup?.merged === false;
-  const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || rollup_pending;
+  const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending;
   return {
     run_id: run11.run_id,
     run_status: run11.status,
@@ -12983,6 +13005,7 @@ function scanRun(run11) {
     needs_rescue,
     e2e_failed,
     e2e_assessment_failed,
+    traceability_failed,
     rollup_pending,
     would_deadlock,
     summary: summarize(
@@ -12992,25 +13015,27 @@ function scanRun(run11) {
       would_deadlock,
       e2e_failed,
       e2e_assessment_failed,
+      traceability_failed,
       rollup_pending
     ),
     tasks
   };
 }
-function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAssessmentFailed, rollupPending) {
+function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAssessmentFailed, traceabilityFailed, rollupPending) {
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
   const assessTail = e2eAssessmentFailed ? " (e2e assessment failed \u2014 needs a fix + --reset-e2e)" : "";
+  const traceTail = traceabilityFailed ? " (PRD-traceability failed \u2014 needs a fix + --reset-traceability)" : "";
   const rollupTail = rollupPending ? " (rollup armed, not landed \u2014 re-run finalize once merged via --recheck-rollup)" : "";
   if (resettable === 0) {
     const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
-    if (e2eFailed || e2eAssessmentFailed || rollupPending) {
-      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${assessTail}${rollupTail}`;
+    if (e2eFailed || e2eAssessmentFailed || traceabilityFailed || rollupPending) {
+      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${assessTail}${traceTail}${rollupTail}`;
     }
     return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${assessTail}${rollupTail}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${assessTail}${traceTail}${rollupTail}`;
 }
 
 // src/rescue/assess.ts
@@ -13158,9 +13183,9 @@ function selectTargets(run11, opts) {
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  if (opts.auto !== void 0 && ((opts.tasks?.length ?? 0) > 0 || opts.includeDeadEnds === true || opts.resetE2e === true || opts.recheckRollup === true)) {
+  if (opts.auto !== void 0 && ((opts.tasks?.length ?? 0) > 0 || opts.includeDeadEnds === true || opts.resetE2e === true || opts.recheckRollup === true || opts.resetTraceability === true)) {
     throw new Error(
-      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup)"
+      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability)"
     );
   }
   const updated = await state.update(runId, (run11) => {
@@ -13211,9 +13236,10 @@ async function applyRescue(state, runId, opts = {}) {
     const wasTerminal = isTerminalRunStatus(run11.status);
     const e2eReset = opts.resetE2e === true && run11.e2e_phase?.status === "failed";
     const assessReset = opts.resetE2e === true && run11.e2e_assessment?.status === "failed";
+    const traceReset = opts.resetTraceability === true && run11.traceability?.status === "failed";
     const rollupRecheck = opts.recheckRollup === true && run11.rollup?.merged === false;
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || rollupRecheck);
-    const didWork = targets.length > 0 || reopen || e2eReset || assessReset || rollupRecheck;
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || traceReset || rollupRecheck);
+    const didWork = targets.length > 0 || reopen || e2eReset || assessReset || traceReset || rollupRecheck;
     result = {
       run_id: runId,
       run_status: reopen ? "running" : run11.status,
@@ -13238,6 +13264,9 @@ async function applyRescue(state, runId, opts = {}) {
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
       ...assessReset ? { e2e_assessment: void 0 } : {},
+      // S9 (Decision 47): drop the WHOLE failed traceability marker so
+      // wantsTraceability re-fires a fresh audit on the next drive.
+      ...traceReset ? { traceability: void 0 } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       ...reopen ? { status: "running", ended_at: null } : {}
@@ -13817,7 +13846,160 @@ async function isDocsApplicable(repoRoot) {
 
 // src/orchestrator/record.ts
 import { readFile as readFile13 } from "node:fs/promises";
-import { join as join17 } from "node:path";
+import { sep as sep3 } from "node:path";
+
+// src/hooks/tcb.ts
+import { existsSync as existsSync7, realpathSync } from "node:fs";
+import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
+function isAtOrUnder(p, base) {
+  if (p === base) {
+    return true;
+  }
+  return p.startsWith(base.endsWith(sep2) ? base : base + sep2);
+}
+function canonicalizeAnchor(dir) {
+  const normalized = normalize(resolve2(dir));
+  try {
+    if (existsSync7(normalized)) {
+      return realpathSync(normalized);
+    }
+  } catch {
+  }
+  const parts = normalized.split(sep2);
+  for (let cut = parts.length - 1; cut > 0; cut--) {
+    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
+    try {
+      if (existsSync7(ancestor)) {
+        const realAncestor = realpathSync(ancestor);
+        const tail = parts.slice(cut).join(sep2);
+        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
+      }
+    } catch {
+    }
+  }
+  return normalized;
+}
+function hasComponent(absPath, component) {
+  return absPath.split(sep2).includes(component);
+}
+function hasAdjacentComponents(absPath, parent, child) {
+  const parts = absPath.split(sep2);
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (parts[i] === parent && parts[i + 1] === child) {
+      return true;
+    }
+  }
+  return false;
+}
+function baseName(absPath) {
+  const parts = absPath.split(sep2).filter((s) => s.length > 0);
+  return parts[parts.length - 1] ?? "";
+}
+var GATE_CONFIG_BASENAMES = /* @__PURE__ */ new Set([...STRYKER_CONFIG_BASENAMES, ...DEPENDENCY_CRUISER_CONFIG_BASENAMES]);
+function buildTcbRules(ctx = {}) {
+  const rules = [];
+  rules.push({
+    category: "ci-workflows",
+    describe: ".github/workflows/** (CI / quality-gate machinery)",
+    test: (p) => hasAdjacentComponents(p, ".github", "workflows")
+  });
+  rules.push({
+    category: "docs-factory",
+    describe: "docs/factory/** (in-repo reviewable spec copy \u2014 F-specloc)",
+    test: (p) => hasAdjacentComponents(p, "docs", "factory")
+  });
+  rules.push({
+    category: "gate-contract",
+    describe: ".factory/gates.json (the committed gate contract \u2014 Decision 46)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json")
+  });
+  rules.push({
+    category: "gate-config",
+    describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
+    test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))
+  });
+  if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
+    const hooksDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "hooks"));
+    rules.push({
+      category: "hooks",
+      describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
+      test: (p) => isAtOrUnder(p, hooksDir)
+    });
+  } else {
+    rules.push({
+      category: "hooks",
+      describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
+      test: (p) => hasComponent(p, "hooks")
+    });
+  }
+  if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
+    const e2eDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "e2e"));
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
+      test: (p) => isAtOrUnder(p, e2eDir)
+    });
+  } else {
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
+      test: (p) => hasComponent(p, "e2e")
+    });
+  }
+  if (ctx.dataDir != null && ctx.dataDir.length > 0) {
+    const runsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "runs"));
+    const specsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "specs"));
+    rules.push({
+      category: "data-runs",
+      describe: "<dataDir>/runs/** (run state, holdouts, reviews \u2014 \u0394 Y)",
+      test: (p) => isAtOrUnder(p, runsDir)
+    });
+    rules.push({
+      category: "data-specs",
+      describe: "<dataDir>/specs/** (durable spec store)",
+      test: (p) => isAtOrUnder(p, specsDir)
+    });
+    const configFile = canonicalizeAnchor(resolve2(ctx.dataDir, "config.json"));
+    rules.push({
+      category: "data-config",
+      describe: "<dataDir>/config.json (operator config \u2014 writing it enables arbitrary shell via setupCommand)",
+      test: (p) => p === configFile
+    });
+  } else {
+    rules.push({
+      category: "data-runs",
+      describe: "**/runs/{holdouts,reviews,state} (run store, dataDir unresolved)",
+      test: (p) => hasComponent(p, "holdouts") || hasComponent(p, "reviews")
+    });
+  }
+  return rules;
+}
+var TCB_DENY = buildTcbRules();
+function canonicalizePath(candidate, cwd = process.cwd()) {
+  const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
+  const normalized = normalize(abs);
+  try {
+    if (existsSync7(normalized)) {
+      return realpathSync(normalized);
+    }
+  } catch {
+  }
+  const parts = normalized.split(sep2);
+  for (let cut = parts.length - 1; cut > 0; cut--) {
+    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
+    try {
+      if (existsSync7(ancestor)) {
+        const realAncestor = realpathSync(ancestor);
+        const tail = parts.slice(cut).join(sep2);
+        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
+      }
+    } catch {
+    }
+  }
+  return normalized;
+}
+
+// src/orchestrator/record.ts
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -13889,9 +14071,15 @@ async function buildWorktreeSource(worktree, reviews) {
     }
   }
   const lines = /* @__PURE__ */ new Map();
+  const root = canonicalizePath(worktree);
   for (const file of files) {
+    const resolved = canonicalizePath(file, worktree);
+    if (resolved !== root && !resolved.startsWith(root.endsWith(sep3) ? root : root + sep3)) {
+      lines.set(file, null);
+      continue;
+    }
     try {
-      const text = await readFile13(join17(worktree, file), "utf8");
+      const text = await readFile13(resolved, "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err.code !== "ENOENT") {
@@ -14293,6 +14481,12 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
   const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews);
   return env.step;
 }
+function doneFromStep(runId, taskId, step) {
+  if (!step.done) {
+    throw new Error("orchestrator: terminal transition returned a non-terminal step");
+  }
+  return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
+}
 async function nextAction(deps, runId, taskId, results) {
   let run11 = await deps.state.read(runId);
   let task = requireTask2(run11, taskId);
@@ -14361,16 +14555,10 @@ async function nextAction(deps, runId, taskId, results) {
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step2 = await completeTask(deps, runId, taskId);
-          if (!step2.done) {
-            throw new Error("orchestrator: completeTask returned non-terminal step");
-          }
-          return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+          return doneFromStep(runId, taskId, step2);
         }
         const step = await failStep(deps, runId, taskId, result.outcome.failure_class, result.outcome.reason);
-        if (!step.done) {
-          throw new Error("orchestrator: failStep returned non-terminal step");
-        }
-        return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
+        return doneFromStep(runId, taskId, step);
       }
       case "wait-retry": {
         if (result.phase === "ship") {
@@ -14384,10 +14572,7 @@ async function nextAction(deps, runId, taskId, results) {
               "blocked-environmental",
               `staging re-sync: task worktree missing (${resyncWorktree})`
             );
-            if (!step2.done) {
-              throw new Error("orchestrator: failStep returned non-terminal step");
-            }
-            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+            return doneFromStep(runId, taskId, step2);
           }
           const resync = await resyncTaskBranchOntoStaging({
             git: deps.git,
@@ -14403,10 +14588,7 @@ async function nextAction(deps, runId, taskId, results) {
               "blocked-environmental",
               `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
             );
-            if (!step2.done) {
-              throw new Error("orchestrator: failStep returned non-terminal step");
-            }
-            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+            return doneFromStep(runId, taskId, step2);
           }
           let newResyncs = 0;
           let overCap = false;
@@ -14431,10 +14613,7 @@ async function nextAction(deps, runId, taskId, results) {
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
             );
-            if (!step2.done) {
-              throw new Error("orchestrator: failStep returned non-terminal step");
-            }
-            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+            return doneFromStep(runId, taskId, step2);
           }
           log26.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
@@ -14467,12 +14646,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join18 } from "node:path";
+import { join as join17 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".docs");
+  return join17(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -14541,12 +14720,12 @@ async function runDocsRecord(deps, runId, results) {
 }
 
 // src/orchestrator/traceability.ts
-import { join as join19 } from "node:path";
+import { join as join18 } from "node:path";
 var TRACE_MODEL = "opus";
 var TRACE_MAX_TURNS = 60;
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".trace");
+  return join18(dataDir, "worktrees", runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -14870,21 +15049,9 @@ async function nextTask(deps, runId) {
 
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute, join as join20 } from "node:path";
-var log27 = createLogger("e2e");
-var DefaultE2eFileOps = class {
-  async copySpec(from, to) {
-    await mkdir10(dirname8(to), { recursive: true });
-    await copyFile(from, to);
-  }
-  async writeConfig(path6, contents) {
-    await mkdir10(dirname8(path6), { recursive: true });
-    await writeFile2(path6, contents);
-  }
-};
-var E2E_AUTHOR_MODEL = "opus";
-var MAX_AUTHOR_ATTEMPTS = 2;
-var E2E_AUTHOR_MAX_TURNS = 90;
+import { dirname as dirname8, isAbsolute as isAbsolute2, join as join20 } from "node:path";
+
+// src/orchestrator/e2e-schemas.ts
 var CONTROL_TITLE_PREFIX = "control:";
 var E2eAdjudicationVerdictSchema = external_exports.object({
   spec_path: external_exports.string().min(1),
@@ -14917,20 +15084,23 @@ var E2eResultsSchema = external_exports.object({
    */
   verdicts: external_exports.array(E2eAdjudicationVerdictSchema).optional()
 }).strict();
+
+// src/orchestrator/e2e-paths.ts
+import { join as join19 } from "node:path";
 function e2eWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-author");
+  return join19(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-run");
+  return join19(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join19(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join19(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join19(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -14961,6 +15131,22 @@ function scrubbedE2eEnv(cfg, boot) {
   }
   return env;
 }
+
+// src/orchestrator/e2e.ts
+var log27 = createLogger("e2e");
+var DefaultE2eFileOps = class {
+  async copySpec(from, to) {
+    await mkdir10(dirname8(to), { recursive: true });
+    await copyFile(from, to);
+  }
+  async writeConfig(path6, contents) {
+    await mkdir10(dirname8(path6), { recursive: true });
+    await writeFile2(path6, contents);
+  }
+};
+var E2E_AUTHOR_MODEL = "opus";
+var MAX_AUTHOR_ATTEMPTS = 2;
+var E2E_AUTHOR_MAX_TURNS = 90;
 function buildAuthorPrompt(args) {
   const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
   return [
@@ -15103,7 +15289,7 @@ async function prepareAdjudicatorSpawn(deps, run11, runId, boot) {
   };
 }
 function assertSafeSpecPath(specPath) {
-  if (isAbsolute(specPath)) {
+  if (isAbsolute2(specPath)) {
     throw new Error(`e2e manifest spec_path '${specPath}' must be relative, not absolute`);
   }
   if (specPath.split(/[\\/]+/).includes("..")) {
@@ -15479,10 +15665,13 @@ function throwawayConfigContents(throwawayDir) {
   ].join("\n");
 }
 function findEntry(manifest, spec) {
-  return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`));
+  return manifest.find((e) => specPathMatches(spec.file, e.spec_path));
 }
 function specPathMatches(file, specPath) {
   return file === specPath || file.endsWith(`/${specPath}`) || specPath.endsWith(`/${file}`);
+}
+function unattributableToolingFailure(r) {
+  return !r.ok && r.specs.every((s) => s.status !== "failed");
 }
 async function runSuiteAndDecide(deps, runId) {
   const run11 = await deps.state.read(runId);
@@ -15546,16 +15735,14 @@ async function runSuiteAndDecide(deps, runId) {
   const criticalEntries = manifest.filter((e) => e.kind === "critical");
   const criticalMisses = criticalEntries.map((entry) => ({
     entry,
-    spec: criticalResult.specs.find(
-      (s) => s.file === entry.spec_path || s.file.endsWith(`/${entry.spec_path}`)
-    )
+    spec: criticalResult.specs.find((s) => specPathMatches(s.file, entry.spec_path))
   })).filter((m) => m.spec === void 0 || m.spec.status !== "passed" && m.spec.status !== "flaky");
-  if (!criticalResult.ok && criticalResult.specs.every((s) => s.status !== "failed")) {
+  if (unattributableToolingFailure(criticalResult)) {
     const reason = "e2e critical suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  if (firstPass && throwawayResult && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed")) {
+  if (firstPass && throwawayResult && unattributableToolingFailure(throwawayResult)) {
     const reason = "e2e throwaway suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
@@ -15612,7 +15799,7 @@ async function runSuiteAndDecide(deps, runId) {
     ...stillPass
   ];
   if (mappable.length === 0) {
-    const throwawayToolingFailed = !firstPass && (throwawayThrew !== void 0 || throwawayResult !== void 0 && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed"));
+    const throwawayToolingFailed = !firstPass && (throwawayThrew !== void 0 || throwawayResult !== void 0 && unattributableToolingFailure(throwawayResult));
     const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : throwawayToolingFailed ? "throwaway suite reported a tooling failure (non-gating)" : void 0;
     await markDone(deps, runId, { attempts, advisory });
     return { kind: "done", run_id: runId };
@@ -15830,7 +16017,7 @@ async function runAssessmentRecord(deps, runId, results) {
     await deps.git.push("origin", staging);
   }
   await deps.git.worktreeRemove([worktree, "--force"]);
-  const warning = results.status === "degraded" ? results.warning ?? results.reason : void 0;
+  const warning = results.status === "degraded" ? results.warning ?? results.reason ?? "e2e assessment degraded (assessor gave no detail)" : void 0;
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_assessment: {
@@ -15843,9 +16030,12 @@ async function runAssessmentRecord(deps, runId, results) {
       ended_at: nowIso()
     }
   }));
-  log28.info(
-    `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} affected spec(s)${warning !== void 0 ? `, warning: ${warning}` : ""})`
-  );
+  const doneMsg = `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} affected spec(s)${warning !== void 0 ? `, warning: ${warning}` : ""})`;
+  if (results.status === "degraded") {
+    log28.warn(doneMsg);
+  } else {
+    log28.info(doneMsg);
+  }
   return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
 }
 
@@ -15894,9 +16084,152 @@ async function loadCliDeps(opts) {
   };
 }
 
+// src/orchestrator/lifecycle.ts
+function seedTasksFromSpec(request) {
+  const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
+  const tasks = seedTaskRows(request.tasks, ctx);
+  assertAcyclic(tasks, ctx);
+  return tasks;
+}
+async function resolveSpec2(specStore, opts) {
+  const request = opts.specId !== void 0 ? await specStore.read(opts.repo, opts.specId) : await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (request === null) {
+    throw new Error(`run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`);
+  }
+  if (!await specStore.hasPrd(request.repo, request.spec_id)) {
+    throw new Error(
+      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
+    );
+  }
+  return request;
+}
+async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
+  const seeded = seedTasksFromSpec(request);
+  const branch = runStagingBranch(opts.runId);
+  if (stagingDeps !== void 0) {
+    await ensureStaging({
+      gitClient: stagingDeps.gitClient,
+      stagingBranch: branch,
+      baseBranch: stagingDeps.config.git.baseBranch,
+      cwd: stagingDeps.targetRoot,
+      orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath
+    });
+    await provisionProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch,
+      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      provision: true
+    });
+  }
+  await state.create({
+    run_id: opts.runId,
+    spec: specStore.toPointer(request),
+    staging_branch: branch,
+    // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
+    execution_mode: "sequential",
+    ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
+    ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
+    ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
+    ...opts.e2e === true ? { e2e: true } : {},
+    ...opts.debug === true ? { debug: true } : {}
+  });
+  const run11 = await state.update(opts.runId, (s) => ({
+    ...s,
+    tasks: seeded,
+    // S11: the launch touch — every run costs at least one human action, so a
+    // clean lights-out run scores exactly 1.0 on the derived touch metric.
+    human_touches: [{ kind: "launch", at: s.started_at }]
+  }));
+  return run11;
+}
+async function createRun(state, specStore, opts) {
+  return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
+}
+async function supersedeRun(state, existing, stagingDeps) {
+  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
+  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
+  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+  await state.finalize(existing.run_id, "superseded");
+}
+async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
+  const request = await resolveSpec2(specStore, opts);
+  if (opts.intent === "fresh") {
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
+    };
+  }
+  const pointer = specStore.toPointer(request);
+  return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
+    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
+    if (existing !== null) {
+      const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
+      if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== "resume") {
+        return { kind: "pause", existing };
+      }
+      if (opts.intent === "supersede") {
+        if (stagingDeps === void 0) {
+          throw new UsageError("run create --supersede requires the CLI gh deps");
+        }
+        const supersededId = existing.run_id;
+        await supersedeRun(state, existing, stagingDeps);
+        const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
+        const run11 = await state.update(created.run_id, (s) => ({
+          ...s,
+          human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
+        }));
+        return { kind: "superseded", run: run11, supersededId };
+      }
+      return { kind: "exists", existing };
+    }
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
+    };
+  });
+}
+async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}) {
+  const run11 = await state.read(runId);
+  if (isTerminalRunStatus(run11.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
+  }
+  if (run11.debug) {
+    return { kind: "debug-resume", run_id: runId, run: run11 };
+  }
+  const plan = planResume(run11, reading, config, nowEpochSec);
+  switch (plan.kind) {
+    case "not-resumable":
+      return { kind: "resumed", run: run11 };
+    case "resume": {
+      const at2 = new Date(nowEpochSec * 1e3).toISOString();
+      const updated = await state.update(runId, (s) => ({
+        ...s,
+        status: plan.clear.status,
+        quota: plan.clear.quota,
+        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at: at2 }] }
+      }));
+      return { kind: "resumed", run: updated, cleared: true };
+    }
+    case "pause": {
+      const d = plan.decision;
+      if (d.kind === "proceed") {
+        return { kind: "resumed", run: run11 };
+      }
+      const base = {
+        kind: "pause",
+        run_id: runId,
+        status: run11.status,
+        reason: d.reason
+      };
+      return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
+    }
+  }
+}
+
 // src/cli/subcommands/run.ts
-import { access as access5, readFile as readFile14 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
@@ -15950,6 +16283,62 @@ function decideAutonomyPreflight(input) {
     return { proceed: false, regenerate: true, reason: "stale-version" };
   }
   return { proceed: true, regenerate: false, reason: "fresh" };
+}
+
+// src/orchestrator/preflight.ts
+import { access as access5, readFile as readFile14 } from "node:fs/promises";
+import { join as join22 } from "node:path";
+async function assertE2ePrereqs(cwd) {
+  const missing = [];
+  let pkgRaw;
+  try {
+    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
+  } catch {
+    missing.push("package.json");
+  }
+  if (pkgRaw !== void 0) {
+    let hasDep2 = false;
+    let parseable = true;
+    try {
+      const pkg = JSON.parse(pkgRaw);
+      hasDep2 = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
+    } catch {
+      parseable = false;
+    }
+    if (!parseable) {
+      missing.push("a parseable package.json (current file is not valid JSON)");
+    } else if (!hasDep2) {
+      missing.push("@playwright/test (dependencies or devDependencies)");
+    }
+  }
+  try {
+    await access5(join22(cwd, "playwright.config.ts"));
+  } catch {
+    missing.push("playwright.config.ts");
+  }
+  if (missing.length > 0) {
+    throw new UsageError(
+      `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. Run \`factory scaffold\` to seed playwright.config.ts + e2e/, and install @playwright/test.`
+    );
+  }
+}
+async function assertGateContract(cwd, gitClient) {
+  const load = await loadGateContract(cwd);
+  if (load.state === "absent") {
+    throw new UsageError(
+      `run create: missing ${GATE_CONTRACT_REL} gate contract \u2014 run \`factory scaffold\` and commit the contract.`
+    );
+  }
+  if (load.state === "invalid") {
+    throw new UsageError(
+      `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) \u2014 fix it or delete it and re-run \`factory scaffold\`.`
+    );
+  }
+  if (!await gitClient.isTracked(GATE_CONTRACT_REL, { cwd })) {
+    throw new UsageError(
+      `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked \u2014 commit it so task worktrees see the contract.`
+    );
+  }
 }
 
 // src/cli/subcommands/run.ts
@@ -16060,148 +16449,6 @@ session end and leaves the run resumable; cancel is for deliberately discarding 
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;
-function seedTasksFromSpec(request) {
-  const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
-  const tasks = seedTaskRows(request.tasks, ctx);
-  assertAcyclic(tasks, ctx);
-  return tasks;
-}
-async function resolveSpec2(specStore, opts) {
-  const request = opts.specId !== void 0 ? await specStore.read(opts.repo, opts.specId) : await specStore.resolveByIssue(opts.repo, opts.issue);
-  if (request === null) {
-    throw new Error(`run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`);
-  }
-  if (!await specStore.hasPrd(request.repo, request.spec_id)) {
-    throw new Error(
-      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
-    );
-  }
-  return request;
-}
-async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
-  const seeded = seedTasksFromSpec(request);
-  const branch = runStagingBranch(opts.runId);
-  await state.create({
-    run_id: opts.runId,
-    spec: specStore.toPointer(request),
-    staging_branch: branch,
-    // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
-    execution_mode: "sequential",
-    ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
-    ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
-    ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
-    ...opts.e2e === true ? { e2e: true } : {},
-    ...opts.debug === true ? { debug: true } : {}
-  });
-  const run11 = await state.update(opts.runId, (s) => ({
-    ...s,
-    tasks: seeded,
-    // S11: the launch touch — every run costs at least one human action, so a
-    // clean lights-out run scores exactly 1.0 on the derived touch metric.
-    human_touches: [{ kind: "launch", at: s.started_at }]
-  }));
-  if (stagingDeps !== void 0) {
-    await ensureStaging({
-      gitClient: stagingDeps.gitClient,
-      stagingBranch: branch,
-      baseBranch: stagingDeps.config.git.baseBranch,
-      cwd: stagingDeps.targetRoot,
-      orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath
-    });
-    await provisionProtection({
-      ghClient: stagingDeps.ghClient,
-      owner: stagingDeps.owner,
-      repo: stagingDeps.repo,
-      branch,
-      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
-      provision: true
-    });
-  }
-  return run11;
-}
-async function createRun(state, specStore, opts) {
-  return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
-}
-async function supersedeRun(state, existing, stagingDeps) {
-  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
-  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
-  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
-  await state.finalize(existing.run_id, "superseded");
-}
-async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
-  const request = await resolveSpec2(specStore, opts);
-  if (opts.intent === "fresh") {
-    return {
-      kind: "created",
-      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
-    };
-  }
-  const pointer = specStore.toPointer(request);
-  return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
-    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
-    if (existing !== null) {
-      const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
-      if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== "resume") {
-        return { kind: "pause", existing };
-      }
-      if (opts.intent === "supersede") {
-        if (stagingDeps === void 0) {
-          throw new UsageError("run create --supersede requires the CLI gh deps");
-        }
-        const supersededId = existing.run_id;
-        await supersedeRun(state, existing, stagingDeps);
-        const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
-        const run11 = await state.update(created.run_id, (s) => ({
-          ...s,
-          human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
-        }));
-        return { kind: "superseded", run: run11, supersededId };
-      }
-      return { kind: "exists", existing };
-    }
-    return {
-      kind: "created",
-      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
-    };
-  });
-}
-async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}) {
-  const run11 = await state.read(runId);
-  if (isTerminalRunStatus(run11.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
-  }
-  if (run11.debug) {
-    return { kind: "debug-resume", run_id: runId, run: run11 };
-  }
-  const plan = planResume(run11, reading, config, nowEpochSec);
-  switch (plan.kind) {
-    case "not-resumable":
-      return { kind: "resumed", run: run11 };
-    case "resume": {
-      const at2 = new Date(nowEpochSec * 1e3).toISOString();
-      const updated = await state.update(runId, (s) => ({
-        ...s,
-        status: plan.clear.status,
-        quota: plan.clear.quota,
-        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at: at2 }] }
-      }));
-      return { kind: "resumed", run: updated, cleared: true };
-    }
-    case "pause": {
-      const d = plan.decision;
-      if (d.kind === "proceed") {
-        return { kind: "resumed", run: run11 };
-      }
-      const base = {
-        kind: "pause",
-        run_id: runId,
-        status: run11.status,
-        reason: d.reason
-      };
-      return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
-    }
-  }
-}
 function parseIssue(raw) {
   if (raw === void 0) {
     return void 0;
@@ -16217,54 +16464,6 @@ function parseIssue(raw) {
 }
 function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
-}
-async function assertE2ePrereqs(cwd) {
-  const missing = [];
-  let pkgRaw;
-  try {
-    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
-  } catch {
-    missing.push("package.json");
-  }
-  if (pkgRaw !== void 0) {
-    let hasDep2 = false;
-    try {
-      const pkg = JSON.parse(pkgRaw);
-      hasDep2 = pkg.dependencies?.["@playwright/test"] !== void 0 || pkg.devDependencies?.["@playwright/test"] !== void 0;
-    } catch {
-    }
-    if (!hasDep2) {
-      missing.push("@playwright/test (dependencies or devDependencies)");
-    }
-  }
-  try {
-    await access5(join22(cwd, "playwright.config.ts"));
-  } catch {
-    missing.push("playwright.config.ts");
-  }
-  if (missing.length > 0) {
-    throw new UsageError(
-      `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. Run \`factory scaffold\` to seed playwright.config.ts + e2e/, and install @playwright/test.`
-    );
-  }
-}
-async function assertGateContract(cwd, gitClient) {
-  const load = await loadGateContract(cwd);
-  if (load.state === "absent") {
-    throw new UsageError(
-      `run create: missing ${GATE_CONTRACT_REL} gate contract \u2014 run \`factory scaffold\` and commit the contract.`
-    );
-  }
-  if (load.state === "invalid") {
-    throw new UsageError(
-      `run create: invalid ${GATE_CONTRACT_REL} gate contract (${load.error}) \u2014 fix it or delete it and re-run \`factory scaffold\`.`
-    );
-  }
-  if (!await gitClient.isTracked(GATE_CONTRACT_REL, { cwd })) {
-    throw new UsageError(
-      `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked \u2014 commit it so task worktrees see the contract.`
-    );
-  }
 }
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
@@ -16346,7 +16545,7 @@ async function runCreate(argv, overrides = {}) {
     ghClient,
     config,
     targetRoot: cwd,
-    orchestratorWorktreePath: join22(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
+    orchestratorWorktreePath: join23(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
@@ -16367,7 +16566,7 @@ async function runCreate(argv, overrides = {}) {
   );
   if (result.kind === "pause") {
     const r = result.existing;
-    const resets = r.quota?.resets_at_epoch;
+    const resets = r.quota && r.quota.binding_window !== "unavailable" ? r.quota.resets_at_epoch : void 0;
     emitJson({
       kind: "pause",
       scope: "7d",
@@ -16399,7 +16598,7 @@ async function runCreate(argv, overrides = {}) {
     return {
       run: parked,
       spec_approval: {
-        spec_path: join22(specDir(dataDir, repoSlug, run11.spec.spec_id), "spec.md"),
+        spec_path: join23(specDir(dataDir, repoSlug, run11.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -17037,10 +17236,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join23(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join24(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join23(dataDir, "debug", runId, `pass-${pass}`);
+  return join24(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -17114,8 +17313,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join23(passDir, "findings.json");
-  const reportPath = join23(passDir, "findings.md");
+  const findingsPath = join24(passDir, "findings.json");
+  const reportPath = join24(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -17412,15 +17611,15 @@ var stateCommand = {
 
 // src/cli/subcommands/scaffold.ts
 import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname10, join as join26, relative } from "node:path";
+import { dirname as dirname10, join as join27, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
-import { existsSync as existsSync7 } from "node:fs";
-import { join as join24 } from "node:path";
+import { existsSync as existsSync8 } from "node:fs";
+import { join as join25 } from "node:path";
 var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -17486,9 +17685,9 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join24(opts.targetRoot, ".claude");
-  const path6 = join24(dir, "settings.json");
-  const created = !existsSync7(path6);
+  const dir = join25(opts.targetRoot, ".claude");
+  const path6 = join25(dir, "settings.json");
+  const created = !existsSync8(path6);
   let existing = {};
   if (!created) {
     const raw = await readFile15(path6, "utf8");
@@ -17510,20 +17709,20 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold-gates.ts
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname9, join as join25 } from "node:path";
+import { dirname as dirname9, join as join26 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync8(join25(targetRoot, "deno.json")) || existsSync8(join25(targetRoot, "deno.jsonc"))) {
+  if (existsSync9(join26(targetRoot, "deno.json")) || existsSync9(join26(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync8(join25(targetRoot, "package.json"))) {
+  if (existsSync9(join26(targetRoot, "package.json"))) {
     return "npm";
   }
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join25(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join26(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -17537,9 +17736,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync8(join25(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join25(targetRoot, file), "utf8");
+  const raw = await readFile16(join26(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -17557,7 +17756,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync8(join25(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -17567,7 +17766,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join25(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -17589,11 +17788,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join25(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync8(join25(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -17659,7 +17858,7 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join25(opts.targetRoot, GATE_CONTRACT_REL);
+  const dest = join26(opts.targetRoot, GATE_CONTRACT_REL);
   await mkdir12(dirname9(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack };
@@ -17725,8 +17924,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join26(dir, "templates");
-    if (existsSync9(join26(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join27(dir, "templates");
+    if (existsSync10(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname10(dir);
@@ -17752,9 +17951,9 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join26(templatesDir, ...segs);
-  const dest = join26(targetRoot, ...segs);
-  if (!existsSync9(src)) {
+  const src = join27(templatesDir, ...segs);
+  const dest = join27(targetRoot, ...segs);
+  if (!existsSync10(src)) {
     log30.warn(`template missing, skipping: ${src}`);
     return;
   }
@@ -17762,7 +17961,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     const text = await readFile17(src, "utf8");
     return transform ? transform(text) : text;
   };
-  if (!existsSync9(dest)) {
+  if (!existsSync10(dest)) {
     await mkdir13(dirname10(dest), { recursive: true });
     await writeFile4(dest, await render(), "utf8");
     lists.created.push(entry.rel);
@@ -17781,9 +17980,9 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path6 = join26(root, ".gitignore");
+  const path6 = join27(root, ".gitignore");
   const rel = relative(root, path6);
-  if (!existsSync9(path6)) {
+  if (!existsSync10(path6)) {
     await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
@@ -17794,8 +17993,8 @@ async function ensureGitignore(root, lists) {
     lists.present.push(rel);
     return;
   }
-  const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile4(path6, current + sep2 + missing.join("\n") + "\n", "utf8");
+  const sep4 = current.endsWith("\n") ? "" : "\n";
+  await writeFile4(path6, current + sep4 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -17809,7 +18008,7 @@ async function runScaffold(opts) {
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
-  const isNodePackage = existsSync9(join26(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync10(join27(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly === true && !isNodePackage) {
       continue;
@@ -17998,6 +18197,9 @@ function pageHints(runId, scan) {
   if (scan.e2e_failed || scan.e2e_assessment_failed) {
     hints.push(`factory rescue apply --run ${runId} --reset-e2e`);
   }
+  if (scan.traceability_failed) {
+    hints.push(`factory rescue apply --run ${runId} --reset-traceability`);
+  }
   return hints;
 }
 async function resumeRun(state, runId, dataDir, opts = {}) {
@@ -18148,7 +18350,7 @@ var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
 
 Usage:
   factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
@@ -18162,12 +18364,12 @@ Usage:
 
 Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
 RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
-rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
+traceability_failed, rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
 survey (\`work\`) + the recover \`route\`. Writes nothing.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
@@ -18187,11 +18389,16 @@ Usage:
                        re-enters finalize and picks up the (by-then) merged PR. Use
                        once you've confirmed the queued merge landed. Alone
                        sufficient to reopen a terminal run.
+  --reset-traceability Clear a failed PRD-traceability audit (S9, Decision 47) so it
+                       re-enters and re-derives on the next drive. Use once the unmet
+                       PRD intent is addressed (or the auditor crash was transient).
+                       Alone sufficient to reopen a terminal run.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
 (blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, or
---recheck-rollup targets an armed-not-landed rollup). Idempotent.
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase,
+--reset-traceability clears a failed audit, or --recheck-rollup targets an
+armed-not-landed rollup). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
@@ -18215,7 +18422,9 @@ async function runScan(argv, overrides = {}) {
   return runRecover([...argv, "--dry-run"], overrides);
 }
 async function runApply(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup"] });
+  const args = parseArgs(argv, {
+    booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup", "reset-traceability"]
+  });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
@@ -18227,11 +18436,13 @@ async function runApply(argv, overrides = {}) {
   const includeDeadEnds = args.flag("include-dead-ends") === true;
   const resetE2e = args.flag("reset-e2e") === true;
   const recheckRollup = args.flag("recheck-rollup") === true;
+  const resetTraceability = args.flag("reset-traceability") === true;
   const result = await applyRescue(state, runId, {
     ...tasks.length > 0 ? { tasks } : {},
     includeDeadEnds,
     resetE2e,
-    recheckRollup
+    recheckRollup,
+    resetTraceability
   });
   if (result.touched) {
     await emitMetric(dataDir, runId, "human_touch", { kind: "recover" });
@@ -18431,7 +18642,7 @@ var nextCommand = {
 
 // src/cli/subcommands/statusline.ts
 import { readFile as readFile18 } from "node:fs/promises";
-import { join as join27 } from "node:path";
+import { join as join28 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -18467,7 +18678,7 @@ async function renderProgress(deps) {
       return "";
     }
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
-    const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const raw = await readFile18(join28(currentLinkPath(dataDir), STATE_FILE), "utf8");
     const run11 = JSON.parse(raw);
     if (typeof run11.run_id !== "string" || typeof run11.status !== "string") {
       return "";
@@ -18565,9 +18776,9 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync10 } from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 import { readFile as readFile19 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -18605,7 +18816,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join28(dataDir, "merged-settings.json");
+  return join29(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -18687,8 +18898,8 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path6 = join28(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync10(path6)) {
+  const path6 = join29(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync11(path6)) {
     return void 0;
   }
   try {
@@ -18704,10 +18915,10 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join28(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync10(userSettingsPath)) {
+  if (existsSync11(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
       if (isObject2(parsed)) {
@@ -18719,7 +18930,7 @@ async function runAutonomyEnsure(opts = {}) {
       log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join28(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join29(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile19(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
@@ -18756,7 +18967,7 @@ function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path6.length > 0 && existsSync10(path6),
+    mergedSettingsPresent: path6.length > 0 && existsSync11(path6),
     mergedSettingsPath: path6
   };
   if (opts.json === true) {
@@ -18780,7 +18991,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
   return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
 async function readOnDiskVersion(path6) {
-  if (!existsSync10(path6)) {
+  if (!existsSync11(path6)) {
     return void 0;
   }
   try {
@@ -18825,7 +19036,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path6 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path6.length > 0 && existsSync10(path6);
+  const mergedSettingsPresent = path6.length > 0 && existsSync11(path6);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path6) : void 0;
   const decision = decideAutonomyPreflight({
