@@ -216,6 +216,13 @@ export interface RunStagingDeps {
     readonly ghClient: GhClient
     readonly config: Config
     readonly targetRoot: string
+    /**
+     * Absolute orchestrator-worktree path (`<repo-root>/.claude/worktrees/orchestrator-<run_id>`)
+     * where `ensureStaging` materialises the run's staging branch — never the user's
+     * primary checkout (D2). Resolved from `git rev-parse --show-toplevel` so it matches
+     * the `$ORCH` the runner skill `cd`s into.
+     */
+    readonly orchestratorWorktreePath: string
     readonly owner: string
     readonly repo: string
 }
@@ -359,6 +366,7 @@ async function createRunFromManifest(
             stagingBranch: branch,
             baseBranch: stagingDeps.config.git.baseBranch,
             cwd: stagingDeps.targetRoot,
+            orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath,
         })
         await provisionProtection({
             ghClient: stagingDeps.ghClient,
@@ -842,11 +850,16 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     // coords) so createRunFromManifest can cut + protect staging-<run-id> from develop.
     const ghClient = overrides.ghClient ?? new DefaultGhClient()
     const {owner, repo} = splitRepoSlug(repoSlug)
+    // D2: resolve the repo root the SAME way the runner skill does
+    // (`git rev-parse --show-toplevel`) so both agree on the orchestrator-worktree dir
+    // even if the CLI is invoked from a subdir. Staging is checked out there, not in cwd.
+    const repoRoot = await gitClient.showToplevel({cwd})
     const stagingDeps: RunStagingDeps = {
         gitClient,
         ghClient,
         config,
         targetRoot: cwd,
+        orchestratorWorktreePath: join(repoRoot, '.claude', 'worktrees', `orchestrator-${runId}`),
         owner,
         repo,
     }

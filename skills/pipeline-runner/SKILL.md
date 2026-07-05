@@ -115,6 +115,26 @@ session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the determinist
 start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
 instruction (Phase 0 step 2); never retry blindly.
 
+**Enter the orchestrator worktree (Decision 2).** `run create` already materialised the run's
+staging branch in a dedicated worktree at `.claude/worktrees/orchestrator-<run_id>` — the engine
+NEVER checks staging out in the user's primary checkout (doing so parked the main dir on staging and
+later phase-merge checkouts collided with `already used by worktree` — smoke defect D2). `cd` into it
+now, before the loop, so subagent `baseRef:"head"` worktrees fork from the staging tip and every
+foreground `factory` call runs isolated from the user's checkout:
+
+```bash
+ORCH="$(git rev-parse --show-toplevel)/.claude/worktrees/orchestrator-<run_id>"   # <run_id> = .run.run_id
+cd "$ORCH"
+```
+
+Run all of Phase 3+ (every `factory` call and every `Agent` spawn) from `$ORCH`. **On resume**
+(`/factory:resume`), re-derive `$ORCH` and `cd` in before the loop; if it was pruned between sessions
+recreate it idempotently from the run's already-existing staging branch:
+`[ -d "$ORCH" ] || git worktree add "$ORCH" "$(factory state <run_id> | jq -r .staging_branch)"`.
+**Teardown** (best-effort, at the run's terminal report): `cd "$(git rev-parse --show-toplevel)"` then
+`git worktree remove --force "$ORCH"`. Leaving it is harmless (each run's dir is unique — no collision),
+so teardown is a nicety, not correctness.
+
 ## Phase 3 — THE LOOP (parallel event loop)
 
 The ship mode is persisted on the run (Phase 2's `run create`); `next-task`, `next-action`, and `finalize` all

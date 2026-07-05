@@ -45,6 +45,8 @@ export interface FakeGitOptions {
     localBranches?: Record<string, FakeBranch>
     /** Current branch HEAD points at. */
     currentBranch?: string
+    /** Absolute repo root `showToplevel` reports (defaults to `/repo`). */
+    repoRoot?: string
 }
 
 /**
@@ -83,6 +85,7 @@ export class FakeGitClient implements GitClient {
     readonly branchFiles = new Map<string, string[]>()
     private head: string
     private shaCounter = 0
+    private readonly repoRoot: string
 
     constructor(opts: FakeGitOptions = {}) {
         const origin = new Map<string, string>()
@@ -94,6 +97,11 @@ export class FakeGitClient implements GitClient {
             this.localBranches.set(b, fb.sha)
         }
         this.head = opts.currentBranch ?? 'main'
+        this.repoRoot = opts.repoRoot ?? '/repo'
+    }
+
+    showToplevel(_opts?: GitOpts): Promise<string> {
+        return Promise.resolve(this.repoRoot)
     }
 
     private nextSha(prefix = 'sha'): string {

@@ -1,7 +1,7 @@
 # S12 — End-to-End Smoke Acceptance
 
 **Session:** S12 (final redesign session). **Date started:** 2026-07-04.
-**Status:** ⚙️ Setup complete — run phase pending (must run from the toy-repo session; see the runbook).
+**Status:** 🔧 Two defects found + fixed — D1 (docs-suspend, v1.19.2) and D2 (orchestrator-worktree isolation, on `main`). Lights-out 1.0 re-run deferred (must run from the toy-repo session; see the runbook).
 
 The acceptance bar for the whole 12-session redesign: **a PRD drives to a merged
 PR with zero human touches beyond launch → touch metric exactly 1.0.**
@@ -102,18 +102,18 @@ echo '{"model":{"display_name":"x"},"workspace":{"current_dir":"'"$PWD"'"},"sess
 
 Fill each row with **PASS/FAIL + evidence** during the run.
 
-| #   | Check                                                                                                                                                                                                                                  | Result     | Evidence                                                          |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
-| 1   | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run                                                                                                                   | 🟡 partial | Junk #2 **PASS** (see below); healthy-#1 spec-gen pending the run |
-| 2   | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips)                                                                      | ⬜         |                                                                   |
-| 3   | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues                                                                                                                       | ⬜         |                                                                   |
-| 4   | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1`                                                                              | ⬜         |                                                                   |
-| 5   | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent                                                                                           | ⬜         |                                                                   |
-| 6   | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked                                                                                 | ⬜         |                                                                   |
-| 7   | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete                                                                                                                                                                 | ⬜         |                                                                   |
-| 8   | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch). ⚠️ First run scored ~2.0 — docs-suspend defect **D1** forced a `resume`; fixed v1.19.2, clean re-run pending. | ⬜         |                                                                   |
-| 9   | **Statusline** — suffix live during the run; gone >30 min after terminal                                                                                                                                                               | ⬜         |                                                                   |
-| 10  | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now)                              | ⬜         |                                                                   |
+| #   | Check                                                                                                                                                                                                                                                                                                                                                                 | Result     | Evidence                                                          |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| 1   | **Spec** — specifiability gate passes; spec + tasks.json generated for #1; junk #2 → `unspecifiable` refusal pre-run                                                                                                                                                                                                                                                  | 🟡 partial | Junk #2 **PASS** (see below); healthy-#1 spec-gen pending the run |
+| 2   | **Parallelism** — two tasks genuinely in flight (two in-flight entries, overlapping bg agents); preflight lock holds (no spurious `assertBaseIsStagingTip` trips)                                                                                                                                                                                                     | ⬜         |                                                                   |
+| 3   | **Pause/resume** — a forced quota pause parks with `run.quota` written (A2); `factory resume` clears + continues                                                                                                                                                                                                                                                      | ⬜         |                                                                   |
+| 4   | **Self-heal** — one forced task failure → failed finalize → `factory recover --auto` runs ONCE → recovered or paged correctly; `self_heal.attempts === 1`                                                                                                                                                                                                             | ⬜         |                                                                   |
+| 5   | **4-lens panel** — exactly 4 reviewers per task review wave; citation-verify + finding-verifier exercised; cross-vendor warn if Codex absent                                                                                                                                                                                                                          | ⬜         |                                                                   |
+| 6   | **Traceability** — runs after tasks terminal, before finalize; per-requirement verdicts in report; one deliberately-unmet requirement → rollup blocked                                                                                                                                                                                                                | ⬜         |                                                                   |
+| 7   | **Ship** — merged PR(s); whole-PRD delivery; PRD #1 closed on complete                                                                                                                                                                                                                                                                                                | ⬜         |                                                                   |
+| 8   | **Metric** — run summary + `factory score --fleet`; clean lights-out run scores exactly **1.0** (launch the only touch). ⚠️ First run scored ~2.0 — docs-suspend defect **D1** forced a `resume` (fixed v1.19.2); the clean re-run then crashed on defect **D2** (docs-merge collision, uncreated orchestrator worktree — fixed). 1.0 re-run gated on both, deferred. | ⬜         |                                                                   |
+| 9   | **Statusline** — suffix live during the run; gone >30 min after terminal                                                                                                                                                                                                                                                                                              | ⬜         |                                                                   |
+| 10  | **Statusline-staleness (Unresolved Q1)** — watch whether the usage cache goes >1 h stale while idling on bg agents → benign fail-closed suspend; record what happened (do NOT build `--refresh-from` now)                                                                                                                                                             | ⬜         |                                                                   |
 
 ---
 
@@ -160,6 +160,35 @@ issues were filed: healthy #1 `passed: true`, junk #2 `passed: false`.
   `--no-ff`), v1.19.2.
 - **Re-run needed.** The affected run already completed via resume; a fresh Phase A run on
   ≥v1.19.2 is required to confirm the docs stage completes lights-out and check 8 scores 1.0.
+
+**D2 — `run create` parked the user's primary checkout on the run's staging branch → docs-merge crash (fixed).**
+
+- **Symptom.** The clean D1 re-run (`run-20260705-093249`) drove tasks to merged PRs, then
+  **crashed mid-docs-merge**: `factory run docs … --results` exited 128 with
+  `git checkout staging-run-20260705-093249` / `fatal: 'staging-run-20260705-093249' is already
+used by worktree at '/Users/Javier/Projects/factory-smoke-tipsplit'` (the target repo's MAIN
+  dir). The scribe's commit was safe on `docs-run-…`; the engine simply could not check staging
+  out to merge docs into it. **D1's fix exposed D2:** previously the docs-suspend short-circuited
+  the merge before it could collide; with docs now proceeding, it hit the collision.
+- **Root cause.** The plugin documents an **orchestrator worktree**
+  (`.claude/worktrees/orchestrator-<run_id>/`, Decision 2) that isolates the runner's git ops so
+  "the user's primary checkout is never touched", and a hook already depends on it
+  (`inOrchestratorWorktree`, `src/hooks/branch-protection.ts`) — but **nothing ever created it**
+  (the "Step 6" the docs cited was never implemented). So `ensureStaging` (`src/git/staging.ts`)
+  ran `git checkout -B staging-<run-id> origin/develop` in the MAIN dir, parking it on the run's
+  staging branch. Every later phase merge (`mergeFfOrCommit`, no cwd) then ran `git checkout
+staging-<run-id>` from the ambient cwd — a no-op when that cwd was the main-dir-on-staging, but a
+  fatal `already used by worktree` when it was a linked worktree (the `.docs` tree the scribe used).
+- **Fix.** `ensureStaging` now materialises staging via `git worktree add -b staging-<id> <orch>
+origin/develop` (idempotent `ensureOnStaging` re-point on resume) inside the orchestrator
+  worktree — the main dir's HEAD never moves. `run create` resolves the worktree path from `git
+rev-parse --show-toplevel` (new `GitClient.showToplevel`), and the runner skill's restored
+  Phase-2 step `cd`s into it (governs subagent `baseRef:"head"` + every foreground `factory` call).
+  RED→GREEN unit + integration tests (main-dir HEAD unchanged after `run create`; staging lives
+  only in the orchestrator worktree). Committed to `main`.
+- **Wedged run left as-is** — surfacing this was its job (the smoke exists to find issues); no
+  recovery, per the user. The lights-out **1.0** re-run is now gated on **both** D1 and D2; a fresh
+  Phase-A run validates — explicitly deferred.
 
 ## Quota-spend observations
 

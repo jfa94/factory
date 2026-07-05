@@ -12,6 +12,7 @@
  */
 import {createLogger} from '../shared/index.js'
 import {GitSchema} from '../config/schema.js'
+import {ensureOnStaging} from './worktree.js'
 import type {GitClient} from './git-client.js'
 
 const log = createLogger('git')
@@ -26,8 +27,15 @@ export interface EnsureStagingArgs {
     stagingBranch?: string
     /** Base branch staging forks from / reconciles with. Defaults to `develop`. */
     baseBranch?: string
-    /** Working directory. */
+    /** Working directory for the HEAD-safe read ops (fetch/rev-parse/merge-base). */
     cwd?: string
+    /**
+     * Absolute path of the orchestrator worktree (`.claude/worktrees/orchestrator-<run_id>`)
+     * where staging is materialised. D2 fix: staging is checked out HERE, never in the
+     * user's primary checkout — a `checkout -B` on the main dir parked it on the run's
+     * staging branch and later phase-merge checkouts collided (`already used by worktree`).
+     */
+    orchestratorWorktreePath: string
 }
 
 /** Result of {@link ensureStaging}. */
@@ -67,8 +75,8 @@ export async function ensureStaging(args: EnsureStagingArgs): Promise<EnsureStag
             throw new Error(`staging: base branch '${remote}/${base}' does not exist — cannot create staging`)
         }
         log.info(`creating ${staging} from ${remote}/${base}`)
-        await args.gitClient.checkoutB(staging, `${remote}/${base}`, {cwd: args.cwd})
-        await args.gitClient.push(remote, staging, {setUpstream: true, cwd: args.cwd})
+        await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base)
+        await args.gitClient.push(remote, staging, {setUpstream: true, cwd: args.orchestratorWorktreePath})
         return {created: true, stagingTip: baseHead}
     }
 
@@ -88,8 +96,8 @@ export async function ensureStaging(args: EnsureStagingArgs): Promise<EnsureStag
     if (mergeBase === stagingTip) {
         // base is strictly ahead of staging → fast-forward staging to base.
         log.info(`fast-forwarding ${staging} to ${remote}/${base}`)
-        await args.gitClient.checkoutB(staging, `${remote}/${base}`, {cwd: args.cwd})
-        await args.gitClient.push(remote, staging, {cwd: args.cwd})
+        await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base)
+        await args.gitClient.push(remote, staging, {cwd: args.orchestratorWorktreePath})
         return {created: false, stagingTip: baseTip}
     }
     if (mergeBase === baseTip) {
@@ -102,4 +110,25 @@ export async function ensureStaging(args: EnsureStagingArgs): Promise<EnsureStag
         `staging: ${remote}/${staging} and ${remote}/${base} have DIVERGED ` +
             `(merge-base=${mergeBase}, staging=${stagingTip}, base=${baseTip}) — refusing to reconcile (no silent main fallback)`
     )
+}
+
+/**
+ * Materialise `staging` onto `origin/<base>` inside the orchestrator worktree —
+ * NEVER the main dir (D2). Idempotent, mirroring {@link createTaskWorktree}: on a
+ * resume the worktree already exists, so re-point its branch via `ensureOnStaging`
+ * (`checkout -B` in the worktree) rather than a bare `worktree add`, which fatals on
+ * the existing path/branch.
+ */
+async function materializeStagingWorktree(
+    gitClient: GitClient,
+    path: string,
+    branch: string,
+    remote: string,
+    base: string
+): Promise<void> {
+    if (await gitClient.worktreeExists(path)) {
+        await ensureOnStaging({gitClient, path, branch, remote, base})
+    } else {
+        await gitClient.worktreeAdd(['-b', branch, path, `${remote}/${base}`])
+    }
 }

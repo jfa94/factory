@@ -626,6 +626,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             ghClient: gh,
             config: defaultConfig(),
             targetRoot: '/target',
+            orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
             owner: 'acme',
             repo: 'widgets',
         }
@@ -657,6 +658,37 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         )
     })
 
+    it('D2: fresh create materialises staging ONLY in the orchestrator worktree (primary HEAD untouched)', async () => {
+        // The user's primary checkout sits on develop; a run create must NEVER check the
+        // per-run staging branch out here (that parked the main dir on staging and later
+        // phase-merge checkouts collided: `already used by worktree`). Staging goes in the
+        // orchestrator worktree instead.
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}, currentBranch: 'develop'})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const {defaultConfig} = await import('../../config/schema.js')
+        const orchestratorWorktreePath = '/target/.claude/worktrees/orchestrator-run-new'
+        const r = await resolveOrCreateRun(
+            state,
+            store,
+            {repo: REPO, issue: 42, runId: 'run-new'},
+            {
+                gitClient: git,
+                ghClient: new FakeGhClient(),
+                config: defaultConfig(),
+                targetRoot: '/target',
+                orchestratorWorktreePath,
+                owner: 'acme',
+                repo: 'widgets',
+            }
+        )
+        expect(r.kind).toBe('created')
+        // staging-run-new is checked out in the orchestrator worktree...
+        expect(git.worktrees.get(orchestratorWorktreePath)).toBe('staging-run-new')
+        // ...and the primary checkout's HEAD never moved off develop (no `checkout -B` on it).
+        expect(await git.currentBranch()).toBe('develop')
+        expect(git.calls.some((c) => c.startsWith('checkout -B'))).toBe(false)
+    })
+
     it('--supersede stamps launch + conflict touches on the FRESH run (S11)', async () => {
         await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
@@ -671,6 +703,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
                 ghClient: new FakeGhClient(),
                 config: defaultConfig(),
                 targetRoot: '/target',
+                orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
                 owner: 'acme',
                 repo: 'widgets',
             }
@@ -700,6 +733,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             ghClient: gh,
             config: defaultConfig(),
             targetRoot: '/target',
+            orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
             owner: 'acme',
             repo: 'widgets',
         }
@@ -735,6 +769,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             ghClient: gh,
             config: defaultConfig(),
             targetRoot: '/target',
+            orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
             owner: 'acme',
             repo: 'widgets',
         }
@@ -770,6 +805,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             ghClient: gh,
             config: defaultConfig(),
             targetRoot: '/target',
+            orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
             owner: 'acme',
             repo: 'widgets',
         }
@@ -1970,10 +2006,16 @@ describe('run create cuts and protects staging/<run-id> from develop', () => {
         expect(code).toBe(EXIT.OK)
 
         const branch = 'staging-run-20260618-101500'
+        // Orchestrator worktree the fake's showToplevel (/repo) + runId derive to (D2).
+        const orch = '/repo/.claude/worktrees/orchestrator-run-20260618-101500'
 
-        // (a) branch was cut: checkoutB was called with the per-run staging branch from origin/develop
-        expect(git.calls).toContain(`checkout -B ${branch} origin/develop`)
-        // branch exists in the fake's remote heads (push was called after checkoutB)
+        // (a) branch was cut in the ORCHESTRATOR WORKTREE, not the primary checkout: a
+        // `worktree add` with the per-run staging branch from origin/develop — never a
+        // `checkout -B` that would park the user's main dir on staging (the D2 collision).
+        expect(git.calls).toContain(`worktree add -b ${branch} ${orch} origin/develop`)
+        expect(git.calls.some((c) => c.startsWith('checkout -B'))).toBe(false)
+        expect(git.worktrees.get(orch)).toBe(branch)
+        // branch exists in the fake's remote heads (push was called after worktree add)
         expect(git.getRemoteHead(branch)).toBeDefined()
 
         // (b) protection was provisioned on the per-run branch

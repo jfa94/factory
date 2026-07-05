@@ -28,13 +28,17 @@ git -C /Users/Javier/Projects/factory-plugin push origin main
 /plugin update factory
 
 # 3. VERIFY the installed dist actually carries the fix (belt + suspenders — the last
-#    smoke hit a stale-version gap). The installed path is under ~/.claude/plugins/;
-#    the token below only exists in >= v1.19.2:
-grep -rl 'DONE_WITH_CONCERNS' ~/.claude/plugins/*/factory*/dist/factory.js 2>/dev/null \
+#    smoke hit a stale-version gap). The installed dist is under ~/.claude/plugins/cache/.
+#    DON'T grep for 'DONE_WITH_CONCERNS': the fix compiles to the regex
+#    DONE(?:_WITH_CONCERNS)?, so that contiguous literal never appears in the bundle —
+#    the grep always misses, even on a correct install. The reliable >= v1.19.2 marker
+#    is the substring CONCERNS:
+grep -rl 'CONCERNS' ~/.claude/plugins/cache/jfa94/factory/*/dist/factory.js 2>/dev/null \
   || echo 'NOT UPDATED — installed plugin is still pre-1.19.2, do not run yet'
 ```
 
-Do not proceed until the grep prints a path (installed plugin ≥ v1.19.2).
+Do not proceed until the grep prints a path (installed plugin ≥ v1.19.2). Belt-and-suspenders:
+`grep '"version"' ~/.claude/plugins/cache/jfa94/factory/*/.claude-plugin/plugin.json` should read ≥ 1.19.2.
 
 ## Precondition B — tidy the toy repo (avoids a rescue touch)
 
@@ -42,29 +46,44 @@ The first run left drift in `/Users/Javier/Projects/factory-smoke-tipsplit`. If 
 new run has to auto-rescue this, that rescue is a `human_touches` entry and the metric
 can't reach 1.0. Start from a clean, origin-synced `develop`:
 
-Observed leftover state (2026-07-04):
+Observed leftover state (2026-07-05 — a later **failed** run `run-20260704-143621`,
+which mistakenly targeted the already-closed PRD #1, added more drift than the first run):
 
 - HEAD is on `staging-run-20260704-143621` (a leftover staging branch), not `develop`.
-- Local `develop` (`b3f1115`) has **diverged** from `origin/develop` (`242e7a5`).
+- Untracked `docs/factory/` (a leftover docs artifact) sits in the tree.
+- Local `develop` (`b3f1115`) is **1 behind** `origin/develop` (`242e7a5`).
 - Stale branches: `factory/run-20260704-134253/T1..T6`, `staging-run-20260704-134253`,
   `staging-run-20260704-143621`, `docs-run-20260704-134253`, `worktree-purrfect-foraging-bengio`.
+- **8 worktrees still checked out** (6 `factory/run-…/T*` under the plugin data dir + the
+  `purrfect-foraging-bengio` one). These MUST be removed before `git branch -D` — a branch
+  checked out in a worktree can't be deleted, so `worktree prune` alone is not enough.
 
-Recommended tidy (operator's call — the `reset --hard` discards the divergent local
-`develop`; `origin/develop` is the PR-merged source of truth):
+Recommended tidy (operator's call — the `reset --hard` discards the local `develop`;
+`origin/develop` is the PR-merged source of truth):
 
 ```bash
 cd /Users/Javier/Projects/factory-smoke-tipsplit
 git fetch origin --prune
-git checkout develop && git reset --hard origin/develop   # clean integration base
+git checkout develop                 # off the failed run's staging branch
+git reset --hard origin/develop      # clean integration base
+# remove leftover worktrees BEFORE deleting their branches (else branch -D fails):
+git worktree remove --force .claude/worktrees/purrfect-foraging-bengio 2>/dev/null || true
+for t in T1 T2 T3 T4 T5 T6; do
+  git worktree remove --force ~/.claude/plugins/data/factory-jfa94/worktrees/run-20260704-134253/$t 2>/dev/null || true
+done
 git worktree prune
-# delete the prior run's branches (all prior-run artifacts, safe to drop):
+# delete the prior runs' branches (both 134253 and the failed 143621 — safe to drop):
 git branch -D staging-run-20260704-134253 staging-run-20260704-143621 \
   docs-run-20260704-134253 worktree-purrfect-foraging-bengio \
   factory/run-20260704-134253/T1 factory/run-20260704-134253/T2 \
   factory/run-20260704-134253/T3 factory/run-20260704-134253/T4 \
   factory/run-20260704-134253/T5 factory/run-20260704-134253/T6
+rm -rf docs/factory/                 # untracked leftover docs artifact
 git status   # clean tree, on develop == origin/develop
 ```
+
+(If a `worktree remove` errors on a locked/missing dir: `rm -rf` that dir, then
+`git worktree prune` before the `branch -D`.)
 
 Leave the origin remote branches alone (harmless) and **leave PRD #2 open** (the junk
 PRD — check 1b already passed; don't touch it).

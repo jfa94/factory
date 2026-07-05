@@ -77,6 +77,13 @@ export interface GitClient {
     /** `git rev-parse --abbrev-ref HEAD` → current branch name. */
     currentBranch(opts?: GitOpts): Promise<string>
     /**
+     * `git rev-parse --show-toplevel` → absolute repo root. The anchor for the
+     * orchestrator worktree path (`<root>/.claude/worktrees/orchestrator-<run_id>`),
+     * resolved identically to the runner skill so engine and runner agree on the
+     * dir even when the CLI is invoked from a subdirectory.
+     */
+    showToplevel(opts?: GitOpts): Promise<string>
+    /**
      * `git remote get-url <remote>` → the remote URL, or `null` when the remote is
      * absent / the dir is not a git repo (a non-zero exit is a normal NO — used to
      * auto-derive `--repo`, where "no origin" is a legitimate answer, not an error).
@@ -226,6 +233,11 @@ export class DefaultGitClient implements GitClient {
 
     async currentBranch(opts?: GitOpts): Promise<string> {
         const r = await this.execOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], opts)
+        return r.stdout.trim()
+    }
+
+    async showToplevel(opts?: GitOpts): Promise<string> {
+        const r = await this.execOrThrow(['rev-parse', '--show-toplevel'], opts)
         return r.stdout.trim()
     }
 

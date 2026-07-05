@@ -8389,6 +8389,10 @@ var DefaultGitClient = class {
     const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
     return r.stdout.trim();
   }
+  async showToplevel(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--show-toplevel"], opts);
+    return r.stdout.trim();
+  }
   async remoteUrl(remote, opts) {
     const r = await this.exec(["remote", "get-url", remote], opts);
     if (r.code !== 0) {
@@ -9196,8 +9200,8 @@ async function ensureStaging(args) {
       throw new Error(`staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`);
     }
     log13.info(`creating ${staging} from ${remote}/${base}`);
-    await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
-    await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.cwd });
+    await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base);
+    await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.orchestratorWorktreePath });
     return { created: true, stagingTip: baseHead };
   }
   await args.gitClient.fetch(remote, staging);
@@ -9211,8 +9215,8 @@ async function ensureStaging(args) {
   });
   if (mergeBase === stagingTip) {
     log13.info(`fast-forwarding ${staging} to ${remote}/${base}`);
-    await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
-    await args.gitClient.push(remote, staging, { cwd: args.cwd });
+    await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base);
+    await args.gitClient.push(remote, staging, { cwd: args.orchestratorWorktreePath });
     return { created: false, stagingTip: baseTip };
   }
   if (mergeBase === baseTip) {
@@ -9221,6 +9225,13 @@ async function ensureStaging(args) {
   throw new Error(
     `staging: ${remote}/${staging} and ${remote}/${base} have DIVERGED (merge-base=${mergeBase}, staging=${stagingTip}, base=${baseTip}) \u2014 refusing to reconcile (no silent main fallback)`
   );
+}
+async function materializeStagingWorktree(gitClient, path6, branch, remote, base) {
+  if (await gitClient.worktreeExists(path6)) {
+    await ensureOnStaging({ gitClient, path: path6, branch, remote, base });
+  } else {
+    await gitClient.worktreeAdd(["-b", branch, path6, `${remote}/${base}`]);
+  }
 }
 
 // src/git/run-staging.ts
@@ -16094,7 +16105,8 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
       gitClient: stagingDeps.gitClient,
       stagingBranch: branch,
       baseBranch: stagingDeps.config.git.baseBranch,
-      cwd: stagingDeps.targetRoot
+      cwd: stagingDeps.targetRoot,
+      orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath
     });
     await provisionProtection({
       ghClient: stagingDeps.ghClient,
@@ -16328,11 +16340,13 @@ async function runCreate(argv, overrides = {}) {
   const specStore = new SpecStore({ dataDir });
   const ghClient = overrides.ghClient ?? new DefaultGhClient();
   const { owner, repo } = splitRepoSlug(repoSlug);
+  const repoRoot = await gitClient.showToplevel({ cwd });
   const stagingDeps = {
     gitClient,
     ghClient,
     config,
     targetRoot: cwd,
+    orchestratorWorktreePath: join22(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
