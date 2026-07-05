@@ -165,6 +165,16 @@ describe('parseCoverageSummary (dual-shape)', () => {
         expect(parseCoverageSummary({})).toBeNull()
         expect(parseCoverageSummary({total: null})).toBeNull()
     })
+
+    it('returns null on an out-of-range percentage (>100 or negative) — a corrupt metric is not a measurement', () => {
+        expect(parseCoverageSummary({total: {lines: 101, branches: 80, functions: 70, statements: 60}})).toBeNull()
+        expect(parseCoverageSummary({total: {lines: 90, branches: -1, functions: 70, statements: 60}})).toBeNull()
+        expect(
+            parseCoverageSummary({
+                total: {lines: {pct: 250}, branches: {pct: 80}, functions: {pct: 70}, statements: {pct: 60}},
+            })
+        ).toBeNull()
+    })
 })
 
 describe('resolveLocalBin + defaultLocalBinResolver against a REAL filesystem', () => {

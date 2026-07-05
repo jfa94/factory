@@ -37,6 +37,7 @@ import {
     GateRunner,
     FsCoverageStore,
     buildPanelManifest,
+    PANEL_ROLES,
     resolveReviewModel,
     dialForRung,
     buildProducerContext,
@@ -361,7 +362,16 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 )
             }
 
-            if (task.reviewers.length === 0) {
+            // Fail-closed: re-spawn unless a FULL panel is on record. Guarding only the empty
+            // roster let a persisted all-approve SUBSET (<4 reviewers, e.g. from an unsanctioned
+            // write) derive a passing merge gate. Cardinality, NOT identity: `reviewer` is a bare
+            // string whose format isn't proven equal to the PANEL_ROLES values, so an identity
+            // predicate risks a permanent re-spawn loop — a count check catches the subset case
+            // (a subset has <4 entries) and is footgun-free. The sanctioned record path already
+            // runs enforcePanelRoster, so there's no known live trigger; this is defense-in-depth.
+            // ponytail: validates cardinality only; identity-validation needs the SpawnRole enum in
+            // the state layer, which the frozen-seam rule forbids — deferred.
+            if (task.reviewers.length < PANEL_ROLES.length) {
                 return panelSpawn()
             }
 
@@ -383,7 +393,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                     return panelSpawn()
                 }
                 // Re-derive holdout gate evidence for the fast-path. The normal composition site
-                // is applyRecordReviews (record.ts:382-388), which is skipped on merge-resync.
+                // is applyRecordReviews's deriveHoldoutEvidence call (record.ts), skipped on merge-resync.
                 // Without this a re-synced implementation that fails withheld criteria can pass
                 // the merge gate. deriveHoldoutEvidence() returns undefined if no record exists,
                 // but holdoutExpected guarantees one does.
@@ -405,7 +415,9 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             }
             return waitRetry(
                 'verify',
-                mergeGateBlockReason(task.reviewers, gate.evidence),
+                // fastPathEvidence (not gate.evidence): includes the holdout gate that may be
+                // the actual blocker, so the reason names the real cause instead of a generic fallback.
+                mergeGateBlockReason(task.reviewers, fastPathEvidence),
                 ctx.attempt ?? 1,
                 ESCALATION_CAP + 1
             )

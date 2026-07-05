@@ -73,12 +73,13 @@ describe('Δ P — idempotent PR create', () => {
         expect(gh.created).toHaveLength(1)
     })
 
-    it('post-merge-crash resume: a MERGED PR for the head re-binds the SAME number (no duplicate)', async () => {
+    it('post-merge-crash resume: a MERGED PR whose number state STILL remembers re-binds (no duplicate)', async () => {
         // Regression (CP2 #12): ship merged the PR but crashed before recording
-        // `done` (the --delete-branch worktree failure). On resume, lookup-by-head
-        // must find the MERGED PR (state:"all") and re-bind it — NOT open a duplicate
-        // (the squashed branch has diverged from staging, so a fresh create would
-        // mis-open). The serial-writer merge step then idempotently no-ops.
+        // `done` (the --delete-branch worktree failure). On resume, ship re-runs with
+        // `pr_number` still persisted (written BEFORE the merge), so `knownPrNumber`
+        // gates the MERGED fallback ON → lookup-by-head re-binds the SAME PR, NOT a
+        // duplicate (the squashed branch diverged from staging). The serial-writer
+        // merge step then idempotently no-ops.
         const gh = new FakeGhClient({
             prs: [
                 {
@@ -90,12 +91,54 @@ describe('Δ P — idempotent PR create', () => {
                 },
             ],
         })
-        const result = await createTaskPrIdempotent({ghClient: gh, ...baseArgs})
+        const result = await createTaskPrIdempotent({ghClient: gh, ...baseArgs, knownPrNumber: 99})
         expect(result).toEqual({
             number: 99,
             url: 'https://github.com/fake/repo/pull/99',
             resumed: true,
         })
         expect(gh.created).toHaveLength(0) // no duplicate opened
+    })
+
+    it('e2e-reopen: a MERGED PR is NOT rebound when state forgot the number → opens a FRESH PR', async () => {
+        // Bug #2 (critical): e2e-reopen re-runs a `done` task with NEW commits on the
+        // SAME deterministic branch; resetTaskRow(clearShippedPr) drops `pr_number` first,
+        // so `knownPrNumber` is undefined. The old MERGED PR must NOT be rebound (the
+        // serializer would no-op the reopened fix into oblivion) — a fresh PR opens for
+        // the new commits.
+        const gh = new FakeGhClient({
+            prs: [
+                {
+                    number: 99,
+                    headRefName: 'factory/run-1/t1',
+                    baseRefName: 'staging',
+                    state: 'MERGED',
+                    url: 'https://github.com/fake/repo/pull/99',
+                },
+            ],
+        })
+        const result = await createTaskPrIdempotent({ghClient: gh, ...baseArgs}) // no knownPrNumber
+        expect(result.resumed).toBe(false)
+        expect(result.number).not.toBe(99)
+        expect(gh.created).toHaveLength(1)
+    })
+
+    it('a MERGED PR whose number does NOT match knownPrNumber is not rebound (fresh PR)', async () => {
+        // Defensive: if state remembers a DIFFERENT number than the merged PR sitting on
+        // the head, that merged PR is not this task's resume target → open fresh.
+        const gh = new FakeGhClient({
+            prs: [
+                {
+                    number: 99,
+                    headRefName: 'factory/run-1/t1',
+                    baseRefName: 'staging',
+                    state: 'MERGED',
+                    url: 'https://github.com/fake/repo/pull/99',
+                },
+            ],
+        })
+        const result = await createTaskPrIdempotent({ghClient: gh, ...baseArgs, knownPrNumber: 7})
+        expect(result.resumed).toBe(false)
+        expect(gh.created).toHaveLength(1)
     })
 })

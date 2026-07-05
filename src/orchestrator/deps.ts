@@ -78,6 +78,7 @@ export {
     assertBaseIsStagingTip,
     ensureOnStaging,
     removeWorktree,
+    resyncTaskBranchOntoStaging,
     createTaskPrIdempotent,
     MergeSerializer,
     probeProtection,

@@ -171,6 +171,14 @@ export interface ResetTaskRowOpts {
      * UNCHANGED — see the field's own note below.
      */
     e2eFeedback?: string
+    /**
+     * Drop `pr_number` as part of the reset (default: keep it). e2e-reopen re-runs a
+     * `done` task with NEW commits on the SAME deterministic branch, so its old PR is
+     * already MERGED; forgetting the number makes `createTaskPrIdempotent` open a FRESH
+     * PR instead of rebinding the merged one (which the serializer would no-op away).
+     * Rescue resets leave it unset → `pr_number` preserved (idempotent-create, Δ P).
+     */
+    clearShippedPr?: boolean
 }
 
 /**
@@ -206,6 +214,9 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
         // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
         // recreated worktree to the pre-rescue tip_sha.
         spawn_in_flight: _spawnInFlight,
+        // Kept by default (branch/PR pointers reused on retry — idempotent-create, Δ P);
+        // only e2e-reopen opts in to dropping it, so the merged PR isn't rebound below.
+        pr_number: _prNumber,
         ...rest
     } = task
     return {
@@ -214,6 +225,7 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
         escalation_rung: 0,
         reviewers: [],
         merge_resyncs: 0,
+        ...(opts.clearShippedPr !== true && _prNumber !== undefined ? {pr_number: _prNumber} : {}),
         ...(opts.e2eFeedback !== undefined ? {e2e_feedback: opts.e2eFeedback} : {}),
     }
 }

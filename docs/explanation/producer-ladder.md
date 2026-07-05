@@ -49,7 +49,7 @@ closed outcome union (`src/producer/agents.ts`) that `classifyFailure` reads:
 
 | Producer outcome   | STATUS line                                                   | Classifies as                                  |
 | ------------------ | ------------------------------------------------------------- | ---------------------------------------------- |
-| `done`             | `STATUS: DONE`                                                | success — advance                              |
+| `done`             | `STATUS: DONE` / `STATUS: DONE_WITH_CONCERNS`                 | success — advance                              |
 | `blocked-escalate` | `STATUS: BLOCKED — escalate: <reason>`                        | terminal `spec-defect`                         |
 | `test-defective`   | `STATUS: BLOCKED — escalate: test requires revision <reason>` | `capability` — retry (regenerate the RED test) |
 | `needs-context`    | `STATUS: NEEDS_CONTEXT — <question>`                          | `capability` — retry                           |

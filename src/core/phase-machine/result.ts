@@ -127,8 +127,8 @@ export function gracefulStop(scope: '5h' | '7d', reason: string, resets_at_epoch
 
 export function waitRetry(phase: TaskPhase, reason: string, attempt: number, max_attempts: number): WaitRetryResult {
     // T2: enforce the attempt ≤ max_attempts invariant at construction time. The engine
-    // also throws (engine.ts:124-132), but callers like panel-run.ts:198 build
-    // WaitRetryResult directly without routing through the engine — this closes that gap.
+    // also throws (runPhase's `case 'wait-retry'` bound check in engine.ts), but callers like
+    // panel-run.ts build a wait-retry via this helper without routing through runPhase — closing that gap.
     if (attempt > max_attempts) {
         throw new Error(
             `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`

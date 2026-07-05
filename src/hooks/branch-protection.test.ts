@@ -105,6 +105,25 @@ describe('branch-protection — allowed forms pass', () => {
         )
         expect(isDeny(d)).toBe(true)
     })
+
+    it('staging exception: reset --hard ON staging ALLOWED inside an orchestrator worktree (Check 6)', async () => {
+        const d = await decideBranchProtection(
+            bashInput('git reset --hard HEAD~1'),
+            deps('staging', {
+                autonomousMode: true,
+                cwd: '/work/.claude/worktrees/orchestrator-abc',
+            })
+        )
+        expect(isDeny(d)).toBe(false)
+    })
+
+    it('staging reset --hard exception does NOT apply outside an orchestrator worktree (Check 6)', async () => {
+        const d = await decideBranchProtection(
+            bashInput('git reset --hard HEAD~1'),
+            deps('staging', {autonomousMode: true, cwd: '/work/repo'})
+        )
+        expect(isDeny(d)).toBe(true)
+    })
 })
 
 describe('branch-protection — nested-shell denial (autonomous)', () => {

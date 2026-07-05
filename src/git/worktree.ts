@@ -13,7 +13,7 @@
 import {createLogger} from '../shared/index.js'
 import {GitSchema} from '../config/schema.js'
 import {runScopedBranch} from './branch.js'
-import type {GitClient, GitOpts} from './git-client.js'
+import type {GitClient, GitOpts, MergeAttempt} from './git-client.js'
 
 const log = createLogger('git')
 
@@ -132,6 +132,39 @@ export async function ensureOnStaging(args: EnsureOnStagingArgs): Promise<void> 
     const opts: GitOpts = {cwd: args.path}
     log.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`)
     await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts)
+}
+
+/** Args to {@link resyncTaskBranchOntoStaging}. */
+export interface ResyncTaskBranchArgs {
+    git: GitClient
+    /** The task worktree the branch is checked out in. */
+    cwd: string
+    /** The run-scoped task branch to forward-merge staging into. */
+    branch: string
+    /** Bare staging branch name (the `origin/` ref is built internally). */
+    stagingBranch: string
+    remote?: string
+}
+
+/**
+ * Bug #1 fix: forward-merge the CURRENT staging tip into a task branch a serial
+ * writer refused as BEHIND, then re-push so the REMOTE PR head advances (the
+ * serializer reads mergeStateStatus from the remote head — a local-only merge would
+ * leave the PR BEHIND and the next ship would refuse it again, burning the re-sync
+ * budget for nothing). `git merge`, never rebase/force (honors the no-force rule); a
+ * real conflict comes back as `{merged:false}` with the tree already aborted-to-clean,
+ * for the caller to classify terminal. Push only on a clean merge (fast-forward of the
+ * merge commit — no force).
+ */
+export async function resyncTaskBranchOntoStaging(args: ResyncTaskBranchArgs): Promise<MergeAttempt> {
+    const remote = args.remote ?? 'origin'
+    const opts: GitOpts = {cwd: args.cwd}
+    await args.git.fetch(remote, args.stagingBranch, opts)
+    const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, opts)
+    if (attempt.merged) {
+        await args.git.push(remote, args.branch, opts)
+    }
+    return attempt
 }
 
 /**

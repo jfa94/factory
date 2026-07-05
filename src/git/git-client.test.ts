@@ -131,4 +131,40 @@ describe('DefaultGitClient over an injectable runner (no real git)', () => {
         const git = new DefaultGitClient(runner)
         await expect(git.mergeFfOrCommit('staging/run-1', 'origin/develop')).rejects.toThrow(/command failed/)
     })
+
+    it('tryMergeNoForce returns {merged:true} on a clean merge (checkout, then merge --no-edit, no force)', async () => {
+        const calls: (readonly string[])[] = []
+        const runner = vi.fn<GitRunner>((args) => {
+            calls.push(args)
+            return Promise.resolve(result({code: 0}))
+        })
+        const git = new DefaultGitClient(runner)
+        const r = await git.tryMergeNoForce('factory/run-1/T1', 'origin/staging-run-1')
+
+        expect(r).toEqual({merged: true})
+        expect(calls[0]).toEqual(['checkout', 'factory/run-1/T1'])
+        expect(calls[1]).toEqual(['merge', '--no-edit', 'origin/staging-run-1'])
+        expect(calls.flat().some((a) => /force/i.test(a) || a === '-f')).toBe(false)
+    })
+
+    it('tryMergeNoForce aborts to a clean tree and returns {merged:false, conflict} on conflict (does NOT throw)', async () => {
+        const calls: (readonly string[])[] = []
+        const runner: GitRunner = (args) => {
+            calls.push(args)
+            if (args[0] === 'merge' && args[1] === '--no-edit') {
+                return Promise.resolve(result({code: 1, stderr: 'CONFLICT (content): merge conflict in a.ts'}))
+            }
+            return Promise.resolve(result({code: 0}))
+        }
+        const git = new DefaultGitClient(runner)
+        const r = await git.tryMergeNoForce('factory/run-1/T1', 'origin/staging-run-1')
+
+        expect(r.merged).toBe(false)
+        if (r.merged) {
+            throw new Error('unreachable')
+        }
+        expect(r.conflict).toMatch(/CONFLICT/)
+        // The tree was aborted back to clean before returning.
+        expect(calls.some((c) => c[0] === 'merge' && c[1] === '--abort')).toBe(true)
+    })
 })

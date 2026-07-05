@@ -27,6 +27,13 @@ export interface CreateTaskPrArgs {
     body: string
     /** Base branch to target. Defaults to the configured staging branch. */
     base?: string
+    /**
+     * The PR number state currently remembers for this task, if any. Gates the
+     * MERGED-PR fallback: a MERGED PR is rebound ONLY when it matches this number
+     * (true post-merge-crash resume). When state has forgotten it (e2e-reopen cleared
+     * `pr_number`), the fallback is skipped and a FRESH PR opens for the new commits.
+     */
+    knownPrNumber?: number | undefined
 }
 
 /** Result of {@link createTaskPrIdempotent}. */
@@ -49,12 +56,22 @@ export async function createTaskPrIdempotent(args: CreateTaskPrArgs): Promise<Ta
     // opened OR even after it MERGED but before the run recorded `done` — BOTH are
     // the same logical PR, and re-creating either would open a duplicate (or hit
     // "no commits between" once the squashed branch diverged from staging). Prefer
-    // an OPEN PR (the normal resume); fall back to a MERGED one (post-merge-crash
-    // resume) so ship re-enters and the serial-writer merge step idempotently
-    // no-ops. A CLOSED-unmerged PR is NOT a resume target (manual intervention) —
-    // fall through and open a fresh PR.
+    // an OPEN PR (the normal resume). The MERGED fallback (post-merge-crash resume, so
+    // ship re-enters and the serial-writer merge step idempotently no-ops) is GATED on
+    // `knownPrNumber`: rebind a MERGED PR ONLY when state still remembers that exact
+    // number. e2e-reopen re-runs a `done` task with NEW commits on the SAME
+    // deterministic branch and clears `pr_number` first (resetTaskRow's `clearShippedPr`)
+    // → `knownPrNumber` is undefined → the old MERGED PR is NOT rebound and a FRESH PR
+    // opens for the new commits. Without this gate the old merged PR is rebound and the
+    // serializer no-ops the reopened fix into oblivion (it never reaches staging).
+    // A CLOSED-unmerged PR is NOT a resume target (manual intervention) — fall through
+    // and open a fresh PR.
     const existing = await args.ghClient.prList({head: args.branch, base, state: 'all'})
-    const pr = existing.find((p) => p.state === 'OPEN') ?? existing.find((p) => p.state === 'MERGED')
+    const mergedResume =
+        args.knownPrNumber !== undefined
+            ? existing.find((p) => p.state === 'MERGED' && p.number === args.knownPrNumber)
+            : undefined
+    const pr = existing.find((p) => p.state === 'OPEN') ?? mergedResume
     if (pr !== undefined) {
         log.info(`resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`)
         return {number: pr.number, url: pr.url ?? '', resumed: true}

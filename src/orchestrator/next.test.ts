@@ -13,6 +13,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {nextTask} from './next.js'
+import {MAX_DOCS_ATTEMPTS} from './docs.js'
 import {makeOrchestratorDeps, PAUSE_5H} from './orchestrator-fixtures.js'
 import type {UsageReading} from '../quota/usage-source.js'
 import {nonNull} from '../shared/index.js'
@@ -542,6 +543,27 @@ describe('docs-ready gate', () => {
             expect(resumed.status).toBe('running')
             // the checkpoint clear that returned the run to running must also drop quota
             expect(resumed.quota).toBeUndefined()
+        } finally {
+            await cleanup()
+        }
+    })
+
+    it('docs exhausted at MAX_DOCS_ATTEMPTS → finalize, NOT another docs spawn (anti-infinite-loop cap)', async () => {
+        // The stop side of next.ts wantsDocs's `attempts >= MAX_DOCS_ATTEMPTS` backstop:
+        // an otherwise docs-ready run whose docs phase failed the cap number of times must
+        // finalize (docs treated best-effort as done), never re-spawn scribe forever.
+        const {deps, runId, state, cleanup} = await makeOrchestratorDeps({
+            tasks: [{task_id: 'T1'}],
+            docsApplicable: true,
+        })
+        try {
+            await state.updateTask(runId, 'T1', (t) => ({...t, status: 'done', ended_at: DONE_AT}))
+            await state.update(runId, (s) => ({
+                ...s,
+                traceability: TRACED,
+                docs: {status: 'failed', reason: 'prior', ended_at: DONE_AT, attempts: MAX_DOCS_ATTEMPTS},
+            }))
+            expect((await nextTask(deps, runId)).kind).toBe('finalize')
         } finally {
             await cleanup()
         }

@@ -97,4 +97,39 @@ describe('parseHoldoutRecord', () => {
             })
         ).toThrow()
     })
+
+    it('rejects withholding MORE than were split (withheld_count > total_criteria)', () => {
+        expect(() =>
+            parseHoldoutRecord({
+                task_id: 't',
+                withheld_criteria: ['a', 'b', 'c'], // count===length holds at 3 …
+                total_criteria: 2, // … but you cannot withhold 3 of only 2 criteria
+                withheld_count: 3,
+            })
+        ).toThrow(/total_criteria/)
+    })
+})
+
+describe('FsHoldoutStore.has — I/O errors are LOUD, only absence is quiet', () => {
+    let dataDir: string
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'holdout-has-'))
+    })
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    it('returns false on ENOENT (genuinely absent key)', async () => {
+        const store = new FsHoldoutStore(dataDir)
+        expect(await store.has('run-1', 'ghost')).toBe(false)
+    })
+
+    it('RE-THROWS a non-ENOENT read error instead of masking it as "no holdout"', async () => {
+        const {mkdir} = await import('node:fs/promises')
+        // Create the answer-key PATH as a directory → readFile fails EISDIR (not ENOENT).
+        // The old blanket catch swallowed this as `false`, silently dropping the gate.
+        const keyPath = join(runDir(dataDir, 'run-1'), 'holdouts', 'task-1.json')
+        await mkdir(keyPath, {recursive: true})
+        await expect(new FsHoldoutStore(dataDir).has('run-1', 'task-1')).rejects.toThrow()
+    })
 })

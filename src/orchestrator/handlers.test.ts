@@ -145,6 +145,16 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         return {run, task: stored, attempt: stored.escalation_rung + 1}
     }
 
+    /**
+     * A FULL approving risk-invariant panel (every PANEL_ROLES role). The verify fast-path
+     * now requires the complete panel on record before deriving the merge gate (fail-closed
+     * against a persisted subset), so fast-path tests must seed all four, matching what a
+     * sanctioned record (enforcePanelRoster) always persists.
+     */
+    function approvingPanel(): ReviewerResult[] {
+        return PANEL_ROLES.map((role) => ({reviewer: role, verdict: 'approve' as const, confirmed_blockers: 0}))
+    }
+
     function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
         return {
             config: defaultConfig(),
@@ -561,6 +571,25 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
     })
 
+    it('verify RE-SPAWNS the panel when only a SUBSET of reviewers is on record (fail-closed roster)', async () => {
+        // A persisted <PANEL_ROLES.length roster (here 2 approving) must NOT derive a passing
+        // merge gate on the fast-path — an all-approve subset would otherwise ship on a partial
+        // panel. The cardinality guard re-routes to a fresh full-panel spawn instead.
+        const handlers = makePhaseHandlers(makeDeps())
+        const subset: ReviewerResult[] = [
+            {reviewer: 'implementation-reviewer', verdict: 'approve', confirmed_blockers: 0},
+            {reviewer: 'quality-reviewer', verdict: 'approve', confirmed_blockers: 0},
+        ]
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: subset})
+        const result = await handlers.verify(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
+    })
+
     it('S5/C: default config stamps a deterministic absent cross_vendor WITHOUT probing (hermetic)', async () => {
         const handlers = makePhaseHandlers(makeDeps())
         const ctx = await ctxFor({task_id: 't-multi', reviewers: []})
@@ -618,11 +647,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
 
     it('verify advances to ship when gates are green and reviewers unanimously approve', async () => {
         const handlers = makePhaseHandlers(makeDeps())
-        const reviewers: ReviewerResult[] = [
-            {reviewer: 'implementation-reviewer', verdict: 'approve', confirmed_blockers: 0},
-            {reviewer: 'quality-reviewer', verdict: 'approve', confirmed_blockers: 0},
-        ]
-        const ctx = await ctxFor({task_id: 't-multi', reviewers})
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()})
         const result = await handlers.verify(ctx)
 
         expect(result).toEqual({kind: 'advance', to: 'ship'})
@@ -633,10 +658,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             tools: makeFakeTools({git: greenProbe(), eslint: new FakeEslint(proc(1))}),
         })
         const handlers = makePhaseHandlers(deps)
-        const reviewers: ReviewerResult[] = [
-            {reviewer: 'implementation-reviewer', verdict: 'approve', confirmed_blockers: 0},
-        ]
-        const ctx = await ctxFor({task_id: 't-multi', reviewers})
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()})
         const result = await handlers.verify(ctx)
 
         expect(result.kind).toBe('wait-retry')
@@ -656,10 +678,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             tools: makeFakeTools({git: greenProbe(), eslint: new FakeEslint(proc(1))}),
         })
         const handlers = makePhaseHandlers(deps)
-        const reviewers: ReviewerResult[] = [
-            {reviewer: 'implementation-reviewer', verdict: 'approve', confirmed_blockers: 0},
-        ]
-        const ctx = await ctxFor({task_id: 't-multi', reviewers})
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()})
         const result = await handlers.verify(ctx)
 
         expect(result.kind).toBe('wait-retry')
@@ -684,11 +703,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         })
         const deps = makeDeps({tools: makeFakeTools({git: perRunProbe})})
         const handlers = makePhaseHandlers(deps)
-        const reviewers: ReviewerResult[] = [
-            {reviewer: 'implementation-reviewer', verdict: 'approve', confirmed_blockers: 0},
-            {reviewer: 'quality-reviewer', verdict: 'approve', confirmed_blockers: 0},
-        ]
-        const ctx = await ctxFor({task_id: 't-multi', reviewers})
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()})
         const result = await handlers.verify(ctx)
 
         // Must advance to ship — the gate must have resolved origin/staging-run-1 as its

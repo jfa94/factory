@@ -23,7 +23,9 @@
  * component-anchored TCB rules still fire.
  */
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
-import {nonNull} from '../shared/index.js'
+import {createLogger, nonNull} from '../shared/index.js'
+
+const log = createLogger('write-protection')
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
 import {isTcbProtected, type TcbContext} from './tcb.js'
 import {
@@ -189,8 +191,16 @@ function resolveTcbContext(deps: WriteProtectionDeps): TcbContext {
     let dataDir: string | undefined
     try {
         dataDir = resolveDataDir(deps)
-    } catch {
+    } catch (err) {
+        // resolveDataDir throws ONLY when CLAUDE_PLUGIN_DATA is unset — the data-dir TCB
+        // rules (runs/**, specs/**) then can't apply, but the repo-relative rules (hooks/**,
+        // dist/**) still do. Surface it rather than swallow: an UNEXPECTED resolver failure
+        // must be detectable, mirroring holdout-guard's identical best-effort resolve.
         dataDir = undefined
+        log.warn(
+            `TCB data dir unresolved (${(err as Error).message}); ` +
+                `data-dir write-protection rules are inert — repo-relative rules still apply`
+        )
     }
     return {repoRoot: deps.repoRoot ?? cwd, dataDir}
 }

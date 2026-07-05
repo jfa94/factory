@@ -2,7 +2,8 @@
  * Per-task `tdd_exempt` reader wiring (Δ N).
  *
  * The deterministic TDD gate honors `tdd_exempt` ONLY when the GateContext carries
- * an {@link ExemptReader} (src/verifier/deterministic/strategies/tdd.ts:99). Both
+ * an {@link ExemptReader} (the `ctx.exemptReader.isExempt` consultation in
+ * src/verifier/deterministic/strategies/tdd.ts). Both
  * live GateContext construction sites — the verify reporter
  * ({@link import("./handlers.js").makePhaseHandlers}) and the record-reviews record
  * ({@link import("./record.js").applyRecordReviews}) — build the reader here so an

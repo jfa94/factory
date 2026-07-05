@@ -1347,7 +1347,7 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
         ...s,
         tasks: Object.fromEntries(
             Object.entries(s.tasks).map(([id, t]) =>
-                taskIds.includes(id) ? [id, resetTaskRow(t, {e2eFeedback: feedback})] : [id, t]
+                taskIds.includes(id) ? [id, resetTaskRow(t, {e2eFeedback: feedback, clearShippedPr: true})] : [id, t]
             )
         ),
         e2e_phase: {

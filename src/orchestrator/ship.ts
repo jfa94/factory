@@ -103,6 +103,10 @@ export async function shipTask(deps: ShipDeps, ctx: PhaseContext): Promise<Phase
         title: specTask.title,
         body: shipBody(runId, specTask),
         base: resolveStagingBranch(runId, ctx.run.staging_branch),
+        // Gate the MERGED-PR fallback on the number state still remembers: a crash-resume
+        // keeps pr_number (idempotent no-op), but e2e-reopen clears it so a fresh PR opens
+        // for the reopened commits instead of rebinding the already-merged one. See pr.ts.
+        knownPrNumber: task.pr_number,
     })
     await deps.state.updateTask(runId, task.task_id, (t) => ({
         ...t,

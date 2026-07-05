@@ -6963,6 +6963,7 @@ function isTcbProtected(candidatePath, ctx = {}, cwd = process.cwd()) {
 }
 
 // src/hooks/write-protection.ts
+var log5 = createLogger("write-protection");
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
 var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
 var REDIRECT_TARGET_RE = /(?:\d+|&)?>{1,2}\|?\s*("[^"]+"|'[^']+'|[^\s;|&<>()`]+)/g;
@@ -7057,8 +7058,11 @@ function resolveTcbContext(deps) {
   let dataDir;
   try {
     dataDir = resolveDataDir(deps);
-  } catch {
+  } catch (err) {
     dataDir = void 0;
+    log5.warn(
+      `TCB data dir unresolved (${err.message}); data-dir write-protection rules are inert \u2014 repo-relative rules still apply`
+    );
   }
   return { repoRoot: deps.repoRoot ?? cwd, dataDir };
 }
@@ -7109,7 +7113,7 @@ async function readAllStdin2() {
 
 // src/hooks/holdout-guard.ts
 import { sep as sep3 } from "node:path";
-var log5 = createLogger("holdout-guard");
+var log6 = createLogger("holdout-guard");
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
 var READ_COMMAND_RE = /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
 function isHoldoutPath(canonical) {
@@ -7136,7 +7140,7 @@ function decideHoldoutGuard(input, deps = {}) {
     dataDir = resolveDataDir(deps);
   } catch (err) {
     dataDir = void 0;
-    log5.warn(
+    log6.warn(
       `holdout store dir unresolved (${err.message}); the Bash textual-match arm is inert (no store configured) \u2014 canonical-path denial still applies`
     );
   }
@@ -8046,7 +8050,7 @@ function specDir(dataDir, repo, specId) {
 }
 
 // src/core/state/manager.ts
-var log6 = createLogger("state");
+var log7 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class _StateManager {
   dataDir;
@@ -8263,7 +8267,7 @@ var StateManager = class _StateManager {
         if (err.code === "ENOENT") {
           continue;
         }
-        log6.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log7.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
@@ -8414,7 +8418,7 @@ var StateManager = class _StateManager {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log6.warn(`state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`);
+      log7.warn(`state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`);
       await unlink2(tmp).catch(() => {
       });
     }
@@ -8712,7 +8716,7 @@ async function readAllStdin5() {
 }
 
 // src/hooks/subagent-stop.ts
-var log7 = createLogger("hook:subagent-stop");
+var log8 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -8763,7 +8767,7 @@ async function handleSubagentStop(input, deps = {}) {
   const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
     if (sessionId !== void 0) {
-      log7.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
+      log8.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
     }
     return null;
   }
@@ -8775,7 +8779,7 @@ async function handleSubagentStop(input, deps = {}) {
       try {
         transcriptText = await deps.readTranscript(transcriptPath);
       } catch (err) {
-        log7.warn(
+        log8.warn(
           `could not read transcript '${transcriptPath}': ${err.message} \u2014 falling back to last_assistant_message / single-reviewing-task resolution`
         );
         transcriptText = void 0;
@@ -8793,17 +8797,17 @@ async function handleSubagentStop(input, deps = {}) {
     }
   }
   if (taskId.length === 0) {
-    log7.error(
+    log8.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 orchestrator record is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log7.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
+    log8.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log7.info(
+  log8.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 orchestrator records reviews via the drive --results record)`
   );
   return null;
@@ -8814,19 +8818,19 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch (err) {
-    log7.error(`malformed SubagentStop input: ${err.message}`);
+    log8.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log7.error(`SubagentStop handler error: ${err.message}`);
+    log8.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
 
 // src/hooks/stop-gate.ts
-var log8 = createLogger("hook:stop-gate");
+var log9 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, stoppingSession) {
   if (run === null) {
@@ -8857,25 +8861,25 @@ async function runStopGate(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     stoppingSession = sessionIdOf(parseHookInput(raw));
   } catch (err) {
-    log8.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log9.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
   try {
     run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
     if (run === null && stoppingSession !== void 0) {
-      log8.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
+      log9.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
     }
   } catch (err) {
     const rawMsg = err.message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
     const reason = `could not enumerate run state: ${rawMsg}. Investigate the factory data directory before stopping.`;
-    log8.error(reason);
+    log9.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
   const action = decideStop(run, stoppingSession);
   if (action.kind === "allow-unfinalized") {
-    log8.info(
+    log9.info(
       `run ${action.run_id}: all tasks terminal but the run is not finalized \u2014 left running; \`factory resume\` will run the real finalize`
     );
   }

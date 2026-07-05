@@ -8,8 +8,16 @@
  * reach it, but an implementer could shell at the absolute data-dir path — this guard
  * denies that, with absolute and `..`/symlink-traversal forms collapsing to the
  * same canonical deny. Bash denial is PATH-based (the holdouts path in argv), not a
- * reader-binary denylist: `python`/`node`/`dd`/`base64`/`cp` exfiltration is denied
- * just like `cat`, since any binary that opens the file leaks the key.
+ * reader-binary denylist: a command that names the holdouts path as a token is denied
+ * whatever the binary — `python`/`node`/`dd`/`base64`/`cp` with a LITERAL path leak
+ * just like `cat`.
+ *
+ * BOUNDARY (do not overclaim): this is a TEXT scan of argv tokens. It cannot beat a
+ * Turing-complete interpreter that COMPUTES the path at runtime (`python -c "open(b+'hold'+'outs')"`,
+ * a here-doc, stdin, a written-then-run script) — no literal token to match, no deny.
+ * The durable read-confinement is an OS-level read-sandbox on the data dir (deferred;
+ * tracked as executor-confinement work), not this hook. Treat this guard as a tripwire
+ * against casual/literal reads, not a containment boundary against a malicious agent.
  *
  * Path matching reuses tcb.ts's canonicalization; the holdout-specific matcher
  * is narrower than the full TCB write-deny (it targets the holdouts subtree, the

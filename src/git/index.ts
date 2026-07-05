@@ -43,8 +43,20 @@ export {runScopedBranch, isRunScopedBranch, parseRunScopedBranch} from './branch
 export type {RunScopedBranchParts} from './branch.js'
 
 // worktree lifecycle (D12)
-export {createTaskWorktree, assertBaseIsStagingTip, ensureOnStaging, removeWorktree} from './worktree.js'
-export type {CreateTaskWorktreeArgs, TaskWorktree, AssertBaseArgs, EnsureOnStagingArgs} from './worktree.js'
+export {
+    createTaskWorktree,
+    assertBaseIsStagingTip,
+    ensureOnStaging,
+    removeWorktree,
+    resyncTaskBranchOntoStaging,
+} from './worktree.js'
+export type {
+    CreateTaskWorktreeArgs,
+    TaskWorktree,
+    AssertBaseArgs,
+    EnsureOnStagingArgs,
+    ResyncTaskBranchArgs,
+} from './worktree.js'
 
 // worktree dependency provisioning (setupCommand / lockfile install before gates)
 export {provisionWorktree, resolveSetupCommand} from './provision.js'

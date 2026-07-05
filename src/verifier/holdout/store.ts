@@ -38,6 +38,9 @@ export const HoldoutRecordSchema = z
     .refine((r) => r.withheld_count === r.withheld_criteria.length, {
         message: 'withheld_count must equal withheld_criteria.length',
     })
+    .refine((r) => r.withheld_count <= r.total_criteria, {
+        message: 'withheld_count must not exceed total_criteria (cannot withhold more than were split)',
+    })
 
 /** A persisted holdout answer-key record. */
 export type HoldoutRecord = z.infer<typeof HoldoutRecordSchema>
@@ -127,8 +130,14 @@ export class FsHoldoutStore implements HoldoutStore {
         try {
             await readFile(this.path(runId, taskId), 'utf8')
             return true
-        } catch {
-            return false
+        } catch (err) {
+            // ONLY a genuinely-absent key means "no holdout". A real I/O error (EACCES,
+            // EIO, …) must NOT masquerade as absent — that would silently drop the answer-key
+            // gate from the merge decision. Surface it so the verify phase fails loud.
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                return false
+            }
+            throw err
         }
     }
 }

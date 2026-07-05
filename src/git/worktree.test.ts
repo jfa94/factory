@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {assertBaseIsStagingTip, createTaskWorktree, ensureOnStaging, removeWorktree} from './worktree.js'
+import {
+    assertBaseIsStagingTip,
+    createTaskWorktree,
+    ensureOnStaging,
+    removeWorktree,
+    resyncTaskBranchOntoStaging,
+} from './worktree.js'
 import {FakeGitClient} from './fakes.js'
 import {at} from '../shared/index.js'
 
@@ -86,6 +92,39 @@ describe('D12 — idempotent checkout -B fallback (ported independently of the s
         git.localBranches.set('factory/run-1/t1', 'sha-stale-0')
         await ensureOnStaging({gitClient: git, path: '/tmp/wt-5', branch: 'factory/run-1/t1'})
         expect(git.localBranches.get('factory/run-1/t1')).toBe('sha-staging-1')
+    })
+})
+
+describe('resyncTaskBranchOntoStaging (Bug #1 — forward-merge staging into a BEHIND task branch)', () => {
+    it('fetches staging, forward-merges it into the branch, then re-pushes (clean merge)', async () => {
+        const git = new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging-1'}})
+        const r = await resyncTaskBranchOntoStaging({
+            git,
+            cwd: '/tmp/wt-rs',
+            branch: 'factory/run-1/t1',
+            stagingBranch: 'staging-run-1',
+        })
+        expect(r).toEqual({merged: true})
+        // Order matters: fetch → try-merge → push (a local-only merge leaves the PR BEHIND).
+        expect(git.calls).toEqual([
+            'fetch origin staging-run-1',
+            'try-merge --no-edit origin/staging-run-1 into factory/run-1/t1',
+            'push origin factory/run-1/t1',
+        ])
+        expect(git.mergesInto['factory/run-1/t1']).toContain('origin/staging-run-1')
+    })
+
+    it('on a merge conflict returns {merged:false} and does NOT push (broken merge never reaches the remote)', async () => {
+        const git = new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging-1'}})
+        git.failMergeNoForce = true
+        const r = await resyncTaskBranchOntoStaging({
+            git,
+            cwd: '/tmp/wt-rs',
+            branch: 'factory/run-1/t1',
+            stagingBranch: 'staging-run-1',
+        })
+        expect(r.merged).toBe(false)
+        expect(git.calls).not.toContain('push origin factory/run-1/t1')
     })
 })
 

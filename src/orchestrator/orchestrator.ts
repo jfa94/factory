@@ -43,7 +43,7 @@ import type {UsageSignal} from './deps.js'
 import {markInFlight, completeTask, failStep, escalateOrFail, type TaskOutcome, type TaskStep} from './transitions.js'
 import {applyRecordProducer, applyRecordHoldout, applyRecordReviews, type RecordDeps} from './record.js'
 import {makePhaseHandlers} from './handlers.js'
-import {resolveStagingBranch} from './deps.js'
+import {resolveStagingBranch, runScopedBranch, resyncTaskBranchOntoStaging} from './deps.js'
 import {shipTask} from './ship.js'
 import {taskWorktreePath} from './paths.js'
 import {applyQuotaGate, quotaStopFields, type QuotaStop} from './quota-gate.js'
@@ -368,6 +368,51 @@ export async function nextAction(
             }
             case 'wait-retry': {
                 if (result.phase === 'ship') {
+                    // Bug #1: a serial-writer BEHIND refusal means staging advanced under this
+                    // task. Re-routing to exec alone re-runs the producer on the SAME stale base,
+                    // so ship refuses again every cycle until the budget burns. Forward-merge the
+                    // current staging tip INTO the task branch (and re-push, so the remote PR head
+                    // advances — the serializer reads BEHIND from the remote) BEFORE the re-route,
+                    // so exec re-runs on the integrated base. A clean textual merge can still be a
+                    // SEMANTIC conflict (both sides apply but break a test together); exec→verify is
+                    // exactly the fix-forward path that repairs it and re-runs every gate. A real
+                    // merge conflict is terminal blocked-environmental (tree already aborted-clean).
+                    // Done before the atomic bump so a crash replays the merge (idempotent: a second
+                    // merge is "already up to date") until the bump commits phase→exec.
+                    const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId)
+                    const stagingBranch = resolveStagingBranch(runId, run.staging_branch)
+                    if (!(await deps.git.worktreeExists(resyncWorktree))) {
+                        const step = await failStep(
+                            deps,
+                            runId,
+                            taskId,
+                            'blocked-environmental',
+                            `staging re-sync: task worktree missing (${resyncWorktree})`
+                        )
+                        if (!step.done) {
+                            throw new Error('orchestrator: failStep returned non-terminal step')
+                        }
+                        return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                    }
+                    const resync = await resyncTaskBranchOntoStaging({
+                        git: deps.git,
+                        cwd: resyncWorktree,
+                        branch: runScopedBranch(runId, taskId),
+                        stagingBranch,
+                    })
+                    if (!resync.merged) {
+                        const step = await failStep(
+                            deps,
+                            runId,
+                            taskId,
+                            'blocked-environmental',
+                            `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
+                        )
+                        if (!step.done) {
+                            throw new Error('orchestrator: failStep returned non-terminal step')
+                        }
+                        return {kind: 'done', run_id: runId, task_id: taskId, outcome: step.outcome}
+                    }
                     // Live-merge refusal → bounded re-sync through exec (persisted budget).
                     // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
                     // crash between the bump and the next markInFlight cannot double-spend the

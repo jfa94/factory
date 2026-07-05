@@ -82,6 +82,16 @@ async function driveToVerify(
 }
 
 /**
+ * Register a task worktree in the fake git client at the path the orchestrator derives.
+ * Past preflight a real run ALWAYS has this worktree at ship time; the fixture omits it,
+ * so tests that exercise the BEHIND ship-refusal re-sync (which guards on worktreeExists,
+ * Bug #1) must seed it or the guard fails the task as environmentally-blocked.
+ */
+function registerTaskWorktree(deps: OrchestratorDeps, runId: string, dataDir: string, taskId: string): void {
+    ;(deps.git as FakeGitClient).worktrees.set(taskWorktreePath(dataDir, runId, taskId), runScopedBranch(runId, taskId))
+}
+
+/**
  * Build a DriveResults with approving reviews from all PANEL_ROLES (all PANEL_ROLES) + holdout pass.
  * result_key is echoed from the prior spawn envelope.
  */
@@ -688,7 +698,7 @@ describe('nextAction', () => {
             mergeStateStatus: 'BEHIND',
             url: 'https://github.com/fake/repo/pull/500',
         })
-        const {deps, runId, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
@@ -701,6 +711,7 @@ describe('nextAction', () => {
                 pr_number: 500,
             },
         })
+        registerTaskWorktree(deps, runId, dataDir, 'T1')
         try {
             const env = await nextAction(deps, runId, 'T1')
             expect(env).toMatchObject({
@@ -728,11 +739,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new BehindOnceGh()
-        const {deps, runId, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
+        registerTaskWorktree(deps, runId, dataDir, 'T1')
         try {
             const panelEnv = await driveToVerify(deps, runId, 'T1')
             const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
@@ -777,11 +789,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new AlwaysBehindGh()
-        const {deps, runId, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
+        registerTaskWorktree(deps, runId, dataDir, 'T1')
         try {
             const panelEnv = await driveToVerify(deps, runId, 'T1')
             const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
@@ -818,6 +831,91 @@ describe('nextAction', () => {
             const run = await deps.state.read(runId)
             expect(run.tasks.T1?.phase).toBe('exec')
             expect(run.tasks.T1?.merge_resyncs).toBe(1)
+        } finally {
+            await cleanup()
+        }
+    })
+
+    // Bug #1 (the load-bearing guardrail): a BEHIND ship refusal must FORWARD-MERGE the
+    // current staging tip into the task branch and RE-PUSH before re-routing to exec —
+    // otherwise the branch stays BEHIND every cycle and the run burns the whole re-sync
+    // budget on correct code, failing blocked-environmental.
+    it('BEHIND re-sync fetches + forward-merges staging into the task branch + re-pushes before re-routing', async () => {
+        class BehindOnceGh extends FakeGhClient {
+            private views = 0
+            override async prView(n: number, fields: readonly string[]) {
+                const pr = await super.prView(n, fields)
+                this.views += 1
+                return this.views === 1 ? {...pr, mergeStateStatus: 'BEHIND' as const} : pr
+            }
+        }
+        const gh = new BehindOnceGh()
+        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+            tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
+            shipMode: 'live',
+            ghClient: gh,
+        })
+        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        const git = deps.git as FakeGitClient
+        const branch = runScopedBranch(runId, 'T1')
+        const stagingBranch = runStagingBranch(runId)
+        try {
+            const panelEnv = await driveToVerify(deps, runId, 'T1')
+            const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
+            const resyncEnv = await nextAction(deps, runId, 'T1', approvingReviewsResults(panelEnv, withheld))
+
+            // Re-routed to a fresh exec spawn (not failed) …
+            expect(resyncEnv.kind).toBe('spawn')
+            if (resyncEnv.kind !== 'spawn') {
+                throw new Error('expected an exec re-sync spawn')
+            }
+            expect(resyncEnv.phase).toBe('exec')
+            // … having forward-merged the LATEST staging into the branch and re-pushed it,
+            // so the remote PR head advances off BEHIND (the serializer reads the remote).
+            expect(git.calls).toContain(`fetch origin ${stagingBranch}`)
+            expect(git.calls).toContain(`try-merge --no-edit origin/${stagingBranch} into ${branch}`)
+            expect(git.calls).toContain(`push origin ${branch}`)
+            expect(git.mergesInto[branch]).toContain(`origin/${stagingBranch}`)
+            // The push must come AFTER the merge (a local-only merge would leave the PR BEHIND).
+            expect(git.calls.indexOf(`push origin ${branch}`)).toBeGreaterThan(
+                git.calls.indexOf(`try-merge --no-edit origin/${stagingBranch} into ${branch}`)
+            )
+        } finally {
+            await cleanup()
+        }
+    })
+
+    it('a re-sync merge CONFLICT fails the task blocked-environmental (terminal, no re-route)', async () => {
+        class AlwaysBehindGh extends FakeGhClient {
+            override async prView(n: number, fields: readonly string[]) {
+                const pr = await super.prView(n, fields)
+                return {...pr, mergeStateStatus: 'BEHIND' as const}
+            }
+        }
+        const gh = new AlwaysBehindGh()
+        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+            tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
+            shipMode: 'live',
+            ghClient: gh,
+        })
+        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        const git = deps.git as FakeGitClient
+        git.failMergeNoForce = true // the forward-merge hits a real conflict
+        try {
+            const panelEnv = await driveToVerify(deps, runId, 'T1')
+            const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
+            const env = await nextAction(deps, runId, 'T1', approvingReviewsResults(panelEnv, withheld))
+            expect(env).toMatchObject({
+                kind: 'done',
+                outcome: {outcome: 'failed', failure_class: 'blocked-environmental'},
+            })
+            const run = await deps.state.read(runId)
+            expect(run.tasks.T1?.status).toBe('failed')
+            // Terminal on the FIRST conflict — the budget is not spent chasing a conflict.
+            expect(run.tasks.T1?.merge_resyncs).toBe(0)
+            // Conflict path aborted the merge back to a clean tree (never pushed a broken merge).
+            expect(git.calls).toContain('merge --abort')
+            expect(git.calls).not.toContain(`push origin ${runScopedBranch(runId, 'T1')}`)
         } finally {
             await cleanup()
         }

@@ -352,9 +352,11 @@ factory run docs [--run <id>] [--results <path>]
   **in the worktree without pushing**. Idempotent on resume — an existing worktree from
   a prior failed attempt is reused, not re-created.
 - **Record** (`--results <path>`): reads a `{status:"<scribe STATUS line>"}` JSON file. On
-  `STATUS: DONE`, fast-forward/merges `docs-<run-id>` into `staging-<run-id>`, pushes the
+  `STATUS: DONE` **or `DONE_WITH_CONCERNS`** (both parse to `done` — `src/producer/agents.ts`),
+  fast-forward/merges `docs-<run-id>` into `staging-<run-id>`, pushes the
   staging branch (scribe's commit, if any, rides along), removes the worktree, marks the
-  `docs` phase `done`, and returns `{kind:"done", run_id}`. On any non-`DONE` status,
+  `docs` phase `done`, and returns `{kind:"done", run_id}`. On any other status
+  (`BLOCKED`/`NEEDS_CONTEXT`/unparseable),
   increments the `docs.attempts` counter and writes a `failed` docs marker. While
   `attempts < MAX_DOCS_ATTEMPTS` (2) it transitions the run to **suspended** (the staging
   branch + worktree are kept for retry) and returns `{kind:"suspend", run_id, reason}`;

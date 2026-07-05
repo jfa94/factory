@@ -8434,6 +8434,17 @@ var DefaultGitClient = class {
     await this.execOrThrow(["checkout", branch], opts);
     await this.execOrThrow(["merge", "--no-edit", ref], opts);
   }
+  async tryMergeNoForce(branch, ref, opts) {
+    log5.debug(`tryMerge --no-edit ${ref} into ${branch}`);
+    await this.execOrThrow(["checkout", branch], opts);
+    const r = await this.exec(["merge", "--no-edit", ref], opts);
+    if (r.code === 0) {
+      return { merged: true };
+    }
+    const conflict = (r.stderr.trim().length > 0 ? r.stderr : r.stdout).trim() || `git merge exited ${r.code ?? "null"}`;
+    await this.exec(["merge", "--abort"], opts);
+    return { merged: false, conflict };
+  }
   async resetHardClean(ref, opts) {
     log5.debug(`reset --hard ${ref} && clean -fd`);
     await this.execOrThrow(["reset", "--hard", ref], opts);
@@ -8905,6 +8916,16 @@ async function ensureOnStaging(args) {
   log8.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`);
   await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts);
 }
+async function resyncTaskBranchOntoStaging(args) {
+  const remote = args.remote ?? "origin";
+  const opts = { cwd: args.cwd };
+  await args.git.fetch(remote, args.stagingBranch, opts);
+  const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, opts);
+  if (attempt.merged) {
+    await args.git.push(remote, args.branch, opts);
+  }
+  return attempt;
+}
 
 // src/git/provision.ts
 import { access } from "node:fs/promises";
@@ -8964,7 +8985,8 @@ var GIT_DEFAULTS3 = GitSchema.parse({});
 async function createTaskPrIdempotent(args) {
   const base = args.base ?? GIT_DEFAULTS3.stagingBranch;
   const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
-  const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
+  const mergedResume = args.knownPrNumber !== void 0 ? existing.find((p) => p.state === "MERGED" && p.number === args.knownPrNumber) : void 0;
+  const pr = existing.find((p) => p.state === "OPEN") ?? mergedResume;
   if (pr !== void 0) {
     log10.info(`resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`);
     return { number: pr.number, url: pr.url ?? "", resumed: true };
@@ -11949,16 +11971,16 @@ var DefaultFsProbe = class {
     return false;
   }
 };
+function isPct(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100;
+}
 function readMetric(total, key) {
   const v = total[key];
-  if (typeof v === "number" && Number.isFinite(v)) {
+  if (isPct(v)) {
     return v;
   }
-  if (typeof v === "object" && v !== null) {
-    const pct = v.pct;
-    if (typeof pct === "number" && Number.isFinite(pct)) {
-      return pct;
-    }
+  if (typeof v === "object" && v !== null && isPct(v.pct)) {
+    return v.pct;
   }
   return null;
 }
@@ -12080,9 +12102,10 @@ function isSummary(v) {
     return false;
   }
   const o = v;
-  return ["lines", "branches", "functions", "statements"].every(
-    (k) => typeof o[k] === "number" && Number.isFinite(o[k])
-  );
+  return ["lines", "branches", "functions", "statements"].every((k) => {
+    const m = o[k];
+    return typeof m === "number" && Number.isFinite(m) && m >= 0 && m <= 100;
+  });
 }
 var FsCoverageStore = class {
   constructor(dir) {
@@ -12652,6 +12675,8 @@ var HoldoutRecordSchema = external_exports.object({
   withheld_count: external_exports.number().int().nonnegative()
 }).strict().refine((r) => r.withheld_count === r.withheld_criteria.length, {
   message: "withheld_count must equal withheld_criteria.length"
+}).refine((r) => r.withheld_count <= r.total_criteria, {
+  message: "withheld_count must not exceed total_criteria (cannot withhold more than were split)"
 });
 function parseHoldoutRecord(raw, source) {
   const result = HoldoutRecordSchema.safeParse(raw);
@@ -12691,8 +12716,11 @@ var FsHoldoutStore = class {
     try {
       await readFile9(this.path(runId, taskId), "utf8");
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        return false;
+      }
+      throw err;
     }
   }
 };
@@ -13075,6 +13103,9 @@ function resetTaskRow(task, opts = {}) {
     // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
     // recreated worktree to the pre-rescue tip_sha.
     spawn_in_flight: _spawnInFlight,
+    // Kept by default (branch/PR pointers reused on retry — idempotent-create, Δ P);
+    // only e2e-reopen opts in to dropping it, so the merged PR isn't rebound below.
+    pr_number: _prNumber,
     ...rest
   } = task;
   return {
@@ -13083,6 +13114,7 @@ function resetTaskRow(task, opts = {}) {
     escalation_rung: 0,
     reviewers: [],
     merge_resyncs: 0,
+    ...opts.clearShippedPr !== true && _prNumber !== void 0 ? { pr_number: _prNumber } : {},
     ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
   };
 }
@@ -13633,7 +13665,7 @@ function makePhaseHandlers(deps) {
           )
         );
       };
-      if (task.reviewers.length === 0) {
+      if (task.reviewers.length < PANEL_ROLES.length) {
         return panelSpawn();
       }
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
@@ -13661,7 +13693,9 @@ function makePhaseHandlers(deps) {
       }
       return waitRetry(
         "verify",
-        mergeGateBlockReason(task.reviewers, gate.evidence),
+        // fastPathEvidence (not gate.evidence): includes the holdout gate that may be
+        // the actual blocker, so the reason names the real cause instead of a generic fallback.
+        mergeGateBlockReason(task.reviewers, fastPathEvidence),
         ctx.attempt ?? 1,
         ESCALATION_CAP + 1
       );
@@ -14134,7 +14168,11 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: resolveStagingBranch(runId, ctx.run.staging_branch)
+    base: resolveStagingBranch(runId, ctx.run.staging_branch),
+    // Gate the MERGED-PR fallback on the number state still remembers: a crash-resume
+    // keeps pr_number (idempotent no-op), but e2e-reopen clears it so a fresh PR opens
+    // for the reopened commits instead of rebinding the already-merged one. See pr.ts.
+    knownPrNumber: task.pr_number
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -14325,6 +14363,40 @@ async function nextAction(deps, runId, taskId, results) {
       }
       case "wait-retry": {
         if (result.phase === "ship") {
+          const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId);
+          const stagingBranch = resolveStagingBranch(runId, run11.staging_branch);
+          if (!await deps.git.worktreeExists(resyncWorktree)) {
+            const step2 = await failStep(
+              deps,
+              runId,
+              taskId,
+              "blocked-environmental",
+              `staging re-sync: task worktree missing (${resyncWorktree})`
+            );
+            if (!step2.done) {
+              throw new Error("orchestrator: failStep returned non-terminal step");
+            }
+            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+          }
+          const resync = await resyncTaskBranchOntoStaging({
+            git: deps.git,
+            cwd: resyncWorktree,
+            branch: runScopedBranch(runId, taskId),
+            stagingBranch
+          });
+          if (!resync.merged) {
+            const step2 = await failStep(
+              deps,
+              runId,
+              taskId,
+              "blocked-environmental",
+              `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
+            );
+            if (!step2.done) {
+              throw new Error("orchestrator: failStep returned non-terminal step");
+            }
+            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
+          }
           let newResyncs = 0;
           let overCap = false;
           await deps.state.updateTask(runId, taskId, (t) => {
@@ -15555,7 +15627,7 @@ async function runSuiteAndDecide(deps, runId) {
     ...s,
     tasks: Object.fromEntries(
       Object.entries(s.tasks).map(
-        ([id, t]) => taskIds.includes(id) ? [id, resetTaskRow(t, { e2eFeedback: feedback })] : [id, t]
+        ([id, t]) => taskIds.includes(id) ? [id, resetTaskRow(t, { e2eFeedback: feedback, clearShippedPr: true })] : [id, t]
       )
     ),
     e2e_phase: {

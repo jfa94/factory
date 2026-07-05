@@ -32,6 +32,12 @@ export interface PushOptions extends GitOpts {
 export type MergeOptions = GitOpts
 
 /**
+ * Outcome of {@link GitClient.tryMergeNoForce}: a clean merge, or a conflict the caller
+ * must handle (the git tree was already `--abort`ed back to clean before this returns).
+ */
+export type MergeAttempt = {merged: true} | {merged: false; conflict: string}
+
+/**
  * The typed git surface WS3 builds on. NO force-push exists here by design.
  */
 export interface GitClient {
@@ -102,6 +108,15 @@ export interface GitClient {
      * (non-auto-recoverable → surfaces for rescue). NEVER uses `--force` or `-f`.
      */
     mergeFfOrCommit(branch: string, ref: string, opts?: MergeOptions): Promise<void>
+    /**
+     * Conflict-AWARE sibling of {@link mergeFfOrCommit}: check out `branch`, then
+     * `git merge --no-edit <ref>`. On a clean merge (incl. "Already up to date")
+     * returns `{merged:true}`. On conflict, runs `git merge --abort` to restore a
+     * clean tree and returns `{merged:false, conflict}` — it does NOT throw, so the
+     * caller can classify the conflict instead of crashing. NEVER uses `--force`.
+     * (mergeFfOrCommit stays fatal-on-conflict; its staging callers depend on the throw.)
+     */
+    tryMergeNoForce(branch: string, ref: string, opts?: MergeOptions): Promise<MergeAttempt>
     /**
      * `git reset --hard <ref>` then `git clean -fd` — restore the worktree to `ref`,
      * discarding every commit/staged/unstaged change above it AND untracked (NON-ignored)
@@ -272,6 +287,21 @@ export class DefaultGitClient implements GitClient {
         // Check out the branch from its origin tracking ref first, then merge.
         await this.execOrThrow(['checkout', branch], opts)
         await this.execOrThrow(['merge', '--no-edit', ref], opts)
+    }
+
+    async tryMergeNoForce(branch: string, ref: string, opts?: MergeOptions): Promise<MergeAttempt> {
+        log.debug(`tryMerge --no-edit ${ref} into ${branch}`)
+        await this.execOrThrow(['checkout', branch], opts)
+        const r = await this.exec(['merge', '--no-edit', ref], opts)
+        if (r.code === 0) {
+            return {merged: true}
+        }
+        // Non-zero → conflict (or an un-mergeable ref). Abort to restore a clean tree; the
+        // abort is best-effort (nothing-to-abort exits non-zero harmlessly) so use `exec`.
+        const conflict =
+            (r.stderr.trim().length > 0 ? r.stderr : r.stdout).trim() || `git merge exited ${r.code ?? 'null'}`
+        await this.exec(['merge', '--abort'], opts)
+        return {merged: false, conflict}
     }
 
     async resetHardClean(ref: string, opts?: GitOpts): Promise<void> {

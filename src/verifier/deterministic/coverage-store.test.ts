@@ -50,6 +50,16 @@ describe('FsCoverageStore', () => {
         await expect(store.get(SHA1)).rejects.toThrow(/corrupt entry/)
     })
 
+    it('throws LOUD on an out-of-range metric (>100) instead of gating on a poisoned cache entry', async () => {
+        await store.put(SHA1, SUMMARY)
+        await writeFile(
+            path.join(dir, `${SHA1}.json`),
+            JSON.stringify({lines: 90, branches: 80, functions: 70, statements: 150}),
+            'utf8'
+        )
+        await expect(store.get(SHA1)).rejects.toThrow(/corrupt entry/)
+    })
+
     it.each(['../evil', 'a'.repeat(39), 'A'.repeat(40), 'deadbeef', ''])(
         'refuses the non-sha key %j (path-traversal guard)',
         async (key) => {

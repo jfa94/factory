@@ -785,7 +785,7 @@ describe('runSuiteAndDecide (via runE2eEmit re-entry)', () => {
         expect(run.e2e_phase?.reopen_counts['task-a']).toBe(1)
     })
 
-    it('pass 1: a mappable critical failure reopens its task with e2e_feedback, preserving branch/PR', async () => {
+    it('pass 1: a mappable critical failure reopens its task with e2e_feedback, keeping the branch but CLEARING the shipped PR (Bug #2)', async () => {
         await state.update(RUN_ID, (s) => ({
             ...s,
             tasks: {
@@ -815,8 +815,11 @@ describe('runSuiteAndDecide (via runE2eEmit re-entry)', () => {
         const task = nonNull(run.tasks['task-a'])
         expect(task.status).toBe('pending')
         expect(task.e2e_feedback).toContain('checkout.spec.ts')
+        // Branch is reused (the stable deterministic branch); the MERGED pr_number is FORGOTTEN
+        // so ship opens a FRESH PR for the reopened commits instead of rebinding the merged one
+        // (which the serializer would no-op away — Bug #2).
         expect(task.branch).toBe('factory/run-1/task-a')
-        expect(task.pr_number).toBe(5)
+        expect(task.pr_number).toBeUndefined()
         expect(run.e2e_phase?.status).toBeUndefined() // cleared so the phase re-fires post-reopen
         expect(run.e2e_phase?.reopen_counts['task-a']).toBe(1)
         expect(run.e2e_phase?.attempts).toBe(1)

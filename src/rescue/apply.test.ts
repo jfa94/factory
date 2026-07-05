@@ -702,4 +702,17 @@ describe('resetTaskRow (Decision 39 — e2e reopen reuse)', () => {
         expect(reset.reviewers).toEqual([])
         expect(reset.merge_resyncs).toBe(0)
     })
+
+    it('with no opts, PRESERVES pr_number (branch/PR reused on retry — idempotent-create, Δ P)', () => {
+        const reset = resetTaskRow(task({task_id: 'a', status: 'shipping', pr_number: 11}))
+        expect(reset.pr_number).toBe(11)
+    })
+
+    it('opts.clearShippedPr DROPS pr_number — Bug #2: e2e-reopen opens a fresh PR', () => {
+        const reset = resetTaskRow(task({task_id: 'a', status: 'done', pr_number: 11}), {
+            e2eFeedback: 'checkout: 500 on submit',
+            clearShippedPr: true,
+        })
+        expect(reset.pr_number).toBeUndefined()
+    })
 })

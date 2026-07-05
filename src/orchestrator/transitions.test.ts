@@ -148,6 +148,16 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         expect((await readTask('t1')).e2e_feedback).toBeUndefined()
     })
 
+    it('completeTask clears any stale fix_findings (D5 — a blocked rung record must not outlive the task)', async () => {
+        await seedTask({
+            task_id: 't1',
+            status: 'shipping',
+            fix_findings: [{reviewer: 'quality-reviewer', description: 'unhandled null'}],
+        })
+        await completeTask(deps, RUN_ID, 't1')
+        expect((await readTask('t1')).fix_findings).toBeUndefined()
+    })
+
     // -- failTask / failStep --------------------------------------------------
 
     it('failTask persists the closed failure_class + reason (loud fail)', async () => {

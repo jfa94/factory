@@ -664,17 +664,24 @@ export class DefaultFsProbe implements FsProbe {
     }
 }
 
-/** Read one metric from a `total.*` entry, supporting object-or-scalar shapes. */
+/** A finite percentage in the documented 0..100 range (CoverageSummary contract). */
+function isPct(v: unknown): v is number {
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100
+}
+
+/**
+ * Read one metric from a `total.*` entry, supporting object-or-scalar shapes.
+ * An out-of-range (or non-finite) value returns null, so parseCoverageSummary
+ * fails the parse cleanly and the strategy routes through measure-on-miss — a
+ * corrupt >100 / negative percentage never poses as a real measurement.
+ */
 function readMetric(total: Record<string, unknown>, key: string): number | null {
     const v = total[key]
-    if (typeof v === 'number' && Number.isFinite(v)) {
+    if (isPct(v)) {
         return v
     }
-    if (typeof v === 'object' && v !== null) {
-        const pct = (v as {pct?: unknown}).pct
-        if (typeof pct === 'number' && Number.isFinite(pct)) {
-            return pct
-        }
+    if (typeof v === 'object' && v !== null && isPct((v as {pct?: unknown}).pct)) {
+        return (v as {pct: number}).pct
     }
     return null
 }

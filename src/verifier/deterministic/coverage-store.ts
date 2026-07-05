@@ -31,15 +31,20 @@ export interface CoverageStore {
     put(treeSha: string, summary: CoverageSummary): Promise<void>
 }
 
-/** The stored shape is the bare {@link CoverageSummary} — validate all four metrics. */
+/**
+ * The stored shape is the bare {@link CoverageSummary} — validate all four metrics
+ * are percentages in the documented 0..100 range. A corrupt out-of-range value is
+ * rejected here, so a poisoned cache entry re-measures instead of gating on garbage.
+ */
 function isSummary(v: unknown): v is CoverageSummary {
     if (typeof v !== 'object' || v === null) {
         return false
     }
     const o = v as Record<string, unknown>
-    return (['lines', 'branches', 'functions', 'statements'] as const).every(
-        (k) => typeof o[k] === 'number' && Number.isFinite(o[k])
-    )
+    return (['lines', 'branches', 'functions', 'statements'] as const).every((k) => {
+        const m = o[k]
+        return typeof m === 'number' && Number.isFinite(m) && m >= 0 && m <= 100
+    })
 }
 
 /** Filesystem {@link CoverageStore} over `<dir>/<treeSha>.json`. */

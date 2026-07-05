@@ -13,7 +13,7 @@
  * `Promise.reject(err)` (NOT a synchronous `throw`) so `.catch()`/`.rejects`
  * consumers observe a real rejection, exactly as with the real async clients.
  */
-import type {GitClient, GitOpts, MergeOptions, PushOptions} from './git-client.js'
+import type {GitClient, GitOpts, MergeAttempt, MergeOptions, PushOptions} from './git-client.js'
 import type {
     ChecksState,
     CreatedPr,
@@ -65,6 +65,8 @@ export class FakeGitClient implements GitClient {
     failRemoteUrl = false
     /** When true, `mergeFfOrCommit` throws (simulate a non-auto-recoverable merge conflict). */
     failMerge = false
+    /** When true, `tryMergeNoForce` reports `{merged:false}` (conflict) instead of merging. */
+    failMergeNoForce = false
     /** Ordered log of git ops, for assertions. */
     readonly calls: string[] = []
     /**
@@ -301,6 +303,19 @@ export class FakeGitClient implements GitClient {
         this.mergesInto[branch] ??= []
         this.mergesInto[branch].push(ref)
         return Promise.resolve()
+    }
+
+    tryMergeNoForce(branch: string, ref: string, _opts?: MergeOptions): Promise<MergeAttempt> {
+        this.calls.push(`try-merge --no-edit ${ref} into ${branch}`)
+        // `failMergeNoForce` set → model a conflict (tree already aborted-to-clean, per the
+        // real client's contract) WITHOUT throwing, so tests exercise the conflict branch.
+        if (this.failMergeNoForce) {
+            this.calls.push(`merge --abort`)
+            return Promise.resolve({merged: false, conflict: `conflict: ${ref} into ${branch} (simulated)`})
+        }
+        this.mergesInto[branch] ??= []
+        this.mergesInto[branch].push(ref)
+        return Promise.resolve({merged: true})
     }
 
     resetHardClean(ref: string, opts?: GitOpts): Promise<void> {
