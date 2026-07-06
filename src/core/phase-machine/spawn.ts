@@ -41,6 +41,32 @@ export const SpawnRoleEnum = z.enum([
 export type SpawnRole = z.infer<typeof SpawnRoleEnum>
 
 /**
+ * The SINGLE mapping home from engine role to the runner's `Task(subagent_type)`
+ * value (C4/Decision 52): every spawn envelope carries `agent_type` so the runner
+ * spawns it VERBATIM — no prose matrix to re-derive from. Bare plugin-local names
+ * (`implementer`, not `factory:implementer`): same-plugin resolution wins.
+ */
+export const AGENT_TYPE_BY_ROLE = {
+    'test-writer': 'test-writer',
+    implementer: 'implementer',
+    'implementation-reviewer': 'implementation-reviewer',
+    'quality-reviewer': 'quality-reviewer',
+    'silent-failure-hunter': 'silent-failure-hunter',
+    'systemic-failure-reviewer': 'systemic-failure-reviewer',
+    'database-design-reviewer': 'database-design-reviewer',
+    scribe: 'scribe',
+} as const satisfies Record<SpawnRole, string>
+
+/** Holdout-validator sidecar + finding-verifier — generic contexts, no bespoke agent. */
+export const GENERAL_PURPOSE_AGENT_TYPE = 'general-purpose'
+/** The e2e AUTHOR and ADJUDICATOR spawns (both `expects` arms) share one agent. */
+export const E2E_AUTHOR_AGENT_TYPE = 'e2e-author'
+export const E2E_ASSESSOR_AGENT_TYPE = 'e2e-assessor'
+export const TRACEABILITY_AUDITOR_AGENT_TYPE = 'traceability-auditor'
+export const SPEC_GENERATOR_AGENT_TYPE = 'spec-generator'
+export const SPEC_REVIEWER_AGENT_TYPE = 'spec-reviewer'
+
+/**
  * One agent to spawn. `isolation` defaults to `"worktree"` (the normal case — the
  * subagent gets its own worktree branched off staging HEAD per the worktree
  * invariant); `"none"` reuses the caller's tree (offline/test paths).
@@ -48,6 +74,8 @@ export type SpawnRole = z.infer<typeof SpawnRoleEnum>
 export const AgentSpecSchema = z.object({
     /** The reviewer/producer role (closed set). */
     role: SpawnRoleEnum,
+    /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+    agent_type: z.string().min(1),
     /** Worktree isolation. Defaults to "worktree". */
     isolation: z.enum(['worktree', 'none']).default('worktree'),
     /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */

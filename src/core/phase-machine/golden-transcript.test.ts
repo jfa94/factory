@@ -29,6 +29,7 @@ const mkManifest = (
     agents: [
         {
             role,
+            agent_type: role,
             isolation: 'worktree',
             model: 'sonnet',
             max_turns: 60,

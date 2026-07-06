@@ -124,7 +124,14 @@ describe('invariant #3 — finalize is terminal-by-construction at the seam', ()
                     spawn({
                         resume_phase: 'exec',
                         agents: [
-                            {role: 'implementer', isolation: 'worktree', model: 's', max_turns: 1, prompt_ref: 'p'},
+                            {
+                                role: 'implementer',
+                                agent_type: 'implementer',
+                                isolation: 'worktree',
+                                model: 's',
+                                max_turns: 1,
+                                prompt_ref: 'p',
+                            },
                         ],
                     })
                 ),
@@ -156,7 +163,16 @@ describe('nextPhaseFor', () => {
             nextPhaseFor(
                 spawn({
                     resume_phase: 'exec',
-                    agents: [{role: 'implementer', isolation: 'worktree', model: 's', max_turns: 1, prompt_ref: 'p'}],
+                    agents: [
+                        {
+                            role: 'implementer',
+                            agent_type: 'implementer',
+                            isolation: 'worktree',
+                            model: 's',
+                            max_turns: 1,
+                            prompt_ref: 'p',
+                        },
+                    ],
                 })
             )
         ).toBe('exec')

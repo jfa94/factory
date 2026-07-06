@@ -7841,9 +7841,27 @@ var SpawnRoleEnum = external_exports.enum([
   "database-design-reviewer",
   "scribe"
 ]);
+var AGENT_TYPE_BY_ROLE = {
+  "test-writer": "test-writer",
+  implementer: "implementer",
+  "implementation-reviewer": "implementation-reviewer",
+  "quality-reviewer": "quality-reviewer",
+  "silent-failure-hunter": "silent-failure-hunter",
+  "systemic-failure-reviewer": "systemic-failure-reviewer",
+  "database-design-reviewer": "database-design-reviewer",
+  scribe: "scribe"
+};
+var GENERAL_PURPOSE_AGENT_TYPE = "general-purpose";
+var E2E_AUTHOR_AGENT_TYPE = "e2e-author";
+var E2E_ASSESSOR_AGENT_TYPE = "e2e-assessor";
+var TRACEABILITY_AUDITOR_AGENT_TYPE = "traceability-auditor";
+var SPEC_GENERATOR_AGENT_TYPE = "spec-generator";
+var SPEC_REVIEWER_AGENT_TYPE = "spec-reviewer";
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
+  /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+  agent_type: external_exports.string().min(1),
   /** Worktree isolation. Defaults to "worktree". */
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
@@ -9970,6 +9988,7 @@ function parseGenerateResult(raw) {
 function buildGenerateSpawn(prd) {
   return {
     role: "spec-generator",
+    agent_type: SPEC_GENERATOR_AGENT_TYPE,
     model: APEX_MODEL,
     effort: APEX_EFFORT,
     context: {
@@ -9995,6 +10014,7 @@ function buildReviseSpawn(prd, prior, feedback) {
 function buildReviewSpawn(prd, generated) {
   return {
     role: "spec-reviewer",
+    agent_type: SPEC_REVIEWER_AGENT_TYPE,
     model: APEX_MODEL,
     effort: APEX_EFFORT,
     context: {
@@ -11842,6 +11862,7 @@ function promptRefFor(role) {
 function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false) {
   const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
+    agent_type: AGENT_TYPE_BY_ROLE[role],
     isolation: "worktree",
     model,
     max_turns: maxTurns,
@@ -13210,6 +13231,7 @@ function makePhaseHandlers(deps) {
       agents: [
         {
           role,
+          agent_type: AGENT_TYPE_BY_ROLE[role],
           model: dial.model,
           // No implementer-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
@@ -14091,6 +14113,7 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
   return {
     kind: "holdout-validate",
     task_id: taskId,
+    agent_type: GENERAL_PURPOSE_AGENT_TYPE,
     worktree,
     model: resolveReviewModel(deps.config),
     max_turns: deps.config.review.maxTurnsDeep,
@@ -14354,6 +14377,7 @@ async function runDocsEmit(deps, runId) {
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: AGENT_TYPE_BY_ROLE.scribe,
     worktree,
     base_ref: baseRef,
     staging_branch: staging,
@@ -14450,6 +14474,7 @@ async function runTraceabilityEmit(deps, runId) {
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: TRACEABILITY_AUDITOR_AGENT_TYPE,
     worktree,
     base_ref: baseRef,
     staging_branch: staging,
@@ -15014,6 +15039,7 @@ async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
     kind: "spawn",
     expects: "adjudication-results",
     run_id: runId,
+    agent_type: E2E_AUTHOR_AGENT_TYPE,
     worktree,
     staging_branch: staging,
     adjudicate_branch: branch,
@@ -15374,6 +15400,7 @@ async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
     kind: "spawn",
     expects: "author-results",
     run_id: runId,
+    agent_type: E2E_AUTHOR_AGENT_TYPE,
     worktree,
     base_ref: baseRef,
     staging_branch: staging,
@@ -15611,6 +15638,7 @@ async function runAssessmentEmit(deps, runId) {
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: E2E_ASSESSOR_AGENT_TYPE,
     worktree,
     staging_branch: staging,
     assess_branch: branch,

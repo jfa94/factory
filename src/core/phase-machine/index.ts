@@ -10,8 +10,20 @@
 export {TaskPhaseEnum, RunPhaseEnum, TASK_PHASE_ORDER, nextPhase, phaseToInFlightStatus} from './phases.js'
 export type {TaskPhase, RunPhase} from './phases.js'
 
-// --- Spawn request (Zod) ---
-export {SpawnRoleEnum, AgentSpecSchema, SpawnRequestSchema, parseSpawnRequest} from './spawn.js'
+// --- Spawn request (Zod) + the role→agent_type mapping home (C4) ---
+export {
+    SpawnRoleEnum,
+    AgentSpecSchema,
+    SpawnRequestSchema,
+    parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
+    GENERAL_PURPOSE_AGENT_TYPE,
+    E2E_AUTHOR_AGENT_TYPE,
+    E2E_ASSESSOR_AGENT_TYPE,
+    TRACEABILITY_AUDITOR_AGENT_TYPE,
+    SPEC_GENERATOR_AGENT_TYPE,
+    SPEC_REVIEWER_AGENT_TYPE,
+} from './spawn.js'
 export type {SpawnRole, AgentSpec, SpawnRequest} from './spawn.js'
 
 // --- PhaseResult union + constructors + primitives ---

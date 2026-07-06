@@ -7,7 +7,13 @@
  */
 import {isAbsolute} from 'node:path'
 import {ensureStageWorktree, publishToStaging, specTaskLines} from './stage-helpers.js'
-import {parseProducerStatus, provisionWorktree, type RunState, type SpecManifest} from './deps.js'
+import {
+    parseProducerStatus,
+    provisionWorktree,
+    E2E_AUTHOR_AGENT_TYPE,
+    type RunState,
+    type SpecManifest,
+} from './deps.js'
 import {createLogger} from '../shared/index.js'
 import {CONTROL_TITLE_PREFIX, type E2eAuthorResults} from './e2e-schemas.js'
 import {e2eWorktreePath, e2eThrowawayDir, e2eBranchName, resolveBootConfig, type BootConfig} from './e2e-paths.js'
@@ -97,6 +103,7 @@ export async function prepareAuthorSpawn(
         kind: 'spawn',
         expects: 'author-results',
         run_id: runId,
+        agent_type: E2E_AUTHOR_AGENT_TYPE,
         worktree,
         base_ref: baseRef,
         staging_branch: staging,

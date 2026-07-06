@@ -46,6 +46,7 @@ import {
     splitHoldout,
     makeHoldoutRecord,
     parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
     decideFinalize,
     type Config,
     type GateContext,
@@ -189,6 +190,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             agents: [
                 {
                     role,
+                    agent_type: AGENT_TYPE_BY_ROLE[role],
                     model: dial.model,
                     // No implementer-specific turn budget exists; both producer roles share the
                     // test-writer cap (documented WS10 decision).

@@ -37,6 +37,7 @@ import {
     type SpecManifest,
     type E2eAssessment,
     type ProvisionWorktreeFn,
+    E2E_ASSESSOR_AGENT_TYPE,
 } from './deps.js'
 import {failTask} from './transitions.js'
 import {nowIso, createLogger} from '../shared/index.js'
@@ -196,6 +197,7 @@ export async function runAssessmentEmit(deps: AssessmentRunDeps, runId: string):
     return {
         kind: 'spawn',
         run_id: runId,
+        agent_type: E2E_ASSESSOR_AGENT_TYPE,
         worktree,
         staging_branch: staging,
         assess_branch: branch,

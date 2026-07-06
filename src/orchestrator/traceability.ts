@@ -20,7 +20,7 @@ import {ensureStageWorktree} from './stage-helpers.js'
 import type {StageDone, StageFailed, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {getOrThrow, nowIso} from '../shared/index.js'
-import {parseProducerStatus} from './deps.js'
+import {parseProducerStatus, TRACEABILITY_AUDITOR_AGENT_TYPE} from './deps.js'
 import {SpecStore, type Config, type GitClient, type SpecManifest, type StateManager} from './deps.js'
 import {extractPrdRequirements} from '../spec/index.js'
 import type {TraceabilityVerdictRow} from '../core/state/schema.js'
@@ -131,6 +131,7 @@ export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: stri
     return {
         kind: 'spawn',
         run_id: runId,
+        agent_type: TRACEABILITY_AUDITOR_AGENT_TYPE,
         worktree,
         base_ref: baseRef,
         staging_branch: staging,

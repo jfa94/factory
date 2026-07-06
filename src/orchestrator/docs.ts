@@ -3,7 +3,7 @@ import {ensureStageWorktree, publishToStaging} from './stage-helpers.js'
 import type {StageDone, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {nowIso} from '../shared/index.js'
-import {parseProducerStatus} from './deps.js'
+import {parseProducerStatus, AGENT_TYPE_BY_ROLE} from './deps.js'
 import {type Config, type GitClient, type StateManager} from './deps.js'
 
 export interface DocsRunDeps {
@@ -79,6 +79,7 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
     return {
         kind: 'spawn',
         run_id: runId,
+        agent_type: AGENT_TYPE_BY_ROLE.scribe,
         worktree,
         base_ref: baseRef,
         staging_branch: staging,

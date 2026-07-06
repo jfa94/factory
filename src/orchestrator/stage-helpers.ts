@@ -11,9 +11,11 @@
  */
 import type {GitClient, SpecManifest} from './deps.js'
 
-/** The common head of every stage spawn envelope (C4 adds `agent_type` here). */
+/** The common head of every stage spawn envelope. */
 export interface StageSpawnBase {
     readonly run_id: string
+    /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+    readonly agent_type: string
     readonly worktree: string
     readonly staging_branch: string
     readonly model: string

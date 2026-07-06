@@ -15,7 +15,16 @@ import type {SpawnRequest} from './spawn.js'
 
 const request: SpawnRequest = {
     resume_phase: 'exec',
-    agents: [{role: 'implementer', isolation: 'worktree', model: 'sonnet', max_turns: 60, prompt_ref: 'p.md'}],
+    agents: [
+        {
+            role: 'implementer',
+            agent_type: 'implementer',
+            isolation: 'worktree',
+            model: 'sonnet',
+            max_turns: 60,
+            prompt_ref: 'p.md',
+        },
+    ],
 }
 
 describe('PhaseResult constructors build correct discriminants', () => {

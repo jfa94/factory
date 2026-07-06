@@ -38,6 +38,7 @@ import {
     type TaskPhase,
     type TaskState,
     type RunState,
+    GENERAL_PURPOSE_AGENT_TYPE,
 } from './deps.js'
 import type {UsageSignal} from './deps.js'
 import {markInFlight, completeTask, failStep, escalateOrFail, type TaskOutcome, type TaskStep} from './transitions.js'
@@ -68,6 +69,8 @@ export type DriveExpects = 'producer-status' | 'reviews'
 export interface HoldoutSpawn {
     readonly kind: 'holdout-validate'
     readonly task_id: string
+    /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+    readonly agent_type: string
     readonly worktree: string
     readonly model: string
     readonly max_turns: number
@@ -175,6 +178,7 @@ export async function holdoutSidecar(
     return {
         kind: 'holdout-validate',
         task_id: taskId,
+        agent_type: GENERAL_PURPOSE_AGENT_TYPE,
         worktree,
         model: resolveReviewModel(deps.config),
         max_turns: deps.config.review.maxTurnsDeep,

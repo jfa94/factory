@@ -8409,6 +8409,8 @@ var SpawnRoleEnum = external_exports.enum([
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
+  /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+  agent_type: external_exports.string().min(1),
   /** Worktree isolation. Defaults to "worktree". */
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */

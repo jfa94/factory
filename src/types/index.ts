@@ -103,11 +103,18 @@ export {
     TASK_PHASE_ORDER,
     nextPhase,
     phaseToInFlightStatus,
-    // spawn request (Zod)
+    // spawn request (Zod) + the role→agent_type mapping home (C4)
     SpawnRoleEnum,
     AgentSpecSchema,
     SpawnRequestSchema,
     parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
+    GENERAL_PURPOSE_AGENT_TYPE,
+    E2E_AUTHOR_AGENT_TYPE,
+    E2E_ASSESSOR_AGENT_TYPE,
+    TRACEABILITY_AUDITOR_AGENT_TYPE,
+    SPEC_GENERATOR_AGENT_TYPE,
+    SPEC_REVIEWER_AGENT_TYPE,
     // result union: exhaustiveness primitive + constructors
     assertNever,
     isTerminalResult,

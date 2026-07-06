@@ -26,7 +26,7 @@
  * (D26 fixed depth). The request is validated through the frozen
  * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
-import {parseSpawnRequest, type SpawnRequest, type SpawnRole} from '../../types/index.js'
+import {parseSpawnRequest, AGENT_TYPE_BY_ROLE, type SpawnRequest, type SpawnRole} from '../../types/index.js'
 import type {CrossVendorResolution} from './vendor.js'
 
 /**
@@ -105,6 +105,7 @@ export function buildPanelManifest(
 ): SpawnRequest {
     const agents = panelRolesFor(dbApplicable).map((role) => ({
         role,
+        agent_type: AGENT_TYPE_BY_ROLE[role],
         isolation: 'worktree' as const,
         model,
         max_turns: maxTurns,

@@ -17,6 +17,7 @@ import {z} from 'zod'
 import type {Prd} from './gh.js'
 import {SpecTasksSchema, type SpecTask} from './schema.js'
 import type {ReviewVerdict} from './review.js'
+import {SPEC_GENERATOR_AGENT_TYPE, SPEC_REVIEWER_AGENT_TYPE} from '../core/phase-machine/index.js'
 
 /** Decision-21 apex pin — invariant by construction, deliberately NOT config. */
 const APEX_MODEL = 'opus'
@@ -67,6 +68,8 @@ export interface ReviewContext {
  */
 export interface SpecSpawnSpec<C = Record<string, unknown>> {
     role: SpecAgentRole
+    /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+    agent_type: string
     /** Apex pin (Decision 21) — always {@link APEX_MODEL}. */
     model: string
     /** Apex pin (Decision 21) — always {@link APEX_EFFORT}. */
@@ -124,6 +127,7 @@ export interface SpecAgentRunner {
 export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec<GenerateContext> {
     return {
         role: 'spec-generator',
+        agent_type: SPEC_GENERATOR_AGENT_TYPE,
         model: APEX_MODEL,
         effort: APEX_EFFORT,
         context: {
@@ -164,6 +168,7 @@ export function buildReviseSpawn(
 export function buildReviewSpawn(prd: Prd, generated: GenerateResult): SpecSpawnSpec<ReviewContext> {
     return {
         role: 'spec-reviewer',
+        agent_type: SPEC_REVIEWER_AGENT_TYPE,
         model: APEX_MODEL,
         effort: APEX_EFFORT,
         context: {
