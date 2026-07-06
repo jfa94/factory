@@ -14,13 +14,10 @@
 export {
     advance,
     spawn,
-    gracefulStop,
     waitRetry,
     taskDone,
     taskFailed,
-    finalizeTerminal,
     assertNever,
-    isTerminalResult,
     runPhase,
     nextPhaseFor,
     decideFinalize,
@@ -36,10 +33,7 @@ export {
     TERMINAL_RUN_STATUSES,
     isTerminalTaskStatus,
     isTerminalRunStatus,
-    PanelVerdictEnum,
-    TaskStatusEnum,
     derivePanelVerdict,
-    deriveAllGatesVerdict,
     deriveMergeGateVerdict,
     mergeGateBlockReason,
     StateManager,
@@ -81,13 +75,9 @@ export {
     createTaskWorktree,
     provisionWorktree,
     assertBaseIsStagingTip,
-    ensureOnStaging,
-    removeWorktree,
     resyncTaskBranchOntoStaging,
     createTaskPrIdempotent,
     MergeSerializer,
-    probeProtection,
-    requireProtectionOrRefuse,
     provisionProtection,
     runScopedBranch,
     runStagingBranch,
@@ -125,12 +115,11 @@ export {
     buildCheckpoint,
     buildUnavailableCheckpoint,
     clearCheckpoint,
-    selectProducerModel,
 } from '../quota/index.js'
 export type {QuotaDecision, UsageSignal, UsageReading} from '../quota/index.js'
 
 // --- spec store (src/spec) --------------------------------------------------
-export {SpecStore, makeSpecId} from '../spec/index.js'
+export {SpecStore} from '../spec/index.js'
 export type {SpecManifest, SpecTask} from '../spec/index.js'
 
 // --- producer ladder (src/producer) -----------------------------------------
@@ -166,7 +155,6 @@ export {
     touchesDatabase,
     buildPanelManifest,
     resolveReviewModel,
-    resolveJudgmentConfig,
     parseRawReview,
     resolveCodexCrossVendor,
 } from '../verifier/judgment/index.js'

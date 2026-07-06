@@ -24,15 +24,8 @@ export {
 } from './usage-source.js'
 export type {UsageSignal, UsageReading, WindowUsage, UnavailableReason, StatuslineUsageOptions} from './usage-source.js'
 
-// Window math
-export {
-    computeWindowHour,
-    computeWindowDay,
-    hourlyThresholdFor,
-    dailyThresholdFor,
-    FIVE_HOUR_WINDOW_SECONDS,
-    SEVEN_DAY_WINDOW_SECONDS,
-} from './window.js'
+// Window math (position/threshold functions are quota-internal — pacer consumes them directly)
+export {FIVE_HOUR_WINDOW_SECONDS, SEVEN_DAY_WINDOW_SECONDS} from './window.js'
 
 // Pacer
 export {evaluate} from './pacer.js'
@@ -42,9 +35,7 @@ export type {QuotaDecision} from './pacer.js'
 export {buildCheckpoint, buildUnavailableCheckpoint, clearCheckpoint} from './checkpoint.js'
 export type {CheckpointableDecision, CheckpointPatch, ClearCheckpointPatch} from './checkpoint.js'
 
-// Circuit breaker
-export {evaluate as evaluateCircuitBreaker} from './circuit-breaker.js'
-export type {CircuitBreakerInput, CircuitBreakerResult} from './circuit-breaker.js'
+// Circuit breaker: no re-export — orchestrator/circuit-breaker-gate deep-imports './circuit-breaker.js'
 
 // Quota-router (producer dial only)
 export {selectProducerModel} from './router.js'

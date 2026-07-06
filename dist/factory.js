@@ -9541,41 +9541,6 @@ function clearCheckpoint() {
   return { status: "running", quota: void 0 };
 }
 
-// src/quota/circuit-breaker.ts
-var FAILURE_RATIO = 0.15;
-function isNonNegativeFinite(value) {
-  return Number.isFinite(value) && value >= 0;
-}
-function evaluate2(input, config) {
-  const { cumulativeFailures, totalTasks } = input;
-  if (!isNonNegativeFinite(cumulativeFailures)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
-    };
-  }
-  if (!isNonNegativeFinite(totalTasks)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`
-    };
-  }
-  const { maxConsecutiveFailures } = config;
-  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
-  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
-  if (cumulativeFailures >= effectiveThreshold) {
-    const derivation = proportional > maxConsecutiveFailures ? `ceil(${FAILURE_RATIO} \xD7 ${totalTasks} tasks)` : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
-    return {
-      tripped: true,
-      arm: "failures",
-      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`
-    };
-  }
-  return { tripped: false };
-}
-
 // src/quota/router.ts
 function selectProducerModel(riskTier, config) {
   const models = config.quota.producerModels;
@@ -14546,6 +14511,41 @@ async function runTraceabilityRecord(deps, runId, results) {
     traceability: marker
   }));
   return { kind: "suspend", run_id: runId, reason };
+}
+
+// src/quota/circuit-breaker.ts
+var FAILURE_RATIO = 0.15;
+function isNonNegativeFinite(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+function evaluate2(input, config) {
+  const { cumulativeFailures, totalTasks } = input;
+  if (!isNonNegativeFinite(cumulativeFailures)) {
+    return {
+      tripped: true,
+      arm: "fail-closed",
+      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
+    };
+  }
+  if (!isNonNegativeFinite(totalTasks)) {
+    return {
+      tripped: true,
+      arm: "fail-closed",
+      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`
+    };
+  }
+  const { maxConsecutiveFailures } = config;
+  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
+  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
+  if (cumulativeFailures >= effectiveThreshold) {
+    const derivation = proportional > maxConsecutiveFailures ? `ceil(${FAILURE_RATIO} \xD7 ${totalTasks} tasks)` : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
+    return {
+      tripped: true,
+      arm: "failures",
+      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`
+    };
+  }
+  return { tripped: false };
 }
 
 // src/orchestrator/circuit-breaker-gate.ts
