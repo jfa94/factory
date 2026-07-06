@@ -72,11 +72,5 @@ security, test-internal quality (except when it leaves a criterion unverified), 
 
 ## Output
 
-Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
-`{ reviewer, verdict, findings[] }` with `reviewer: "implementation-reviewer"`. Every finding
-carries a verbatim `quote` that substring-matches real source at the cited `file:line`
-(citation-verified by the CLI) and a one-sentence `claim` (≤300 chars) stating the checkable
-defect — the independent verifier sees only the claim, never your `description`. `verdict` is
-`blocked` if you raised any blocking finding,
-else `approve` (a clean approve may have an empty `findings` array), or `error` only if you
-could not complete the review. No `## Verdict` block, no STATUS line, no prose around the JSON.
+Emit exactly one RawReview JSON per the injected `review-protocol` skill, with
+`reviewer: "implementation-reviewer"` on the envelope and every finding.

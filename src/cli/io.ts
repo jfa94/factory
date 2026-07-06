@@ -8,6 +8,7 @@
  * A single invocation emits only ONE kind, so the parse stays unambiguous.
  */
 import {stringifyJson} from '../shared/json.js'
+import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 
 /** Write one JSON document to stdout (newline-terminated) — the machine surface. */
 export function emitJson(value: unknown): void {
@@ -17,6 +18,12 @@ export function emitJson(value: unknown): void {
 /** Write a plain human line to stdout (for `--help` / human summaries). */
 export function emitLine(line: string): void {
     process.stdout.write(line + '\n')
+}
+
+/** Emit `--help` text and return {@link EXIT.OK} — the shared tail of every help gate. */
+export function emitHelp(text: string): ExitCode {
+    emitLine(text)
+    return EXIT.OK
 }
 
 /** Write a human error line to stderr (usage errors, diagnostics). */

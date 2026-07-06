@@ -1834,6 +1834,11 @@ function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
+// src/shared/fs-errors.ts
+function isEnoent(err) {
+  return err instanceof Error && err.code === "ENOENT";
+}
+
 // src/shared/assert.ts
 function nonNull(x, msg) {
   if (x == null) {
@@ -1974,7 +1979,8 @@ var UsageError = class extends Error {
   }
 };
 
-// src/hooks/git-args.ts
+// src/hooks/token-helpers.ts
+var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
 function unquote(tok) {
   let t = tok;
   if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
@@ -1985,10 +1991,12 @@ function unquote(tok) {
   }
   return t;
 }
-function basename2(tok) {
+function basenameOf(tok) {
   const parts = tok.split("/");
   return parts[parts.length - 1] ?? tok;
 }
+
+// src/hooks/git-args.ts
 function parseGitInvocation(command) {
   const ENV_PREFIX_RE2 = /^([A-Za-z_][A-Za-z0-9_]*)=/;
   const tokens = [];
@@ -2020,7 +2028,7 @@ function parseGitInvocation(command) {
   let i = 0;
   let foundGit = false;
   while (i < n) {
-    if (basename2(at(tokens, i)) === "git") {
+    if (basenameOf(at(tokens, i)) === "git") {
       foundGit = true;
       i++;
       break;
@@ -2426,7 +2434,7 @@ async function decideBranchProtection(input, deps = {}) {
 async function runBranchProtection(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "branch-protection: unparseable hook input");
@@ -2437,17 +2445,10 @@ async function runBranchProtection(_argv = [], deps = {}) {
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
 }
-async function readAllStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 // src/config/load.ts
 import { existsSync as existsSync2, readFileSync } from "node:fs";
-import { basename as basename3, dirname as dirname2, join as join2, resolve, sep } from "node:path";
+import { basename as basename2, dirname as dirname2, join as join2, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 
 // node_modules/zod/v3/external.js
@@ -6697,12 +6698,12 @@ function expectedDataDir(opts) {
   if (!current.startsWith(dataRoot + sep)) {
     return null;
   }
-  const currentBase = basename3(current);
+  const currentBase = basename2(current);
   if (currentBase === PLUGIN_NAME || currentBase.startsWith(`${PLUGIN_NAME}-`)) {
     return null;
   }
-  const pluginFromPath = basename3(dirname2(pluginRoot));
-  const marketplaceFromPath = basename3(dirname2(dirname2(pluginRoot)));
+  const pluginFromPath = basename2(dirname2(pluginRoot));
+  const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
   const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
@@ -6965,25 +6966,10 @@ function isTcbProtected(candidatePath, ctx = {}, cwd = process.cwd()) {
 // src/hooks/write-protection.ts
 var log5 = createLogger("write-protection");
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
-var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
 var REDIRECT_TARGET_RE = /(?:\d+|&)?>{1,2}\|?\s*("[^"]+"|'[^']+'|[^\s;|&<>()`]+)/g;
 var INPUT_REDIRECT_RE = /<+\s*[^\s;|&<>()`]*/g;
 var ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "command", "nohup", "time", "nice", "stdbuf", "xargs"]);
-function unquote2(tok) {
-  let t = tok;
-  if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-    t = t.slice(1, -1);
-  }
-  if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
-    t = t.slice(1, -1);
-  }
-  return t;
-}
-function basenameOf(tok) {
-  const parts = tok.split("/");
-  return parts[parts.length - 1] ?? tok;
-}
 function nonFlagArgs(args) {
   return args.filter((a) => !a.startsWith("-"));
 }
@@ -7030,11 +7016,11 @@ var WRITE_BINARIES = {
 function bashWriteTargets(command) {
   const out = /* @__PURE__ */ new Set();
   for (const m of command.matchAll(REDIRECT_TARGET_RE)) {
-    out.add(unquote2(nonNull(m[1])));
+    out.add(unquote(nonNull(m[1])));
   }
   for (const seg of command.split(SEGMENT_SPLIT_RE)) {
     const cleaned = seg.replace(REDIRECT_TARGET_RE, " ").replace(INPUT_REDIRECT_RE, " ");
-    const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).map(unquote2);
+    const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).map(unquote);
     let i = 0;
     while (i < tokens.length) {
       const tok = nonNull(tokens[i]);
@@ -7092,7 +7078,7 @@ function decideWriteProtection(input, deps = {}) {
 async function runWriteProtection(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin2();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "write-protection: unparseable hook input");
@@ -7102,13 +7088,6 @@ async function runWriteProtection(_argv = [], deps = {}) {
   const decision = decideWriteProtection(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin2() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/holdout-guard.ts
@@ -7185,7 +7164,7 @@ function decideHoldoutGuard(input, deps = {}) {
 async function runHoldoutGuard(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin3();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "holdout-guard: unparseable hook input");
@@ -7195,13 +7174,6 @@ async function runHoldoutGuard(_argv = [], deps = {}) {
   const decision = decideHoldoutGuard(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin3() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/secret-guard.ts
@@ -7225,7 +7197,7 @@ var PATH_BLOCKLIST = [
   /\.(gpg|asc|ppk)$/
 ];
 function findGitCommitOrPush(command) {
-  for (const seg of command.split(/&&|\|\||;|&|\||\n|\$\(|`|\)/)) {
+  for (const seg of command.split(SEGMENT_SPLIT_RE)) {
     const inv = parseGitInvocation(seg);
     if (inv.subcommand === "commit") {
       return { isCommit: true, inv };
@@ -7388,7 +7360,7 @@ async function decideSecretGuard(input, deps = {}) {
 async function runSecretGuard(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin4();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "secret-guard: unparseable hook input");
@@ -7398,13 +7370,6 @@ async function runSecretGuard(_argv = [], deps = {}) {
   const decision = await decideSecretGuard(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin4() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/verifier/deterministic/scope.ts
@@ -7650,6 +7615,14 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  const inFlight = task.status === "executing" || task.status === "reviewing" || task.status === "shipping";
+  if (inFlight && task.phase === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["phase"],
+      message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor \u2014 phase is written in lockstep with status (state from an older factory version); start a fresh run`
+    });
+  }
   if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
@@ -7664,27 +7637,39 @@ var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window"
   external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
   external_exports.object({ binding_window: external_exports.literal("unavailable") })
 ]);
-var DocsPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string()
-});
+function concludedPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string()
+  });
+}
+function openPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]).optional(),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string().optional()
+  });
+}
+var DocsPhaseSchema = concludedPhaseMarker({}, {});
 var TraceabilityVerdictRowSchema = external_exports.object({
   requirement: external_exports.string().min(1),
   verdict: external_exports.enum(["met", "partial", "unmet"]),
   evidence: external_exports.string().min(1)
 });
-var TraceabilityPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
-  verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([]),
-  ended_at: external_exports.string()
-});
+var TraceabilityPhaseSchema = concludedPhaseMarker(
+  {},
+  {
+    /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+    verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([])
+  }
+);
 var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
 var E2eManifestEntrySchema = external_exports.object({
   /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
@@ -7714,39 +7699,38 @@ var E2eAdjudicationSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative(),
   requested_at: external_exports.string()
 });
-var E2ePhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  reason: external_exports.string().optional(),
-  /**
-   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-   * didn't block completion (Decision 39: only critical red gates). Distinct from
-   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
-   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
-   */
-  advisory: external_exports.string().optional(),
-  /** Cumulative attempt count across ALL passes (1-indexed). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /**
-   * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
-   * automatic re-spawn before the phase fails; distinct from `attempts` (suite
-   * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
-   */
-  author_attempts: external_exports.number().int().nonnegative().optional(),
-  /** The author's spec→task manifest, fixed once authored and reused across passes. */
-  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
-  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
-  reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
-  /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
-  adjudication: E2eAdjudicationSchema.optional(),
-  /**
-   * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
-   * A spec failing AGAIN after its one adjudication is a regression — the run
-   * fails rather than adjudicating in a loop. Survives rescue's reset (like
-   * `reopen_counts`): the cap holds across the whole run.
-   */
-  adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2ePhaseSchema = openPhaseMarker(
+  {
+    /**
+     * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+     * didn't block completion (Decision 39: only critical red gates). Distinct from
+     * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+     * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+     */
+    advisory: external_exports.string().optional()
+  },
+  {
+    /**
+     * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+     * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+     * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+     */
+    author_attempts: external_exports.number().int().nonnegative().optional(),
+    /** The author's spec→task manifest, fixed once authored and reused across passes. */
+    manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+    /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+    reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+    /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+    adjudication: E2eAdjudicationSchema.optional(),
+    /**
+     * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+     * A spec failing AGAIN after its one adjudication is a regression — the run
+     * fails rather than adjudicating in a loop. Survives rescue's reset (like
+     * `reopen_counts`): the cap holds across the whole run.
+     */
+    adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional()
+  }
+);
 var E2eAffectedSpecSchema = external_exports.object({
   /** Repo-relative path of the existing committed spec. */
   spec_path: external_exports.string().min(1),
@@ -7754,28 +7738,25 @@ var E2eAffectedSpecSchema = external_exports.object({
   task_ids: external_exports.array(external_exports.string().min(1)).min(1),
   expectation: external_exports.enum(["needs-update", "should-still-pass"])
 });
-var E2eAssessmentSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  /** Plain-language failure verdict (set IFF failed — T3 below). */
-  reason: external_exports.string().optional(),
-  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
-  warning: external_exports.string().optional(),
-  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
-  resolved: external_exports.object({
-    start_command: external_exports.string().min(1).optional(),
-    base_url: external_exports.string().min(1).optional()
-  }).optional(),
-  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
-  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([]),
-  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2eAssessmentSchema = openPhaseMarker(
+  {
+    /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+    warning: external_exports.string().optional(),
+    /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+    resolved: external_exports.object({
+      start_command: external_exports.string().min(1).optional(),
+      base_url: external_exports.string().min(1).optional()
+    }).optional(),
+    /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+    affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
+  },
+  {}
+);
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(2).default(2),
+  schema_version: external_exports.literal(3).default(3),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
@@ -7798,12 +7779,10 @@ var RunStateSchema = external_exports.object({
    * merge target, rollup source — reads the branch the run ACTUALLY created, not a
    * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
    * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
-   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
-   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
-   * does not apply.
+   * the already-pushed branch. Git provenance / immutable identity — NOT a derived
+   * verdict, so derive-don't-store does not apply.
    */
-  staging_branch: external_exports.string().min(1).optional(),
+  staging_branch: external_exports.string().min(1),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7836,15 +7815,15 @@ var RunStateSchema = external_exports.object({
    * `recover` (an approved rescue apply that did work). The second sanctioned
    * stored-EVENT exception (with `self_heal`): which touches happened is history
    * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
-   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
+   * guarded to n/a on an empty ledger — never a fabricated number.
    */
   human_touches: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
       at: external_exports.string()
     })
-  ).optional(),
+  ).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -8060,16 +8039,16 @@ var StateManager = class _StateManager {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
   /**
-   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-   * `schema_version` absent or === 2 → pass through to parseRunState normally.
-   * Any other value → the file predates the current schema; ephemeral runs can't be
-   * migrated, so the user gets a clear "start a fresh run" message.
+   * Reject any state file not stamped with the CURRENT schema version, with a clear
+   * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+   * the version, so an unstamped file predates the current schema. Ephemeral runs
+   * can't be migrated; the remedy is always a fresh run.
    */
   static guardedParse(raw, context) {
     const v = raw?.schema_version;
-    if (v !== void 0 && v !== 2) {
+    if (v !== 3) {
       throw new UsageError(
-        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported \u2014 start a fresh run`
+        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported \u2014 this state was created by an older factory version; start a fresh run`
       );
     }
     return parseRunState(raw);
@@ -8134,7 +8113,7 @@ var StateManager = class _StateManager {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
-      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},
@@ -8190,18 +8169,12 @@ var StateManager = class _StateManager {
   /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
    * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
-   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
-   * run (global-only) still resolves, while another repo's run never leaks in.
-   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
+   * pointers on every create, so a repo with a run always has its per-repo link.
+   * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
    */
   async readCurrentForRepo(repo) {
-    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
-    if (viaRepo !== null) {
-      return viaRepo;
-    }
-    const legacy = await this.readCurrent();
-    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+    return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
   }
   /**
    * Read + validate a run's state THROUGH a `current`-style directory symlink (the
@@ -8220,7 +8193,7 @@ var StateManager = class _StateManager {
     try {
       raw = await readFile(statePath, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -8244,7 +8217,7 @@ var StateManager = class _StateManager {
     try {
       entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return [];
       }
       throw err;
@@ -8257,7 +8230,7 @@ var StateManager = class _StateManager {
       try {
         runs.push(await this.read(entry.name));
       } catch (err) {
-        if (err.code === "ENOENT") {
+        if (isEnoent(err)) {
           continue;
         }
         log7.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
@@ -8436,6 +8409,8 @@ var SpawnRoleEnum = external_exports.enum([
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
+  /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+  agent_type: external_exports.string().min(1),
   /** Worktree isolation. Defaults to "worktree". */
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
@@ -8488,7 +8463,7 @@ async function loadActiveRun(opts = {}) {
     const st = await lstat(link);
     isLink = st.isSymbolicLink() || st.isDirectory();
   } catch (err) {
-    if (err.code === "ENOENT") {
+    if (isEnoent(err)) {
       return null;
     }
     throw err;
@@ -8550,25 +8525,12 @@ function runTaskForPath(dataDir, absPath) {
   }
   return { run_id, task_id };
 }
-function statusToPhase(status) {
-  switch (status) {
-    case "executing":
-      return TaskPhaseEnum.enum.tests;
-    case "reviewing":
-      return TaskPhaseEnum.enum.verify;
-    case "shipping":
-      return TaskPhaseEnum.enum.ship;
-    case "pending":
-    case "done":
-    case "failed":
-      return null;
-  }
-}
+var IN_FLIGHT_STATUSES = /* @__PURE__ */ new Set(["executing", "reviewing", "shipping"]);
 function activePhaseOf(task) {
-  if (statusToPhase(task.status) === null) {
+  if (!IN_FLIGHT_STATUSES.has(task.status)) {
     return null;
   }
-  return task.phase ?? statusToPhase(task.status);
+  return task.phase ?? null;
 }
 function resolveActiveTask(run, explicitTaskId) {
   const taskId = explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8679,7 +8641,7 @@ async function decidePipelineGuards(input, deps = {}) {
 async function runPipelineGuards(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin5();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "pipeline-guards: unparseable hook input");
@@ -8700,13 +8662,6 @@ async function runPipelineGuards(_argv = [], deps = {}) {
   }
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin5() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/subagent-stop.ts

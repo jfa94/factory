@@ -2,8 +2,7 @@
  * WS10 — orchestrator-local shared types (the reporter dependency bundle the engine
  * wires against).
  *
- * ARCHITECTURE (settled, Model A — see docs/rewrite/group0-seams.md §3.5/§4 and
- * the design-intent transcript):
+ * ARCHITECTURE (settled, Model A):
  *
  *   - HANDLERS are pure-ish REPORTERS. {@link import("./handlers.js").makePhaseHandlers}
  *     builds a {@link PhaseHandlers} whose methods read the frozen
@@ -26,7 +25,7 @@
  * the quota signal.
  */
 import type {Config, GhClient, GitClient, HoldoutStore, ProvisionWorktreeFn, SpecManifest, VendorProbe} from './deps.js'
-import type {GateTools} from '../verifier/deterministic/index.js'
+import type {GateContractLoad, GateTools} from '../verifier/deterministic/index.js'
 import type {ArtifactStore} from './artifacts.js'
 
 /**
@@ -66,6 +65,12 @@ export interface HandlerDeps {
     readonly gh: GhClient
     /** Deterministic gate tools (the verify reporter runs the GateRunner). */
     readonly tools: GateTools
+    /**
+     * Gate-contract loader threaded into the GateRunner. Optional — defaults to the
+     * real committed-`.factory/gates.json` read over the task worktree; injectable
+     * for unit tests (the runner THROWS without a contract).
+     */
+    readonly loadContract?: (rootAbs: string) => Promise<GateContractLoad>
     /** Persists producer prompt-context artifacts; references them via prompt_ref. */
     readonly artifacts: ArtifactStore
     /**

@@ -43,6 +43,7 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         deps = {state}
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
     })
@@ -60,6 +61,15 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
                 [t.task_id]: {
                     task_id: t.task_id,
                     status: t.status ?? 'pending',
+                    ...(t.phase !== undefined
+                        ? {phase: t.phase}
+                        : t.status === 'executing'
+                          ? {phase: 'exec' as const}
+                          : t.status === 'reviewing'
+                            ? {phase: 'verify' as const}
+                            : t.status === 'shipping'
+                              ? {phase: 'ship' as const}
+                              : {}),
                     depends_on: t.depends_on ?? [],
                     escalation_rung: t.escalation_rung ?? 0,
                     reviewers: t.reviewers ?? [],

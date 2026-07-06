@@ -34,13 +34,11 @@
 import {
     decideFinalize,
     rollup,
-    loadGateContract,
     buildPartialReport,
     renderPartialReportMarkdown,
     renderFailureComment,
     failureCommentMarker,
     recordRunFinalized,
-    resolveStagingBranch,
     scanRun,
     effectiveAutoResets,
     type Config,
@@ -194,18 +192,7 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             : taskTerminal
 
     // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
-    // TODO(remove after one release): legacy pre-contract fallback warning (S7,
-    // Decision 46). Derived at finalize from the contract's absence at the target
-    // root (derive-don't-store) — mirrors GateRunner's per-sweep legacy path.
-    const contract = await loadGateContract(process.cwd())
-    const warnings =
-        contract.state === 'absent'
-            ? [
-                  'gates ran without a .factory/gates.json contract (legacy pre-contract run) — ' +
-                      'run `factory scaffold` and commit the contract',
-              ]
-            : []
-    const report = buildPartialReport({...run, status: terminal}, deps.spec, {now, warnings})
+    const report = buildPartialReport({...run, status: terminal}, deps.spec, {now})
     const markdown = renderPartialReportMarkdown(report)
 
     // 3. persist report.md (atomic full-file replace).
@@ -224,7 +211,7 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
     //    On failed, develop is untouched (the PRD failure comment is already posted above).
     let rollupResult: RollupResult | undefined
     if (terminal === 'completed') {
-        const stagingBranch = resolveStagingBranch(runId, run.staging_branch)
+        const stagingBranch = run.staging_branch
         // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
         // (no force-push) so the rollup PR is up-to-date. A conflict here is
         // non-auto-recoverable → surfaces for rescue.

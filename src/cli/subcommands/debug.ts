@@ -62,19 +62,17 @@
 import {join} from 'node:path'
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitLine, emitHelp} from '../io.js'
 import {readJsonInput} from '../../orchestrator/index.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
 import {readJsonFile, writeJsonFile} from '../../shared/json.js'
-import {makeRunId, validateId} from '../../shared/ids.js'
+import {makeRunId, validateId} from '../../shared/index.js'
 import {StateManager} from '../../core/state/index.js'
 import {SpecStore} from '../../spec/index.js'
 import {DefaultGitClient, runStagingBranch, resolveRepo, type GitClient} from '../../git/index.js'
-import {loadCliDeps} from '../wiring.js'
-import {finalizeRun} from '../../orchestrator/finalize.js'
 import {createRun} from '../../orchestrator/lifecycle.js'
-import {resolveOwnerSession} from './run.js'
+import {resolveOwnerSession, finalizedEnvelope} from './run.js'
 import {resolveSpec, gateSpec, storeSpec, type SpecBuildDeps, type SpecBuildEnvelope} from './spec.js'
 import {buildReviewManifest, adjudicateWholeScope, runCommittedE2e, foldE2eIntoBlockers} from '../../debug/review.js'
 import {debugIssueNumber, buildDebugReport, wireDebugSpecDeps} from '../../debug/spec-source.js'
@@ -587,19 +585,7 @@ export async function debugFinalize(
     if (!new StateManager({dataDir: deps.dataDir}).exists(runId)) {
         return {kind: 'nothing-to-ship', run_id: runId}
     }
-    const cliDeps = await loadCliDeps({
-        dataDir: deps.dataDir,
-        runId,
-        ...(shipMode !== undefined ? {shipMode} : {}),
-    })
-    const {run, report, rollup, failureCommentPosted} = await finalizeRun(cliDeps, runId)
-    return {
-        kind: 'finalized',
-        run,
-        report,
-        ...(rollup !== undefined ? {rollup} : {}),
-        failure_comment_posted: failureCommentPosted,
-    }
+    return finalizedEnvelope(deps.dataDir, runId, shipMode)
 }
 
 // ---------------------------------------------------------------------------
@@ -640,8 +626,7 @@ function parseMaxPasses(raw: string): number {
 export async function runDebugStart(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['full', 'no-ship', 'author-e2e']})
     if (args.flag('help') === true) {
-        emitLine(START_HELP)
-        return EXIT.OK
+        return emitHelp(START_HELP)
     }
     const base = optionalString(args.flag('base'))
     const maxPassesRaw = optionalString(args.flag('max-passes'))
@@ -664,8 +649,7 @@ export async function runDebugStart(argv: string[], overrides: DebugOverrides = 
 export async function runDebugReview(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['emit', 'record']})
     if (args.flag('help') === true) {
-        emitLine(REVIEW_HELP)
-        return EXIT.OK
+        return emitHelp(REVIEW_HELP)
     }
     const emit = args.flag('emit') === true
     const record = args.flag('record') === true
@@ -704,8 +688,7 @@ export async function runDebugSpec(argv: string[], overrides: DebugOverrides = {
     }
     const args = parseArgs(argv.slice(1), {})
     if (args.flag('help') === true) {
-        emitLine(SPEC_SUB_HELP)
-        return EXIT.OK
+        return emitHelp(SPEC_SUB_HELP)
     }
     const runId = args.requireFlag('run')
     const deps = wireDeps(overrides)
@@ -717,8 +700,7 @@ export async function runDebugSpec(argv: string[], overrides: DebugOverrides = {
 export async function runDebugSeed(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {})
     if (args.flag('help') === true) {
-        emitLine(SEED_HELP)
-        return EXIT.OK
+        return emitHelp(SEED_HELP)
     }
     const runId = args.requireFlag('run')
     const deps = wireDeps(overrides)
@@ -730,8 +712,7 @@ export async function runDebugSeed(argv: string[], overrides: DebugOverrides = {
 export async function runDebugFinalize(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['no-ship']})
     if (args.flag('help') === true) {
-        emitLine(FINALIZE_HELP)
-        return EXIT.OK
+        return emitHelp(FINALIZE_HELP)
     }
     const runId = args.requireFlag('run')
     const shipMode: RunState['ship_mode'] | undefined = args.flag('no-ship') === true ? 'no-merge' : undefined

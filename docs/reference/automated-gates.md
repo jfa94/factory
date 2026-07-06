@@ -87,11 +87,8 @@ merged over `process.env` into each gate's spawn env (`defaultGateTools(gateEnv)
 wired from config in `src/cli/wiring.ts`). Use it to mirror the repo's CI build-step env
 so the gate measures the code, not a missing-env crash — e.g. a Next.js static prerender
 that needs `NEXT_PUBLIC_*` defined would otherwise fail the `build` gate on a missing-env
-crash unrelated to task quality. It is **CI-parity placeholders, not a secret store** — a narrow
-reserved-key denylist (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) and
-secret-shaped values are failed at detection, never persisted. Populate it by auto-detecting the
-repo's CI workflow env (`factory configure --detect-gate-env`, also run automatically by
-`factory scaffold`) with manual `--set` as the escape hatch. The same map is the single source of
+crash unrelated to task quality. It is **CI-parity placeholders, not a secret store**. Populate it
+with `factory configure --set quality.gateEnv.<KEY>=<value>`. The same map is the single source of
 truth in the other direction too: `factory scaffold` renders it into the managed `quality-gate.yml`
 it writes, so the local gate and the repo's GitHub CI build with identical env. See
 [configuration.md](./configuration.md#gateenv--ci-parity-placeholders).
@@ -137,9 +134,9 @@ of re-running the suite.
 
 **Fail-closed rules:** any non-measured answer — command failed, summary missing,
 summary invalid — FAILS the gate naming which side broke (`head` or `base <sha>`)
-with a stderr excerpt. An unresolvable base ref fails too. The only skips are an
-explicitly uncontracted entry (`uncontracted: <reason>`, the committed waiver) and
-`no-gate-contract` on legacy pre-contract worktrees.
+with a stderr excerpt. An unresolvable base ref fails too. The only skip is an
+explicitly uncontracted entry (`uncontracted: <reason>`, the committed waiver) —
+a worktree with no `.factory/gates.json` at all fails loud naming `factory scaffold`.
 
 **Scaffold contracts it on npm** when a vitest coverage provider
 (`@vitest/coverage-v8` or `@vitest/coverage-istanbul`) is installed; otherwise

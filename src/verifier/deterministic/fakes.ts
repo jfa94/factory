@@ -14,6 +14,8 @@
  * consumers observe a real rejection, exactly as with the real async tools.
  */
 import type {CoverageStore} from './coverage-store.js'
+import type {GateContract, GateContractLoad} from './gate-contract.js'
+import {GATE_IDS} from './strategy.js'
 import type {
     CommandRunner,
     CommitInfo,
@@ -287,6 +289,22 @@ export interface FakeToolsOptions {
     coverage?: CoverageTool
     fs?: FsProbe
     command?: CommandRunner
+}
+
+/**
+ * A contract loader answering "everything contracted" — the fixture counterpart of
+ * a committed all-green `.factory/gates.json` (the runner THROWS without one).
+ * Per-gate overrides carve out gates a fixture does not exercise
+ * (e.g. `{coverage: {contracted: false, reason: '…'}}`).
+ */
+export function contractedLoader(
+    overrides: Partial<GateContract['gates']> = {}
+): (rootAbs: string) => Promise<GateContractLoad> {
+    const gates = {
+        ...(Object.fromEntries(GATE_IDS.map((id) => [id, {contracted: true}])) as GateContract['gates']),
+        ...overrides,
+    }
+    return () => Promise.resolve({state: 'ok', contract: {version: 1, stack: 'npm', gates}})
 }
 
 /** Assemble a full GateTools bag from overrides, all-green by default. */

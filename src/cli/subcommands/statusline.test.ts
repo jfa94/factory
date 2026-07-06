@@ -315,7 +315,7 @@ describe('runStatusline (run-progress suffix, S11)', () => {
     beforeEach(async () => {
         dataDir = mkdtempSync(join(tmpdir(), 'factory-statusline-progress-'))
         state = new StateManager({dataDir})
-        await state.create({run_id: RUN, spec: SPEC})
+        await state.create({run_id: RUN, staging_branch: `staging-${RUN}`, spec: SPEC})
         await state.update(RUN, (s) => ({
             ...s,
             status: 'running',

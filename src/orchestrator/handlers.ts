@@ -33,7 +33,6 @@ import {
     mergeGateBlockReason,
     createTaskWorktree,
     provisionWorktree,
-    resolveStagingBranch,
     GateRunner,
     FsCoverageStore,
     buildPanelManifest,
@@ -47,6 +46,7 @@ import {
     splitHoldout,
     makeHoldoutRecord,
     parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
     decideFinalize,
     type Config,
     type GateContext,
@@ -190,6 +190,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             agents: [
                 {
                     role,
+                    agent_type: AGENT_TYPE_BY_ROLE[role],
                     model: dial.model,
                     // No implementer-specific turn budget exists; both producer roles share the
                     // test-writer cap (documented WS10 decision).
@@ -217,7 +218,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         async preflight(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'preflight')
             const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id)
-            const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
+            const staging = ctx.run.staging_branch
             // Parallel preflights share the main repo's .git: `fetch` + `worktree add`
             // contend on index.lock, and the shared origin/<staging> tracking ref can move
             // between one task's fetch and another's assertBaseIsStagingTip — spuriously
@@ -332,10 +333,11 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 runId: ctx.run.run_id,
                 taskId: task.task_id,
                 worktree,
-                baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
+                baseRef: ctx.run.staging_branch,
                 config: deps.config,
                 tools: deps.tools,
                 exemptReader: taskExemptReader(deps, worktree),
+                ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
                 coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id)),
             }
             const gate = await new GateRunner().run(gateCtx)

@@ -26,7 +26,7 @@ import {defaultConfig} from '../config/schema.js'
 import {parseSpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
+import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore, InMemoryHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
 import {InMemoryArtifactStore} from './artifacts.js'
 import {ESCALATION_CAP} from '../producer/index.js'
@@ -92,6 +92,7 @@ describe('applyRecordHoldout record', () => {
         verdictStore = new InMemoryHoldoutVerdictStore()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
         deps = {
@@ -100,6 +101,10 @@ describe('applyRecordHoldout record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools(),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -240,6 +245,7 @@ describe('applyRecordReviews record', () => {
         verdictStore = new InMemoryHoldoutVerdictStore()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
         await state.update(RUN_ID, (s) => ({
@@ -248,6 +254,7 @@ describe('applyRecordReviews record', () => {
                 [TASK_ID]: {
                     task_id: TASK_ID,
                     status: 'reviewing',
+                    phase: 'verify',
                     depends_on: [],
                     risk_tier: 'medium',
                     escalation_rung: 0,
@@ -270,6 +277,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: probe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -738,6 +749,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: spyProbe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -875,6 +890,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: perRunProbe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -908,6 +927,7 @@ async function seededProducerState(task: Partial<TaskState> = {}): Promise<{data
     })
     await state.create({
         run_id: RUN_ID,
+        staging_branch: `staging-${RUN_ID}`,
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
     })
     await state.update(RUN_ID, (s) => ({
@@ -916,6 +936,7 @@ async function seededProducerState(task: Partial<TaskState> = {}): Promise<{data
             t1: {
                 task_id: 't1',
                 status: task.status ?? 'executing',
+                phase: task.phase ?? 'exec',
                 depends_on: [],
                 risk_tier: 'medium',
                 escalation_rung: task.escalation_rung ?? 0,

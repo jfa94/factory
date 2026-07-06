@@ -211,7 +211,7 @@ quality-failure and quota-exhaustion — a latent bug):
 
 **Decision — long waits use suspend + scheduled auto-resume, not in-session sleep.** The system
 already knows `resets_at_epoch`. When a wait would exceed a threshold, **persist state, exit, and
-schedule a wake-up at the exact reset to fire `/factory:run resume`** — zero human, robust against
+schedule a wake-up at the exact reset to fire `/factory:resume`** — zero human, robust against
 session/machine death, holds nothing hostage. This **replaces** today's 75-minute cumulative-pause
 **human gate** (which contradicts both "pause until reset" and the no-human-valve north star — a
 full 5h wait would trip it ~4×) and the held in-session sleep.

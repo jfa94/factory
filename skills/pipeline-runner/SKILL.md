@@ -53,16 +53,16 @@ loop on env.kind:
   unspecifiable → STOP LOUD (exit 1; zero agent cost). Surface env.blockers to the
       user verbatim — the PRD needs editing before the factory can spec it. Spawn NOTHING.
   generate → remember env.max_iterations (the loop bound)
-      spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
   revise → (count iterations; > the remembered max_iterations → STOP LOUD, spec-defect)
-      spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
       (env.spawn.context already carries the prior spec + the blockers to fix — the
        agent PATCHES it; it does NOT re-author from scratch. Do not hand-assemble context.)
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
-  review → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
+  review → spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
       write its ReviewVerdict JSON to env.verdict_path
       env = factory spec store [--repo <o/n>] --issue <n>
 ```
@@ -180,7 +180,7 @@ REFILL (run at loop entry and after every completion):
                       "spawn" → spawn EVERY entry in tenv.manifest.agents IN THE
                                 BACKGROUND (count-agnostic — spawn however many the
                                 manifest names, never assume a panel size), per the
-                                collection contract + spawn matrix below; add the task
+                                collection contract + spawn rule below; add the task
                                 to the table with tenv.result_key + the agent ids
                       "done"  → report tenv.outcome (a drop is loud + classified);
                                 REFILL again (a terminal task may unblock dependents)
@@ -239,9 +239,9 @@ worktree); any manifest agent you cannot account for → re-spawn it per the man
 e2e stage:
   eenv = factory run e2e --run <run_id>
   loop while eenv.kind == "spawn":
-    branch on eenv.expects (BOTH spawns use subagent_type `e2e-author`, model
-    per eenv.model, isolation OMITTED — the agent works IN eenv.worktree,
-    prompt = eenv.prompt VERBATIM):
+    branch on eenv.expects (BOTH spawns use subagent_type eenv.agent_type
+    VERBATIM, model per eenv.model, isolation OMITTED — the agent works IN
+    eenv.worktree, prompt = eenv.prompt VERBATIM):
     "author-results" → the e2e AUTHOR: explores the live staging app
       (Playwright MCP), authors throwaway journey specs (into
       eenv.throwaway_dir — never committed) and any load-bearing journey
@@ -279,8 +279,8 @@ e2e stage:
 e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
   aenv = factory run e2e-assess --run <run_id>
   loop while aenv.kind == "spawn":
-    spawn the e2e assessor (subagent_type `e2e-assessor`, model per aenv.model,
-    isolation OMITTED — it works IN aenv.worktree), prompt = aenv.prompt VERBATIM.
+    spawn the e2e assessor (subagent_type aenv.agent_type VERBATIM, model per
+    aenv.model, isolation OMITTED — it works IN aenv.worktree), prompt = aenv.prompt VERBATIM.
     It checks/authors the repo's e2e machinery (boot config in playwright.config.ts,
     seed/auth support), validates by booting, and forecasts which committed specs
     this run's tasks touch. Write its structured verdict {"status":"ok|degraded|
@@ -294,9 +294,9 @@ e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
 traceability stage (S9, Decision 47 — once per non-debug run, after e2e, before docs):
   trenv = factory run traceability --run <run_id>
   case trenv.kind:
-    "spawn"   → spawn the traceability auditor (subagent_type `traceability-auditor`,
-                model per trenv.model, isolation OMITTED — it works IN trenv.worktree,
-                a DETACHED read-only checkout), prompt = trenv.prompt VERBATIM.
+    "spawn"   → spawn the traceability auditor (subagent_type trenv.agent_type
+                VERBATIM, model per trenv.model, isolation OMITTED — it works IN
+                trenv.worktree, a DETACHED read-only checkout), prompt = trenv.prompt VERBATIM.
                 Write its JSON verdict object {"status":"<line>","verdicts":[{"index":n,
                 "verdict":"met|partial|unmet","evidence":"..."}, ...]} to a results file
                 under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
@@ -317,8 +317,8 @@ docs stage:
   case denv.kind:
     "done"    → loop                      # idempotent: already published
     "suspend" → report denv.reason; STOP  # run suspended; /factory:resume retries
-    "spawn"   → spawn scribe (subagent_type `scribe`, model per denv.model,
-                isolation OMITTED — it works IN denv.worktree), prompt = denv.prompt VERBATIM.
+    "spawn"   → spawn the scribe (subagent_type denv.agent_type VERBATIM, model per
+                denv.model, isolation OMITTED — it works IN denv.worktree), prompt = denv.prompt VERBATIM.
                 Capture its terminal STATUS line.
                 Write {"status":"<line>"} to a results file under
                 $CLAUDE_PLUGIN_DATA/results/<run_id>/.
@@ -336,7 +336,8 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 
 1. Read the persisted context: `$CLAUDE_PLUGIN_DATA/runs/<run_id>/<agents[0].prompt_ref>`
    (a ProducerContext JSON).
-2. Spawn the producer — `subagent_type` per the matrix, model mapped, `maxTurns` from
+2. Spawn the producer — `subagent_type` = the manifest agent's `agent_type`
+   VERBATIM, model mapped, `maxTurns` from
    the manifest, **isolation OMITTED**, plus the manifest agent's `effort` as the
    spawn's `effort` opt **when present** (the dial sets it only on high escalation
    rungs; omit it otherwise to inherit the default). Build the prompt from the ProducerContext +
@@ -349,19 +350,18 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 
 **`expects: "reviews"`** (stage verify — the review panel, plus sidecar):
 
-1. **Sidecar (if `tenv.sidecar` present):** spawn `general-purpose`, isolation
-   `"worktree"`, model mapped from `sidecar.model`, `maxTurns = sidecar.max_turns`,
+1. **Sidecar (if `tenv.sidecar` present):** spawn `sidecar.agent_type` VERBATIM,
+   isolation `"worktree"`, model mapped from `sidecar.model`, `maxTurns = sidecar.max_turns`,
    prompt = `sidecar.prompt` VERBATIM — in the background, alongside the panel.
    Keep its raw output.
 2. **Panel:** spawn EVERY entry in `manifest.agents` (count-agnostic — the engine appends the
    content-conditional `database-design-reviewer` when the task diff touches migration/schema
-   files, Decision 51; each isolation `"worktree"`, model mapped from each agent's `model`,
-   `max_turns` from the manifest). Construct each prompt per
-   `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff <tenv.base_ref>`,
-   emit ONE RawReview JSON:
-   `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","claim","description" } ] }`
-   (`quote` and `claim` REQUIRED — `claim` is the one-sentence checkable assertion, ≤300
-   chars; `file`+`line` make a finding citable; `findings` may be empty.)
+   files, Decision 51; each `subagent_type` = the entry's `agent_type` VERBATIM,
+   isolation `"worktree"`, model mapped from each agent's `model`,
+   `max_turns` from the manifest). Each prompt: inspect via
+   `git -C <tenv.worktree> diff <tenv.base_ref>` and emit ONE RawReview JSON exactly per
+   `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
+   reviewer via its frontmatter `skills:` — do not restate the shape).
 
     **Cross-vendor quality-reviewer (Δ U/S5).** The manifest carries the engine's
     resolved `cross_vendor` stamp; it decides how the `quality-reviewer` entry runs:
@@ -404,18 +404,15 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
     absent, or the `codex exec` fallback fired) — never invent the reason: echo
     the stamp's reason or the runtime-failure detail exactly.
 
-### Agent spawn matrix
+### Agent spawn rule
 
-| Agent                                | `subagent_type`                    | isolation                                   |
-| ------------------------------------ | ---------------------------------- | ------------------------------------------- |
-| test-writer                          | `test-writer`                      | **none** (omit) — works IN `tenv.worktree`  |
-| implementer                          | `implementer`                      | **none** (omit) — works IN `tenv.worktree`  |
-| panel reviewers                      | the manifest `role`                | `"worktree"`                                |
-| holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                                |
-| spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                                |
-| e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree`  |
-| e2e-assessor                         | `e2e-assessor`                     | **none** (omit) — works IN `aenv.worktree`  |
-| traceability-auditor                 | `traceability-auditor`             | **none** (omit) — works IN `trenv.worktree` |
+Every spawn envelope carries `agent_type` — spawn
+`Task(subagent_type: <the envelope's agent_type VERBATIM>)` with the entry's
+model/max_turns; honor isolation as given (producers and run-level stage agents
+say "isolation OMITTED — works IN the envelope's worktree"; panel reviewers say
+`"worktree"`). NEVER re-derive the type from `role` or from prose. The ONE
+runner-chosen type not carried by an envelope: the finding-verifier
+(`general-purpose`, step 3 above).
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the

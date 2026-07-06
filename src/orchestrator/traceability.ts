@@ -16,17 +16,12 @@
  * ⇔ quota-caused stop); resume clears it unconditionally.
  */
 import {join} from 'node:path'
+import {ensureStageWorktree} from './stage-helpers.js'
+import type {StageDone, StageFailed, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {getOrThrow, nowIso} from '../shared/index.js'
-import {parseProducerStatus} from './deps.js'
-import {
-    resolveStagingBranch,
-    SpecStore,
-    type Config,
-    type GitClient,
-    type SpecManifest,
-    type StateManager,
-} from './deps.js'
+import {parseProducerStatus, TRACEABILITY_AUDITOR_AGENT_TYPE} from './deps.js'
+import {SpecStore, type Config, type GitClient, type SpecManifest, type StateManager} from './deps.js'
 import {extractPrdRequirements} from '../spec/index.js'
 import type {TraceabilityVerdictRow} from '../core/state/schema.js'
 
@@ -40,19 +35,13 @@ export interface TraceabilityRunDeps {
 }
 
 export type TraceabilityAction =
-    | {
+    | (StageSpawnBase & {
           readonly kind: 'spawn'
-          readonly run_id: string
-          readonly worktree: string
           readonly base_ref: string
-          readonly staging_branch: string
-          readonly model: string
-          readonly max_turns: number
-          readonly prompt: string
-      }
-    | {readonly kind: 'done'; readonly run_id: string}
-    | {readonly kind: 'failed'; readonly run_id: string; readonly reason: string}
-    | {readonly kind: 'suspend'; readonly run_id: string; readonly reason: string}
+      })
+    | StageDone
+    | StageFailed
+    | StageSuspend
 
 const TRACE_MODEL = 'opus'
 const TRACE_MAX_TURNS = 60
@@ -121,7 +110,7 @@ async function readRequirements(deps: TraceabilityRunDeps, runId: string): Promi
 /** Emit the traceability spawn request: prepare the detached staging-tip worktree. */
 export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: string): Promise<TraceabilityAction> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const worktree = traceWorktreePath(deps.dataDir, runId)
     const baseRef = `origin/${base}`
@@ -130,18 +119,19 @@ export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: stri
 
     await deps.git.fetch('origin', staging)
     await deps.git.fetch('origin', base)
-    // Idempotent on resume; --detach because the auditor never commits → no branch to GC.
-    if (!(await deps.git.worktreeExists(worktree))) {
-        await deps.git.worktreeAdd(['--detach', worktree, `origin/${staging}`])
-    } else if ((run.traceability?.attempts ?? 0) >= 1) {
-        // Retry after a crash: a read-only auditor should leave the tree clean, but a
-        // died-mid-Bash attempt may not have — reset to the staging tip regardless.
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // --detach (no branch): the auditor never commits → no branch to GC. Retry-reset:
+    // a read-only auditor should leave the tree clean, but a died-mid-Bash attempt may
+    // not have.
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        resetIfExists: (run.traceability?.attempts ?? 0) >= 1,
+    })
 
     return {
         kind: 'spawn',
         run_id: runId,
+        agent_type: TRACEABILITY_AUDITOR_AGENT_TYPE,
         worktree,
         base_ref: baseRef,
         staging_branch: staging,

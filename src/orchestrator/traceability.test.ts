@@ -1,8 +1,9 @@
-import {mkdtemp, rm} from 'node:fs/promises'
+import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach, beforeEach, describe, expect, it} from 'vitest'
 import {StateManager} from '../core/state/manager.js'
+import {specDir} from '../core/state/paths.js'
 import {defaultConfig} from '../config/schema.js'
 import {FakeGitClient} from '../git/fakes.js'
 import {SpecStore} from '../spec/index.js'
@@ -50,6 +51,7 @@ beforeEach(async () => {
     git = new FakeGitClient({remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging'}})
     await state.create({
         run_id: RUN_ID,
+        staging_branch: `staging-${RUN_ID}`,
         spec: {repo: REPO, spec_id: SPEC_ID, issue_number: 42},
     })
     // Durable spec + PRD snapshot — what emit/record read (docsRoot kept off the cwd).
@@ -100,18 +102,15 @@ describe('runTraceabilityEmit', () => {
         expect(adds).toHaveLength(0)
     })
 
-    it('throws LOUD when the PRD snapshot is missing (pre-S9 spec, backfill remedy)', async () => {
+    it('throws LOUD when the PRD snapshot is missing (older-factory spec, --supersede remedy)', async () => {
         await rm(join(dataDir, 'specs'), {recursive: true, force: true})
-        await expect(runTraceabilityEmit(deps(), RUN_ID)).rejects.toThrow(
-            /predates the S9 PRD snapshot.*factory spec resolve --issue 42/s
-        )
+        await expect(runTraceabilityEmit(deps(), RUN_ID)).rejects.toThrow(/has no PRD snapshot.*--supersede/s)
     })
 
     it('throws LOUD when the PRD yields zero extractable requirements', async () => {
-        await new SpecStore({dataDir, docsRoot: join(dataDir, 'docs-mirror')}).writePrd(
-            REPO,
-            SPEC_ID,
-            makePrd({body: 'just prose with no bullets and nothing normative'})
+        await writeFile(
+            join(specDir(dataDir, REPO, SPEC_ID), 'prd.json'),
+            JSON.stringify(makePrd({body: 'just prose with no bullets and nothing normative'}))
         )
         await expect(runTraceabilityEmit(deps(), RUN_ID)).rejects.toThrow(/no.*requirements/i)
     })

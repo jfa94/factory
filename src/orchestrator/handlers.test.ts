@@ -22,7 +22,14 @@ import {parseSpecManifest} from '../spec/schema.js'
 import type {SpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools, FakeGitProbe, FakeEslint, proc, commit} from '../verifier/deterministic/fakes.js'
+import {
+    contractedLoader,
+    makeFakeTools,
+    FakeGitProbe,
+    FakeEslint,
+    proc,
+    commit,
+} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
 import {dialForRung} from '../producer/index.js'
 import {PANEL_ROLES} from '../verifier/judgment/index.js'
@@ -116,6 +123,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         gh = new FakeGhClient()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
     })
@@ -162,6 +170,10 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             git,
             gh,
             tools: makeFakeTools({git: greenProbe()}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts,
             holdout,
             dataDir,

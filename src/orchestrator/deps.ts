@@ -14,13 +14,10 @@
 export {
     advance,
     spawn,
-    gracefulStop,
     waitRetry,
     taskDone,
     taskFailed,
-    finalizeTerminal,
     assertNever,
-    isTerminalResult,
     runPhase,
     nextPhaseFor,
     decideFinalize,
@@ -28,13 +25,15 @@ export {
     phaseToInFlightStatus,
     TASK_PHASE_ORDER,
     parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
+    GENERAL_PURPOSE_AGENT_TYPE,
+    E2E_AUTHOR_AGENT_TYPE,
+    E2E_ASSESSOR_AGENT_TYPE,
+    TRACEABILITY_AUDITOR_AGENT_TYPE,
     TERMINAL_RUN_STATUSES,
     isTerminalTaskStatus,
     isTerminalRunStatus,
-    PanelVerdictEnum,
-    TaskStatusEnum,
     derivePanelVerdict,
-    deriveAllGatesVerdict,
     deriveMergeGateVerdict,
     mergeGateBlockReason,
     StateManager,
@@ -76,17 +75,12 @@ export {
     createTaskWorktree,
     provisionWorktree,
     assertBaseIsStagingTip,
-    ensureOnStaging,
-    removeWorktree,
     resyncTaskBranchOntoStaging,
     createTaskPrIdempotent,
     MergeSerializer,
-    probeProtection,
-    requireProtectionOrRefuse,
     provisionProtection,
     runScopedBranch,
     runStagingBranch,
-    resolveStagingBranch,
     ensureStaging,
     rollup,
 } from '../git/index.js'
@@ -121,12 +115,11 @@ export {
     buildCheckpoint,
     buildUnavailableCheckpoint,
     clearCheckpoint,
-    selectProducerModel,
 } from '../quota/index.js'
 export type {QuotaDecision, UsageSignal, UsageReading} from '../quota/index.js'
 
 // --- spec store (src/spec) --------------------------------------------------
-export {SpecStore, makeSpecId} from '../spec/index.js'
+export {SpecStore} from '../spec/index.js'
 export type {SpecManifest, SpecTask} from '../spec/index.js'
 
 // --- producer ladder (src/producer) -----------------------------------------
@@ -151,7 +144,7 @@ export type {
 } from '../producer/index.js'
 
 // --- deterministic verifier (src/verifier/deterministic) --------------------
-export {GateRunner, GateMemo, loadGateContract, FsCoverageStore} from '../verifier/deterministic/index.js'
+export {GateRunner, loadGateContract, FsCoverageStore} from '../verifier/deterministic/index.js'
 export type {GateContext, GateRunResult, GateReportEntry, GateTools} from '../verifier/deterministic/index.js'
 
 // --- judgment verifier (src/verifier/judgment) ------------------------------
@@ -162,7 +155,6 @@ export {
     touchesDatabase,
     buildPanelManifest,
     resolveReviewModel,
-    resolveJudgmentConfig,
     parseRawReview,
     resolveCodexCrossVendor,
 } from '../verifier/judgment/index.js'

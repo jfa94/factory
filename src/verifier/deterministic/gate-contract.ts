@@ -22,6 +22,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import {join} from 'node:path'
 import {z} from 'zod'
 import {runnerName, validateCommand, type CommandValidation} from '../../shared/command-allowlist.js'
@@ -135,10 +136,10 @@ export const GateContractSchema = z
 export type GateContract = z.infer<typeof GateContractSchema>
 
 /**
- * The result of loading a contract from a repo root / worktree. `absent` is the
- * legacy pre-contract state (runner warns + keeps today's skip semantics);
- * `invalid` is structural — a committed-but-broken contract must fail LOUD,
- * never degrade to legacy.
+ * The result of loading a contract from a repo root / worktree. Both non-ok
+ * states are structural for the GateRunner: `absent` (worktree cut from a commit
+ * without the contract) and `invalid` (committed-but-broken) each fail LOUD —
+ * a sweep never runs without a valid contract.
  */
 export type GateContractLoad =
     | {readonly state: 'ok'; readonly contract: GateContract}
@@ -151,7 +152,7 @@ export async function loadGateContract(rootAbs: string): Promise<GateContractLoa
     try {
         raw = await readFile(join(rootAbs, GATE_CONTRACT_REL), 'utf8')
     } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (isEnoent(err)) {
             return {state: 'absent'}
         }
         return {state: 'invalid', error: `unreadable: ${(err as Error).message}`}

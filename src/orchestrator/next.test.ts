@@ -216,6 +216,7 @@ describe('nextTask', () => {
                     T1: {
                         ...nonNull(s.tasks.T1),
                         status: 'executing' as const,
+                        phase: 'exec' as const,
                         depends_on: ['T2'],
                     },
                     T2: {

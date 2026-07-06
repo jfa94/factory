@@ -29,21 +29,8 @@ export type {ArtifactStore} from './artifacts.js'
 // -- docs applicability check ------------------------------------------------
 export {isDocsApplicable} from './docs-applicable.js'
 
-// -- record cores (the orchestrator's deterministic result-record kernels) ----------------
-export {
-    readJsonInput,
-    applyRecordProducer,
-    applyRecordHoldout,
-    applyRecordReviews,
-    type RecordDeps,
-    type TransitionEnvelope,
-    type RecordHoldoutInput,
-    type RecordHoldoutEnvelope,
-    type VerifierVerdictInput,
-    type ReviewerVerifications,
-    type RecordReviewsInput,
-    type RecordReviewsEnvelope,
-} from './record.js'
+// -- record input reader (record cores themselves are consumed via deep './record.js' imports) --
+export {readJsonInput} from './record.js'
 
 // -- drive results schema (factory next-action --results input) --------------------
 export {DriveResultsSchema, parseDriveResults, type DriveResults} from './results.js'

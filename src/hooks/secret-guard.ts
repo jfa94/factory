@@ -37,7 +37,9 @@ import {
     parseHookInput,
     type HookDecision,
     type HookInput,
+    readStdin,
 } from './hook-io.js'
+import {SEGMENT_SPLIT_RE} from './token-helpers.js'
 
 /**
  * Env files that are committed by convention (placeholders / public dev config).
@@ -101,7 +103,7 @@ export interface SecretGuardDeps {
  * is a guard bypass.
  */
 function findGitCommitOrPush(command: string): {isCommit: boolean; inv: GitInvocation} | null {
-    for (const seg of command.split(/&&|\|\||;|&|\||\n|\$\(|`|\)/)) {
+    for (const seg of command.split(SEGMENT_SPLIT_RE)) {
         const inv = parseGitInvocation(seg)
         // ponytail: `subcommand` is an open string, so a typo in these "commit"/"push"
         // literals would fail OPEN. Left as-is: subcommand can be any git verb (no closed
@@ -347,7 +349,7 @@ export async function runSecretGuard(
 ): Promise<ExitCode> {
     let input: HookInput | null
     try {
-        const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin()
+        const raw = deps.readRaw ? await deps.readRaw() : await readStdin()
         input = parseHookInput(raw)
     } catch {
         const decision = deny('malformed_hook_input', 'secret-guard: unparseable hook input')
@@ -357,13 +359,4 @@ export async function runSecretGuard(
     const decision = await decideSecretGuard(input, deps)
     emitPermissionDecision(decision)
     return decisionToExitCode(decision)
-}
-
-/** Read all of process.stdin as utf-8. */
-async function readAllStdin(): Promise<string> {
-    const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array))
-    }
-    return Buffer.concat(chunks).toString('utf8')
 }

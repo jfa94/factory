@@ -28,6 +28,7 @@
  * visibility lives in run state (task.status === "failed") and the finalize
  * rollup.
  */
+import {depsSatisfied, isUnsatisfiableDep} from './readiness.js'
 import {
     type TERMINAL_RUN_STATUSES,
     isTerminalRunStatus,
@@ -35,7 +36,6 @@ import {
     clearCheckpoint,
     decideFinalize,
     type RunState,
-    type TaskState,
 } from './deps.js'
 import {failTask} from './transitions.js'
 import {MAX_DOCS_ATTEMPTS} from './docs.js'
@@ -93,17 +93,6 @@ export type NextTask =
           readonly reason: string
           readonly resets_at_epoch?: number
       })
-
-/** True iff every dependency of `task` is `done`. */
-function depsSatisfied(run: RunState, task: TaskState): boolean {
-    return task.depends_on.every((d) => run.tasks[d]?.status === 'done')
-}
-
-/** A dependency is unsatisfiable when it is absent or already failed. */
-function isUnsatisfiableDep(run: RunState, depId: string): boolean {
-    const dep = run.tasks[depId]
-    return dep === undefined || dep.status === 'failed'
-}
 
 /**
  * True iff a fully-terminal run still needs its docs phase: prospective status
@@ -371,7 +360,7 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     // 7. Build the ready set: non-terminal tasks whose deps are all done.
     //    In-flight tasks (status !== "pending") come first — crash-resume finishes
     //    what was started before opening new work.
-    const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run, t))
+    const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run, t.depends_on))
     const inFlight = ready.filter((t) => t.status !== 'pending').map((t) => t.task_id)
     const pending = ready.filter((t) => t.status === 'pending').map((t) => t.task_id)
     const ordered = [...inFlight, ...pending]

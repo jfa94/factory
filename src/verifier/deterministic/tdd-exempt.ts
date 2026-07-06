@@ -10,6 +10,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import path from 'node:path'
 import {createLogger} from '../../shared/logging.js'
 
@@ -92,7 +93,7 @@ async function readJsonOrNull(file: string): Promise<unknown> {
     try {
         raw = await readFile(file, 'utf8')
     } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (!isEnoent(err)) {
             log.warn(`could not read '${file}': ${(err as Error).message} — treating as not exempt`)
         }
         return null

@@ -58,7 +58,7 @@ describe('factory state', () => {
 
     it("prints the current run's state as JSON (resolved per-repo from cwd)", async () => {
         const state = new StateManager({dataDir})
-        await state.create({run_id: 'run-x', spec: SPEC})
+        await state.create({run_id: 'run-x', staging_branch: 'staging-run-x', spec: SPEC})
 
         // No --run → resolve the current run for THIS checkout's repo (acme/widgets).
         const code = await runState([], {gitClient: gitWithOrigin('acme/widgets'), cwd: '/x'})
@@ -69,8 +69,8 @@ describe('factory state', () => {
 
     it('prints a specific run by id', async () => {
         const state = new StateManager({dataDir})
-        await state.create({run_id: 'run-a', spec: SPEC})
-        await state.create({run_id: 'run-b', spec: SPEC})
+        await state.create({run_id: 'run-a', staging_branch: 'staging-run-a', spec: SPEC})
+        await state.create({run_id: 'run-b', staging_branch: 'staging-run-b', spec: SPEC})
 
         const code = await stateCommand.run(['run-a'])
         expect(code).toBe(EXIT.OK)
@@ -79,11 +79,12 @@ describe('factory state', () => {
 
     it('--summary prints a compact human report', async () => {
         const state = new StateManager({dataDir})
-        await state.create({run_id: 'run-s', spec: SPEC})
+        await state.create({run_id: 'run-s', staging_branch: 'staging-run-s', spec: SPEC})
 
         const code = await stateCommand.run(['run-s', '--summary'])
         expect(code).toBe(EXIT.OK)
         expect(stdout.join('')).toMatch(/run run-s/)
+        expect(stdout.join('')).toMatch(/execution_mode=(sequential|balanced)/)
         expect(stdout.join('')).toMatch(/acme\/widgets#12/)
     })
 

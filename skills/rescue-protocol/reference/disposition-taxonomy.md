@@ -22,7 +22,7 @@ Derived sets in the scan envelope:
   traceability audit, or a pending rollup — run-level blocks only an explicit apply flag clears.
 - `would_deadlock` = non-terminal work remains but **no** task is actionable (none ready,
   none cascade-droppable). This is exactly the shape the orchestrator throws on — the signal that
-  `factory run resume` alone cannot recover the run and rescue is required first. A terminal
+  `factory resume` alone cannot recover the run and rescue is required first. A terminal
   `partial`/`failed` run is never `would_deadlock` (it already finalized) but may still be
   `needs_rescue` (recoverable drops to retry on reopen).
 

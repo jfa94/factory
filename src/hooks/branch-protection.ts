@@ -35,6 +35,7 @@ import {
     parseHookInput,
     type HookDecision,
     type HookInput,
+    readStdin,
 } from './hook-io.js'
 
 /** The protected-branch set (hardcoded — a destructive op on any is denied). */
@@ -243,7 +244,7 @@ export async function runBranchProtection(
 ): Promise<ExitCode> {
     let input: HookInput | null
     try {
-        const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin()
+        const raw = deps.readRaw ? await deps.readRaw() : await readStdin()
         input = parseHookInput(raw)
     } catch {
         // Malformed input → fail closed (deny).
@@ -254,13 +255,4 @@ export async function runBranchProtection(
     const decision = await decideBranchProtection(input, deps)
     emitPermissionDecision(decision)
     return decisionToExitCode(decision)
-}
-
-/** Read all of process.stdin as utf-8 (the production stdin reader). */
-async function readAllStdin(): Promise<string> {
-    const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array))
-    }
-    return Buffer.concat(chunks).toString('utf8')
 }

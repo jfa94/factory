@@ -38,12 +38,13 @@ import {
     type TaskPhase,
     type TaskState,
     type RunState,
+    GENERAL_PURPOSE_AGENT_TYPE,
 } from './deps.js'
 import type {UsageSignal} from './deps.js'
 import {markInFlight, completeTask, failStep, escalateOrFail, type TaskOutcome, type TaskStep} from './transitions.js'
 import {applyRecordProducer, applyRecordHoldout, applyRecordReviews, type RecordDeps} from './record.js'
 import {makePhaseHandlers} from './handlers.js'
-import {resolveStagingBranch, runScopedBranch, resyncTaskBranchOntoStaging} from './deps.js'
+import {runScopedBranch, resyncTaskBranchOntoStaging} from './deps.js'
 import {shipTask} from './ship.js'
 import {taskWorktreePath} from './paths.js'
 import {applyQuotaGate, quotaStopFields, type QuotaStop} from './quota-gate.js'
@@ -68,6 +69,8 @@ export type DriveExpects = 'producer-status' | 'reviews'
 export interface HoldoutSpawn {
     readonly kind: 'holdout-validate'
     readonly task_id: string
+    /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+    readonly agent_type: string
     readonly worktree: string
     readonly model: string
     readonly max_turns: number
@@ -175,6 +178,7 @@ export async function holdoutSidecar(
     return {
         kind: 'holdout-validate',
         task_id: taskId,
+        agent_type: GENERAL_PURPOSE_AGENT_TYPE,
         worktree,
         model: resolveReviewModel(deps.config),
         max_turns: deps.config.review.maxTurnsDeep,
@@ -318,7 +322,7 @@ export async function nextAction(
                 const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
                 // The base ref the worktree forked from — plumbed into every spawn so
                 // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
-                const base_ref = `origin/${resolveStagingBranch(runId, run.staging_branch)}`
+                const base_ref = `origin/${run.staging_branch}`
                 const holdout =
                     spawnPhase === 'verify' ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined
                 const result_key: ResultKey = {phase: spawnPhase, rung: task.escalation_rung}
@@ -387,7 +391,7 @@ export async function nextAction(
                     // Done before the atomic bump so a crash replays the merge (idempotent: a second
                     // merge is "already up to date") until the bump commits phase→exec.
                     const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId)
-                    const stagingBranch = resolveStagingBranch(runId, run.staging_branch)
+                    const stagingBranch = run.staging_branch
                     if (!(await deps.git.worktreeExists(resyncWorktree))) {
                         const step = await failStep(
                             deps,

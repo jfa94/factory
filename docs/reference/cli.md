@@ -48,29 +48,12 @@ factory configure                          # print the resolved config
 factory configure --get <key.path>         # print one resolved value
 factory configure --set <key.path=value>   # set (repeatable), validate, persist
 factory configure --unset <key.path>       # revert a key to its default (repeatable)
-factory configure --detect-gate-env        # auto-detect CI build env → gap-fill quality.gateEnv
 ```
 
 Values parse as JSON when possible (numbers, booleans, arrays), else as a bare
 string. `--get` cannot be combined with `--set`/`--unset`. Example:
 `factory configure --set quality.holdoutPercent=25`. Keys are in
 [configuration.md](./configuration.md).
-
-`--detect-gate-env` scans `.github/workflows/*.yml` for every step/job-level `env:`
-literal (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`) and **gap-fills**
-`quality.gateEnv` from `process.cwd()` — the operator always wins (an existing key is
-never overwritten; a detected value that differs is reported as a conflict). It is
-**mutually exclusive** with `--get`/`--set`/`--unset` (combining them is a usage error),
-writes the overlay only when there are new keys, and prints a `DetectReport`:
-`{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, droppedKeys,
-warnings, sources, gateEnv }`. Entries are failed — never silently — for: a `${{ }}` expression
-ref (`skippedExpressionRefs`), a secret-shaped value (`droppedSecrets`), a reserved loader/path-injection
-KEY (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX KEY name
-(`droppedKeys`, with `reason: "reserved"` / `"invalid-name"`), and anything inside a `run: |` block
-scalar. Detection is biased to MISS (block-style space-indented YAML only — an _unquoted_ exotic-YAML
-value is skipped, never mangled; a _quoted_ look-alike is kept); the escape hatch for a miss is
-`--set quality.gateEnv.<KEY>=<value>`. `scaffold` runs the same detection automatically (see
-[`scaffold`](#scaffold)).
 
 ## `scaffold`
 
@@ -82,17 +65,12 @@ base) — **refusing loudly** when `develop` is not protected, unless `--provisi
 set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
-Before writing any template, scaffold **auto-detects the repo's CI build env** (the same
-detection as [`configure --detect-gate-env`](#configure)) and gap-fills `quality.gateEnv`.
-This runs FIRST by design: `quality-gate.yml` is a managed template scaffold overwrites, so
-detecting first captures the repo author's CI env into the durable config overlay before the
-managed file clobbers the author's workflow. The resolved `quality.gateEnv` is then **rendered
-back into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
+The configured `quality.gateEnv` (set via `factory configure --set quality.gateEnv.<KEY>=<value>`)
+is **rendered into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
 (`src/ci/inject-gate-env.ts`) replaces the template's `# factory:gate-env` marker with a real
 `env:` block — so one config drives both the local merge gate and this repo's GitHub CI. Drift
 is measured against the _rendered_ template, so an injected managed file stays byte-identical
-across re-runs. An unparseable workflow is surfaced loudly (`log.warn` + a `warnings` entry),
-never swallowed.
+across re-runs; an empty `gateEnv` leaves the marker untouched.
 
 ```
 factory scaffold [--repo <owner/name>] [--provision]
@@ -104,12 +82,8 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
-protection, settings, gateEnv? }`. SEED gate configs are scaffold-once / project-owned — an
-existing one is reported under `files_present`, never flagged (no `files_outdated`). The
-optional `gateEnv` field is the CI build-env detection `DetectReport`; it is included whenever a
-key was detected **or any anomaly surfaced** (a parse `warnings` entry, or an expression-ref /
-secret / key fail), so a malformed workflow is never silently swallowed. It is **omitted** only
-for a clean brand-new repo (no workflows, nothing to report), keeping that report unchanged.
+protection, settings }`. SEED gate configs are scaffold-once / project-owned — an
+existing one is reported under `files_present`, never flagged (no `files_outdated`).
 
 ## `spec <resolve|gate|store>`
 
@@ -181,7 +155,7 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|resume|finalize|traceability|docs|e2e-assess|e2e|cancel>`
+## `run <create|finalize|traceability|docs|e2e-assess|e2e|cancel>`
 
 ### `run create`
 
@@ -259,15 +233,6 @@ suspend** (no `binding_window`) are never blocked; the **`--resume` intent** fal
 to the ordinary `kind:"exists"` conflict (the `resume` door re-checks the live window); and
 **`--ignore-quota`** overrides the block, letting create/supersede proceed. See
 [Quota pacing — the weekly-quota hard stop](../explanation/quota-pacing.md#the-weekly-quota-hard-stop-on-run-create).
-
-### `run resume`
-
-Thin CLI alias of the top-level [`resume`](#resume) command, kept for one release.
-Prefer `factory resume`.
-
-```
-factory run resume [--run <id>]
-```
 
 ### `run finalize`
 
@@ -518,8 +483,8 @@ from the Stop gate and must work from any session. Emits `{kind:"cancelled", run
 Action (Decision 35 — a top-level verb, distinct from `run`/`rescue`/`debug`).
 Re-checks the live quota window and resumes a paused/suspended run if the binding
 window recovered. Reads nothing else; leaves state untouched when blocked. A terminal
-run is a loud error (nothing to resume). `factory run resume` is a thin alias of this
-command. The documented operator entry is `/factory:resume` (Decision 50) — it runs
+run is a loud error (nothing to resume). The documented operator
+entry is `/factory:resume` (Decision 50) — it runs
 [`rescue scan`](#rescue-scan) first and routes for you; this verb is its clean-park path.
 
 ```
@@ -537,8 +502,8 @@ loud on resume), it combines freely. See
 [Quota pacing — `--ignore-quota`](../explanation/quota-pacing.md#--ignore-quota--the-per-run-pacing-override).
 
 `--run` defaults to **this repo's current run** — resolved from the caller's
-checkout (`origin` remote → `<dataDir>/current/<repoKey>`), falling back to the
-legacy global pointer when the repo can't be derived (see
+checkout (`origin` remote → `<dataDir>/current/<repoKey>`); if the repo can't be
+derived there is no current run (see
 [Per-repo current](#per-repo-current-run-resolution)). Emits one of:
 
 - `{kind:"resumed", run}` — window recovered (or the run was already running).
@@ -569,8 +534,10 @@ in two different checkouts don't shadow each other:
 
 1. derive the repo from the checkout's `origin` remote;
 2. read `<dataDir>/current/<repoKey>` → that repo's current run;
-3. if the repo can't be derived (no `origin`), fall back to the legacy global
-   `runs/current` (the repo-less "most recent") — degrade-safe, never an error.
+3. if the repo can't be derived (no `origin`), there is no current run (`null`,
+   never an error). The global repo-less `runs/current` pointer still exists, but
+   it serves the **no-cwd consumers** (statusline ticks, `hook-context`,
+   `next-task`) — the cwd-based reporters never fall back to it.
 
 `--run <id>` always wins over this resolution; `next-action` ignores it entirely
 (always requires `--run`). `next-task` is the one exception — it stays on the global
@@ -659,7 +626,10 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
 
 - `{ kind:"spawn", run_id, task_id, phase, result_key, request, holdout?, expects, worktree, base_ref }`
   — the agents to run (`request.agents`) and what to feed back. Each agent carries
-  `{ role, model, max_turns, prompt_ref, isolation, effort? }`; `effort` (the `Agent`
+  `{ role, agent_type, model, max_turns, prompt_ref, isolation, effort? }`; `agent_type`
+  is the runner-facing `Task(subagent_type)` value the runner spawns **verbatim**
+  (`AGENT_TYPE_BY_ROLE`, `src/core/phase-machine/spawn.ts`, Decision 52) — there is no
+  prose spawn matrix for the runner to re-derive. `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
@@ -670,10 +640,9 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
   `base_ref` is the per-run staging base that worktree forked from
   (`origin/staging-<run-id>`); the panel and holdout validator diff against THIS, never
   a bare `origin/staging` (which namespace-collides after a repo branch rename). Its
-  branch is resolved via `resolveStagingBranch(run_id, run.staging_branch)` — the name
-  pinned in `RunState` at create ([state model](./state-model.md#runstate)), not
-  recomputed — so it stays fixed to the branch already pushed to origin even if the
-  naming scheme changes mid-run.
+  branch is `run.staging_branch` — the name pinned in `RunState` at create
+  ([state model](./state-model.md#runstate)), never recomputed — so it stays fixed
+  to the branch already pushed to origin even if the naming scheme changes mid-run.
 - `{ kind:"done", run_id, task_id, outcome }` — the task is `done` or a
   classified `failed`.
 - `{ kind:"pause", run_id, task_id, scope, reason, resets_at_epoch? }`.
@@ -720,8 +689,8 @@ factory score --fleet
 Emits `{ kind:"score", summary }`. The summary carries the S11 touch metric:
 `touches` (length of the run's `human_touches` ledger) and `touch_metric`
 (derived, never stored: `(completed ? 1 : 0) / touches` — `launch` counts, so a
-clean lights-out run scores exactly `1.0`). Legacy runs without the ledger report
-both as `null`.
+clean lights-out run scores exactly `1.0`). A run with an empty ledger reports
+`touches: 0` and `touch_metric: null` (the 0-division guard).
 
 `--fleet` reports the metric across **every** run in the store: emits
 `{ kind:"fleet-score", runs:[{run_id, status, touches, metric}], aggregate }`

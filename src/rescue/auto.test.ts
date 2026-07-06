@@ -22,6 +22,8 @@ import type {RunState, RunStatus, TaskState} from '../types/index.js'
 
 type TaskSeed = Partial<TaskState> & {task_id: string; status: TaskState['status']}
 
+const IN_FLIGHT_DEFAULT_PHASE = {executing: 'exec', reviewing: 'verify', shipping: 'ship'} as const
+
 function task(seed: TaskSeed): TaskState {
     const base = {
         depends_on: [],
@@ -29,6 +31,9 @@ function task(seed: TaskSeed): TaskState {
         escalation_rung: 0,
         reviewers: [],
         merge_resyncs: 0,
+        ...(seed.status === 'executing' || seed.status === 'reviewing' || seed.status === 'shipping'
+            ? {phase: IN_FLIGHT_DEFAULT_PHASE[seed.status]}
+            : {}),
         ...seed,
     }
     if (seed.status === 'failed') {
@@ -44,6 +49,7 @@ function task(seed: TaskSeed): TaskState {
 function mkRun(seeds: readonly TaskSeed[], status: RunStatus = 'failed'): RunState {
     return parseRunState({
         run_id: 'run-auto-1',
+        staging_branch: 'staging-run-auto-1',
         status,
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
         tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),

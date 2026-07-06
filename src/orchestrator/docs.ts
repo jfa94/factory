@@ -1,8 +1,10 @@
 import {join} from 'node:path'
+import {ensureStageWorktree, publishToStaging} from './stage-helpers.js'
+import type {StageDone, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {nowIso} from '../shared/index.js'
-import {parseProducerStatus} from './deps.js'
-import {resolveStagingBranch, type Config, type GitClient, type StateManager} from './deps.js'
+import {parseProducerStatus, AGENT_TYPE_BY_ROLE} from './deps.js'
+import {type Config, type GitClient, type StateManager} from './deps.js'
 
 export interface DocsRunDeps {
     readonly state: StateManager
@@ -12,19 +14,13 @@ export interface DocsRunDeps {
 }
 
 export type DocsAction =
-    | {
+    | (StageSpawnBase & {
           readonly kind: 'spawn'
-          readonly run_id: string
-          readonly worktree: string
           readonly base_ref: string
-          readonly staging_branch: string
           readonly docs_branch: string
-          readonly model: string
-          readonly max_turns: number
-          readonly prompt: string
-      }
-    | {readonly kind: 'done'; readonly run_id: string}
-    | {readonly kind: 'suspend'; readonly run_id: string; readonly reason: string}
+      })
+    | StageDone
+    | StageSuspend
 
 const DOCS_MODEL = 'opus'
 const DOCS_MAX_TURNS = 60
@@ -63,7 +59,7 @@ function buildScribePrompt(worktree: string, baseRef: string): string {
 /** Emit the docs spawn request: prepare the staging-rooted worktree, name scribe. */
 export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<DocsAction> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const docsBranch = `docs-${runId}`
     const worktree = docsWorktreePath(deps.dataDir, runId)
@@ -71,24 +67,19 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
 
     await deps.git.fetch('origin', staging)
     await deps.git.fetch('origin', base)
-    // Idempotent on resume: a prior (failed) attempt leaves the worktree in place; real
-    // `git worktree add` FATALS on an existing path, so reuse it instead of re-creating.
-    if (!(await deps.git.worktreeExists(worktree))) {
-        // `-B` (not `-b`): a crash between the worktree removal (runDocsRecord) and the
-        // `docs=done` state write can leave `docs-<runId>` behind after the worktree path
-        // is gone — a bare `-b` fatals on re-entry, wedging the run in EMIT before the
-        // RECORD-side attempt cap can fire. `-B` force-creates/resets, matching the e2e
-        // sibling's crash-safety.
-        await deps.git.worktreeAdd(['-B', docsBranch, worktree, `origin/${staging}`])
-    } else if ((run.docs?.attempts ?? 0) >= 1) {
-        // Retry: reset dirty worktree to staging tip so the prior failed commit/edit doesn't
-        // bleed into the new attempt (preserves "at most one docs commit" invariant).
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // Retry-reset: the prior failed commit/edit must not bleed into the new attempt
+    // (preserves "at most one docs commit" invariant).
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        branch: docsBranch,
+        resetIfExists: (run.docs?.attempts ?? 0) >= 1,
+    })
 
     return {
         kind: 'spawn',
         run_id: runId,
+        agent_type: AGENT_TYPE_BY_ROLE.scribe,
         worktree,
         base_ref: baseRef,
         staging_branch: staging,
@@ -109,15 +100,14 @@ export async function runDocsRecord(
     results: DocsResults
 ): Promise<Extract<DocsAction, {kind: 'done' | 'suspend'}>> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const docsBranch = `docs-${runId}`
     const worktree = docsWorktreePath(deps.dataDir, runId)
     const outcome = parseProducerStatus(results.status)
 
     if (outcome.status === 'done') {
         // docsBranch = staging tip (+ at most one docs commit) → ff-merge is clean.
-        await deps.git.mergeFfOrCommit(staging, docsBranch)
-        await deps.git.push('origin', staging)
+        await publishToStaging(deps.git, staging, docsBranch)
         await deps.git.worktreeRemove([worktree, '--force'])
         await deps.state.update(runId, (s) => ({...s, docs: {status: 'done', ended_at: nowIso()}}))
         return {kind: 'done', run_id: runId}

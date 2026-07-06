@@ -25,7 +25,7 @@ import {join} from 'node:path'
 import type {ExitCode} from '../../shared/exit-codes.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {parseArgs} from '../args.js'
-import {emitLine} from '../io.js'
+import {emitHelp} from '../io.js'
 import {readStdin} from '../../shared/stdin.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/index.js'
 import {currentLinkPath, STATE_FILE} from '../../core/state/paths.js'
@@ -91,7 +91,7 @@ const TERMINAL_LINGER_SEC = 30 * 60
  * in-flight task's phase, run id, run status). Terminal runs show only for
  * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
  *
- * DELIBERATELY raw reads: the legacy GLOBAL `runs/current` symlink dereferenced
+ * DELIBERATELY raw reads: the GLOBAL repo-less `runs/current` symlink dereferenced
  * straight to `state.json` + a plain `JSON.parse` — never `parseRunState`. A
  * torn/partial concurrent write, a schema mismatch, or a missing pointer must
  * degrade to "no suffix", not a Zod throw: the statusline NEVER breaks.
@@ -224,8 +224,7 @@ async function passthrough(payload: string, deps: StatuslineDeps): Promise<strin
 export async function runStatusline(argv: string[] = [], deps: StatuslineDeps = {}): Promise<ExitCode> {
     const args = parseArgs(argv)
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
     // 1. Read the whole stdin payload (may be empty).

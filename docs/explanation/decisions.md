@@ -1777,6 +1777,66 @@ specialist to approve non-schema SQL rather than the engine guessing intent.
 
 ---
 
+## Decision 52 — The Simplification Pass: Greenfield Doctrine, Single-Source Guards, `agent_type` Envelopes
+
+**Date:** 2026-07-06
+
+**Context:** Decisions 39–51 shipped ~+23K net lines in five days. A whole-repo
+audit found the seams healthy but the body fat: duplicated engine plumbing, a
+980-line niche feature, legacy-compat branches in a greenfield system, double
+guard layers, dead code, ~6K lines of archaeology, and heavy markdown protocol
+restatement. One pass removed ~10K lines with zero functionality regressions;
+the lights-out-autonomy north star constrained every cut (no simplification may
+replace an autonomous path with a human park).
+
+**Decision (eight changes):**
+
+1. **detect-gate-env deleted** — `quality.gateEnv` is manual-only config
+   (`factory configure --set quality.gateEnv.KEY=value`); scaffold still renders
+   configured values into the managed workflow, it just never guesses them.
+2. **Greenfield doctrine: all legacy fallbacks dropped, `schema_version` 2→3.**
+   Absent version now rejects too; `staging_branch` required (the
+   `resolveStagingBranch` recompute fallback died); `human_touches` defaults
+   `[]`; the S9 PRD backfill died (a spec without `prd.json` is refused —
+   regenerate with `--supersede`); a worktree without `.factory/gates.json`
+   throws instead of warn-and-skip; the cwd-based reporters no longer fall back
+   to the global pointer (per-repo miss → no current run); in-flight task status
+   now REQUIRES a phase cursor (schema invariant, not a status→phase guess
+   table). Stale artifacts fail loud naming the remedy — never silently degrade.
+3. **Single-source guards** — the inline shell PreToolUse guards left
+   `templates/settings.autonomous.json`; the compiled TS hooks are the one guard
+   layer. Accepted coverage deltas (Edit/Write main-guard, Supabase SQL-safety,
+   curl-pipe-sh) recorded in the template's `_security_model`.
+4. **`factory run resume` alias removed** — `/factory:resume` (Decision 50) is
+   the one resume surface.
+5. **GateMemo deleted** (dead in production: every run constructed a fresh
+   instance, so it never memoized across anything).
+6. **Archaeology deleted** — `remediation/`, `docs/reports/`, `docs/rewrite/`,
+   tracked `docs/superpowers/` strays, `schemas/codex-review.schema.json`.
+   `decisions.md` kept intact (this file is the history).
+7. **Markdown single-sourcing** — reviewers point at the injected
+   `review-protocol` skill instead of restating it; the TDD skill is wired into
+   test-writer (RED half) + implementer (GREEN/REFACTOR half) via frontmatter
+   `skills:`; the debug SKILL shrank to deltas over pipeline-runner; the runner
+   spawn matrix died — **every spawn envelope now carries `agent_type`**
+   (`AGENT_TYPE_BY_ROLE`, `src/core/phase-machine/spawn.ts`) and the runner uses
+   it verbatim.
+8. **Shared stage helpers, not a framework** — `stage-helpers.ts`
+   (`ensureStageWorktree`, `publishToStaging`, `specTaskLines`, `StageSpawnBase`),
+   the `e2e.ts` split into 5 modules behind a facade, and mechanical dedup
+   (`isEnoent`, `resolveRunIdOrCurrent`, `withHelpGate`/`openState`, hook token
+   helpers). Each run-level stage keeps its own coroutine and attempt-cap
+   policy — the rejected alternative was a stage policy engine.
+
+**Consequences:** the wire formats are byte-identical except the additive
+`agent_type`; old on-disk runs fail loud with the v3 message instead of limping;
+the test suite reorganized along the same seams (`lifecycle.test.ts`,
+`spec/build.test.ts`, shared `cli/test-fixtures.ts`). Anyone resurrecting a
+legacy-compat branch should read change 2 first: the doctrine is that a factory
+that runs unattended must never guess about stale state.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

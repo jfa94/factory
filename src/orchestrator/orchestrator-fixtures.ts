@@ -8,6 +8,7 @@
  * identically. New option is additive-only.
  */
 import {mkdtemp, rm} from 'node:fs/promises'
+import {epochToIso} from '../shared/time.js'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -16,7 +17,7 @@ import {parseSpecManifest} from '../spec/schema.js'
 import type {Prd, SpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
+import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
 import {InMemoryArtifactStore} from './artifacts.js'
 import {fakeUsageSignal, type UsageReading} from '../quota/usage-source.js'
@@ -155,6 +156,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
 
     await state.create({
         run_id: runId,
+        staging_branch: `staging-${runId}`,
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
     })
 
@@ -188,9 +190,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
             opts.runStatusOverride !== undefined
                 ? {
                       status: opts.runStatusOverride,
-                      ...(isTerminalRunStatus(opts.runStatusOverride)
-                          ? {ended_at: new Date(NOW * 1000).toISOString()}
-                          : {}),
+                      ...(isTerminalRunStatus(opts.runStatusOverride) ? {ended_at: epochToIso(NOW)} : {}),
                   }
                 : {}
         return {...s, ...statusPatch, tasks: next}
@@ -205,6 +205,10 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
         git,
         gh,
         tools: makeFakeTools({git: greenProbe()}),
+        loadContract: contractedLoader({
+            coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+            sast: {contracted: false, reason: 'fixture: no security command'},
+        }),
         artifacts: new InMemoryArtifactStore(),
         holdout,
         dataDir,

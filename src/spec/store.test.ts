@@ -207,23 +207,12 @@ describe('SpecStore PRD snapshot (S9, Decision 47)', () => {
         expect(await store.readPrd(m.repo, m.spec_id)).toEqual(PRD)
     })
 
-    it('readPrd fails loud with the backfill remedy on a pre-S9 spec (no snapshot)', async () => {
+    it('readPrd fails loud with the --supersede remedy on a snapshot-less spec dir', async () => {
         const store = newStore()
         const m = request()
         await store.write(m, '# spec', PRD)
-        await rm(join(specDir(dataDir, m.repo, m.spec_id), 'prd.json')) // fabricate a pre-S9 dir
-        await expect(store.readPrd(m.repo, m.spec_id)).rejects.toThrow(
-            /predates the S9 PRD snapshot.*factory spec resolve --issue 123/s
-        )
-    })
-
-    it('writePrd backfills a spec dir that lacks the snapshot', async () => {
-        const store = newStore()
-        const m = request()
-        await store.write(m, '# spec', PRD)
-        await rm(join(specDir(dataDir, m.repo, m.spec_id), 'prd.json'))
-        await store.writePrd(m.repo, m.spec_id, PRD)
-        expect(await store.readPrd(m.repo, m.spec_id)).toEqual(PRD)
+        await rm(join(specDir(dataDir, m.repo, m.spec_id), 'prd.json')) // fabricate an older-factory dir
+        await expect(store.readPrd(m.repo, m.spec_id)).rejects.toThrow(/has no PRD snapshot.*--supersede/s)
     })
 
     it('readPrd fails loud (source-tagged) on a malformed/hand-edited snapshot — never laundered', async () => {

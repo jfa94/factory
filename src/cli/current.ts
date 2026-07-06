@@ -8,16 +8,17 @@
  * Repo resolution mirrors `run create`'s {@link RunCreateOverrides} seam exactly:
  * derive `owner/name` from the `origin` remote of `cwd` via {@link resolveRepo}, with
  * the git client + cwd injectable for tests. When the repo is NOT derivable (invoked
- * outside any checkout / no `origin`), fall back to the legacy GLOBAL `runs/current`
- * pointer (repo-less "most-recent") rather than failing — a bare `factory state` in a
- * scratch dir must still work. The per-repo reader ({@link StateManager.readCurrentForRepo})
- * itself read-throughs to the same-repo legacy pointer for pre-upgrade in-flight runs.
+ * outside any checkout / no `origin`), there is no current run for the caller —
+ * resolve to null and let the command's own "no current run" handling speak. The
+ * global repo-less `runs/current` pointer stays for no-cwd consumers (statusline
+ * ticks, hook-context) — it is just never a fallback here.
  *
  * NOTE this is intentionally NOT used by `factory next-task`: that command is machine-driven
  * (the runner bootstrap), always passes `--run` on the hot path, and its
  * no-`--run` fallback is guarded against a foreign run by `--assert-owner`.
  */
 import {DefaultGitClient, resolveRepo, type GitClient} from '../git/index.js'
+import {optionalString, UsageError, type ParsedArgs} from './args.js'
 import type {RunState, StateManager} from '../core/state/index.js'
 
 /** Test seam: inject the git client + cwd (parity with {@link RunCreateOverrides}). */
@@ -28,8 +29,8 @@ export interface CurrentRunOverrides {
 
 /**
  * The current run for the caller's checkout, or `null` when none. Resolves the repo
- * from `cwd`'s `origin` remote and reads that repo's pointer; degrades to the global
- * pointer when the repo cannot be derived. Never throws on repo resolution itself.
+ * from `cwd`'s `origin` remote and reads that repo's pointer; an underivable repo
+ * (not a checkout / no origin) means no current run. Never throws on repo resolution.
  */
 export async function readCurrentForCwd(
     state: StateManager,
@@ -41,8 +42,31 @@ export async function readCurrentForCwd(
     try {
         repo = await resolveRepo({cwd, gitClient})
     } catch {
-        // Not a checkout / no origin remote → repo-less legacy "most-recent" pointer.
-        return state.readCurrent()
+        // Not a checkout / no origin remote → no repo, no current run.
+        return null
     }
     return state.readCurrentForRepo(repo)
+}
+
+/**
+ * Resolve `runId` from `--run`, falling back to the caller-repo current run (LOUD
+ * if neither is available) — the shared head of every command that defaults to the
+ * active run (`resume`/`finalize`/phase commands, `rescue apply`/`auto`). `label`
+ * is the error-message prefix (e.g. `run finalize`, `rescue apply`).
+ */
+export async function resolveRunIdOrCurrent(
+    state: StateManager,
+    args: ParsedArgs,
+    label: string,
+    overrides: CurrentRunOverrides = {}
+): Promise<string> {
+    const explicit = optionalString(args.flag('run'))
+    if (explicit !== undefined) {
+        return explicit
+    }
+    const current = await readCurrentForCwd(state, overrides)
+    if (current === null) {
+        throw new UsageError(`${label}: no --run given and no current run`)
+    }
+    return current.run_id
 }

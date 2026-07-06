@@ -391,7 +391,7 @@ export async function applyRescue(
             ...run,
             tasks: nextTasks,
             // S11: a manual apply that did work IS a human touch.
-            human_touches: [...(run.human_touches ?? []), {kind: 'recover' as const, at: opts.at ?? nowIso()}],
+            human_touches: [...run.human_touches, {kind: 'recover' as const, at: opts.at ?? nowIso()}],
             ...(e2eReset ? {e2e_phase: reopenE2ePhase(nonNull(run.e2e_phase))} : {}),
             // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
             // so wantsE2eAssessment re-fires a fresh assessor on the next drive.

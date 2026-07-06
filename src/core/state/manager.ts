@@ -26,6 +26,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {mkdir, readFile, readdir, rename, rm, symlink, unlink} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import {existsSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../../shared/file-lock.js'
@@ -62,8 +63,8 @@ export interface CreateRunArgs {
     ship_mode?: RunState['ship_mode']
     /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
     owner_session?: RunState['owner_session']
-    /** The per-run staging branch to PIN on the row (Decision 33); recomputed if absent. */
-    staging_branch?: RunState['staging_branch']
+    /** The per-run staging branch to PIN on the row (Decision 33). */
+    staging_branch: RunState['staging_branch']
     /** Quota-gate bypass from `--ignore-quota`; persisted so both orchestrators skip the gate. */
     ignore_quota?: RunState['ignore_quota']
     /** e2e-phase opt-in from `--e2e` (Decision 39); persisted so `wantsE2e` reads it live. */
@@ -94,16 +95,16 @@ export class StateManager {
     }
 
     /**
-     * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-     * `schema_version` absent or === 2 → pass through to parseRunState normally.
-     * Any other value → the file predates the current schema; ephemeral runs can't be
-     * migrated, so the user gets a clear "start a fresh run" message.
+     * Reject any state file not stamped with the CURRENT schema version, with a clear
+     * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+     * the version, so an unstamped file predates the current schema. Ephemeral runs
+     * can't be migrated; the remedy is always a fresh run.
      */
     private static guardedParse(raw: unknown, context: string): RunState {
         const v = (raw as Record<string, unknown> | null)?.schema_version
-        if (v !== undefined && v !== 2) {
+        if (v !== 3) {
             throw new UsageError(
-                `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported — start a fresh run`
+                `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported — this state was created by an older factory version; start a fresh run`
             )
         }
         return parseRunState(raw)
@@ -185,7 +186,7 @@ export class StateManager {
             // Stamp the owning session only when known (best-effort) — an absent owner
             // leaves the field undefined and the Stop gate falls back to unscoped behavior.
             ...(args.owner_session !== undefined ? {owner_session: args.owner_session} : {}),
-            ...(args.staging_branch !== undefined ? {staging_branch: args.staging_branch} : {}),
+            staging_branch: args.staging_branch,
             ...(args.ignore_quota !== undefined ? {ignore_quota: args.ignore_quota} : {}),
             ...(args.e2e !== undefined ? {e2e: args.e2e} : {}),
             ...(args.debug !== undefined ? {debug: args.debug} : {}),
@@ -253,19 +254,12 @@ export class StateManager {
     /**
      * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
      * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-     * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
-     * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
-     * run (global-only) still resolves, while another repo's run never leaks in.
-     * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+     * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
+     * pointers on every create, so a repo with a run always has its per-repo link.
+     * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
      */
     async readCurrentForRepo(repo: string): Promise<RunState | null> {
-        const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo))
-        if (viaRepo !== null) {
-            return viaRepo
-        }
-        // Per-repo miss → legacy read-through, scoped to the SAME repo (never cross-repo).
-        const legacy = await this.readCurrent()
-        return legacy !== null && legacy.spec.repo === repo ? legacy : null
+        return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo))
     }
 
     /**
@@ -285,7 +279,7 @@ export class StateManager {
         try {
             raw = await readFile(statePath, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err
@@ -311,7 +305,7 @@ export class StateManager {
         try {
             entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return []
             }
             throw err
@@ -324,7 +318,7 @@ export class StateManager {
             try {
                 runs.push(await this.read(entry.name))
             } catch (err) {
-                if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                if (isEnoent(err)) {
                     continue
                 } // no state.json yet
                 log.warn(`state: skipping unreadable run '${entry.name}': ${(err as Error).message}`)

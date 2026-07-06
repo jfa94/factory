@@ -27,14 +27,13 @@
 .claude/scheduled_tasks.lock
 CLAUDE.local.md
 
-# Superpowers plans — treated as private session scratch. Already-tracked
-# plans remain tracked; this pattern hides new plan files going forward.
-docs/superpowers/plans/
+# Superpowers output — private session scratch, never tracked.
+docs/superpowers/
 
 # Temporary files
 .temp/
 
-# Reports (mutation testing, coverage) — root-anchored so docs/reports/ stays tracked
+# Reports (mutation testing, coverage)
 /reports/
 
 # Comprehensive code review output (session scratch)

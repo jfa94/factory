@@ -74,6 +74,7 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
 
     await state.create({
         run_id: opts.runId,
+        staging_branch: `staging-${opts.runId}`,
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
     })
     await state.update(opts.runId, (s) => ({
@@ -83,6 +84,7 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
             't-1': {
                 task_id: 't-1',
                 status: 'shipping' as const,
+                phase: 'ship' as const,
                 depends_on: [],
                 risk_tier: 'medium' as const,
                 escalation_rung: 0,
@@ -160,7 +162,7 @@ describe('shipTask', () => {
         fixtures.push(dataDir)
 
         // Pin a branch that does NOT equal runStagingBranch("run-D") (= "staging-run-D").
-        // A revert of resolveStagingBranch → the bare recompute would silently open AND
+        // A regression to recomputing from the run id would silently open AND
         // merge the PR against the WRONG branch; seeding a divergent pin makes the
         // assertion fail unless the pin is honored (the recompute-equal fixtures can't).
         const pinned = 'staging-LEGACY-run-D'

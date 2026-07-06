@@ -12,7 +12,7 @@
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitLine, emitHelp} from '../io.js'
 import {StateManager} from '../../core/state/index.js'
 import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
 import type {RunState} from '../../types/index.js'
@@ -30,7 +30,7 @@ Exit OK with {"current": null} when there is no current run.`
 /** One compact human line per task: "<id> <status> [phase] [rung] [pr]". */
 function summarize(run: RunState): string {
     const lines: string[] = [
-        `run ${run.run_id}  status=${run.status}  execution_mode=`,
+        `run ${run.run_id}  status=${run.status}  execution_mode=${run.execution_mode}`,
         `spec ${run.spec.repo}#${run.spec.issue_number} (${run.spec.spec_id})`,
         `tasks (${Object.keys(run.tasks).length}):`,
     ]
@@ -53,8 +53,7 @@ function summarize(run: RunState): string {
 export async function runState(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['summary']})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
     const state = new StateManager()

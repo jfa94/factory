@@ -87,6 +87,7 @@ describe('next --run resolution falls back to runs/current', () => {
         // Create a run so it becomes current.
         await state.create({
             run_id: 'run-current',
+            staging_branch: 'staging-run-current',
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
         // Seed one pending task so nextTask schedules it.
@@ -167,6 +168,7 @@ describe('next runs/current guards (--assert-owner)', () => {
     async function seedReadyCurrent(ownerSession?: string) {
         await state.create({
             run_id: 'run-current',
+            staging_branch: 'staging-run-current',
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
             ...(ownerSession !== undefined ? {owner_session: ownerSession} : {}),
         })
@@ -254,12 +256,14 @@ describe('next runs/current guards (--assert-owner)', () => {
         // Run A: this session's intended run.
         await state.create({
             run_id: 'run-A',
+            staging_branch: 'staging-run-A',
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
             owner_session: 'sess-A',
         })
         // A concurrent create of run B in another session moves runs/current → B.
         await state.create({
             run_id: 'run-B',
+            staging_branch: 'staging-run-B',
             spec: {repo: 'acme/other', spec_id: '7-thing', issue_number: 7},
             owner_session: 'sess-B',
         })

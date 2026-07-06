@@ -82,6 +82,15 @@ export async function loadOrchestratorDeps(opts: LoadCliDepsOptions): Promise<Or
 }
 
 /**
+ * Open the state store under the default data dir — the shared head of every
+ * read/write subcommand that needs `{dataDir, state}` and nothing else.
+ */
+export function openState(): {dataDir: string; state: StateManager} {
+    const dataDir = resolveDataDir({})
+    return {dataDir, state: new StateManager({dataDir})}
+}
+
+/**
  * Assemble the {@link CliDeps} bundle for `runId`. Resolves the data dir ONCE and
  * threads it through every store so they all agree on the layout; reads the run
  * state to get its `{repo, spec_id}` pointer, then loads the durable spec (LOUD if

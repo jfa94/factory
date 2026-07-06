@@ -27,7 +27,6 @@ import {
 } from './fakes.js'
 import {GateRunner, strategyFor, type GateContext} from './gate-runner.js'
 import type {GateContract, GateContractLoad} from './gate-contract.js'
-import {GateMemo} from './memo.js'
 import type {CoverageSummary, GateTools} from './tools.js'
 
 const full: CoverageSummary = {lines: 100, branches: 100, functions: 100, statements: 100}
@@ -59,6 +58,12 @@ function loadsCoverageContract(overrides: Partial<GateContract['gates']> = {}): 
     return () => Promise.resolve({state: 'ok', contract})
 }
 
+/** Default baseCtx loader: everything contracted (built-in commands) — a sweep never runs contract-less. */
+function loadsAllContracted(): () => Promise<GateContractLoad> {
+    const gates = Object.fromEntries(GATE_IDS.map((id) => [id, {contracted: true}])) as GateContract['gates']
+    return () => Promise.resolve({state: 'ok', contract: {version: 1, stack: 'npm', gates}})
+}
+
 function baseCtx(tools: GateTools, gates: readonly (typeof GATE_IDS)[number][]): GateContext {
     return {
         runId: 'r1',
@@ -69,6 +74,7 @@ function baseCtx(tools: GateTools, gates: readonly (typeof GATE_IDS)[number][]):
         tools,
         gates,
         exemptReader: {isExempt: () => Promise.resolve(false)},
+        loadContract: loadsAllContracted(),
     }
 }
 
@@ -103,9 +109,15 @@ describe("GateRunner — Δ V derive-don't-store conjunction", () => {
     })
 
     it('empty evidence (all gates skipped) FAILS closed — never default-open', async () => {
-        // sast with no securityCommand skips; run ONLY sast ⇒ zero evidence.
+        // sast waived by contract; run ONLY sast ⇒ zero evidence.
         const tools = makeFakeTools({git: greenGit()})
-        const res = await new GateRunner().run(baseCtx(tools, ['sast']))
+        const waived = Object.fromEntries(
+            GATE_IDS.map((id) => [id, {contracted: false, reason: 'test-waived'}])
+        ) as GateContract['gates']
+        const res = await new GateRunner().run({
+            ...baseCtx(tools, ['sast']),
+            loadContract: () => Promise.resolve({state: 'ok', contract: {version: 1, stack: 'npm', gates: waived}}),
+        })
         expect(res.evidence).toHaveLength(0)
         expect(res.skipped).toHaveLength(1)
         expect(res.verdict.passed).toBe(false) // deriveAllGatesVerdict([]) === false
@@ -121,56 +133,6 @@ describe("GateRunner — Δ V derive-don't-store conjunction", () => {
         expect(a.verdict.__derived).toBe(true)
         expect(b.verdict.__derived).toBe(true)
         expect(a.verdict.passed).toBe(b.verdict.passed)
-    })
-})
-
-describe('GateRunner — tree-SHA evidence memo (Δ O)', () => {
-    it('serves an identical-content re-run from the memo (tool NOT re-invoked)', async () => {
-        const memo = new GateMemo()
-        const vitest = new FakeVitest(proc(0))
-        const git = new FakeGitProbe({
-            refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-            changedFiles: [],
-            commits: [],
-            treeSha: 'tree-A',
-        })
-        const tools = makeFakeTools({git, vitest})
-        const ctx: GateContext = {...baseCtx(tools, ['test']), memo}
-
-        const a = await new GateRunner().run(ctx)
-        const b = await new GateRunner().run(ctx)
-
-        expect(a.verdict.passed).toBe(true)
-        expect(b.verdict.passed).toBe(true)
-        // Same tree SHA + shared memo ⇒ the vitest tool ran ONCE; the second sweep was
-        // served from the evidence memo (the Δ O acceptance criterion).
-        expect(vitest.calls).toHaveLength(1)
-    })
-
-    it('re-runs the tool when the tree SHA changes (different content ⇒ memo miss)', async () => {
-        const memo = new GateMemo()
-        const vitest = new FakeVitest(proc(0))
-        const ctxFor = (tree: string): GateContext => ({
-            ...baseCtx(
-                makeFakeTools({
-                    git: new FakeGitProbe({
-                        refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-                        changedFiles: [],
-                        commits: [],
-                        treeSha: tree,
-                    }),
-                    vitest,
-                }),
-                ['test']
-            ),
-            memo,
-        })
-
-        await new GateRunner().run(ctxFor('tree-1'))
-        await new GateRunner().run(ctxFor('tree-2'))
-
-        // Distinct tree SHAs ⇒ no memo hit ⇒ the tool is invoked each run.
-        expect(vitest.calls).toHaveLength(2)
     })
 })
 
@@ -234,14 +196,14 @@ describe('GateRunner — gate contract (S7, Decision 46)', () => {
         expect(res.verdict.passed).toBe(false)
     })
 
-    it('ABSENT contract keeps legacy skip semantics (tooling skip stays a skip)', async () => {
+    it('an ABSENT contract THROWS — a sweep never runs contract-less', async () => {
         const tools = makeFakeTools({git: greenGit(), fs: new FakeFs([])})
-        const res = await new GateRunner().run({
-            ...baseCtx(tools, ['lint']),
-            loadContract: () => Promise.resolve({state: 'absent'}),
-        })
-        expect(res.skipped).toEqual([{gate: 'lint', reason: 'no-eslint-binary'}])
-        expect(res.evidence).toHaveLength(0)
+        await expect(
+            new GateRunner().run({
+                ...baseCtx(tools, ['lint']),
+                loadContract: () => Promise.resolve({state: 'absent'}),
+            })
+        ).rejects.toThrow(/no \.factory\/gates\.json in this worktree.*factory scaffold/s)
     })
 
     it('an INVALID contract throws — never degrades to legacy', async () => {
@@ -252,39 +214,6 @@ describe('GateRunner — gate contract (S7, Decision 46)', () => {
                 loadContract: () => Promise.resolve({state: 'invalid', error: 'gates.test: required'}),
             })
         ).rejects.toThrow(/INVALID.*gates\.test/)
-    })
-
-    it('a contracted-but-unrunnable failure is NOT memoized (installing the tool fixes it)', async () => {
-        // Same tree SHA + shared memo across both runs: run 1 fails (no eslint), run 2
-        // has the tool installed — it must RUN and pass, not replay the stale failure
-        // (node_modules changes never move the git tree SHA).
-        const memo = new GateMemo()
-        const gitOpts = {
-            refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-            changedFiles: [],
-            commits: [],
-            treeSha: 'tree-C',
-        } as const
-        const contract = loads(contractWith({lint: {contracted: true}}))
-
-        const broken = makeFakeTools({git: new FakeGitProbe(gitOpts), fs: new FakeFs([])})
-        const first = await new GateRunner().run({
-            ...baseCtx(broken, ['lint']),
-            memo,
-            loadContract: contract,
-        })
-        expect(first.verdict.passed).toBe(false)
-
-        const fixed = makeFakeTools({
-            git: new FakeGitProbe(gitOpts),
-            eslint: new FakeEslint(proc(0)),
-        })
-        const second = await new GateRunner().run({
-            ...baseCtx(fixed, ['lint']),
-            memo,
-            loadContract: contract,
-        })
-        expect(second.verdict.passed).toBe(true)
     })
 })
 
@@ -322,6 +251,7 @@ describe('GateRunner — ONE config drives every gate (Δ V)', () => {
             config: strict,
             tools: mkTools(),
             gates: ['mutation'],
+            loadContract: loadsAllContracted(),
         })
         const runLax = await new GateRunner().run({
             runId: 'r',
@@ -331,6 +261,7 @@ describe('GateRunner — ONE config drives every gate (Δ V)', () => {
             config: lax,
             tools: mkTools(),
             gates: ['mutation'],
+            loadContract: loadsAllContracted(),
         })
 
         expect(runStrict.verdict.passed).toBe(false)
@@ -391,13 +322,14 @@ describe('GateRunner — coverage under the contract (S8)', () => {
         expect(res.evidence).toHaveLength(0)
     })
 
-    it('ABSENT contract → coverage skips no-gate-contract (legacy pre-contract semantics)', async () => {
+    it('an ABSENT contract THROWS before coverage is even invoked', async () => {
         const coverage = new FakeCoverageTool({head: measured(full), base: measured(full)})
-        const res = await new GateRunner().run({
-            ...baseCtx(makeFakeTools({git: covGit(), coverage}), ['coverage']),
-            loadContract: () => Promise.resolve({state: 'absent'}),
-        })
-        expect(res.skipped).toEqual([{gate: 'coverage', reason: 'no-gate-contract'}])
+        await expect(
+            new GateRunner().run({
+                ...baseCtx(makeFakeTools({git: covGit(), coverage}), ['coverage']),
+                loadContract: () => Promise.resolve({state: 'absent'}),
+            })
+        ).rejects.toThrow(/no \.factory\/gates\.json in this worktree/)
         expect(coverage.measureCalls).toHaveLength(0)
     })
 })

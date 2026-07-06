@@ -21,6 +21,7 @@ function minimalTask(over: Record<string, unknown> = {}) {
 function minimalRun(over: Record<string, unknown> = {}): unknown {
     return {
         run_id: 'run-20260101-000000',
+        staging_branch: 'staging-run-20260101-000000',
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         started_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
@@ -33,8 +34,9 @@ describe('schema round-trip', () => {
         const run = parseRunState(minimalRun())
         expect(run.status).toBe('running')
         expect(run.execution_mode).toBe('sequential')
-        expect(run.schema_version).toBe(2)
+        expect(run.schema_version).toBe(3)
         expect(run.tasks).toEqual({})
+        expect(run.human_touches).toEqual([])
         expect(run.ended_at).toBeNull()
     })
 
@@ -56,9 +58,10 @@ describe('schema round-trip', () => {
         expect(() => parseRunState(minimalRun({owner_session: ''}))).toThrow()
     })
 
-    it('staging_branch is optional (undefined when absent) and round-trips a pinned value', () => {
+    it('staging_branch is REQUIRED (absent rejects) and round-trips the pinned value', () => {
         // Pinned ONCE at run-create so readers never recompute the branch the run cut.
-        expect(parseRunState(minimalRun()).staging_branch).toBeUndefined()
+        const {staging_branch: _omitted, ...withoutBranch} = minimalRun() as Record<string, unknown>
+        expect(() => parseRunState(withoutBranch)).toThrow(/staging_branch/)
         expect(parseRunState(minimalRun({staging_branch: 'staging-run-x'})).staging_branch).toBe('staging-run-x')
         expect(() => parseRunState(minimalRun({staging_branch: ''}))).toThrow()
     })

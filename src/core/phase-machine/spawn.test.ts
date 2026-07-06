@@ -3,6 +3,7 @@ import {parseSpawnRequest, SpawnRequestSchema} from './spawn.js'
 
 const validAgent = {
     role: 'implementation-reviewer',
+    agent_type: 'implementation-reviewer',
     model: 'opus',
     max_turns: 40,
     prompt_ref: 'reviews/impl.md',
@@ -23,6 +24,12 @@ describe('parseSpawnRequest', () => {
             agents: [{...validAgent, role: 'implementer', isolation: 'none'}],
         })
         expect(m.agents[0]?.isolation).toBe('none')
+    })
+
+    it('rejects a missing or empty agent_type (loud)', () => {
+        const {agent_type: _dropped, ...withoutAgentType} = validAgent
+        expect(() => parseSpawnRequest({resume_phase: 'exec', agents: [withoutAgentType]})).toThrow()
+        expect(() => parseSpawnRequest({resume_phase: 'exec', agents: [{...validAgent, agent_type: ''}]})).toThrow()
     })
 
     it('rejects an empty agents array (loud)', () => {

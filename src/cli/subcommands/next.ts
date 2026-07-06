@@ -4,7 +4,7 @@
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitHelp} from '../io.js'
 import {loadOrchestratorDeps} from '../wiring.js'
 import {nextTask} from '../../orchestrator/index.js'
 import {StateManager} from '../../core/state/index.js'
@@ -69,8 +69,7 @@ function assertCurrentOwner(current: RunState, assertOwner: string | boolean | u
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: []})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
     const explicit = args.flag('run')
     let runId: string

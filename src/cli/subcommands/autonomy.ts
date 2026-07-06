@@ -40,7 +40,7 @@ import {homedir} from 'node:os'
 import type {ExitCode} from '../../shared/exit-codes.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {parseArgs} from '../args.js'
-import {emitLine, emitError} from '../io.js'
+import {emitError, emitHelp} from '../io.js'
 import {resolveDataDir, resolvePluginRoot} from '../../config/index.js'
 import {decideAutonomyPreflight, isAutonomous} from '../../autonomy/mode.js'
 import type {PreflightReason} from '../../autonomy/mode.js'
@@ -547,8 +547,7 @@ export async function runAutonomyPreflight(opts: AutonomyPreflightOptions = {}):
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['json']})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
     // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1;

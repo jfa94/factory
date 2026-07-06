@@ -34,7 +34,7 @@ export {
 } from './secret-patterns.js'
 export type {SecretPattern} from './secret-patterns.js'
 
-export {isValidId, validateId, slugify, ID_PATTERN, SLUG_MAX_LENGTH} from './ids.js'
+export {isValidId, validateId, slugify, makeRunId, ID_PATTERN, SLUG_MAX_LENGTH} from './ids.js'
 
 export {tildeShorten} from './paths.js'
 
@@ -44,3 +44,5 @@ export type {FileLockTuning, FileLockOptions} from './file-lock.js'
 export {UsageError, isUsageError} from './usage-error.js'
 
 export {nonNull, at, getOrThrow} from './assert.js'
+
+export {isEnoent} from './fs-errors.js'

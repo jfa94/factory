@@ -36,9 +36,11 @@ command's flags. Like `/factory:run`, this requires autonomous mode — the skil
 runs `factory autonomy preflight` as its own first step; a non-autonomous session
 halts with the printed relaunch command (`claude --settings <merged-settings.json>`).
 
-Then load the skill:
+Then load BOTH skills — the debug skill delegates its spawn mechanics, spec loop,
+and task loop to the runner protocol, so it must be in context first:
 
 ```
+Skill(pipeline-runner)
 Skill(debug, "base=<resolved|omitted> full=<true|false> no-ship=<true|false> author-e2e=<true|false> max-passes=<n|default> session-id=<id|$CLAUDE_CODE_SESSION_ID>")
 ```
 

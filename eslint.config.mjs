@@ -101,11 +101,12 @@ export default defineConfig(
         },
     },
 
-    // Tests build fixture files at derived paths — the fs-filename heuristic can't
-    // distinguish a test's own temp dir from external input, so it's pure noise here.
-    // It stays ON for production (a real tripwire for new fs code).
+    // Tests (and their shared fixture modules) build files at derived paths — the
+    // fs-filename heuristic can't distinguish a test's own temp dir from external
+    // input, so it's pure noise here. It stays ON for production (a real tripwire
+    // for new fs code).
     {
-        files: ['**/*.test.ts'],
+        files: ['**/*.test.ts', '**/test-fixtures.ts'],
         rules: {
             'security/detect-non-literal-fs-filename': 'off',
         },

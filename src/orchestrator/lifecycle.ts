@@ -12,18 +12,12 @@
  * tdd_exempt); dangling/self/cyclic/duplicate edges are caught LOUDLY at seed time.
  */
 import {seedTaskRows, assertAcyclic, type StateManager} from '../core/state/index.js'
+import {epochToIso} from '../shared/time.js'
 import type {SpecStore, SpecManifest} from '../spec/index.js'
 import {planResume, type UsageReading} from '../quota/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
 import type {Config, RunState, RunStatus, TaskState} from '../types/index.js'
-import {
-    ensureStaging,
-    provisionProtection,
-    runStagingBranch,
-    resolveStagingBranch,
-    type GitClient,
-    type GhClient,
-} from '../git/index.js'
+import {ensureStaging, provisionProtection, runStagingBranch, type GitClient, type GhClient} from '../git/index.js'
 import {UsageError} from '../shared/usage-error.js'
 
 export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
@@ -136,14 +130,13 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
         throw new Error(`run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`)
     }
     // S9 preflight: the traceability stage reads the durable PRD snapshot at the
-    // END of the run — refuse NOW rather than fail a fully-paid run. In-protocol
-    // Phase 1 (`spec resolve`) always backfills first; this guards the
-    // off-protocol `--spec-id` path onto a pre-S9 spec.
+    // END of the run — refuse NOW rather than fail a fully-paid run. Every spec
+    // written by `spec resolve` carries the snapshot; one without it predates the
+    // current factory version.
     if (!(await specStore.hasPrd(request.repo, request.spec_id))) {
         throw new Error(
-            `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) — ` +
-                `run \`factory spec resolve --issue ${request.issue_number}\` to backfill, ` +
-                `or \`--supersede\` to regenerate`
+            `run create: spec ${request.spec_id} has no PRD snapshot (created by an older ` +
+                `factory version) — re-run with \`--supersede\` to regenerate the spec`
         )
     }
     return request
@@ -290,7 +283,7 @@ export type ResolveOrCreateResult =
 async function supersedeRun(state: StateManager, existing: RunState, stagingDeps: RunStagingDeps): Promise<void> {
     // Resolve the PINNED branch: superseding must tear down the branch the run actually
     // cut, not a recompute that a mid-run naming change could have desynced (Decision 33).
-    const branch = resolveStagingBranch(existing.run_id, existing.staging_branch)
+    const branch = existing.staging_branch
     await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch)
     await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch)
     await state.finalize(existing.run_id, 'superseded') // terminal LAST (resume-safe)
@@ -354,7 +347,7 @@ export async function resolveOrCreateRun(
                 // S11: a supersede is a conflict-resolution touch ON TOP of the launch.
                 const run = await state.update(created.run_id, (s) => ({
                     ...s,
-                    human_touches: [...(s.human_touches ?? []), {kind: 'conflict' as const, at: s.started_at}],
+                    human_touches: [...s.human_touches, {kind: 'conflict' as const, at: s.started_at}],
                 }))
                 return {kind: 'superseded', run, supersededId}
             }
@@ -446,14 +439,12 @@ export async function applyResume(
             // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
             return {kind: 'resumed', run}
         case 'resume': {
-            const at = new Date(nowEpochSec * 1000).toISOString()
+            const at = epochToIso(nowEpochSec)
             const updated = await state.update(runId, (s) => ({
                 ...s,
                 status: plan.clear.status,
                 quota: plan.clear.quota,
-                ...(opts.touch === false
-                    ? {}
-                    : {human_touches: [...(s.human_touches ?? []), {kind: 'resume' as const, at}]}),
+                ...(opts.touch === false ? {} : {human_touches: [...s.human_touches, {kind: 'resume' as const, at}]}),
             }))
             return {kind: 'resumed', run: updated, cleared: true}
         }

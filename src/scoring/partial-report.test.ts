@@ -58,7 +58,8 @@ function failedTask(id: string, failure_class: TaskState['failure_class'], reaso
 }
 
 function pendingTask(id: string, status: TaskState['status'] = 'pending'): TaskState {
-    return {task_id: id, status} as TaskState
+    const phase = status === 'executing' ? {phase: 'exec'} : {}
+    return {task_id: id, status, ...phase} as TaskState
 }
 
 function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunState {
@@ -67,8 +68,9 @@ function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunStat
         record[t.task_id] = t
     }
     return parseRunState({
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-1',
+        staging_branch: 'staging-run-1',
         status: 'failed',
         execution_mode: 'balanced',
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},

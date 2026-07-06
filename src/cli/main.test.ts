@@ -75,14 +75,7 @@ describe('cli dispatch', () => {
         expect(chunks.join('')).toContain('re-check quota')
     })
 
-    it('run resume --help alias returns OK and emits resume help', async () => {
-        const chunks: string[] = []
-        vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
-            chunks.push(String(c))
-            return true
-        })
-        const code = await dispatch(['run', 'resume', '--help'])
-        expect(code).toBe(EXIT.OK)
-        expect(chunks.join('')).toContain('re-check quota')
+    it("'run resume' is no longer an alias — usage error at dispatch", async () => {
+        expect(await dispatch(['run', 'resume', '--help'])).toBe(EXIT.USAGE)
     })
 })

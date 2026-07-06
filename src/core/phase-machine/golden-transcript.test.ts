@@ -29,6 +29,7 @@ const mkManifest = (
     agents: [
         {
             role,
+            agent_type: role,
             isolation: 'worktree',
             model: 'sonnet',
             max_turns: 60,
@@ -87,6 +88,7 @@ async function driveTask(handlers: PhaseHandlers, ctx: PhaseContext): Promise<Ph
 const baseRun = (tasks: Record<string, unknown>): RunState =>
     parseRunState({
         run_id: 'run-20260604-120000',
+        staging_branch: 'staging-run-20260604-120000',
         spec: {repo: 'o/r', spec_id: '1-golden', issue_number: 1},
         started_at: '2026-06-04T12:00:00.000Z',
         updated_at: '2026-06-04T12:00:00.000Z',
@@ -146,7 +148,7 @@ describe('golden transcript — fixed PhaseResult sequence', () => {
         const ctx: PhaseContext = {
             run: baseRun({
                 a: {task_id: 'a', status: 'done', risk_tier: 'low'},
-                b: {task_id: 'b', status: 'executing', risk_tier: 'low'},
+                b: {task_id: 'b', status: 'executing', phase: 'exec', risk_tier: 'low'},
             }),
         }
         await expect(runPhase('finalize', ctx, scriptedHandlers('ship'))).rejects.toThrow(/non-terminal task/)

@@ -73,45 +73,7 @@ merged over `process.env` into the spawn env of every gate command
 (`defaultGateTools(gateEnv)`, `src/verifier/deterministic/tools.ts`, wired from config in
 `src/cli/wiring.ts`).
 
-**Preferred: auto-detect from CI.** Rather than transcribing each var by hand, let factory read
-your CI workflow and gap-fill the placeholders:
-
-```bash
-factory configure --detect-gate-env
-```
-
-This scans `.github/workflows/*.yml` for every step/job-level `env:` literal and merges them into
-`quality.gateEnv` (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`). `factory scaffold` runs
-the **same** detection automatically — before the managed `quality-gate.yml` template overwrites
-the repo's own workflow — so a freshly scaffolded repo already has its CI env captured. See
-[`configure --detect-gate-env`](./cli.md#configure) for the flag contract and `DetectReport` shape.
-
-The merge is **gap-fill — the operator always wins**: a key absent from the overlay is _written_;
-present-and-equal is _skipped_ (idempotent); present-and-different is reported as a _conflict_ and
-left untouched. Detection fails an entry — never silently — before it reaches `gateEnv`:
-
-- **value `${{ … }}`** — a GitHub expression ref (`${{ secrets.* }}`, `${{ matrix.* }}`, unusable
-    - unsafe at gate time) → reported under `skippedExpressionRefs`;
-- **secret-shaped value** — anything the secret scanner flags (defense-in-depth: placeholders, not
-  secrets) → reported under `droppedSecrets`;
-- **reserved KEY** — a loader / path-injection name (`PATH`, `NODE_PATH`, `LD_PRELOAD`,
-  `LD_LIBRARY_PATH`, `DYLD_*`) that would hijack the gate subprocess, since gateEnv merges _over_
-  `process.env` → reported under `droppedKeys` with `reason: "reserved"`. The denylist is
-  deliberately narrow: `NODE_OPTIONS` and `GIT_*` are legitimate build/identity vars and are **not**
-  denied;
-- **non-POSIX KEY** — a name that is not a valid POSIX env var (`^[A-Za-z_][A-Za-z0-9_]*$`) → reported
-  under `droppedKeys` with `reason: "invalid-name"`. The schema enforces the same regex on the
-  config key, so a hand-set non-POSIX key is rejected at the `--set` boundary too;
-- **`run: |` block scalar** — anything structurally inside a block scalar is never read as env.
-
-Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with space
-indentation only. An _unquoted_ value opening with exotic YAML — an anchor `&`, alias `*`, tag `!`,
-or flow collection `{`/`[` — is skipped rather than emitted mangled (`isUndetectableScalar`); a
-_quoted_ look-alike (`"[draft]"`, `'!important'`) is a plain string and **is** kept. A workflow file
-that cannot be parsed at all is skipped and reported under `warnings` (and logged loudly), never
-partial-emitted. The escape hatch for any miss is the manual `--set` below.
-
-**Manual escape hatch.** Set each leaf individually:
+**Setting values.** Mirror your CI build-step env by setting each leaf individually:
 
 ```bash
 factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321

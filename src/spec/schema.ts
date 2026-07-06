@@ -96,8 +96,8 @@ export function parseSpecManifest(raw: unknown): SpecManifest {
 }
 
 /**
- * The persisted PRD snapshot (S9). `.strict()` is load-bearing: the only writers
- * (`SpecStore.write`/`SpecStore.writePrd`) serialize EXACTLY these five keys, so an
+ * The persisted PRD snapshot (S9). `.strict()` is load-bearing: the only writer
+ * (`SpecStore.write`) serializes EXACTLY these five keys, so an
  * extra/typo'd key on disk is a corrupt/hand-edited snapshot, not a valid PRD. The
  * `: Prd` return annotation on {@link parsePrd} pins the schema to the authored
  * interface — they cannot silently drift.

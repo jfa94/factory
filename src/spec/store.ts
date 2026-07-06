@@ -24,6 +24,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {access, readFile, readdir, rm} from 'node:fs/promises'
+import {isEnoent} from '../shared/fs-errors.js'
 import {join} from 'node:path'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {parseJson, stringifyJson} from '../shared/json.js'
@@ -113,7 +114,7 @@ export class SpecStore {
         try {
             entries = await readdir(repoRoot)
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err
@@ -158,7 +159,7 @@ export class SpecStore {
         try {
             entries = await readdir(repoRoot)
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return false
             }
             throw err
@@ -280,9 +281,8 @@ export class SpecStore {
     }
 
     /**
-     * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
-     * spec predates the snapshot — never a silent null (traceability would audit
-     * nothing).
+     * Read the durable PRD snapshot (S9). LOUD with the regenerate remedy when the
+     * snapshot is missing — never a silent null (traceability would audit nothing).
      */
     async readPrd(repo: string, specId: string): Promise<Prd> {
         const path = join(specDir(this.dataDir, repo, specId), PRD_FILE)
@@ -290,10 +290,10 @@ export class SpecStore {
         try {
             raw = await readFile(path, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 throw new Error(
-                    `spec ${specId} predates the S9 PRD snapshot — run \`factory spec resolve ` +
-                        `--issue ${issueOf(specId) ?? '<n>'}\` to backfill, or \`--supersede\` to regenerate`
+                    `spec ${specId} has no PRD snapshot (created by an older factory version) — ` +
+                        `re-run with \`--supersede\` to regenerate the spec`
                 )
             }
             throw err
@@ -301,12 +301,6 @@ export class SpecStore {
         // Re-validate at the read boundary: a corrupt/hand-edited snapshot must fail
         // LOUD here, not launder through an `as` cast into the traceability gate.
         return parsePrd(parseJson(raw, path), path)
-    }
-
-    /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
-    async writePrd(repo: string, specId: string, prd: Prd): Promise<void> {
-        await atomicWriteFile(join(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd))
-        log.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`)
     }
 
     /** Build the run-facing {@link SpecPointer} from a request. */

@@ -41,9 +41,10 @@ Violating the letter of this rule violates the spirit. No exceptions.
 1. **Never decide a transition.** The only next action is what the last envelope
    said. You never edit session/state JSON, never re-order steps, never re-run a
    step to "check" (identical to `skills/pipeline-runner/SKILL.md`).
-2. **Spawn exactly what the manifest says; collect output verbatim.** Role, model,
-   `max_turns`, isolation per `skills/pipeline-runner/SKILL.md`'s Agent spawn
-   matrix — reused unchanged, not re-derived here.
+2. **Spawn exactly what the manifest says; collect output verbatim.** `subagent_type`
+   = each envelope entry's `agent_type` verbatim, model/`max_turns`/isolation per
+   `skills/pipeline-runner/SKILL.md`'s Agent spawn rule — reused unchanged, not
+   re-derived here.
 3. **Fail loud.** An unknown envelope `kind`, an unexpected non-zero exit, or a
    `debug spec`/`debug seed` LOUD `Error` (e.g. "run 'debug review --record'
    first") → STOP and surface it verbatim. Never blind-retry.
@@ -53,23 +54,12 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 ## Autonomy check (precondition for all numbered steps)
 
-Identical mechanics to `/factory:run`'s Phase 0 step 2 (`factory autonomy
-preflight`) — reused unchanged, just repositioned as this skill's own first step
-since `/factory:debug` is a standalone entry point, not a sub-phase of the run
-skill:
-
-```bash
-factory autonomy preflight   # exits 0 to proceed, 1 to halt
-```
-
-It auto-scaffolds `merged-settings.json` when the session is not autonomous OR the
-settings are stale/missing/unstamped, and prints the relaunch command. The pipeline
-runs unattended — `debug start` HALTS loud otherwise (same `src/autonomy/mode.ts`
-gate `run create` uses). On a non-zero exit, relay the printed `claude --settings
-<merged-settings.json>` command to the user and **stop** — the relaunch is the
-user's irreducible step. `factory autonomy status`/`ensure` remain the manual
-primitives (see `/factory:run`'s "Autonomous mode" section for the full mechanics —
-not duplicated here).
+Identical mechanics to `/factory:run`'s Phase 0 step 2, repositioned as this
+skill's own first step (standalone entry point): `factory autonomy preflight` —
+exit 0 proceeds; on exit 1 relay the printed `claude --settings
+<merged-settings.json>` relaunch command and STOP (`debug start` HALTS loud in a
+non-autonomous session; see `skills/pipeline-runner/SKILL.md` Phase 0 for the full
+mechanics — not duplicated here).
 
 ## Step 1 — `factory debug start`
 
@@ -129,62 +119,32 @@ Emits:
 `manifest` is `buildPanelManifest("verify", <reviewModel>, <maxTurnsDeep>)` —
 **identical construction** to the per-task verify phase's panel (Δ T/Δ K: the panel
 is risk-invariant, same model + turn budget for every reviewer, no debug-specific
-variant). Its `agents` array is the SAME fixed 4-role
-`PANEL_ROLES` (`src/verifier/judgment/panel.ts`) `skills/pipeline-runner/SKILL.md`'s
-per-task "Panel" step spawns:
+variant). Spawn the panel (all 4 in one assistant message), run the cross-vendor
+quality-reviewer recipe, and verify-then-fix EXACTLY per
+`skills/pipeline-runner/SKILL.md`'s `expects: "reviews"` steps 2–3 (each entry's
+`agent_type` verbatim, isolation `"worktree"`, model-alias mapped) — reused, not
+re-derived here — with these debug-only deltas:
 
-- `implementation-reviewer`, `quality-reviewer`, `silent-failure-hunter`,
-  `systemic-failure-reviewer`.
-
-**Spawn all 4 in one assistant message** (parallel), isolation `"worktree"`, model
-mapped per the manifest agent's `model` field (per
-`skills/pipeline-runner/SKILL.md`'s Agent spawn matrix / model-alias table). Before
-spawning, each reviewer's prompt is built INLINE from that role's `agents/<role>.md`
-definition PLUS the shared `skills/review-protocol/SKILL.md` contract — there is no
-per-run prompt file to Read (`prompt_ref` is a schema placeholder, never a real
-artifact; see `panel.ts`'s `promptRefFor` doc comment). Tell each reviewer to
-inspect via `git -C <worktree> diff <base>` (the envelope's `base`/`worktree`
-verbatim) and emit exactly one RawReview JSON per `skills/review-protocol/SKILL.md`'s
-output contract: `{ reviewer, verdict: "approve"|"blocked"|"error", findings: [
-{ reviewer, severity, blocking, file, line, quote, claim, description } ] }`.
-
-**Cross-vendor (Codex, Δ U/S5).** `codex_available` is the CLI's REAL resolution
-(config `codex.model` + a live `codex --version` probe;
-`src/cli/subcommands/debug.ts`'s `debugReviewEmit`) — read it off THIS envelope,
-never re-derive it. When `false`, the envelope also carries `codex_absent_reason`
-(the exact resolution reason). The manifest's `cross_vendor` stamp mirrors it.
-Follow `skills/pipeline-runner/SKILL.md`'s "Cross-vendor quality-reviewer" recipe
-verbatim: `codex_available == true` → run the `quality-reviewer` via
-`codex exec --model <cross_vendor.model> --sandbox read-only --cd <worktree>`
-instead of a Claude spawn (Claude fallback + `crossVendorAbsent:
-{ reason: "codex execution failed: <detail>" }` on rc≠0/unparseable output);
-`false` → all-Claude panel + `crossVendorAbsent` echoing `codex_absent_reason`
-VERBATIM in the `--results` file (2b, below).
-
-**Verify-then-fix.** For EVERY finding any reviewer marked `blocking: true` AND
-citable (`file`+`line` both present), spawn an INDEPENDENT finding-verifier —
-`general-purpose`, isolation `"worktree"`, model `opus`, adversarial framing ("does
-this finding hold against the code?"), inspecting via `git -C <worktree> diff <base>` —
-per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
-`expects: "reviews"` step 3, reused verbatim (not re-derived here) — including its
-claim-only prompt rule: interpolate ONLY `{reviewer, severity, claim, file, line,
-quote}`, NEVER the finding's `description` (anti-anchoring). It returns
-`{ "holds": true|false, "note": "<why>" }`.
+- Each reviewer's prompt is built INLINE from that role's `agents/<role>.md` body
+  PLUS the `skills/review-protocol/SKILL.md` contract — there is no per-run prompt
+  file to Read (`prompt_ref` is a schema placeholder, never a real artifact; see
+  `panel.ts`'s `promptRefFor` doc comment).
+- Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>` — the
+  envelope's `base`/`worktree` verbatim (no task worktree, no `base_ref`).
+- Cross-vendor resolution is read OFF THIS ENVELOPE, never re-derived:
+  `codex_available` is the CLI's REAL probe (config `codex.model` + a live
+  `codex --version`; `debugReviewEmit`); when `false` the envelope carries
+  `codex_absent_reason` — echo it VERBATIM as `crossVendorAbsent.reason` in the
+  results file (2b). The manifest's `cross_vendor` stamp mirrors it.
 
 ### 2b. Record the results
 
-Write EXACTLY this shape (identical to `RecordReviewsInput` /
-`skills/pipeline-runner/SKILL.md`'s per-task results file, minus the `holdout` key —
-a whole-scope pass has no sidecar/holdout-validator step):
+Write the CONTENT of `skills/pipeline-runner/SKILL.md`'s per-task
+`expects: "reviews"` results file's `reviews` key, hoisted to top level — no
+`result_key`, no `holdout` (a whole-scope pass has no sidecar/holdout-validator):
 
 ```json
-{
-  "reviews": [ /* each panel reviewer's raw RawReview JSON, verbatim */ ],
-  "verifications": [
-    { "reviewer": "<role>", "verdicts": [ { "file", "line", "holds", "note" } ] }
-  ],
-  "crossVendorAbsent": { "reason": "<codex_absent_reason verbatim, or the codex runtime-failure detail>" }
-}
+{ "reviews": [ ... ], "verifications": [ ... ], "crossVendorAbsent": { "reason": "..." } }
 ```
 
 Omit `crossVendorAbsent` entirely when the Codex quality-reviewer actually ran;
@@ -218,50 +178,28 @@ Emits ONE of:
 
 ## Step 3 — Spec sub-loop: `factory debug spec resolve|gate|store`
 
-Only reachable from a `findings` result with `pass < maxPasses` (Iron Law 1). Same
-generate⇄review mechanics as `skills/pipeline-runner/SKILL.md`'s Phase 1 (spec-generator
-/ spec-reviewer, the SAME `agents/spec-generator.md` / `agents/spec-reviewer.md`,
-the SAME `max_iterations` bound) — only the CLI subcommand differs
-(`debug spec` vs `spec`) and the seed is a synthetic PRD rendered from this pass's
-confirmed blockers instead of a fetched GitHub PRD:
+Only reachable from a `findings` result with `pass < maxPasses` (Iron Law 1). Run
+`skills/pipeline-runner/SKILL.md`'s Phase 1 generate⇄review loop EXACTLY as written
+there (same `agents/spec-generator.md` / `agents/spec-reviewer.md`, same
+`max_iterations` bound, same `SpecBuildEnvelope` union) with
+`factory debug spec resolve|gate|store --run <run_id>` as the subcommands, plus
+these debug-only deltas:
 
-```bash
-env = factory debug spec resolve --run <run_id>
-loop on env.kind:
-  reuse   → a durable spec already exists for this pass's synthetic issue number
-            (`DEBUG_ISSUE_BASE + pass`) — call `factory debug spec store --run
-            <run_id>` once anyway (idempotent) so `session.specId` is persisted;
-            only `store`'s `kind:"stored"` branch writes it (`resolve`'s `reuse`
-            envelope does NOT touch the session — see `debugSpecStore`'s doc
-            comment). Then go to step 4 (seed).
-  generate → remember env.max_iterations
-      spawn spec-generator (worktree, opus) with env.spawn.context embedded
-      write its GenerateResult JSON verbatim to env.generated_path
-      env = factory debug spec gate --run <run_id>
-  revise  → (count iterations; > max_iterations → STOP LOUD, spec-defect)
-      spawn spec-generator (worktree, opus) with env.spawn.context embedded
-      (context already carries the prior spec + blockers — PATCH, don't re-author)
-      write its GenerateResult JSON verbatim to env.generated_path
-      env = factory debug spec gate --run <run_id>
-  review  → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
-      write its ReviewVerdict JSON to env.verdict_path
-      env = factory debug spec store --run <run_id>
-  stored  → session.specId persisted (debugSpecStore's side effect on
-            kind:"stored"). Go to step 4 (seed).
-```
-
-Every `debug spec` action's envelope is the SAME `SpecBuildEnvelope` union `factory
-spec`'s actions return (`src/cli/subcommands/spec.ts`) — including `unspecifiable`
-(S9), which is structurally unreachable here: the synthetic PRD always renders an
-Acceptance Criteria section (one criterion per confirmed blocker), so it passes the
-specifiability gate by construction. If it ever fires anyway, Iron Law 3 applies —
-STOP LOUD, spawn nothing. `resolve`/`gate`/`store`
-are thin pass-throughs fed a `SpecBuildDeps` swapped to a network-free `GhClient`
-that returns the synthetic PRD instead of shelling out to `gh` (`debugRepo` still
-auto-derives `owner/name` from the checkout's `origin` remote, exactly like real
-`factory spec`). `debug spec resolve|gate|store` is LOUD (`Error`, not
-`UsageError`) if `review --record` has not run yet this pass — "run 'debug review
---record' first".
+- The seed is a SYNTHETIC PRD rendered from this pass's confirmed blockers (issue
+  number `DEBUG_ISSUE_BASE + pass`), fed through a network-free `GhClient` — no
+  `gh` calls (`debugRepo` still auto-derives `owner/name` from the checkout's
+  `origin` remote, exactly like real `factory spec`).
+- `reuse` → call `factory debug spec store --run <run_id>` once anyway (idempotent)
+  so `session.specId` is persisted — only `store`'s `kind:"stored"` branch writes
+  it (`resolve`'s `reuse` envelope does NOT touch the session; see
+  `debugSpecStore`'s doc comment). Then go to step 4 (seed).
+- `stored` → session.specId persisted. Go to step 4 (seed).
+- `unspecifiable` (S9) is structurally unreachable here — the synthetic PRD always
+  renders an Acceptance Criteria section (one criterion per confirmed blocker), so
+  it passes the specifiability gate by construction. If it ever fires anyway, Iron
+  Law 3 applies — STOP LOUD, spawn nothing.
+- `debug spec resolve|gate|store` is LOUD (`Error`, not `UsageError`) if `review
+--record` has not run yet this pass — "run 'debug review --record' first".
 
 ## Step 4 — `factory debug seed`
 
@@ -288,7 +226,7 @@ Emits `{ "kind": "loop", "run_id": "<id>" }`. Proceed to step 5.
 Drive `run_id` through `skills/pipeline-runner/SKILL.md`'s Phase 3 THE LOOP
 EXACTLY as written there — `factory next-task` / `factory next-action`, the
 `expects: "producer-status"` / `expects: "reviews"` spawn collection, the Agent
-spawn matrix, the `e2e`/`document` stage handling if `--author-e2e` was set — none
+spawn rule, the `e2e`/`document` stage handling if `--author-e2e` was set — none
 of it is re-derived here. **One deviation, called out on its own because getting it
 wrong ships nothing or ships too early:**
 

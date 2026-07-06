@@ -7,6 +7,7 @@ import {parseRunState, type RunState} from '../state/index.js'
 const ctx: PhaseContext = {
     run: parseRunState({
         run_id: 'run-20260604-000000',
+        staging_branch: 'staging-run-20260604-000000',
         spec: {repo: 'o/r', spec_id: '1-x', issue_number: 1},
         started_at: '2026-06-04T00:00:00.000Z',
         updated_at: '2026-06-04T00:00:00.000Z',
@@ -123,7 +124,14 @@ describe('invariant #3 — finalize is terminal-by-construction at the seam', ()
                     spawn({
                         resume_phase: 'exec',
                         agents: [
-                            {role: 'implementer', isolation: 'worktree', model: 's', max_turns: 1, prompt_ref: 'p'},
+                            {
+                                role: 'implementer',
+                                agent_type: 'implementer',
+                                isolation: 'worktree',
+                                model: 's',
+                                max_turns: 1,
+                                prompt_ref: 'p',
+                            },
                         ],
                     })
                 ),
@@ -155,7 +163,16 @@ describe('nextPhaseFor', () => {
             nextPhaseFor(
                 spawn({
                     resume_phase: 'exec',
-                    agents: [{role: 'implementer', isolation: 'worktree', model: 's', max_turns: 1, prompt_ref: 'p'}],
+                    agents: [
+                        {
+                            role: 'implementer',
+                            agent_type: 'implementer',
+                            isolation: 'worktree',
+                            model: 's',
+                            max_turns: 1,
+                            prompt_ref: 'p',
+                        },
+                    ],
                 })
             )
         ).toBe('exec')
@@ -172,6 +189,7 @@ describe('decideFinalize is pure + terminal-by-construction', () => {
     const mkRun = (tasks: Record<string, unknown>): RunState =>
         parseRunState({
             run_id: 'run-20260604-000000',
+            staging_branch: 'staging-run-20260604-000000',
             spec: {repo: 'o/r', spec_id: '1-x', issue_number: 1},
             started_at: '2026-06-04T00:00:00.000Z',
             updated_at: '2026-06-04T00:00:00.000Z',
@@ -233,7 +251,7 @@ describe('decideFinalize is pure + terminal-by-construction', () => {
     it('a non-terminal task THROWS, never wait-retry (anti-spin)', () => {
         const run = mkRun({
             a: {task_id: 'a', status: 'done', risk_tier: 'low'},
-            b: {task_id: 'b', status: 'reviewing', risk_tier: 'low'},
+            b: {task_id: 'b', status: 'reviewing', phase: 'verify', risk_tier: 'low'},
         })
         expect(() => decideFinalize(run)).toThrow(/non-terminal task/)
     })

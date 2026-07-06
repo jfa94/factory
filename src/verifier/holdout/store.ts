@@ -14,6 +14,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {mkdir, readFile} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import {dirname, join} from 'node:path'
 import {z} from 'zod'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
@@ -134,7 +135,7 @@ export class FsHoldoutStore implements HoldoutStore {
             // ONLY a genuinely-absent key means "no holdout". A real I/O error (EACCES,
             // EIO, …) must NOT masquerade as absent — that would silently drop the answer-key
             // gate from the merge decision. Surface it so the verify phase fails loud.
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return false
             }
             throw err

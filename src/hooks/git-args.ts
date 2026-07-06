@@ -11,6 +11,7 @@
  * seam, not here.
  */
 import {at, nonNull} from '../shared/assert.js'
+import {basenameOf, unquote} from './token-helpers.js'
 
 /** Parsed result of a single git invocation (or `subcommand:null` if no git). */
 export interface GitInvocation {
@@ -39,24 +40,6 @@ export interface GitInvocation {
      * index/repo-redirection family). Empty when no env prefixes were present.
      */
     envNames: readonly string[]
-}
-
-/** Strip one layer of surrounding single/double quotes from a token. */
-function unquote(tok: string): string {
-    let t = tok
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-        t = t.slice(1, -1)
-    }
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
-        t = t.slice(1, -1)
-    }
-    return t
-}
-
-/** Basename of a path-like token (last `/`-separated component). */
-function basename(tok: string): string {
-    const parts = tok.split('/')
-    return parts[parts.length - 1] ?? tok
 }
 
 /**
@@ -108,7 +91,7 @@ export function parseGitInvocation(command: string): GitInvocation {
     // Walk to the `git` binary (by basename).
     let foundGit = false
     while (i < n) {
-        if (basename(at(tokens, i)) === 'git') {
+        if (basenameOf(at(tokens, i)) === 'git') {
             foundGit = true
             i++
             break

@@ -33,16 +33,22 @@ function task(over: Partial<TaskState> = {}): TaskState {
 
 function runState(tasks: Record<string, TaskState>): RunState {
     return {
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-x',
+        staging_branch: 'staging-run-x',
         status: 'running',
         execution_mode: 'balanced',
         spec: SPEC,
         tasks,
+        ship_mode: 'live',
+        ignore_quota: false,
+        human_touches: [],
+        e2e: false,
+        debug: false,
         started_at: 't',
         updated_at: 't',
         ended_at: null,
-    } as RunState
+    }
 }
 
 function activeRun(tasks: Record<string, TaskState>): ActiveRun {
@@ -145,7 +151,7 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
     const DATA = {dataDir: '/data'}
 
     it('blocks an implementation write into the task worktree during the test-writer phase', async () => {
-        const run = runState({t1: task({status: 'executing', producer_role: 'test-writer'})})
+        const run = runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
         const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.ts'), {
             ...DATA,
             loadRunById: withRunById(run),
@@ -154,7 +160,7 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
     })
 
     it('allows a test write into the worktree during the test-writer phase', async () => {
-        const run = runState({t1: task({status: 'executing', producer_role: 'test-writer'})})
+        const run = runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
         const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.test.ts'), {
             ...DATA,
             loadRunById: withRunById(run),
@@ -163,7 +169,7 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
     })
 
     it('allows an implementation write during the implementer (GREEN) phase', async () => {
-        const run = runState({t1: task({status: 'executing', producer_role: 'implementer'})})
+        const run = runState({t1: task({status: 'executing', phase: 'exec', producer_role: 'implementer'})})
         const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.ts'), {
             ...DATA,
             loadRunById: withRunById(run),
@@ -179,7 +185,9 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
             ...DATA,
             loadRunById: () => {
                 consulted = true
-                return Promise.resolve(runState({t1: task({status: 'executing', producer_role: 'test-writer'})}))
+                return Promise.resolve(
+                    runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
+                )
             },
         })
         expect(isDeny(d)).toBe(false)
@@ -206,7 +214,7 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
 
 describe('pipeline-guards — nested shell denied while run active', () => {
     it('denies a nested shell when a run is active', async () => {
-        const run = activeRun({t1: task({status: 'executing'})})
+        const run = activeRun({t1: task({status: 'executing', phase: 'exec'})})
         const d = await decidePipelineGuards(bash("bash -c 'gh pr create'"), {loadRun: withRun(run)})
         expect(isDeny(d)).toBe(true)
     })

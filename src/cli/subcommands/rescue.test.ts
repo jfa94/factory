@@ -28,6 +28,8 @@ const SPEC: SpecPointer = {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7
 const RUN = 'run-c'
 const AT = '2026-07-04T00:00:00.000Z'
 
+const IN_FLIGHT_DEFAULT_PHASE = {executing: 'exec', reviewing: 'verify', shipping: 'ship'} as const
+
 function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['status']}): TaskState {
     const base = {
         depends_on: [],
@@ -35,6 +37,9 @@ function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['st
         escalation_rung: 0,
         reviewers: [],
         merge_resyncs: 0,
+        ...(seed.status === 'executing' || seed.status === 'reviewing' || seed.status === 'shipping'
+            ? {phase: IN_FLIGHT_DEFAULT_PHASE[seed.status]}
+            : {}),
         ...seed,
     }
     if (seed.status === 'failed') {
@@ -83,7 +88,7 @@ describe('rescue scan/apply/auto', () => {
             return true
         })
         state = new StateManager({dataDir})
-        await state.create({run_id: RUN, spec: SPEC})
+        await state.create({run_id: RUN, staging_branch: `staging-${RUN}`, spec: SPEC})
     })
 
     afterEach(async () => {
@@ -419,7 +424,7 @@ describe('rescue scan/apply/auto', () => {
         expect((env.resume as {kind: string}).kind).toBe('resumed')
         const run = await state.read(RUN)
         expect(run.status).toBe('running')
-        expect(run.human_touches?.map((t) => t.kind)).toEqual(['recover'])
+        expect(run.human_touches.map((t) => t.kind)).toEqual(['recover'])
         const mirrors = (await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')
         expect(mirrors.map((m) => m.data)).toEqual([{kind: 'recover'}])
     })
@@ -510,7 +515,7 @@ describe('rescue scan/apply/auto', () => {
         const code = await runAuto(['--run', RUN], {now: () => AT})
         expect(code).toBe(EXIT.OK)
         expect(out().kind).toBe('recovered')
-        expect((await state.read(RUN)).human_touches).toBeUndefined()
+        expect((await state.read(RUN)).human_touches).toEqual([])
         expect((await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')).toHaveLength(0)
     })
 })

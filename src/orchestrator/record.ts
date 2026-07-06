@@ -24,6 +24,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
+import {isEnoent} from '../shared/fs-errors.js'
 import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
 import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
@@ -57,7 +58,6 @@ import {
 import {createLogger, UsageError} from '../shared/index.js'
 import type {GateEvidence, GateVerdict, ReviewerResult, ProducerRole, TaskPhase, FixFinding} from '../types/index.js'
 import type {HandlerDeps} from './types.js'
-import {resolveStagingBranch} from './deps.js'
 import type {StateManager} from './deps.js'
 
 const log = createLogger('record')
@@ -302,7 +302,7 @@ export async function buildWorktreeSource(worktree: string, reviews: readonly Ra
             const text = await readFile(resolved, 'utf8')
             lines.set(file, text.split('\n'))
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            if (!isEnoent(err)) {
                 throw err
             }
             lines.set(file, null) // genuinely absent → unverifiable → dropped
@@ -439,7 +439,7 @@ export async function applyRecordReviews(
         throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`)
     }
     const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
-    const baseRef = resolveStagingBranch(runId, run.staging_branch)
+    const baseRef = run.staging_branch
 
     // 1. parse reviews + build the worktree source and the replay verifier factory
     //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
@@ -461,6 +461,7 @@ export async function applyRecordReviews(
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
+        ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
         coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
     }
     const gate = await new GateRunner().run(gateCtx)

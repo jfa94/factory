@@ -5,8 +5,9 @@ import {buildCheckpoint, clearCheckpoint} from './checkpoint.js'
 /** A minimal running RunState we can merge a checkpoint patch into. */
 function baseRun(): RunState {
     return parseRunState({
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-20260604-000000',
+        staging_branch: 'staging-run-20260604-000000',
         status: 'running',
         execution_mode: 'balanced',
         spec: {repo: 'owner/name', spec_id: '12-thing', issue_number: 12},

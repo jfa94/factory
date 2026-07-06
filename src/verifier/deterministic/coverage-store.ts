@@ -1,15 +1,15 @@
 /**
  * S8 — persisted per-tree-SHA coverage summaries (`runs/<run-id>/coverage/`).
  *
- * WHY this persists while GateMemo (memo.ts) deliberately does not: every gate
- * sweep runs in a SEPARATE CLI process (`factory next-action` / record), so an
- * in-memory memo cannot stop the full test suite from being re-measured — twice
- * (head + base) — on every sweep of every task. The store is NOT the stored-
- * verdict smell memo.ts guards against: the key is a content-addressed git tree
- * SHA (an immutable content→summary mapping that cannot go stale), the value is
- * a raw measurement, and the gate VERDICT is still re-derived fresh on every
- * run. Post-squash the staging tip's tree equals the merged task's head tree,
- * so later tasks' base lookups are served by earlier tasks' head measurements.
+ * WHY this PERSISTS (an in-memory cache would be useless): every gate sweep runs
+ * in a SEPARATE CLI process (`factory next-action` / record), so only a persisted
+ * store can stop the full test suite from being re-measured — twice (head + base)
+ * — on every sweep of every task. This is NOT a stored-verdict smell: the key is
+ * a content-addressed git tree SHA (an immutable content→summary mapping that
+ * cannot go stale), the value is a raw measurement, and the gate VERDICT is still
+ * re-derived fresh on every run. Post-squash the staging tip's tree equals the
+ * merged task's head tree, so later tasks' base lookups are served by earlier
+ * tasks' head measurements.
  *
  * Accepted edge (documented, not defended): the key does NOT encode the
  * measurement command, so editing the contract's coverage command mid-run can
@@ -17,6 +17,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import path from 'node:path'
 import type {CoverageSummary} from './tools.js'
 
@@ -68,7 +69,7 @@ export class FsCoverageStore implements CoverageStore {
         try {
             raw = await readFile(file, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err

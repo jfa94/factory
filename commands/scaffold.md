@@ -43,15 +43,11 @@ factory scaffold        # --repo is auto-derived from origin; pass --repo <owner
 
 This is idempotent. It:
 
-- **auto-detects the repo's CI build env** (the same scan as
-  `factory configure --detect-gate-env`) and gap-fills `quality.gateEnv` — run **first**, before
-  the managed `quality-gate.yml` template overwrites the repo's own workflow, so the repo author's
-  CI env is captured into the durable config overlay while that file is still theirs. Gap-fill
-  never clobbers an operator-set value. The resolved `gateEnv` is then **injected back into the
-  managed `quality-gate.yml`** build step (the `# factory:gate-env` marker becomes a real `env:`
-  block), so the committed CI and the factory's local merge gate build with identical env — one
-  config, one source of truth. An unparseable workflow is surfaced loudly (a `log.warn` + the
-  report's `warnings`/`droppedKeys`), never silently swallowed;
+- **renders the configured `quality.gateEnv`** (set via
+  `factory configure --set quality.gateEnv.<KEY>=<value>`) **into the managed
+  `quality-gate.yml`** build step (the `# factory:gate-env` marker becomes a real `env:` block),
+  so the committed CI and the factory's local merge gate build with identical env — one config,
+  one source of truth. An empty `gateEnv` leaves the marker untouched;
 - copies `.github/workflows/quality-gate.yml` (the CI net), and — when the target is a Node
   package — `.stryker.config.json` + `.dependency-cruiser.cjs` (gate configs);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
@@ -67,10 +63,7 @@ This is idempotent. It:
   `staging-<run-id>` are minted at `run create`, not here.)
 
 Print the emitted `ScaffoldReport` JSON: `files_created`, `files_present`, `files_updated`, and
-`protection`. When CI build-env detection found anything — a detected key OR an anomaly worth
-surfacing (`warnings`, `skippedExpressionRefs`, `droppedSecrets`, `droppedKeys`) — the report also
-carries an optional `gateEnv` field (the `DetectReport`); it is omitted only for a brand-new repo
-with no workflows and nothing to report, so that report is unchanged.
+`protection`.
 
 ## Step 3 — Handle a protection refusal
 

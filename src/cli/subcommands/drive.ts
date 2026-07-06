@@ -8,7 +8,7 @@
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, parseShipMode, parseResultsFlag} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitHelp} from '../io.js'
 import {loadOrchestratorDeps} from '../wiring.js'
 import {nextAction, parseDriveResults, readJsonInput} from '../../orchestrator/index.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
@@ -37,8 +37,7 @@ Re-invoking without --results re-derives the same spawn envelope (idempotent).`
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: []})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
     const runId = args.requireFlag('run')
     const taskId = args.requireFlag('task')

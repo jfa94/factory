@@ -178,5 +178,4 @@ never the relaunch.
 ## Resuming a run → `/factory:resume`
 
 Resuming a paused/suspended run is now its own command — see `/factory:resume [--run <id>]`.
-`/factory:run` only ever starts fresh. (`factory run resume` remains as a thin CLI alias for
-one release; the documented entry is `/factory:resume`.)
+`/factory:run` only ever starts fresh.

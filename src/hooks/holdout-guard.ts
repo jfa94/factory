@@ -38,6 +38,7 @@ import {
     toolNameOf,
     type HookDecision,
     type HookInput,
+    readStdin,
 } from './hook-io.js'
 
 const log = createLogger('holdout-guard')
@@ -175,7 +176,7 @@ export async function runHoldoutGuard(
 ): Promise<ExitCode> {
     let input: HookInput | null
     try {
-        const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin()
+        const raw = deps.readRaw ? await deps.readRaw() : await readStdin()
         input = parseHookInput(raw)
     } catch {
         const decision = deny('malformed_hook_input', 'holdout-guard: unparseable hook input')
@@ -185,13 +186,4 @@ export async function runHoldoutGuard(
     const decision = decideHoldoutGuard(input, deps)
     emitPermissionDecision(decision)
     return decisionToExitCode(decision)
-}
-
-/** Read all of process.stdin as utf-8. */
-async function readAllStdin(): Promise<string> {
-    const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array))
-    }
-    return Buffer.concat(chunks).toString('utf8')
 }

@@ -5907,6 +5907,13 @@ ${result.stderr.trim()}`
 
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir2, readFile as readFile2 } from "node:fs/promises";
+
+// src/shared/fs-errors.ts
+function isEnoent(err) {
+  return err instanceof Error && err.code === "ENOENT";
+}
+
+// src/shared/jsonl.ts
 import { dirname as dirname2 } from "node:path";
 
 // src/shared/assert.ts
@@ -5935,6 +5942,9 @@ function nowIso() {
 }
 function nowEpoch() {
   return Math.floor(Date.now() / 1e3);
+}
+function epochToIso(epochSeconds) {
+  return new Date(epochSeconds * 1e3).toISOString();
 }
 
 // src/shared/secret-patterns.ts
@@ -5996,16 +6006,6 @@ var _KNOWN_PUBLIC_TOKEN_PARTS = [
   ]
 ];
 var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map((p) => p.join("."));
-function detectSecrets(text) {
-  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
-  const hits = [];
-  for (const p of SECRET_CONTENT_PATTERNS) {
-    if (new RegExp(p.source).test(scrubbed)) {
-      hits.push(p.name);
-    }
-  }
-  return hits;
-}
 
 // src/shared/ids.ts
 var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -6713,6 +6713,14 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  const inFlight = task.status === "executing" || task.status === "reviewing" || task.status === "shipping";
+  if (inFlight && task.phase === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["phase"],
+      message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor \u2014 phase is written in lockstep with status (state from an older factory version); start a fresh run`
+    });
+  }
   if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
@@ -6727,27 +6735,39 @@ var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window"
   external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
   external_exports.object({ binding_window: external_exports.literal("unavailable") })
 ]);
-var DocsPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string()
-});
+function concludedPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string()
+  });
+}
+function openPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]).optional(),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string().optional()
+  });
+}
+var DocsPhaseSchema = concludedPhaseMarker({}, {});
 var TraceabilityVerdictRowSchema = external_exports.object({
   requirement: external_exports.string().min(1),
   verdict: external_exports.enum(["met", "partial", "unmet"]),
   evidence: external_exports.string().min(1)
 });
-var TraceabilityPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
-  verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([]),
-  ended_at: external_exports.string()
-});
+var TraceabilityPhaseSchema = concludedPhaseMarker(
+  {},
+  {
+    /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+    verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([])
+  }
+);
 var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
 var E2eManifestEntrySchema = external_exports.object({
   /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
@@ -6777,39 +6797,38 @@ var E2eAdjudicationSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative(),
   requested_at: external_exports.string()
 });
-var E2ePhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  reason: external_exports.string().optional(),
-  /**
-   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-   * didn't block completion (Decision 39: only critical red gates). Distinct from
-   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
-   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
-   */
-  advisory: external_exports.string().optional(),
-  /** Cumulative attempt count across ALL passes (1-indexed). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /**
-   * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
-   * automatic re-spawn before the phase fails; distinct from `attempts` (suite
-   * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
-   */
-  author_attempts: external_exports.number().int().nonnegative().optional(),
-  /** The author's spec→task manifest, fixed once authored and reused across passes. */
-  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
-  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
-  reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
-  /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
-  adjudication: E2eAdjudicationSchema.optional(),
-  /**
-   * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
-   * A spec failing AGAIN after its one adjudication is a regression — the run
-   * fails rather than adjudicating in a loop. Survives rescue's reset (like
-   * `reopen_counts`): the cap holds across the whole run.
-   */
-  adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2ePhaseSchema = openPhaseMarker(
+  {
+    /**
+     * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+     * didn't block completion (Decision 39: only critical red gates). Distinct from
+     * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+     * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+     */
+    advisory: external_exports.string().optional()
+  },
+  {
+    /**
+     * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+     * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+     * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+     */
+    author_attempts: external_exports.number().int().nonnegative().optional(),
+    /** The author's spec→task manifest, fixed once authored and reused across passes. */
+    manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+    /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+    reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+    /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+    adjudication: E2eAdjudicationSchema.optional(),
+    /**
+     * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+     * A spec failing AGAIN after its one adjudication is a regression — the run
+     * fails rather than adjudicating in a loop. Survives rescue's reset (like
+     * `reopen_counts`): the cap holds across the whole run.
+     */
+    adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional()
+  }
+);
 var E2eAffectedSpecSchema = external_exports.object({
   /** Repo-relative path of the existing committed spec. */
   spec_path: external_exports.string().min(1),
@@ -6817,28 +6836,25 @@ var E2eAffectedSpecSchema = external_exports.object({
   task_ids: external_exports.array(external_exports.string().min(1)).min(1),
   expectation: external_exports.enum(["needs-update", "should-still-pass"])
 });
-var E2eAssessmentSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  /** Plain-language failure verdict (set IFF failed — T3 below). */
-  reason: external_exports.string().optional(),
-  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
-  warning: external_exports.string().optional(),
-  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
-  resolved: external_exports.object({
-    start_command: external_exports.string().min(1).optional(),
-    base_url: external_exports.string().min(1).optional()
-  }).optional(),
-  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
-  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([]),
-  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2eAssessmentSchema = openPhaseMarker(
+  {
+    /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+    warning: external_exports.string().optional(),
+    /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+    resolved: external_exports.object({
+      start_command: external_exports.string().min(1).optional(),
+      base_url: external_exports.string().min(1).optional()
+    }).optional(),
+    /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+    affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
+  },
+  {}
+);
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(2).default(2),
+  schema_version: external_exports.literal(3).default(3),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
@@ -6861,12 +6877,10 @@ var RunStateSchema = external_exports.object({
    * merge target, rollup source — reads the branch the run ACTUALLY created, not a
    * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
    * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
-   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
-   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
-   * does not apply.
+   * the already-pushed branch. Git provenance / immutable identity — NOT a derived
+   * verdict, so derive-don't-store does not apply.
    */
-  staging_branch: external_exports.string().min(1).optional(),
+  staging_branch: external_exports.string().min(1),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6899,15 +6913,15 @@ var RunStateSchema = external_exports.object({
    * `recover` (an approved rescue apply that did work). The second sanctioned
    * stored-EVENT exception (with `self_heal`): which touches happened is history
    * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
-   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
+   * guarded to n/a on an empty ledger — never a fabricated number.
    */
   human_touches: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
       at: external_exports.string()
     })
-  ).optional(),
+  ).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -7263,16 +7277,16 @@ var StateManager = class _StateManager {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
   /**
-   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-   * `schema_version` absent or === 2 → pass through to parseRunState normally.
-   * Any other value → the file predates the current schema; ephemeral runs can't be
-   * migrated, so the user gets a clear "start a fresh run" message.
+   * Reject any state file not stamped with the CURRENT schema version, with a clear
+   * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+   * the version, so an unstamped file predates the current schema. Ephemeral runs
+   * can't be migrated; the remedy is always a fresh run.
    */
   static guardedParse(raw, context) {
     const v = raw?.schema_version;
-    if (v !== void 0 && v !== 2) {
+    if (v !== 3) {
       throw new UsageError(
-        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported \u2014 start a fresh run`
+        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported \u2014 this state was created by an older factory version; start a fresh run`
       );
     }
     return parseRunState(raw);
@@ -7337,7 +7351,7 @@ var StateManager = class _StateManager {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
-      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},
@@ -7393,18 +7407,12 @@ var StateManager = class _StateManager {
   /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
    * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
-   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
-   * run (global-only) still resolves, while another repo's run never leaks in.
-   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
+   * pointers on every create, so a repo with a run always has its per-repo link.
+   * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
    */
   async readCurrentForRepo(repo) {
-    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
-    if (viaRepo !== null) {
-      return viaRepo;
-    }
-    const legacy = await this.readCurrent();
-    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+    return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
   }
   /**
    * Read + validate a run's state THROUGH a `current`-style directory symlink (the
@@ -7423,7 +7431,7 @@ var StateManager = class _StateManager {
     try {
       raw = await readFile3(statePath, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -7447,7 +7455,7 @@ var StateManager = class _StateManager {
     try {
       entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return [];
       }
       throw err;
@@ -7460,7 +7468,7 @@ var StateManager = class _StateManager {
       try {
         runs.push(await this.read(entry.name));
       } catch (err) {
-        if (err.code === "ENOENT") {
+        if (isEnoent(err)) {
           continue;
         }
         log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
@@ -7719,328 +7727,12 @@ function emitJson(value) {
 function emitLine(line) {
   process.stdout.write(line + "\n");
 }
+function emitHelp(text) {
+  emitLine(text);
+  return EXIT.OK;
+}
 function emitError(line) {
   process.stderr.write(line + "\n");
-}
-
-// src/ci/detect-gate-env.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3, readdirSync } from "node:fs";
-import { join as join5 } from "node:path";
-var DefaultWorkflowSource = class {
-  constructor(root) {
-    this.root = root;
-  }
-  dir() {
-    return join5(this.root, ".github", "workflows");
-  }
-  listWorkflows() {
-    const d = this.dir();
-    if (!existsSync5(d)) {
-      return [];
-    }
-    return readdirSync(d).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml")).sort();
-  }
-  readWorkflow(name) {
-    return readFileSync3(join5(this.dir(), name), "utf8");
-  }
-};
-function parseScalar(raw) {
-  const s = raw.trim();
-  if (s.startsWith('"')) {
-    let out = "";
-    for (let i = 1; i < s.length; i++) {
-      const c = nonNull(s[i]);
-      if (c === "\\" && i + 1 < s.length) {
-        const n = nonNull(s[i + 1]);
-        out += n === "n" ? "\n" : n === "t" ? "	" : n;
-        i++;
-        continue;
-      }
-      if (c === '"') {
-        return out;
-      }
-      out += c;
-    }
-    return out;
-  }
-  if (s.startsWith("'")) {
-    let out = "";
-    for (let i = 1; i < s.length; i++) {
-      const c = nonNull(s[i]);
-      if (c === "'") {
-        if (s[i + 1] === "'") {
-          out += "'";
-          i++;
-          continue;
-        }
-        return out;
-      }
-      out += c;
-    }
-    return out;
-  }
-  const m = /\s#/.exec(s);
-  return (m ? s.slice(0, m.index) : s).trim();
-}
-var KEY_LINE = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
-var isBlockScalar = (v) => v === "|" || v === ">" || /^[|>][+-]?$/.test(v ?? "");
-var RESERVED_ENV_KEYS = /* @__PURE__ */ new Set(["PATH", "NODE_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"]);
-var isReservedEnvKey = (key) => RESERVED_ENV_KEYS.has(key) || key.startsWith("DYLD_");
-var POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-function isUndetectableScalar(rawValue) {
-  const s = rawValue.trim();
-  if (s.startsWith('"') || s.startsWith("'")) {
-    return false;
-  }
-  const first = s[0];
-  return first !== void 0 && "&*!{[".includes(first);
-}
-var MalformedWorkflow = class extends Error {
-};
-function processKey(s, c, ind) {
-  const m = KEY_LINE.exec(c);
-  if (!m) {
-    return;
-  }
-  const key = nonNull(m[1]);
-  const val = m[2];
-  const empty = val === void 0 || val.trim() === "";
-  if (s.jobsIndent === null && key === "jobs" && empty) {
-    s.jobsIndent = ind;
-    return;
-  }
-  if (s.jobsIndent !== null && ind > s.jobsIndent && empty) {
-    s.jobKeyIndent ??= ind;
-    if (ind === s.jobKeyIndent) {
-      s.currentJob = key;
-      s.currentStep = "";
-      s.stepKeyIndent = null;
-    }
-  }
-  const inStep = s.stepKeyIndent !== null && ind === s.stepKeyIndent;
-  if (key === "name" && inStep) {
-    if (val !== void 0) {
-      s.currentStep = parseScalar(val);
-      s.stepLabelFromName = true;
-    }
-    return;
-  }
-  if (key === "run" && inStep) {
-    if (isBlockScalar(val)) {
-      s.blockIndent = ind;
-    } else if (!s.stepLabelFromName && val !== void 0) {
-      s.currentStep = parseScalar(val);
-    }
-    return;
-  }
-  if (key === "env" && empty) {
-    s.envIndent = ind;
-    s.envScope = inStep ? "step" : "job";
-    return;
-  }
-  if (isBlockScalar(val)) {
-    s.blockIndent = ind;
-  }
-}
-function scanWorkflow(text) {
-  const entries = [];
-  const s = {
-    jobsIndent: null,
-    jobKeyIndent: null,
-    currentJob: "",
-    currentStep: "",
-    stepKeyIndent: null,
-    stepLabelFromName: false,
-    blockIndent: null,
-    envIndent: null,
-    envScope: "step"
-  };
-  for (const rawLine of text.split("\n")) {
-    if (rawLine.trim() === "") {
-      continue;
-    }
-    const lead = rawLine.slice(0, rawLine.length - rawLine.trimStart().length);
-    if (lead.includes("	")) {
-      throw new MalformedWorkflow("tab in indentation");
-    }
-    const indent = lead.length;
-    const content = rawLine.slice(indent);
-    if (content.startsWith("#")) {
-      continue;
-    }
-    if (s.blockIndent !== null) {
-      if (indent > s.blockIndent) {
-        continue;
-      }
-      s.blockIndent = null;
-    }
-    if (s.envIndent !== null) {
-      if (indent > s.envIndent) {
-        const km = KEY_LINE.exec(content);
-        if (km) {
-          const inlineVal = km[2];
-          if (isBlockScalar(inlineVal)) {
-            s.blockIndent = indent;
-            continue;
-          }
-          if (inlineVal !== void 0 && inlineVal.trim() !== "" && !isUndetectableScalar(inlineVal)) {
-            entries.push({
-              key: nonNull(km[1]),
-              value: parseScalar(inlineVal),
-              job: s.currentJob,
-              step: s.currentStep,
-              scope: s.envScope
-            });
-          }
-        }
-        continue;
-      }
-      s.envIndent = null;
-    }
-    const listM = /^-\s+(.*)$/.exec(content);
-    if (listM) {
-      const rest = nonNull(listM[1]);
-      if (KEY_LINE.test(rest)) {
-        s.stepKeyIndent = indent + 2;
-        s.currentStep = "";
-        s.stepLabelFromName = false;
-        processKey(s, rest, indent + 2);
-      }
-      continue;
-    }
-    processKey(s, content, indent);
-  }
-  return entries;
-}
-var provenance = (v) => `${v.workflow}${v.job ? ` \u203A ${v.job}` : ""}${v.step ? ` \u203A ${v.step}` : ""}`;
-var scopeRank = (s) => s === "job" ? 0 : 1;
-function detectGateEnv(source) {
-  const gateEnv = {};
-  const detected = [];
-  const skippedExpressionRefs = [];
-  const droppedSecrets = [];
-  const droppedKeys = [];
-  const warnings = [];
-  for (const workflow of source.listWorkflows()) {
-    let raw;
-    try {
-      raw = scanWorkflow(source.readWorkflow(workflow));
-    } catch (err) {
-      if (err instanceof MalformedWorkflow) {
-        warnings.push({ workflow, message: err.message });
-        continue;
-      }
-      throw err;
-    }
-    const kept = [];
-    for (const e of raw) {
-      const ref = { key: e.key, workflow, job: e.job, step: e.step };
-      if (e.value.includes("${{")) {
-        skippedExpressionRefs.push(ref);
-        continue;
-      }
-      const hits = detectSecrets(e.value);
-      if (hits.length > 0) {
-        droppedSecrets.push({ ...ref, match: hits.join(", ") });
-        continue;
-      }
-      if (isReservedEnvKey(e.key)) {
-        droppedKeys.push({ ...ref, reason: "reserved" });
-        continue;
-      }
-      if (!POSIX_ENV_NAME.test(e.key)) {
-        droppedKeys.push({ ...ref, reason: "invalid-name" });
-        continue;
-      }
-      const dv = { ...ref, value: e.value, scope: e.scope };
-      detected.push(dv);
-      kept.push(dv);
-    }
-    for (const dv of [...kept].sort((a, b) => scopeRank(a.scope) - scopeRank(b.scope))) {
-      gateEnv[dv.key] = dv.value;
-    }
-  }
-  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, droppedKeys, warnings };
-}
-function mergeDetectedGateEnv(raw, current, detected, sources) {
-  let next = raw;
-  const written = [];
-  const skipped = [];
-  const conflicts = [];
-  for (const key of Object.keys(detected).sort()) {
-    const value = nonNull(detected[key]);
-    if (!(key in current)) {
-      next = setAtPath(next, ["quality", "gateEnv", key], value);
-      written.push(key);
-    } else if (current[key] === value) {
-      skipped.push(key);
-    } else {
-      conflicts.push({
-        key,
-        configured: nonNull(current[key]),
-        detected: value,
-        source: sources[key] ?? ""
-      });
-    }
-  }
-  return { raw: next, written, skipped, conflicts };
-}
-async function applyGateEnvDetection(root, dataOpts = {}) {
-  const result = detectGateEnv(new DefaultWorkflowSource(root));
-  const sources = {};
-  for (const v of result.detected) {
-    sources[v.key] = provenance(v);
-  }
-  const current = loadConfig(dataOpts).quality.gateEnv;
-  const merge = mergeDetectedGateEnv(readRawConfig(dataOpts), current, result.gateEnv, sources);
-  if (merge.written.length > 0) {
-    await saveRawConfig(merge.raw, dataOpts);
-  }
-  const gateEnv = { ...current };
-  for (const key of merge.written) {
-    gateEnv[key] = nonNull(result.gateEnv[key]);
-  }
-  return {
-    detected: result.gateEnv,
-    written: merge.written,
-    skipped: merge.skipped,
-    conflicts: merge.conflicts,
-    skippedExpressionRefs: result.skippedExpressionRefs.map((r) => ({
-      key: r.key,
-      source: provenance(r)
-    })),
-    droppedSecrets: result.droppedSecrets.map((r) => ({
-      key: r.key,
-      source: provenance(r),
-      match: r.match
-    })),
-    droppedKeys: result.droppedKeys.map((r) => ({
-      key: r.key,
-      source: provenance(r),
-      reason: r.reason
-    })),
-    warnings: [...result.warnings],
-    sources,
-    gateEnv
-  };
-}
-
-// src/ci/inject-gate-env.ts
-var SENTINEL = "# factory:gate-env";
-function injectGateEnvIntoWorkflow(text, gateEnv) {
-  const keys = Object.keys(gateEnv).sort();
-  if (keys.length === 0) {
-    return text;
-  }
-  const lines = text.split("\n");
-  const idx = lines.findIndex((l) => l.trim() === SENTINEL);
-  if (idx === -1) {
-    return text;
-  }
-  const indent = nonNull(/^[ \t]*/.exec(at(lines, idx)))[0];
-  const block = [`${indent}env:`, ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(nonNull(gateEnv[k]))}`)];
-  lines.splice(idx, 1, ...block);
-  return lines.join("\n");
 }
 
 // src/cli/registry-types.ts
@@ -8066,7 +7758,6 @@ Usage:
   factory configure --get <key.path>        Print one resolved value as JSON
   factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
   factory configure --unset <key.path>      Revert a key to its default (repeatable)
-  factory configure --detect-gate-env       Detect CI build env \u2192 gap-fill quality.gateEnv
 
 Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
@@ -8076,19 +7767,11 @@ bare string. Examples:
 async function run(argv) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(HELP);
-    return EXIT.OK;
+    return emitHelp(HELP);
   }
   const sets = args.all("set");
   const unsets = args.all("unset");
   const getKey = args.flag("get");
-  if (args.flag("detect-gate-env") === true) {
-    if (sets.length > 0 || unsets.length > 0 || typeof getKey === "string") {
-      throw new UsageError("--detect-gate-env cannot be combined with --get/--set/--unset");
-    }
-    emitJson(await applyGateEnvDetection(process.cwd()));
-    return EXIT.OK;
-  }
   if (typeof getKey === "string") {
     if (sets.length > 0 || unsets.length > 0) {
       throw new UsageError("--get cannot be combined with --set/--unset");
@@ -8158,9 +7841,27 @@ var SpawnRoleEnum = external_exports.enum([
   "database-design-reviewer",
   "scribe"
 ]);
+var AGENT_TYPE_BY_ROLE = {
+  "test-writer": "test-writer",
+  implementer: "implementer",
+  "implementation-reviewer": "implementation-reviewer",
+  "quality-reviewer": "quality-reviewer",
+  "silent-failure-hunter": "silent-failure-hunter",
+  "systemic-failure-reviewer": "systemic-failure-reviewer",
+  "database-design-reviewer": "database-design-reviewer",
+  scribe: "scribe"
+};
+var GENERAL_PURPOSE_AGENT_TYPE = "general-purpose";
+var E2E_AUTHOR_AGENT_TYPE = "e2e-author";
+var E2E_ASSESSOR_AGENT_TYPE = "e2e-assessor";
+var TRACEABILITY_AUDITOR_AGENT_TYPE = "traceability-auditor";
+var SPEC_GENERATOR_AGENT_TYPE = "spec-generator";
+var SPEC_REVIEWER_AGENT_TYPE = "spec-reviewer";
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
+  /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
+  agent_type: external_exports.string().min(1),
   /** Worktree isolation. Defaults to "worktree". */
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
@@ -9009,7 +8710,7 @@ async function createTaskPrIdempotent(args) {
 }
 
 // src/git/serial-writer.ts
-import { join as join6 } from "node:path";
+import { join as join5 } from "node:path";
 var log11 = createLogger("git");
 var GIT_DEFAULTS4 = GitSchema.parse({});
 var MERGE_LOCK_DEFAULTS = {
@@ -9037,13 +8738,13 @@ var MergeSerializer = class {
     this.tuning = { ...MERGE_LOCK_DEFAULTS, ...opts.lock ?? {} };
   }
   lockfilePath() {
-    return join6(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
+    return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
   }
   /** Run `fn` while holding the app-level merge lock (the serial section). */
   async withMergeLock(fn) {
     return withFileLock(
       {
-        dir: join6(this.dataDir, "locks"),
+        dir: join5(this.dataDir, "locks"),
         lockfile: this.lockfilePath(),
         label: `merge '${this.lockScope}'`,
         dirPolicy: "create",
@@ -9251,12 +8952,6 @@ function runStagingBranch(runId) {
     throw new Error("runStagingBranch: empty run id (would yield a bare 'staging-' branch)");
   }
   return `${RUN_STAGING_PREFIX}-${runId}`;
-}
-function resolveStagingBranch(runId, pinned) {
-  if (pinned !== void 0 && pinned.length > 0) {
-    return pinned;
-  }
-  return runStagingBranch(runId);
 }
 
 // src/scoring/partial-report.ts
@@ -9539,6 +9234,13 @@ function durationSeconds(startedAt, endedAt) {
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
+function touchMetricOf(run10) {
+  const touches = run10.human_touches.length;
+  if (touches === 0) {
+    return null;
+  }
+  return (run10.status === "completed" ? 1 : 0) / touches;
+}
 function buildRunSummary(run10, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
@@ -9554,8 +9256,8 @@ function buildRunSummary(run10, report, opts = {}) {
     ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
-  const touches = run10.human_touches?.length ?? null;
-  const touchMetric = touches === null || touches === 0 ? null : (run10.status === "completed" ? 1 : 0) / touches;
+  const touches = run10.human_touches.length;
+  const touchMetric = touchMetricOf(run10);
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -9638,8 +9340,8 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
+import { join as join6 } from "node:path";
 var log15 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
@@ -9699,7 +9401,7 @@ function readingFromCache(raw, nowEpoch2) {
   };
 }
 function usageCachePath(dataDir) {
-  return join7(dataDir, "usage-cache.json");
+  return join6(dataDir, "usage-cache.json");
 }
 var StatuslineUsageSignal = class {
   opts;
@@ -9718,13 +9420,13 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync6(file)) {
+    if (!existsSync5(file)) {
       log15.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
-      raw = parseJson(readFileSync4(file, "utf8"), file);
+      raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch (err) {
       log15.warn(
         `usage-cache.json is malformed at ${file}: ${err.message}; emitting unavailable sentinel`
@@ -9837,41 +9539,6 @@ function buildUnavailableCheckpoint() {
 }
 function clearCheckpoint() {
   return { status: "running", quota: void 0 };
-}
-
-// src/quota/circuit-breaker.ts
-var FAILURE_RATIO = 0.15;
-function isNonNegativeFinite(value) {
-  return Number.isFinite(value) && value >= 0;
-}
-function evaluate2(input, config) {
-  const { cumulativeFailures, totalTasks } = input;
-  if (!isNonNegativeFinite(cumulativeFailures)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
-    };
-  }
-  if (!isNonNegativeFinite(totalTasks)) {
-    return {
-      tripped: true,
-      arm: "fail-closed",
-      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`
-    };
-  }
-  const { maxConsecutiveFailures } = config;
-  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
-  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
-  if (cumulativeFailures >= effectiveThreshold) {
-    const derivation = proportional > maxConsecutiveFailures ? `ceil(${FAILURE_RATIO} \xD7 ${totalTasks} tasks)` : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
-    return {
-      tripped: true,
-      arm: "failures",
-      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`
-    };
-  }
-  return { tripped: false };
 }
 
 // src/quota/router.ts
@@ -10055,7 +9722,7 @@ var RealGhClient = class {
 
 // src/spec/store.ts
 import { access as access2, readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
-import { join as join8 } from "node:path";
+import { join as join7 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
@@ -10085,7 +9752,7 @@ var SpecStore = class {
   docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
-    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
+    this.docsRoot = opts.docsRoot ?? join7(process.cwd(), "docs");
   }
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
@@ -10100,12 +9767,12 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`resolveByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -10139,12 +9806,12 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return false;
       }
       throw err;
@@ -10162,8 +9829,8 @@ var SpecStore = class {
   /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile4(join8(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
+    const tasksRaw = await readFile4(join7(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join7(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -10194,11 +9861,11 @@ var SpecStore = class {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
-    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
-    await atomicWriteFile(join8(dir, PRD_FILE), stringifyJson(prd));
+    await atomicWriteFile(join7(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join7(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join7(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
-      join8(dir, META_FILE),
+      join7(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -10209,8 +9876,8 @@ var SpecStore = class {
     const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
     let mirrored = true;
     try {
-      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
-      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
+      await atomicWriteFile(join7(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join7(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
       log17.warn(
@@ -10225,36 +9892,30 @@ var SpecStore = class {
   /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
   async hasPrd(repo, specId) {
     try {
-      await access2(join8(specDir(this.dataDir, repo, specId), PRD_FILE));
+      await access2(join7(specDir(this.dataDir, repo, specId), PRD_FILE));
       return true;
     } catch {
       return false;
     }
   }
   /**
-   * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
-   * spec predates the snapshot — never a silent null (traceability would audit
-   * nothing).
+   * Read the durable PRD snapshot (S9). LOUD with the regenerate remedy when the
+   * snapshot is missing — never a silent null (traceability would audit nothing).
    */
   async readPrd(repo, specId) {
-    const path6 = join8(specDir(this.dataDir, repo, specId), PRD_FILE);
+    const path6 = join7(specDir(this.dataDir, repo, specId), PRD_FILE);
     let raw;
     try {
       raw = await readFile4(path6, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         throw new Error(
-          `spec ${specId} predates the S9 PRD snapshot \u2014 run \`factory spec resolve --issue ${issueOf(specId) ?? "<n>"}\` to backfill, or \`--supersede\` to regenerate`
+          `spec ${specId} has no PRD snapshot (created by an older factory version) \u2014 re-run with \`--supersede\` to regenerate the spec`
         );
       }
       throw err;
     }
     return parsePrd(parseJson(raw, path6), path6);
-  }
-  /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
-  async writePrd(repo, specId, prd) {
-    await atomicWriteFile(join8(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd));
-    log17.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`);
   }
   /** Build the run-facing {@link SpecPointer} from a request. */
   toPointer(request) {
@@ -10265,8 +9926,8 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile4(join8(dir, META_FILE), "utf8");
-    const parsed = parseJson(raw, join8(dir, META_FILE));
+    const raw = await readFile4(join7(dir, META_FILE), "utf8");
+    const parsed = parseJson(raw, join7(dir, META_FILE));
     const meta = parsed !== null && typeof parsed === "object" ? parsed : {};
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -10292,6 +9953,7 @@ function parseGenerateResult(raw) {
 function buildGenerateSpawn(prd) {
   return {
     role: "spec-generator",
+    agent_type: SPEC_GENERATOR_AGENT_TYPE,
     model: APEX_MODEL,
     effort: APEX_EFFORT,
     context: {
@@ -10317,6 +9979,7 @@ function buildReviseSpawn(prd, prior, feedback) {
 function buildReviewSpawn(prd, generated) {
   return {
     role: "spec-reviewer",
+    agent_type: SPEC_REVIEWER_AGENT_TYPE,
     model: APEX_MODEL,
     effort: APEX_EFFORT,
     context: {
@@ -10611,31 +10274,17 @@ function decideSpecReview(verdict, opts = {}) {
   };
 }
 
-// src/spec/pipeline.ts
-function buildManifest(repo, issueNumber, generated) {
-  const specId = makeSpecId(issueNumber, generated.slug);
-  const slug = specId.replace(/^\d+-/, "");
-  return parseSpecManifest({
-    spec_id: specId,
-    issue_number: issueNumber,
-    slug,
-    repo,
-    generated_at: nowIso(),
-    tasks: generated.tasks
-  });
-}
-
 // src/spec/build.ts
-import { join as join9 } from "node:path";
+import { join as join8 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
 function scratchPaths(scratchRoot, repo, issue) {
   const dir = specBuildDir(scratchRoot, repo, issue);
   return {
-    prdPath: join9(dir, PRD_FILE2),
-    generatedPath: join9(dir, GENERATED_FILE),
-    verdictPath: join9(dir, VERDICT_FILE)
+    prdPath: join8(dir, PRD_FILE2),
+    generatedPath: join8(dir, GENERATED_FILE),
+    verdictPath: join8(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
@@ -10644,9 +10293,6 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
-    if (!await deps.store.hasPrd(repo, existing.spec_id)) {
-      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
-    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
@@ -10725,6 +10371,18 @@ async function storeSpec(deps, repo, issue) {
   const prd = await readJsonFile(prdPath);
   const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
+}
+function buildManifest(repo, issueNumber, generated) {
+  const specId = makeSpecId(issueNumber, generated.slug);
+  const slug = specId.replace(/^\d+-/, "");
+  return parseSpecManifest({
+    spec_id: specId,
+    issue_number: issueNumber,
+    slug,
+    repo,
+    generated_at: nowIso(),
+    tasks: generated.tasks
+  });
 }
 
 // src/producer/agents.ts
@@ -10877,7 +10535,7 @@ function skip(gate, reason) {
 
 // src/verifier/deterministic/gate-contract.ts
 import { readFile as readFile5 } from "node:fs/promises";
-import { join as join10 } from "node:path";
+import { join as join9 } from "node:path";
 
 // src/shared/command-allowlist.ts
 var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
@@ -10979,9 +10637,9 @@ var GateContractSchema = external_exports.object({
 async function loadGateContract(rootAbs) {
   let raw;
   try {
-    raw = await readFile5(join10(rootAbs, GATE_CONTRACT_REL), "utf8");
+    raw = await readFile5(join9(rootAbs, GATE_CONTRACT_REL), "utf8");
   } catch (err) {
-    if (err.code === "ENOENT") {
+    if (isEnoent(err)) {
       return { state: "absent" };
     }
     return { state: "invalid", error: `unreadable: ${err.message}` };
@@ -11014,36 +10672,6 @@ function contractCommand(contract, id) {
   }
   return v.argv;
 }
-
-// src/verifier/deterministic/memo.ts
-var GateMemo = class {
-  /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
-  evidence = /* @__PURE__ */ new Map();
-  /** `${taskId}@${tipSha}` → the TDD verdict struct (re-derived by the runner). */
-  tdd = /* @__PURE__ */ new Map();
-  evKey(gate, treeSha) {
-    return `${gate}@${treeSha}`;
-  }
-  tddKey(taskId, tipSha) {
-    return `${taskId}@${tipSha}`;
-  }
-  /** Look up cached evidence for a gate at a tree sha (undefined = miss). */
-  getEvidence(gate, treeSha) {
-    return this.evidence.get(this.evKey(gate, treeSha));
-  }
-  /** Cache a gate's evidence at a tree sha. */
-  putEvidence(gate, treeSha, ev) {
-    this.evidence.set(this.evKey(gate, treeSha), ev);
-  }
-  /** Look up the memoized TDD verdict for a task at a tip sha (undefined = miss). */
-  getTdd(taskId, tipSha) {
-    return this.tdd.get(this.tddKey(taskId, tipSha));
-  }
-  /** Memoize the TDD verdict for a task at a tip sha. */
-  putTdd(taskId, tipSha, verdict) {
-    this.tdd.set(this.tddKey(taskId, tipSha), verdict);
-  }
-};
 
 // src/verifier/deterministic/scope.ts
 function isTestPath(file) {
@@ -11276,11 +10904,6 @@ var tddStrategy = {
     if (base === null) {
       return ran("tdd", false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`);
     }
-    const tipSha = await ctx.tools.git.revParse("HEAD", opts);
-    const memoized = ctx.memo?.getTdd(ctx.taskId, tipSha);
-    if (memoized !== void 0) {
-      return verdictToOutcome(memoized);
-    }
     const commits = await ctx.tools.git.commits(base, ctx.taskId, opts);
     if (isSquashedHistory(commits.map((c) => c.files))) {
       const verdict2 = {
@@ -11289,12 +10912,10 @@ var tddStrategy = {
         violations: [],
         note: "squashed history \u2014 TDD gate no-op"
       };
-      ctx.memo?.putTdd(ctx.taskId, tipSha, verdict2);
       return verdictToOutcome(verdict2);
     }
     const exempt = ctx.exemptReader ? await ctx.exemptReader.isExempt(ctx.taskId) : false;
     const verdict = deriveTddVerdict(commits, exempt);
-    ctx.memo?.putTdd(ctx.taskId, tipSha, verdict);
     return verdictToOutcome(verdict);
   }
 };
@@ -11369,7 +10990,7 @@ var coverageStrategy = {
   async run(ctx) {
     const opts = { cwd: ctx.worktree };
     if (ctx.contract === void 0) {
-      return skip("coverage", "no-gate-contract");
+      throw new Error("coverage strategy invoked without a gate contract \u2014 the runner must load it first");
     }
     const resolution = resolveCoverageCommand(ctx.contract);
     if (!resolution.ok) {
@@ -11626,37 +11247,28 @@ var GateRunner = class {
    */
   async run(ctx) {
     const gates = ctx.gates ?? GATE_IDS;
-    const memo = ctx.memo ?? new GateMemo();
     const report = [];
     const evidence = [];
     const skipped = [];
-    const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
     const load = await (ctx.loadContract ?? loadGateContract)(ctx.worktree);
     if (load.state === "invalid") {
       throw new Error(
         `gate contract: .factory/gates.json is INVALID (${load.error}) \u2014 fix or re-run \`factory scaffold\``
       );
     }
-    const contract = load.state === "ok" ? load.contract : void 0;
-    if (contract === void 0) {
-      log18.warn(
-        `run ${ctx.runId} task ${ctx.taskId}: no .factory/gates.json in worktree \u2014 legacy skip semantics (contracted-but-unrunnable enforcement OFF)`
+    if (load.state === "absent") {
+      throw new Error(
+        "gate contract: no .factory/gates.json in this worktree \u2014 the worktree was cut from a commit without the contract (older factory version, or the contract was never committed). Run `factory scaffold`, commit .factory/gates.json, and start a fresh run."
       );
     }
+    const contract = load.contract;
     for (const id of gates) {
-      const entry = contract?.gates[id];
-      if (entry !== void 0 && !entry.contracted) {
+      const entry = contract.gates[id];
+      if (!entry.contracted) {
         const reason = `uncontracted: ${entry.reason}`;
         report.push({ gate: id, outcome: { kind: "skip", gate: id, reason } });
         skipped.push({ gate: id, reason });
         log18.debug(`gate ${id} skipped: ${reason}`);
-        continue;
-      }
-      const cached = memo.getEvidence(id, treeSha);
-      if (cached !== void 0) {
-        report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
-        evidence.push(cached);
-        log18.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -11668,21 +11280,17 @@ var GateRunner = class {
         config: ctx.config,
         tools: ctx.tools,
         exemptReader: ctx.exemptReader,
-        memo,
         contract,
         coverageStore: ctx.coverageStore
       };
       let outcome = await strategy.run(sctx);
-      if (outcome.kind === "skip" && entry?.contracted === true && classifySkip(outcome.reason) === "tooling") {
+      if (outcome.kind === "skip" && classifySkip(outcome.reason) === "tooling") {
         outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`);
         log18.warn(`gate ${id} contracted but unrunnable \u2014 failing loud`);
       }
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
-        if (outcome.evidence.detail?.startsWith("contracted-but-unrunnable") !== true) {
-          memo.putEvidence(id, treeSha, outcome.evidence);
-        }
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
         log18.debug(`gate ${id} skipped: ${outcome.reason}`);
@@ -11733,7 +11341,7 @@ async function readJsonOrNull(file) {
   try {
     raw = await readFile6(file, "utf8");
   } catch (err) {
-    if (err.code !== "ENOENT") {
+    if (!isEnoent(err)) {
       log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
     }
     return null;
@@ -12071,12 +11679,12 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log33 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log33.code !== 0) {
-      throw new Error(`git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`);
+    const log36 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log36.code !== 0) {
+      throw new Error(`git log ${base}..HEAD failed (code=${log36.code ?? "null"}): ${log36.stderr.trim()}`);
     }
-    assertNotTruncated(log33, "git log (tdd classification)");
-    const shas = splitLines(log33.stdout).reverse();
+    assertNotTruncated(log36, "git log (tdd classification)");
+    const shas = splitLines(log36.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -12167,7 +11775,7 @@ var FsCoverageStore = class {
     try {
       raw = await readFile8(file, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -12219,6 +11827,7 @@ function promptRefFor(role) {
 function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false) {
   const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
+    agent_type: AGENT_TYPE_BY_ROLE[role],
     isolation: "worktree",
     model,
     max_turns: maxTurns,
@@ -12723,7 +12332,7 @@ function splitHoldout(criteria, percent, seed) {
 
 // src/verifier/holdout/store.ts
 import { mkdir as mkdir7, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname5, join as join11 } from "node:path";
+import { dirname as dirname5, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -12756,7 +12365,7 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path6 = this.path(runId, record.task_id);
@@ -12773,7 +12382,7 @@ var FsHoldoutStore = class {
       await readFile9(this.path(runId, taskId), "utf8");
       return true;
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return false;
       }
       throw err;
@@ -12783,7 +12392,7 @@ var FsHoldoutStore = class {
 
 // src/verifier/holdout/verdict-store.ts
 import { mkdir as mkdir8, readFile as readFile10 } from "node:fs/promises";
-import { dirname as dirname6, join as join12 } from "node:path";
+import { dirname as dirname6, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -12796,7 +12405,7 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path6 = this.path(runId, taskId);
@@ -12964,6 +12573,15 @@ async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
   return parseE2eReport(result.stdout, result.code);
 }
 
+// src/orchestrator/readiness.ts
+function depsSatisfied(run10, depends) {
+  return depends.every((d) => run10.tasks[d]?.status === "done");
+}
+function isUnsatisfiableDep(run10, depId) {
+  const dep = run10.tasks[depId];
+  return dep === void 0 || dep.status === "failed";
+}
+
 // src/rescue/scan.ts
 function dispositionOf(status, failureClass) {
   if (status === "done") {
@@ -12976,15 +12594,6 @@ function dispositionOf(status, failureClass) {
     return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
   }
   return "stuck";
-}
-function depsSatisfied(run10, depends) {
-  return depends.every((d) => run10.tasks[d]?.status === "done");
-}
-function hasUnsatisfiableDep(run10, depends) {
-  return depends.some((d) => {
-    const dep = run10.tasks[d];
-    return dep === void 0 || dep.status === "failed";
-  });
 }
 function scanRun(run10) {
   const all = Object.values(run10.tasks);
@@ -13005,7 +12614,7 @@ function scanRun(run10) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || t.depends_on.some((d) => isUnsatisfiableDep(run10, d)))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run10.e2e_phase?.status === "failed";
@@ -13064,7 +12673,7 @@ function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAs
 
 // src/rescue/assess.ts
 async function assessWork(run10, probe) {
-  const baseRef = `origin/${resolveStagingBranch(run10.run_id, run10.staging_branch)}`;
+  const baseRef = `origin/${run10.staging_branch}`;
   const baseResolved = await probe.refExists(baseRef);
   const tasks = [];
   for (const t of Object.values(run10.tasks)) {
@@ -13283,7 +12892,7 @@ async function applyRescue(state, runId, opts = {}) {
       ...run10,
       tasks: nextTasks,
       // S11: a manual apply that did work IS a human touch.
-      human_touches: [...run10.human_touches ?? [], { kind: "recover", at: opts.at ?? nowIso() }],
+      human_touches: [...run10.human_touches, { kind: "recover", at: opts.at ?? nowIso() }],
       ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run10.e2e_phase)) } : {},
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
@@ -13336,18 +12945,14 @@ async function finalizeRun(deps, runId) {
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
   const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" || run10.traceability?.status === "failed" ? "failed" : taskTerminal;
-  const contract = await loadGateContract(process.cwd());
-  const warnings = contract.state === "absent" ? [
-    "gates ran without a .factory/gates.json contract (legacy pre-contract run) \u2014 run `factory scaffold` and commit the contract"
-  ] : [];
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now, warnings });
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
   const failureCommentPosted = run10.debug ? false : await commentFailuresOnPrd(deps, run10, report);
   let rollupResult;
   if (terminal === "completed") {
-    const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
+    const stagingBranch = run10.staging_branch;
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
     await deps.git.push("origin", stagingBranch);
@@ -13517,11 +13122,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/orchestrator/paths.ts
-import { join as join13 } from "node:path";
+import { join as join12 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join13(worktreesRoot(dataDir), runId, taskId);
+  return join12(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -13533,7 +13138,7 @@ function taskExemptReader(deps, worktree) {
 }
 
 // src/orchestrator/handlers.ts
-import { join as join14 } from "node:path";
+import { join as join13 } from "node:path";
 var PREFLIGHT_GIT_LOCK_TUNING = {
   ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
@@ -13591,6 +13196,7 @@ function makePhaseHandlers(deps) {
       agents: [
         {
           role,
+          agent_type: AGENT_TYPE_BY_ROLE[role],
           model: dial.model,
           // No implementer-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
@@ -13615,12 +13221,12 @@ function makePhaseHandlers(deps) {
     async preflight(ctx) {
       const task = requireTask3(ctx, "preflight");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
-      const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch);
+      const staging = ctx.run.staging_branch;
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
         {
-          dir: join14(deps.dataDir, "locks"),
-          lockfile: join14(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          dir: join13(deps.dataDir, "locks"),
+          lockfile: join13(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
           label: `preflight git '${staging}'`,
           dirPolicy: "create",
           tuning: PREFLIGHT_GIT_LOCK_TUNING
@@ -13703,10 +13309,11 @@ function makePhaseHandlers(deps) {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree,
-        baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
+        baseRef: ctx.run.staging_branch,
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
+        ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
         coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id))
       };
       const gate = await new GateRunner().run(gateCtx);
@@ -13814,7 +13421,7 @@ function shipBody(runId, specTask) {
 
 // src/orchestrator/artifacts.ts
 import { mkdir as mkdir9, readFile as readFile11 } from "node:fs/promises";
-import { dirname as dirname7, join as join15 } from "node:path";
+import { dirname as dirname7, join as join14 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -13823,7 +13430,7 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join15(runDir(this.dataDir, runId), ref);
+    return join14(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
@@ -13841,7 +13448,7 @@ var FsArtifactStore = class {
 
 // src/orchestrator/docs-applicable.ts
 import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { join as join15 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -13861,14 +13468,14 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join16(repoRoot, "docs"));
+    const s = await stat(join15(repoRoot, "docs"));
     if (!s.isDirectory()) {
       return false;
     }
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join16(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
@@ -13876,7 +13483,7 @@ import { readFile as readFile13 } from "node:fs/promises";
 import { sep as sep3 } from "node:path";
 
 // src/hooks/tcb.ts
-import { existsSync as existsSync7, realpathSync } from "node:fs";
+import { existsSync as existsSync6, realpathSync } from "node:fs";
 import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
 function isAtOrUnder(p, base) {
   if (p === base) {
@@ -13887,7 +13494,7 @@ function isAtOrUnder(p, base) {
 function canonicalizeAnchor(dir) {
   const normalized = normalize(resolve2(dir));
   try {
-    if (existsSync7(normalized)) {
+    if (existsSync6(normalized)) {
       return realpathSync(normalized);
     }
   } catch {
@@ -13896,7 +13503,7 @@ function canonicalizeAnchor(dir) {
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync7(ancestor)) {
+      if (existsSync6(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -14006,7 +13613,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
   const normalized = normalize(abs);
   try {
-    if (existsSync7(normalized)) {
+    if (existsSync6(normalized)) {
       return realpathSync(normalized);
     }
   } catch {
@@ -14015,7 +13622,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync7(ancestor)) {
+      if (existsSync6(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -14109,7 +13716,7 @@ async function buildWorktreeSource(worktree, reviews) {
       const text = await readFile13(resolved, "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
-      if (err.code !== "ENOENT") {
+      if (!isEnoent(err)) {
         throw err;
       }
       lines.set(file, null);
@@ -14186,7 +13793,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-  const baseRef = resolveStagingBranch(runId, run10.staging_branch);
+  const baseRef = run10.staging_branch;
   const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
   const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
@@ -14199,6 +13806,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     config: deps.config,
     tools: deps.tools,
     exemptReader: taskExemptReader(deps, worktree),
+    ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
     coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
   };
   const gate = await new GateRunner().run(gateCtx);
@@ -14396,7 +14004,7 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: resolveStagingBranch(runId, ctx.run.staging_branch),
+    base: ctx.run.staging_branch,
     // Gate the MERGED-PR fallback on the number state still remembers: a crash-resume
     // keeps pr_number (idempotent no-op), but e2e-reopen clears it so a fresh PR opens
     // for the reopened commits instead of rebinding the already-merged one. See pr.ts.
@@ -14414,7 +14022,7 @@ async function shipTask(deps, ctx) {
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
+    stagingBranch: ctx.run.staging_branch,
     dataDir: deps.dataDir
   });
   const outcome = await serializer.merge(pr.number);
@@ -14470,6 +14078,7 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
   return {
     kind: "holdout-validate",
     task_id: taskId,
+    agent_type: GENERAL_PURPOSE_AGENT_TYPE,
     worktree,
     model: resolveReviewModel(deps.config),
     max_turns: deps.config.review.maxTurnsDeep,
@@ -14553,7 +14162,7 @@ async function nextAction(deps, runId, taskId, results) {
         const spawnPhase = asSpawnPhase(phase);
         const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const base_ref = `origin/${resolveStagingBranch(runId, run10.staging_branch)}`;
+        const base_ref = `origin/${run10.staging_branch}`;
         const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
@@ -14592,7 +14201,7 @@ async function nextAction(deps, runId, taskId, results) {
       case "wait-retry": {
         if (result.phase === "ship") {
           const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId);
-          const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
+          const stagingBranch = run10.staging_branch;
           if (!await deps.git.worktreeExists(resyncWorktree)) {
             const step2 = await failStep(
               deps,
@@ -14675,12 +14284,34 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join17 } from "node:path";
+import { join as join16 } from "node:path";
+
+// src/orchestrator/stage-helpers.ts
+async function ensureStageWorktree(git, opts) {
+  if (!await git.worktreeExists(opts.worktree)) {
+    const args = opts.branch !== void 0 ? ["-B", opts.branch, opts.worktree, opts.ref] : ["--detach", opts.worktree, opts.ref];
+    await git.worktreeAdd(args);
+    if (opts.provision !== void 0) {
+      await opts.provision();
+    }
+  } else if (opts.resetIfExists) {
+    await git.resetHardClean(opts.ref, { cwd: opts.worktree });
+  }
+}
+async function publishToStaging(git, staging, branch) {
+  await git.mergeFfOrCommit(staging, branch);
+  await git.push("origin", staging);
+}
+function specTaskLines(spec) {
+  return spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+}
+
+// src/orchestrator/docs.ts
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".docs");
+  return join16(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -14695,21 +14326,23 @@ function buildScribePrompt(worktree, baseRef) {
 }
 async function runDocsEmit(deps, runId) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const base = deps.config.git.baseBranch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", docsBranch, worktree, `origin/${staging}`]);
-  } else if ((run10.docs?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch: docsBranch,
+    resetIfExists: (run10.docs?.attempts ?? 0) >= 1
+  });
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: AGENT_TYPE_BY_ROLE.scribe,
     worktree,
     base_ref: baseRef,
     staging_branch: staging,
@@ -14722,13 +14355,12 @@ async function runDocsEmit(deps, runId) {
 var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 async function runDocsRecord(deps, runId, results) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
-    await deps.git.mergeFfOrCommit(staging, docsBranch);
-    await deps.git.push("origin", staging);
+    await publishToStaging(deps.git, staging, docsBranch);
     await deps.git.worktreeRemove([worktree, "--force"]);
     await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
     return { kind: "done", run_id: runId };
@@ -14749,12 +14381,12 @@ async function runDocsRecord(deps, runId, results) {
 }
 
 // src/orchestrator/traceability.ts
-import { join as join18 } from "node:path";
+import { join as join17 } from "node:path";
 var TRACE_MODEL = "opus";
 var TRACE_MAX_TURNS = 60;
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".trace");
+  return join17(dataDir, "worktrees", runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -14792,21 +14424,22 @@ async function readRequirements(deps, runId) {
 }
 async function runTraceabilityEmit(deps, runId) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const base = deps.config.git.baseBranch;
   const worktree = traceWorktreePath(deps.dataDir, runId);
   const baseRef = `origin/${base}`;
   const requirements = await readRequirements(deps, runId);
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["--detach", worktree, `origin/${staging}`]);
-  } else if ((run10.traceability?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    resetIfExists: (run10.traceability?.attempts ?? 0) >= 1
+  });
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: TRACEABILITY_AUDITOR_AGENT_TYPE,
     worktree,
     base_ref: baseRef,
     staging_branch: staging,
@@ -14880,6 +14513,41 @@ async function runTraceabilityRecord(deps, runId, results) {
   return { kind: "suspend", run_id: runId, reason };
 }
 
+// src/quota/circuit-breaker.ts
+var FAILURE_RATIO = 0.15;
+function isNonNegativeFinite(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+function evaluate2(input, config) {
+  const { cumulativeFailures, totalTasks } = input;
+  if (!isNonNegativeFinite(cumulativeFailures)) {
+    return {
+      tripped: true,
+      arm: "fail-closed",
+      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
+    };
+  }
+  if (!isNonNegativeFinite(totalTasks)) {
+    return {
+      tripped: true,
+      arm: "fail-closed",
+      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`
+    };
+  }
+  const { maxConsecutiveFailures } = config;
+  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
+  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
+  if (cumulativeFailures >= effectiveThreshold) {
+    const derivation = proportional > maxConsecutiveFailures ? `ceil(${FAILURE_RATIO} \xD7 ${totalTasks} tasks)` : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
+    return {
+      tripped: true,
+      arm: "failures",
+      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`
+    };
+  }
+  return { tripped: false };
+}
+
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
   const run10 = await deps.state.read(runId);
@@ -14894,13 +14562,6 @@ async function applyCircuitBreaker(deps, runId) {
 }
 
 // src/orchestrator/next.ts
-function depsSatisfied2(run10, task) {
-  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
-}
-function isUnsatisfiableDep(run10, depId) {
-  const dep = run10.tasks[depId];
-  return dep === void 0 || dep.status === "failed";
-}
 async function wantsDocs(deps, run10) {
   if (run10.docs?.status === "done") {
     return false;
@@ -15047,7 +14708,7 @@ async function nextTask(deps, runId) {
     run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run10, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run10, t.depends_on));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -15075,10 +14736,6 @@ async function nextTask(deps, runId) {
     max_parallel: deps.config.maxParallelTasks
   };
 }
-
-// src/orchestrator/e2e.ts
-import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute as isAbsolute2, join as join20 } from "node:path";
 
 // src/orchestrator/e2e-schemas.ts
 var CONTROL_TITLE_PREFIX = "control:";
@@ -15115,21 +14772,21 @@ var E2eResultsSchema = external_exports.object({
 }).strict();
 
 // src/orchestrator/e2e-paths.ts
-import { join as join19 } from "node:path";
+import { join as join18 } from "node:path";
 function e2eWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-author");
+  return join18(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-run");
+  return join18(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join18(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join18(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join19(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join18(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -15161,7 +14818,12 @@ function scrubbedE2eEnv(cfg, boot) {
   return env;
 }
 
-// src/orchestrator/e2e.ts
+// src/orchestrator/e2e-author.ts
+import { isAbsolute as isAbsolute2 } from "node:path";
+
+// src/orchestrator/e2e-shared.ts
+import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname8 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
@@ -15176,383 +14838,51 @@ var DefaultE2eFileOps = class {
 var E2E_AUTHOR_MODEL = "opus";
 var MAX_AUTHOR_ATTEMPTS = 2;
 var E2E_AUTHOR_MAX_TURNS = 90;
-function buildAuthorPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
-  return [
-    "You are the factory e2e-author running the pipeline's end-to-end test-authoring phase.",
-    `1. cd into your worktree: ${args.worktree} (checked out on the e2e branch off the staging tip).`,
-    `2. Boot the app: \`${args.startCommand}\` \u2192 ${args.baseURL} (reuse if already running).`,
-    "3. Review every task this PRD delivered:",
-    taskLines,
-    `4. For each USER-FACING task, explore the live app via the Playwright MCP tools and author a THROWAWAY spec into ${args.throwawayDir} (OUTSIDE this worktree \u2014 never commit it).`,
-    `5. Author a small number of CRITICAL, money-path JOURNEY specs (thin \u2014 the load-bearing net, not per-task coverage) into ${args.worktree}/${args.testDir}/ and COMMIT them in this worktree. Each critical spec MUST include one assertion titled with the "${CONTROL_TITLE_PREFIX}" prefix that passes on ANY boot of the app (e.g. the page loads) \u2014 the fail-first proof uses it to tell 'the app didn't boot' apart from 'the feature doesn't exist yet.'`,
-    "6. Self-validate: every spec you authored must be green against the live (staging) app before you finish.",
-    "7. Do NOT push (the engine merges the critical specs on record). Do NOT edit non-e2e files.",
-    'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} \u2014 the manifest is an array of {task_ids, spec_path, kind, title} rows, one per spec you authored (critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative; `title` is a plain-language journey name a non-technical reader understands, e.g. "Sign up and reach the dashboard"). EVERY file you commit under the test dir must appear as a critical manifest row (support helpers under support/ and auth.setup.ts excepted) \u2014 an undeclared committed spec is rejected at record. Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.'
-  ].join("\n");
-}
-async function runE2eEmit(deps, runId) {
-  const run10 = await deps.state.read(runId);
-  const cfg = deps.config.e2e;
-  const boot = resolveBootConfig(cfg, run10);
-  if (boot === null) {
-    const reason = "e2e phase has no boot config \u2014 the run-start assessment resolved none and no override is set; run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` then resume";
-    await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-    log27.warn(`run '${runId}': ${reason}`);
-    return { kind: "suspend", run_id: runId, reason };
-  }
-  if (run10.e2e_phase === void 0) {
-    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
-  }
-  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.manifest.length === 0 && (run10.e2e_phase.author_attempts ?? 0) >= 1) {
-    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
-  }
-  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.adjudication !== void 0) {
-    return prepareAdjudicatorSpawn(deps, run10, runId, boot);
-  }
-  return runSuiteAndDecide(deps, runId);
-}
-async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
-  const base = deps.config.git.baseBranch;
-  const branch = e2eBranchName(runId);
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
-  const baseRef = `origin/${base}`;
-  await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
-      path: worktree,
-      setupCommand: deps.config.quality.setupCommand
-    });
-  } else if ((run10.e2e_phase?.author_attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
-  const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
-  return {
-    kind: "spawn",
-    expects: "author-results",
-    run_id: runId,
-    worktree,
-    base_ref: baseRef,
-    staging_branch: staging,
-    e2e_branch: branch,
-    throwaway_dir: throwawayDir,
-    model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
-    prompt: buildAuthorPrompt({
-      worktree,
-      baseRef,
-      throwawayDir,
-      testDir,
-      startCommand: boot.startCommand,
-      baseURL: boot.baseURL,
-      spec: deps.spec
-    })
-  };
-}
-function buildAdjudicationPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
-  const specLines = (rows) => rows.map((s) => {
-    const detail = s.error === void 0 ? "" : `
-    ${s.error.replace(/\n/g, "\n    ")}`;
-    return `  - ${s.spec_path} \u2014 "${s.title}"${detail}`;
-  }).join("\n");
-  const adjudicate = args.cursor.specs.filter((s) => s.mode === "adjudicate");
-  const update = args.cursor.specs.filter((s) => s.mode === "update");
-  const lines = [
-    "You are the factory e2e-adjudicator: pre-existing committed e2e specs are failing against staging and no manifest entry maps them to a task in this run. Decide whether each failure is a REGRESSION this run introduced or an INTENTIONAL behavior change this run's spec authorizes.",
-    `1. cd into your worktree: ${args.worktree} (checked out on the adjudication branch off the staging tip).`,
-    `2. Boot the app: \`${args.boot.startCommand}\` \u2192 ${args.boot.baseURL} (reuse if already running).`,
-    "3. The tasks this run delivered (the ONLY authority for 'intentional'):",
-    taskLines
-  ];
-  if (adjudicate.length > 0) {
-    lines.push(
-      "4. ADJUDICATE each failing spec below \u2014 read its source, reproduce against the live app:",
-      specLines(adjudicate),
-      '   Verdict "regression": the old behavior should still work and this run broke it.',
-      '   Verdict "intentional-change": a task above deliberately changed this behavior \u2014 you MUST include a `citation` quoting the authorizing task/criterion language verbatim; an uncited intentional-change verdict is rejected.'
-    );
-  }
-  if (update.length > 0 || adjudicate.length > 0) {
-    lines.push(
-      `${adjudicate.length > 0 ? "5" : "4"}. UPDATE these pre-authorized specs${adjudicate.length > 0 ? " plus every spec you ruled intentional-change" : ""} \u2014 rewrite each to assert the NEW behavior, keep its "${CONTROL_TITLE_PREFIX}"-titled assertion, validate it green against the live staging app, and COMMIT it in this worktree:`,
-      ...update.length > 0 ? [specLines(update)] : []
-    );
-  }
-  lines.push(
-    "Only the spec files listed above may change \u2014 touching anything else fails the run. Do NOT push.",
-    'Finish with your terminal STATUS line and return {"status": "<line>", "verdicts": [...]} \u2014 one {spec_path, verdict, reason, citation?} row per ADJUDICATED spec only (pre-authorized updates need no verdict row); `reason` is plain language a non-technical reader understands.'
-  );
-  return lines.join("\n");
-}
-async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
-  const cursor = run10.e2e_phase?.adjudication;
-  if (cursor === void 0) {
-    throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`);
-  }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
-  const branch = adjudicateBranchName(runId);
-  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
-  await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
-      path: worktree,
-      setupCommand: deps.config.quality.setupCommand
-    });
-  } else if (cursor.attempts >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
-  return {
-    kind: "spawn",
-    expects: "adjudication-results",
-    run_id: runId,
-    worktree,
-    staging_branch: staging,
-    adjudicate_branch: branch,
-    model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
-    prompt: buildAdjudicationPrompt({ worktree, boot, cursor, spec: deps.spec })
-  };
-}
-function assertSafeSpecPath(specPath) {
-  if (isAbsolute2(specPath)) {
-    throw new Error(`e2e manifest spec_path '${specPath}' must be relative, not absolute`);
-  }
-  if (specPath.split(/[\\/]+/).includes("..")) {
-    throw new Error(`e2e manifest spec_path '${specPath}' must not contain '..' segments`);
-  }
-}
-async function failWithCleanup(deps, runId, worktree, reason) {
-  await deps.git.worktreeRemove([worktree, "--force"]);
-  await markFailed(deps, runId, reason);
-  return { kind: "failed", run_id: runId, reason };
-}
 function errText(err) {
   return err instanceof Error ? err.message : String(err);
 }
-async function retryAuthorOrFail(deps, runId, worktree, reason) {
-  const run10 = await deps.state.read(runId);
-  const attempts = (run10.e2e_phase?.author_attempts ?? 0) + 1;
-  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
-    return failWithCleanup(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
-  }
+function defaultE2ePhase() {
+  return { manifest: [], reopen_counts: {} };
+}
+async function markDone(deps, runId, opts) {
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
       ...s.e2e_phase ?? defaultE2ePhase(),
-      author_attempts: attempts
+      status: "done",
+      reason: void 0,
+      advisory: opts.advisory,
+      attempts: opts.attempts,
+      ended_at: nowIso()
     }
   }));
-  log27.warn(`run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`);
-  return runE2eEmit(deps, runId);
 }
-async function runE2eRecord(deps, runId, results) {
-  const run0 = await deps.state.read(runId);
-  if (run0.e2e_phase?.adjudication !== void 0) {
-    return recordAdjudication(deps, runId, run0, results);
-  }
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
-  const outcome = parseProducerStatus(results.status);
-  if (outcome.status === "error") {
-    return retryAuthorOrFail(deps, runId, worktree, `e2e-author: ${outcome.reason}`);
-  }
-  if (outcome.status !== "done") {
-    const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
-    return failWithCleanup(deps, runId, worktree, reason);
-  }
-  if (results.manifest.length === 0 && results.no_ui_surface !== true) {
-    const reason = "e2e-author: STATUS: DONE with an empty manifest but no_ui_surface was not explicitly true \u2014 ambiguous (genuine no-op vs. a malformed/incomplete response); refusing to silently pass";
-    return failWithCleanup(deps, runId, worktree, reason);
-  }
-  for (const entry of results.manifest) {
-    try {
-      assertSafeSpecPath(entry.spec_path);
-    } catch (err) {
-      return failWithCleanup(deps, runId, worktree, `e2e-author: ${errText(err)}`);
-    }
-  }
-  const cfg = deps.config.e2e;
-  const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
-  const critical = results.manifest.filter((e) => e.kind === "critical");
-  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run10.tasks));
-  if (unknownTaskIds.length > 0) {
-    const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
-    return failWithCleanup(deps, runId, worktree, reason);
-  }
-  if (critical.length > 0) {
-    const testDirPrefix = `${cfg.testDir}/`;
-    const outsideTestDir = critical.filter((e) => !e.spec_path.startsWith(testDirPrefix));
-    if (outsideTestDir.length > 0) {
-      const reason = `e2e-author: critical spec_path(s) not under '${testDirPrefix}' \u2014 refusing to merge: ` + outsideTestDir.map((e) => e.spec_path).join(", ");
-      return failWithCleanup(deps, runId, worktree, reason);
-    }
-    const branch = e2eBranchName(runId);
-    const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
-    const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
-    if (stray.length > 0) {
-      const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
-      return failWithCleanup(deps, runId, worktree, reason);
-    }
-    const declared = new Set(critical.map((e) => e.spec_path));
-    const undeclared = changed.filter(
-      (f) => !declared.has(f) && !f.startsWith(`${testDirPrefix}support/`) && f !== `${testDirPrefix}auth.setup.ts`
-    );
-    if (undeclared.length > 0) {
-      const reason = `e2e-author: committed file(s) under '${testDirPrefix}' missing from the manifest \u2014 an undeclared spec can never be joined back to a task, refusing to merge: ` + undeclared.join(", ");
-      return failWithCleanup(deps, runId, worktree, reason);
-    }
-    const boot = resolveBootConfig(cfg, run10);
-    if (boot === null) {
-      return failWithCleanup(
-        deps,
-        runId,
-        worktree,
-        "e2e-author: boot config vanished between spawn and record (config or assessment state changed mid-run)"
-      );
-    }
-    const proof = await proveCriticals(deps, runId, critical, worktree, boot);
-    if (!proof.ok) {
-      return failWithCleanup(deps, runId, worktree, proof.reason);
-    }
-    await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId));
-    await deps.git.push("origin", staging);
-  }
-  await deps.git.worktreeRemove([worktree, "--force"]);
+async function markFailed(deps, runId, reason, attempts) {
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
       ...s.e2e_phase ?? defaultE2ePhase(),
-      manifest: results.manifest
+      status: "failed",
+      reason,
+      advisory: void 0,
+      attempts: attempts ?? s.e2e_phase?.attempts,
+      ended_at: nowIso()
     }
   }));
-  return runSuiteAndDecide(deps, runId);
+  log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
-async function failAdjudication(deps, runId, worktree, reason) {
-  await deps.git.worktreeRemove([worktree, "--force"]);
-  await deps.state.update(
-    runId,
-    (s) => s.e2e_phase === void 0 ? s : { ...s, e2e_phase: { ...s.e2e_phase, adjudication: void 0 } }
-  );
-  await markFailed(deps, runId, reason);
-  return { kind: "failed", run_id: runId, reason };
+function findEntry(manifest, spec) {
+  return manifest.find((e) => specPathMatches(spec.file, e.spec_path));
 }
-async function retryAdjudicatorOrFail(deps, runId, worktree, reason) {
-  const run10 = await deps.state.read(runId);
-  const cursor = run10.e2e_phase?.adjudication;
-  const attempts = (cursor?.attempts ?? 0) + 1;
-  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
-    return failAdjudication(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
-  }
-  await deps.state.update(
-    runId,
-    (s) => s.e2e_phase?.adjudication === void 0 ? s : {
-      ...s,
-      e2e_phase: {
-        ...s.e2e_phase,
-        adjudication: { ...s.e2e_phase.adjudication, attempts }
-      }
-    }
-  );
-  log27.warn(
-    `run '${runId}': e2e-adjudicator attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} failed \u2014 re-spawning (${reason})`
-  );
-  return runE2eEmit(deps, runId);
+function specPathMatches(file, specPath) {
+  return file === specPath || file.endsWith(`/${specPath}`) || specPath.endsWith(`/${file}`);
 }
-async function recordAdjudication(deps, runId, run10, results) {
-  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
-  const phase = nonNull(run10.e2e_phase);
-  const cursor = nonNull(phase.adjudication);
-  const outcome = parseProducerStatus(results.status);
-  if (outcome.status === "error") {
-    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${outcome.reason}`);
-  }
-  if (outcome.status !== "done") {
-    const reason = `e2e-adjudicator: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
-    return failAdjudication(deps, runId, worktree, reason);
-  }
-  const verdicts = results.verdicts ?? [];
-  const cursorPaths = new Set(cursor.specs.map((s) => s.spec_path));
-  const ruled = new Set(verdicts.map((v) => v.spec_path));
-  const unruled = cursor.specs.filter((s) => s.mode === "adjudicate" && !ruled.has(s.spec_path));
-  const unknown = verdicts.filter((v) => !cursorPaths.has(v.spec_path));
-  const uncited = verdicts.filter(
-    (v) => v.verdict === "intentional-change" && (v.citation === void 0 || v.citation === "")
-  );
-  if (unruled.length > 0 || unknown.length > 0 || uncited.length > 0) {
-    const parts = [
-      ...unruled.length > 0 ? [`missing verdict(s) for: ${unruled.map((s) => s.spec_path).join(", ")}`] : [],
-      ...unknown.length > 0 ? [`verdict(s) for spec(s) not under adjudication: ${unknown.map((v) => v.spec_path).join(", ")}`] : [],
-      ...uncited.length > 0 ? [
-        `intentional-change verdict(s) missing the required citation: ${uncited.map((v) => v.spec_path).join(", ")}`
-      ] : []
-    ];
-    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${parts.join("; ")}`);
-  }
-  const regressions2 = verdicts.filter((v) => v.verdict === "regression");
-  if (regressions2.length > 0) {
-    const reason = "e2e adjudication: regression verdict \u2014 " + regressions2.map((v) => `${v.spec_path}: ${v.reason}`).join("; ");
-    return failAdjudication(deps, runId, worktree, reason);
-  }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
-  const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
-    cwd: worktree
-  });
-  const stray = changed.filter((f) => !cursorPaths.has(f));
-  if (stray.length > 0) {
-    const reason = `e2e-adjudicator: branch touches path(s) outside the adjudicated spec set \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
-    return failAdjudication(deps, runId, worktree, reason);
-  }
-  const unrewritten = cursor.specs.filter((s) => !changed.includes(s.spec_path));
-  if (unrewritten.length > 0) {
-    return retryAdjudicatorOrFail(
-      deps,
-      runId,
-      worktree,
-      `e2e-adjudicator: spec(s) not rewritten: ${unrewritten.map((s) => s.spec_path).join(", ")}`
-    );
-  }
-  const boot = resolveBootConfig(deps.config.e2e, run10);
-  if (boot === null) {
-    return failAdjudication(
-      deps,
-      runId,
-      worktree,
-      "e2e-adjudicator: boot config vanished between spawn and record (config or assessment state changed mid-run)"
-    );
-  }
-  const proof = await proveCriticals(
-    deps,
-    runId,
-    changed.map((f) => ({ task_ids: [], spec_path: f, kind: "critical" })),
-    worktree,
-    boot
-  );
-  if (!proof.ok) {
-    return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`);
-  }
-  await deps.git.mergeFfOrCommit(staging, adjudicateBranchName(runId));
-  await deps.git.push("origin", staging);
-  await deps.git.worktreeRemove([worktree, "--force"]);
-  await deps.state.update(runId, (s) => {
-    if (s.e2e_phase === void 0) {
-      return s;
-    }
-    const counts = { ...s.e2e_phase.adjudication_counts ?? {} };
-    for (const spec of cursor.specs) {
-      counts[spec.spec_path] = (counts[spec.spec_path] ?? 0) + 1;
-    }
-    return {
-      ...s,
-      e2e_phase: { ...s.e2e_phase, adjudication: void 0, adjudication_counts: counts }
-    };
-  });
-  log27.info(`run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`);
-  return runSuiteAndDecide(deps, runId);
+function unattributableToolingFailure(r) {
+  return !r.ok && r.specs.every((s) => s.status !== "failed");
 }
+
+// src/orchestrator/e2e-proof.ts
+import { join as join19 } from "node:path";
 function classifyBaseRun(specs) {
   const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
@@ -15568,16 +14898,19 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
   const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId);
   const base = `origin/${deps.config.git.baseBranch}`;
-  if (!await deps.git.worktreeExists(wtPath)) {
-    await deps.git.worktreeAdd(["-B", `e2e-base-proof-${runId}`, wtPath, base]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree: wtPath,
+    ref: base,
+    branch: `e2e-base-proof-${runId}`,
+    resetIfExists: false,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: wtPath,
       setupCommand: deps.config.quality.setupCommand
-    });
-  }
+    })
+  });
   try {
     for (const entry of critical) {
-      await files.copySpec(join20(authorWorktree, entry.spec_path), join20(wtPath, entry.spec_path));
+      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -15643,35 +14976,199 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
     await deps.git.worktreeRemove([wtPath, "--force"]);
   }
 }
-function defaultE2ePhase() {
-  return { manifest: [], reopen_counts: {} };
+
+// src/orchestrator/e2e-suite.ts
+import { join as join20 } from "node:path";
+var log28 = createLogger("e2e");
+function buildAdjudicationPrompt(args) {
+  const taskLines = specTaskLines(args.spec);
+  const specLines = (rows) => rows.map((s) => {
+    const detail = s.error === void 0 ? "" : `
+    ${s.error.replace(/\n/g, "\n    ")}`;
+    return `  - ${s.spec_path} \u2014 "${s.title}"${detail}`;
+  }).join("\n");
+  const adjudicate = args.cursor.specs.filter((s) => s.mode === "adjudicate");
+  const update = args.cursor.specs.filter((s) => s.mode === "update");
+  const lines = [
+    "You are the factory e2e-adjudicator: pre-existing committed e2e specs are failing against staging and no manifest entry maps them to a task in this run. Decide whether each failure is a REGRESSION this run introduced or an INTENTIONAL behavior change this run's spec authorizes.",
+    `1. cd into your worktree: ${args.worktree} (checked out on the adjudication branch off the staging tip).`,
+    `2. Boot the app: \`${args.boot.startCommand}\` \u2192 ${args.boot.baseURL} (reuse if already running).`,
+    "3. The tasks this run delivered (the ONLY authority for 'intentional'):",
+    taskLines
+  ];
+  if (adjudicate.length > 0) {
+    lines.push(
+      "4. ADJUDICATE each failing spec below \u2014 read its source, reproduce against the live app:",
+      specLines(adjudicate),
+      '   Verdict "regression": the old behavior should still work and this run broke it.',
+      '   Verdict "intentional-change": a task above deliberately changed this behavior \u2014 you MUST include a `citation` quoting the authorizing task/criterion language verbatim; an uncited intentional-change verdict is rejected.'
+    );
+  }
+  if (update.length > 0 || adjudicate.length > 0) {
+    lines.push(
+      `${adjudicate.length > 0 ? "5" : "4"}. UPDATE these pre-authorized specs${adjudicate.length > 0 ? " plus every spec you ruled intentional-change" : ""} \u2014 rewrite each to assert the NEW behavior, keep its "${CONTROL_TITLE_PREFIX}"-titled assertion, validate it green against the live staging app, and COMMIT it in this worktree:`,
+      ...update.length > 0 ? [specLines(update)] : []
+    );
+  }
+  lines.push(
+    "Only the spec files listed above may change \u2014 touching anything else fails the run. Do NOT push.",
+    'Finish with your terminal STATUS line and return {"status": "<line>", "verdicts": [...]} \u2014 one {spec_path, verdict, reason, citation?} row per ADJUDICATED spec only (pre-authorized updates need no verdict row); `reason` is plain language a non-technical reader understands.'
+  );
+  return lines.join("\n");
 }
-async function markDone(deps, runId, opts) {
-  await deps.state.update(runId, (s) => ({
-    ...s,
-    e2e_phase: {
-      ...s.e2e_phase ?? defaultE2ePhase(),
-      status: "done",
-      reason: void 0,
-      advisory: opts.advisory,
-      attempts: opts.attempts,
-      ended_at: nowIso()
-    }
-  }));
+async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
+  const cursor = run10.e2e_phase?.adjudication;
+  if (cursor === void 0) {
+    throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`);
+  }
+  const staging = run10.staging_branch;
+  const branch = adjudicateBranchName(runId);
+  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+  await deps.git.fetch("origin", staging);
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: cursor.attempts >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
+      path: worktree,
+      setupCommand: deps.config.quality.setupCommand
+    })
+  });
+  return {
+    kind: "spawn",
+    expects: "adjudication-results",
+    run_id: runId,
+    agent_type: E2E_AUTHOR_AGENT_TYPE,
+    worktree,
+    staging_branch: staging,
+    adjudicate_branch: branch,
+    model: E2E_AUTHOR_MODEL,
+    max_turns: E2E_AUTHOR_MAX_TURNS,
+    prompt: buildAdjudicationPrompt({ worktree, boot, cursor, spec: deps.spec })
+  };
 }
-async function markFailed(deps, runId, reason, attempts) {
-  await deps.state.update(runId, (s) => ({
-    ...s,
-    e2e_phase: {
-      ...s.e2e_phase ?? defaultE2ePhase(),
-      status: "failed",
-      reason,
-      advisory: void 0,
-      attempts: attempts ?? s.e2e_phase?.attempts,
-      ended_at: nowIso()
+async function failAdjudication(deps, runId, worktree, reason) {
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await deps.state.update(
+    runId,
+    (s) => s.e2e_phase === void 0 ? s : { ...s, e2e_phase: { ...s.e2e_phase, adjudication: void 0 } }
+  );
+  await markFailed(deps, runId, reason);
+  return { kind: "failed", run_id: runId, reason };
+}
+async function retryAdjudicatorOrFail(deps, runId, worktree, reason, emit2) {
+  const run10 = await deps.state.read(runId);
+  const cursor = run10.e2e_phase?.adjudication;
+  const attempts = (cursor?.attempts ?? 0) + 1;
+  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
+    return failAdjudication(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
+  }
+  await deps.state.update(
+    runId,
+    (s) => s.e2e_phase?.adjudication === void 0 ? s : {
+      ...s,
+      e2e_phase: {
+        ...s.e2e_phase,
+        adjudication: { ...s.e2e_phase.adjudication, attempts }
+      }
     }
-  }));
-  log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+  );
+  log28.warn(
+    `run '${runId}': e2e-adjudicator attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} failed \u2014 re-spawning (${reason})`
+  );
+  return emit2(deps, runId);
+}
+async function recordAdjudication(deps, runId, run10, results, emit2) {
+  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+  const phase = nonNull(run10.e2e_phase);
+  const cursor = nonNull(phase.adjudication);
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "error") {
+    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${outcome.reason}`, emit2);
+  }
+  if (outcome.status !== "done") {
+    const reason = `e2e-adjudicator: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+  const verdicts = results.verdicts ?? [];
+  const cursorPaths = new Set(cursor.specs.map((s) => s.spec_path));
+  const ruled = new Set(verdicts.map((v) => v.spec_path));
+  const unruled = cursor.specs.filter((s) => s.mode === "adjudicate" && !ruled.has(s.spec_path));
+  const unknown = verdicts.filter((v) => !cursorPaths.has(v.spec_path));
+  const uncited = verdicts.filter(
+    (v) => v.verdict === "intentional-change" && (v.citation === void 0 || v.citation === "")
+  );
+  if (unruled.length > 0 || unknown.length > 0 || uncited.length > 0) {
+    const parts = [
+      ...unruled.length > 0 ? [`missing verdict(s) for: ${unruled.map((s) => s.spec_path).join(", ")}`] : [],
+      ...unknown.length > 0 ? [`verdict(s) for spec(s) not under adjudication: ${unknown.map((v) => v.spec_path).join(", ")}`] : [],
+      ...uncited.length > 0 ? [
+        `intentional-change verdict(s) missing the required citation: ${uncited.map((v) => v.spec_path).join(", ")}`
+      ] : []
+    ];
+    return retryAdjudicatorOrFail(deps, runId, worktree, `e2e-adjudicator: ${parts.join("; ")}`, emit2);
+  }
+  const regressions2 = verdicts.filter((v) => v.verdict === "regression");
+  if (regressions2.length > 0) {
+    const reason = "e2e adjudication: regression verdict \u2014 " + regressions2.map((v) => `${v.spec_path}: ${v.reason}`).join("; ");
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+  const staging = run10.staging_branch;
+  const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
+    cwd: worktree
+  });
+  const stray = changed.filter((f) => !cursorPaths.has(f));
+  if (stray.length > 0) {
+    const reason = `e2e-adjudicator: branch touches path(s) outside the adjudicated spec set \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
+    return failAdjudication(deps, runId, worktree, reason);
+  }
+  const unrewritten = cursor.specs.filter((s) => !changed.includes(s.spec_path));
+  if (unrewritten.length > 0) {
+    return retryAdjudicatorOrFail(
+      deps,
+      runId,
+      worktree,
+      `e2e-adjudicator: spec(s) not rewritten: ${unrewritten.map((s) => s.spec_path).join(", ")}`,
+      emit2
+    );
+  }
+  const boot = resolveBootConfig(deps.config.e2e, run10);
+  if (boot === null) {
+    return failAdjudication(
+      deps,
+      runId,
+      worktree,
+      "e2e-adjudicator: boot config vanished between spawn and record (config or assessment state changed mid-run)"
+    );
+  }
+  const proof = await proveCriticals(
+    deps,
+    runId,
+    changed.map((f) => ({ task_ids: [], spec_path: f, kind: "critical" })),
+    worktree,
+    boot
+  );
+  if (!proof.ok) {
+    return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`);
+  }
+  await publishToStaging(deps.git, staging, adjudicateBranchName(runId));
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await deps.state.update(runId, (s) => {
+    if (s.e2e_phase === void 0) {
+      return s;
+    }
+    const counts = { ...s.e2e_phase.adjudication_counts ?? {} };
+    for (const spec of cursor.specs) {
+      counts[spec.spec_path] = (counts[spec.spec_path] ?? 0) + 1;
+    }
+    return {
+      ...s,
+      e2e_phase: { ...s.e2e_phase, adjudication: void 0, adjudication_counts: counts }
+    };
+  });
+  log28.info(`run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`);
+  return runSuiteAndDecide(deps, runId);
 }
 function throwawayConfigPath(worktree) {
   return join20(worktree, ".factory-e2e-throwaway.config.cjs");
@@ -15693,15 +15190,6 @@ function throwawayConfigContents(throwawayDir) {
     ""
   ].join("\n");
 }
-function findEntry(manifest, spec) {
-  return manifest.find((e) => specPathMatches(spec.file, e.spec_path));
-}
-function specPathMatches(file, specPath) {
-  return file === specPath || file.endsWith(`/${specPath}`) || specPath.endsWith(`/${file}`);
-}
-function unattributableToolingFailure(r) {
-  return !r.ok && r.specs.every((s) => s.status !== "failed");
-}
 async function runSuiteAndDecide(deps, runId) {
   const run10 = await deps.state.read(runId);
   const manifest = run10.e2e_phase?.manifest ?? [];
@@ -15718,15 +15206,16 @@ async function runSuiteAndDecide(deps, runId) {
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", `e2e-run-${runId}`, worktree, `origin/${staging}`]);
-  } else {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch: `e2e-run-${runId}`,
+    resetIfExists: true
+  });
   await provision({ path: worktree, setupCommand: deps.config.quality.setupCommand });
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
   let criticalResult;
@@ -15817,7 +15306,7 @@ async function runSuiteAndDecide(deps, runId) {
           adjudication: { specs: cursorSpecs, attempts: 0, requested_at: nowIso() }
         }
       }));
-      log27.info(`run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`);
+      log28.info(`run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`);
       return prepareAdjudicatorSpawn(deps, await deps.state.read(runId), runId, boot);
     }
   }
@@ -15868,13 +15357,209 @@ async function runSuiteAndDecide(deps, runId) {
       reopen_counts: reopenCounts
     }
   }));
-  log27.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
+  log28.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
   return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
+}
+
+// src/orchestrator/e2e-author.ts
+var log29 = createLogger("e2e");
+function buildAuthorPrompt(args) {
+  const taskLines = specTaskLines(args.spec);
+  return [
+    "You are the factory e2e-author running the pipeline's end-to-end test-authoring phase.",
+    `1. cd into your worktree: ${args.worktree} (checked out on the e2e branch off the staging tip).`,
+    `2. Boot the app: \`${args.startCommand}\` \u2192 ${args.baseURL} (reuse if already running).`,
+    "3. Review every task this PRD delivered:",
+    taskLines,
+    `4. For each USER-FACING task, explore the live app via the Playwright MCP tools and author a THROWAWAY spec into ${args.throwawayDir} (OUTSIDE this worktree \u2014 never commit it).`,
+    `5. Author a small number of CRITICAL, money-path JOURNEY specs (thin \u2014 the load-bearing net, not per-task coverage) into ${args.worktree}/${args.testDir}/ and COMMIT them in this worktree. Each critical spec MUST include one assertion titled with the "${CONTROL_TITLE_PREFIX}" prefix that passes on ANY boot of the app (e.g. the page loads) \u2014 the fail-first proof uses it to tell 'the app didn't boot' apart from 'the feature doesn't exist yet.'`,
+    "6. Self-validate: every spec you authored must be green against the live (staging) app before you finish.",
+    "7. Do NOT push (the engine merges the critical specs on record). Do NOT edit non-e2e files.",
+    'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} \u2014 the manifest is an array of {task_ids, spec_path, kind, title} rows, one per spec you authored (critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative; `title` is a plain-language journey name a non-technical reader understands, e.g. "Sign up and reach the dashboard"). EVERY file you commit under the test dir must appear as a critical manifest row (support helpers under support/ and auth.setup.ts excepted) \u2014 an undeclared committed spec is rejected at record. Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.'
+  ].join("\n");
+}
+async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
+  const staging = run10.staging_branch;
+  const base = deps.config.git.baseBranch;
+  const branch = e2eBranchName(runId);
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const baseRef = `origin/${base}`;
+  await deps.git.fetch("origin", staging);
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: (run10.e2e_phase?.author_attempts ?? 0) >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
+      path: worktree,
+      setupCommand: deps.config.quality.setupCommand
+    })
+  });
+  const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+  return {
+    kind: "spawn",
+    expects: "author-results",
+    run_id: runId,
+    agent_type: E2E_AUTHOR_AGENT_TYPE,
+    worktree,
+    base_ref: baseRef,
+    staging_branch: staging,
+    e2e_branch: branch,
+    throwaway_dir: throwawayDir,
+    model: E2E_AUTHOR_MODEL,
+    max_turns: E2E_AUTHOR_MAX_TURNS,
+    prompt: buildAuthorPrompt({
+      worktree,
+      baseRef,
+      throwawayDir,
+      testDir,
+      startCommand: boot.startCommand,
+      baseURL: boot.baseURL,
+      spec: deps.spec
+    })
+  };
+}
+function assertSafeSpecPath(specPath) {
+  if (isAbsolute2(specPath)) {
+    throw new Error(`e2e manifest spec_path '${specPath}' must be relative, not absolute`);
+  }
+  if (specPath.split(/[\\/]+/).includes("..")) {
+    throw new Error(`e2e manifest spec_path '${specPath}' must not contain '..' segments`);
+  }
+}
+async function failWithCleanup(deps, runId, worktree, reason) {
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await markFailed(deps, runId, reason);
+  return { kind: "failed", run_id: runId, reason };
+}
+async function retryAuthorOrFail(deps, runId, worktree, reason, emit2) {
+  const run10 = await deps.state.read(runId);
+  const attempts = (run10.e2e_phase?.author_attempts ?? 0) + 1;
+  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
+    return failWithCleanup(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...s.e2e_phase ?? defaultE2ePhase(),
+      author_attempts: attempts
+    }
+  }));
+  log29.warn(`run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`);
+  return emit2(deps, runId);
+}
+async function recordAuthorResults(deps, runId, results, emit2) {
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "error") {
+    return retryAuthorOrFail(deps, runId, worktree, `e2e-author: ${outcome.reason}`, emit2);
+  }
+  if (outcome.status !== "done") {
+    const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
+    return failWithCleanup(deps, runId, worktree, reason);
+  }
+  if (results.manifest.length === 0 && results.no_ui_surface !== true) {
+    const reason = "e2e-author: STATUS: DONE with an empty manifest but no_ui_surface was not explicitly true \u2014 ambiguous (genuine no-op vs. a malformed/incomplete response); refusing to silently pass";
+    return failWithCleanup(deps, runId, worktree, reason);
+  }
+  for (const entry of results.manifest) {
+    try {
+      assertSafeSpecPath(entry.spec_path);
+    } catch (err) {
+      return failWithCleanup(deps, runId, worktree, `e2e-author: ${errText(err)}`);
+    }
+  }
+  const cfg = deps.config.e2e;
+  const run10 = await deps.state.read(runId);
+  const staging = run10.staging_branch;
+  const critical = results.manifest.filter((e) => e.kind === "critical");
+  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run10.tasks));
+  if (unknownTaskIds.length > 0) {
+    const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
+    return failWithCleanup(deps, runId, worktree, reason);
+  }
+  if (critical.length > 0) {
+    const testDirPrefix = `${cfg.testDir}/`;
+    const outsideTestDir = critical.filter((e) => !e.spec_path.startsWith(testDirPrefix));
+    if (outsideTestDir.length > 0) {
+      const reason = `e2e-author: critical spec_path(s) not under '${testDirPrefix}' \u2014 refusing to merge: ` + outsideTestDir.map((e) => e.spec_path).join(", ");
+      return failWithCleanup(deps, runId, worktree, reason);
+    }
+    const branch = e2eBranchName(runId);
+    const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
+    const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
+    if (stray.length > 0) {
+      const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
+      return failWithCleanup(deps, runId, worktree, reason);
+    }
+    const declared = new Set(critical.map((e) => e.spec_path));
+    const undeclared = changed.filter(
+      (f) => !declared.has(f) && !f.startsWith(`${testDirPrefix}support/`) && f !== `${testDirPrefix}auth.setup.ts`
+    );
+    if (undeclared.length > 0) {
+      const reason = `e2e-author: committed file(s) under '${testDirPrefix}' missing from the manifest \u2014 an undeclared spec can never be joined back to a task, refusing to merge: ` + undeclared.join(", ");
+      return failWithCleanup(deps, runId, worktree, reason);
+    }
+    const boot = resolveBootConfig(cfg, run10);
+    if (boot === null) {
+      return failWithCleanup(
+        deps,
+        runId,
+        worktree,
+        "e2e-author: boot config vanished between spawn and record (config or assessment state changed mid-run)"
+      );
+    }
+    const proof = await proveCriticals(deps, runId, critical, worktree, boot);
+    if (!proof.ok) {
+      return failWithCleanup(deps, runId, worktree, proof.reason);
+    }
+    await publishToStaging(deps.git, staging, e2eBranchName(runId));
+  }
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...s.e2e_phase ?? defaultE2ePhase(),
+      manifest: results.manifest
+    }
+  }));
+  return runSuiteAndDecide(deps, runId);
+}
+
+// src/orchestrator/e2e.ts
+var log30 = createLogger("e2e");
+async function runE2eEmit(deps, runId) {
+  const run10 = await deps.state.read(runId);
+  const cfg = deps.config.e2e;
+  const boot = resolveBootConfig(cfg, run10);
+  if (boot === null) {
+    const reason = "e2e phase has no boot config \u2014 the run-start assessment resolved none and no override is set; run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` then resume";
+    await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
+    log30.warn(`run '${runId}': ${reason}`);
+    return { kind: "suspend", run_id: runId, reason };
+  }
+  if (run10.e2e_phase === void 0) {
+    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
+  }
+  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.manifest.length === 0 && (run10.e2e_phase.author_attempts ?? 0) >= 1) {
+    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
+  }
+  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.adjudication !== void 0) {
+    return prepareAdjudicatorSpawn(deps, run10, runId, boot);
+  }
+  return runSuiteAndDecide(deps, runId);
+}
+async function runE2eRecord(deps, runId, results) {
+  const run0 = await deps.state.read(runId);
+  if (run0.e2e_phase?.adjudication !== void 0) {
+    return recordAdjudication(deps, runId, run0, results, runE2eEmit);
+  }
+  return recordAuthorResults(deps, runId, results, runE2eEmit);
 }
 
 // src/orchestrator/assessment.ts
 import { join as join21 } from "node:path";
-var log28 = createLogger("e2e-assess");
+var log31 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "opus";
 var ASSESSOR_MAX_TURNS = 60;
 var MAX_ASSESS_ATTEMPTS = 2;
@@ -15898,7 +15583,7 @@ var AssessmentResultsSchema = external_exports.object({
   affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
 }).strict();
 function buildAssessorPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  const taskLines = specTaskLines(args.spec);
   const hasOverride = args.cfg.startCommand != null && args.cfg.startCommand.length > 0 || args.cfg.baseURL != null && args.cfg.baseURL.length > 0;
   const overrides = hasOverride ? `Operator config overrides exist \u2014 treat them as authoritative: startCommand=${args.cfg.startCommand ?? "(unset)"}, baseURL=${args.cfg.baseURL ?? "(unset)"}.` : "No operator overrides \u2014 resolve the boot config yourself.";
   return [
@@ -15936,22 +15621,24 @@ async function runAssessmentEmit(deps, runId) {
       reason: run10.e2e_assessment.reason ?? "e2e assessment failed"
     };
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const branch = assessBranchName(runId);
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: (run10.e2e_assessment?.attempts ?? 0) >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
-    });
-  } else if ((run10.e2e_assessment?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+    })
+  });
   return {
     kind: "spawn",
     run_id: runId,
+    agent_type: E2E_ASSESSOR_AGENT_TYPE,
     worktree,
     staging_branch: staging,
     assess_branch: branch,
@@ -15993,7 +15680,7 @@ async function failAssessment(deps, runId, reason, attempts) {
       ended_at: nowIso()
     }
   }));
-  log28.warn(`run '${runId}': e2e assessment failed \u2014 ${reason}`);
+  log31.warn(`run '${runId}': e2e assessment failed \u2014 ${reason}`);
   return { kind: "failed", run_id: runId, reason };
 }
 async function retryOrFail(deps, runId, reason, attempts) {
@@ -16004,7 +15691,7 @@ async function retryOrFail(deps, runId, reason, attempts) {
     ...s,
     e2e_assessment: { ...s.e2e_assessment ?? defaultAssessment(), attempts }
   }));
-  log28.warn(`run '${runId}': e2e assessment attempt ${attempts} failed (${reason}) \u2014 retrying`);
+  log31.warn(`run '${runId}': e2e assessment attempt ${attempts} failed (${reason}) \u2014 retrying`);
   return runAssessmentEmit(deps, runId);
 }
 async function runAssessmentRecord(deps, runId, results) {
@@ -16029,7 +15716,7 @@ async function runAssessmentRecord(deps, runId, results) {
       attempts
     );
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const testDirPrefix = `${deps.config.e2e.testDir}/`;
   const changed = await deps.git.diffNames(staging, assessBranchName(runId), { cwd: worktree });
   const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && f !== "playwright.config.ts");
@@ -16042,8 +15729,7 @@ async function runAssessmentRecord(deps, runId, results) {
     );
   }
   if (changed.length > 0) {
-    await deps.git.mergeFfOrCommit(staging, assessBranchName(runId));
-    await deps.git.push("origin", staging);
+    await publishToStaging(deps.git, staging, assessBranchName(runId));
   }
   await deps.git.worktreeRemove([worktree, "--force"]);
   const warning = results.status === "degraded" ? results.warning ?? results.reason ?? "e2e assessment degraded (assessor gave no detail)" : void 0;
@@ -16061,56 +15747,11 @@ async function runAssessmentRecord(deps, runId, results) {
   }));
   const doneMsg = `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} affected spec(s)${warning !== void 0 ? `, warning: ${warning}` : ""})`;
   if (results.status === "degraded") {
-    log28.warn(doneMsg);
+    log31.warn(doneMsg);
   } else {
-    log28.info(doneMsg);
+    log31.info(doneMsg);
   }
   return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
-}
-
-// src/cli/wiring.ts
-function splitRepo(slug) {
-  if (!isValidRepoSlug(slug)) {
-    throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
-  }
-  const parts = slug.split("/");
-  return { owner: at(parts, 0), repo: at(parts, 1) };
-}
-async function loadOrchestratorDeps(opts) {
-  const deps = await loadCliDeps(opts);
-  return {
-    ...deps,
-    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
-    now: nowEpoch,
-    docsApplicable: () => isDocsApplicable(process.cwd())
-  };
-}
-async function loadCliDeps(opts) {
-  const dataDir = resolveDataDir(opts);
-  const dirOpts = { ...opts, dataDir };
-  const config = loadConfig(dirOpts);
-  const state = new StateManager({ ...dirOpts });
-  const run10 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
-  const { owner, repo } = splitRepo(run10.spec.repo);
-  return {
-    config,
-    spec,
-    git: new DefaultGitClient(),
-    gh: new DefaultGhClient(),
-    tools: defaultGateTools(config.quality.gateEnv),
-    artifacts: new FsArtifactStore(dataDir),
-    holdout: new FsHoldoutStore(dataDir),
-    dataDir,
-    owner,
-    repo,
-    // The explicit `--ship-mode` flag overrides; otherwise honor the value
-    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
-    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
-    shipMode: opts.shipMode ?? run10.ship_mode,
-    state,
-    run: run10
-  };
 }
 
 // src/orchestrator/lifecycle.ts
@@ -16127,7 +15768,7 @@ async function resolveSpec2(specStore, opts) {
   }
   if (!await specStore.hasPrd(request.repo, request.spec_id)) {
     throw new Error(
-      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
+      `run create: spec ${request.spec_id} has no PRD snapshot (created by an older factory version) \u2014 re-run with \`--supersede\` to regenerate the spec`
     );
   }
   return request;
@@ -16180,7 +15821,7 @@ async function createRun(state, specStore, opts) {
   return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
 }
 async function supersedeRun(state, existing, stagingDeps) {
-  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
+  const branch = existing.staging_branch;
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
   await state.finalize(existing.run_id, "superseded");
@@ -16210,7 +15851,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
         const run10 = await state.update(created.run_id, (s) => ({
           ...s,
-          human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
+          human_touches: [...s.human_touches, { kind: "conflict", at: s.started_at }]
         }));
         return { kind: "superseded", run: run10, supersededId };
       }
@@ -16235,12 +15876,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
     case "not-resumable":
       return { kind: "resumed", run: run10 };
     case "resume": {
-      const at2 = new Date(nowEpochSec * 1e3).toISOString();
+      const at2 = epochToIso(nowEpochSec);
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
-        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at: at2 }] }
+        ...opts.touch === false ? {} : { human_touches: [...s.human_touches, { kind: "resume", at: at2 }] }
       }));
       return { kind: "resumed", run: updated, cleared: true };
     }
@@ -16263,6 +15904,55 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 // src/cli/subcommands/run.ts
 import { join as join23 } from "node:path";
 
+// src/cli/wiring.ts
+function splitRepo(slug) {
+  if (!isValidRepoSlug(slug)) {
+    throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
+  }
+  const parts = slug.split("/");
+  return { owner: at(parts, 0), repo: at(parts, 1) };
+}
+async function loadOrchestratorDeps(opts) {
+  const deps = await loadCliDeps(opts);
+  return {
+    ...deps,
+    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
+    now: nowEpoch,
+    docsApplicable: () => isDocsApplicable(process.cwd())
+  };
+}
+function openState() {
+  const dataDir = resolveDataDir({});
+  return { dataDir, state: new StateManager({ dataDir }) };
+}
+async function loadCliDeps(opts) {
+  const dataDir = resolveDataDir(opts);
+  const dirOpts = { ...opts, dataDir };
+  const config = loadConfig(dirOpts);
+  const state = new StateManager({ ...dirOpts });
+  const run10 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
+  const { owner, repo } = splitRepo(run10.spec.repo);
+  return {
+    config,
+    spec,
+    git: new DefaultGitClient(),
+    gh: new DefaultGhClient(),
+    tools: defaultGateTools(config.quality.gateEnv),
+    artifacts: new FsArtifactStore(dataDir),
+    holdout: new FsHoldoutStore(dataDir),
+    dataDir,
+    owner,
+    repo,
+    // The explicit `--ship-mode` flag overrides; otherwise honor the value
+    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
+    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
+    shipMode: opts.shipMode ?? run10.ship_mode,
+    state,
+    run: run10
+  };
+}
+
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
   const cwd = overrides.cwd ?? process.cwd();
@@ -16271,9 +15961,20 @@ async function readCurrentForCwd(state, overrides = {}) {
   try {
     repo = await resolveRepo({ cwd, gitClient });
   } catch {
-    return state.readCurrent();
+    return null;
   }
   return state.readCurrentForRepo(repo);
+}
+async function resolveRunIdOrCurrent(state, args, label, overrides = {}) {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== void 0) {
+    return explicit;
+  }
+  const current = await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    throw new UsageError(`${label}: no --run given and no current run`);
+  }
+  return current.run_id;
 }
 
 // src/autonomy/mode.ts
@@ -16374,11 +16075,10 @@ async function assertGateContract(cwd, gitClient) {
 }
 
 // src/cli/subcommands/run.ts
-var RUN_HELP = `factory run \u2014 create or resume a run
+var RUN_HELP = `factory run \u2014 create a run and drive its phases
 
 Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-  factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
   factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
@@ -16388,7 +16088,6 @@ Usage:
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
-  resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
@@ -16430,10 +16129,10 @@ On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it \u2
 --resume to continue it or --supersede to replace it; --new (or an explicit --run-id)
 forces a fresh run regardless. Seeds one pending task per spec task and emits the
 RunState JSON (run_id is the top-level field).`;
-var RESUME_HELP = `factory run resume \u2014 re-check quota and resume a paused/suspended run
+var RESUME_HELP = `factory resume \u2014 re-check quota and resume a paused/suspended run
 
 Usage:
-  factory run resume [--run <id>]
+  factory resume [--run <id>]
 
   --run   The run to resume (defaults to runs/current).
 
@@ -16502,8 +16201,7 @@ async function runCreate(argv, overrides = {}) {
     booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e", "approve-spec"]
   });
   if (args.flag("help") === true) {
-    emitLine(CREATE_HELP);
-    return EXIT.OK;
+    return emitHelp(CREATE_HELP);
   }
   requireAutonomousMode();
   const cwd = overrides.cwd ?? process.cwd();
@@ -16561,9 +16259,7 @@ async function runCreate(argv, overrides = {}) {
   if (e2e) {
     await assertE2ePrereqs(cwd);
   }
-  if (intent !== "resume") {
-    await assertGateContract(cwd, gitClient);
-  }
+  await assertGateContract(cwd, gitClient);
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
@@ -16648,19 +16344,18 @@ async function runCreate(argv, overrides = {}) {
 async function runResume(argv) {
   const args = parseArgs(argv, { booleans: ["no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
-    emitLine(RESUME_HELP);
-    return EXIT.OK;
+    return emitHelp(RESUME_HELP);
   }
   if (args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
-      "run resume: --no-ship/--e2e are not valid on resume \u2014 a run keeps the ship_mode/e2e it was created with."
+      "resume: --no-ship/--e2e are not valid on resume \u2014 a run keeps the ship_mode/e2e it was created with."
     );
   }
   requireAutonomousMode();
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "resume");
+  const runId = await resolveRunIdOrCurrent(state, args, "resume");
   if (args.flag("ignore-quota") === true) {
     await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
   }
@@ -16672,41 +16367,31 @@ async function runResume(argv) {
   emitJson(envelope);
   return EXIT.OK;
 }
-async function resolveRunId(state, args, action, overrides = {}) {
-  const explicit = optionalString(args.flag("run"));
-  if (explicit !== void 0) {
-    return explicit;
-  }
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`run ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
-}
 async function runFinalize(argv) {
   const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP);
-    return EXIT.OK;
+    return emitHelp(FINALIZE_HELP);
   }
   const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "finalize");
+  const { dataDir, state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "run finalize");
+  emitJson(await finalizedEnvelope(dataDir, runId, shipMode));
+  return EXIT.OK;
+}
+async function finalizedEnvelope(dataDir, runId, shipMode) {
   const deps = await loadCliDeps({
     dataDir,
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
   const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
-  emitJson({
+  return {
     kind: "finalized",
     run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     failure_comment_posted: failureCommentPosted
-  });
-  return EXIT.OK;
+  };
 }
 var DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
@@ -16720,9 +16405,8 @@ function phaseCommand(opts) {
       emitLine(opts.help);
       return EXIT.OK;
     }
-    const dataDir = resolveDataDir({});
-    const state = new StateManager({ dataDir });
-    const runId = await resolveRunId(state, args, opts.phase);
+    const { dataDir, state } = openState();
+    const runId = await resolveRunIdOrCurrent(state, args, `run ${opts.phase}`);
     const deps = await loadCliDeps({ dataDir, runId });
     const results = await parseResultsFlag(args, async (path6) => opts.parse(await readJsonInput(path6)));
     emitJson(results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId));
@@ -16805,8 +16489,7 @@ async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
 async function runCancel(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["cleanup"] });
   if (args.flag("help") === true) {
-    emitLine(CANCEL_HELP);
-    return EXIT.OK;
+    return emitHelp(CANCEL_HELP);
   }
   const dataDir = resolveDataDir(overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {});
   const state = new StateManager({ dataDir });
@@ -16818,7 +16501,7 @@ async function runCancel(argv, overrides = {}) {
   const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
   const run10 = await state.finalize(runId, "failed");
   const cleanup = args.flag("cleanup") === true;
-  const branch = resolveStagingBranch(run10.run_id, run10.staging_branch);
+  const branch = run10.staging_branch;
   let cleanedUp = false;
   let cleanupError;
   if (cleanup) {
@@ -16859,8 +16542,6 @@ async function run2(argv) {
   switch (action) {
     case "create":
       return runCreate(rest);
-    case "resume":
-      return runResume(rest);
     case "finalize":
       return runFinalize(rest);
     case "traceability":
@@ -16875,12 +16556,12 @@ async function run2(argv) {
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+        `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | cancel)`
       );
   }
 }
 var runCommand = {
-  describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
+  describe: "Create a run (resolve+seed a spec) and drive its phases",
   run: withUsageGuard("run", run2)
 };
 var resumeCommand = {
@@ -16949,8 +16630,7 @@ async function run3(argv) {
   }
   const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
   if (args.flag("help") === true) {
-    emitLine(SPEC_HELP);
-    return EXIT.OK;
+    return emitHelp(SPEC_HELP);
   }
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
@@ -17013,24 +16693,6 @@ async function adjudicateWholeScope(input) {
     clean: confirmedBlockers.length === 0
   };
 }
-function debugE2eEnv(cfg) {
-  return {
-    BASE_URL: nonNull(cfg.baseURL),
-    FACTORY_E2E_START_COMMAND: nonNull(cfg.startCommand),
-    FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
-    FACTORY_E2E: "1"
-  };
-}
-function scrubbedDebugE2eEnv(cfg) {
-  const env = debugE2eEnv(cfg);
-  for (const key of ["PATH", "HOME"]) {
-    const v = process.env[key];
-    if (v !== void 0) {
-      env[key] = v;
-    }
-  }
-  return env;
-}
 async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
   const { config } = input;
   if (config.startCommand == null || config.startCommand.length === 0 || config.baseURL == null || config.baseURL.length === 0) {
@@ -17044,7 +16706,10 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
     results = await runE2e(
       {
         cwd: input.cwd,
-        env: scrubbedDebugE2eEnv(config),
+        env: scrubbedE2eEnv(config, {
+          startCommand: nonNull(config.startCommand),
+          baseURL: nonNull(config.baseURL)
+        }),
         replaceEnv: true,
         testDir: config.testDir
       },
@@ -17432,19 +17097,7 @@ async function debugFinalize(deps, runId, shipMode) {
   if (!new StateManager({ dataDir: deps.dataDir }).exists(runId)) {
     return { kind: "nothing-to-ship", run_id: runId };
   }
-  const cliDeps = await loadCliDeps({
-    dataDir: deps.dataDir,
-    runId,
-    ...shipMode !== void 0 ? { shipMode } : {}
-  });
-  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(cliDeps, runId);
-  return {
-    kind: "finalized",
-    run: run10,
-    report,
-    ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
-    failure_comment_posted: failureCommentPosted
-  };
+  return finalizedEnvelope(deps.dataDir, runId, shipMode);
 }
 function wireDeps2(overrides = {}) {
   const hasDataDirOverride = overrides.dataDir !== void 0;
@@ -17469,8 +17122,7 @@ function parseMaxPasses(raw) {
 async function runDebugStart(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["full", "no-ship", "author-e2e"] });
   if (args.flag("help") === true) {
-    emitLine(START_HELP);
-    return EXIT.OK;
+    return emitHelp(START_HELP);
   }
   const base = optionalString(args.flag("base"));
   const maxPassesRaw = optionalString(args.flag("max-passes"));
@@ -17490,8 +17142,7 @@ async function runDebugStart(argv, overrides = {}) {
 async function runDebugReview(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["emit", "record"] });
   if (args.flag("help") === true) {
-    emitLine(REVIEW_HELP);
-    return EXIT.OK;
+    return emitHelp(REVIEW_HELP);
   }
   const emit2 = args.flag("emit") === true;
   const record = args.flag("record") === true;
@@ -17526,8 +17177,7 @@ async function runDebugSpec(argv, overrides = {}) {
   }
   const args = parseArgs(argv.slice(1), {});
   if (args.flag("help") === true) {
-    emitLine(SPEC_SUB_HELP);
-    return EXIT.OK;
+    return emitHelp(SPEC_SUB_HELP);
   }
   const runId = args.requireFlag("run");
   const deps = wireDeps2(overrides);
@@ -17537,8 +17187,7 @@ async function runDebugSpec(argv, overrides = {}) {
 async function runDebugSeed(argv, overrides = {}) {
   const args = parseArgs(argv, {});
   if (args.flag("help") === true) {
-    emitLine(SEED_HELP);
-    return EXIT.OK;
+    return emitHelp(SEED_HELP);
   }
   const runId = args.requireFlag("run");
   const deps = wireDeps2(overrides);
@@ -17548,8 +17197,7 @@ async function runDebugSeed(argv, overrides = {}) {
 async function runDebugFinalize(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP2);
-    return EXIT.OK;
+    return emitHelp(FINALIZE_HELP2);
   }
   const runId = args.requireFlag("run");
   const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
@@ -17593,7 +17241,7 @@ Usage:
 Exit OK with {"current": null} when there is no current run.`;
 function summarize2(run10) {
   const lines = [
-    `run ${run10.run_id}  status=${run10.status}  execution_mode=`,
+    `run ${run10.run_id}  status=${run10.status}  execution_mode=${run10.execution_mode}`,
     `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
     `tasks (${Object.keys(run10.tasks).length}):`
   ];
@@ -17615,8 +17263,7 @@ function summarize2(run10) {
 async function runState(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["summary"] });
   if (args.flag("help") === true) {
-    emitLine(HELP2);
-    return EXIT.OK;
+    return emitHelp(HELP2);
   }
   const state = new StateManager();
   const runId = args.positionals[0];
@@ -17643,16 +17290,34 @@ var stateCommand = {
 
 // src/cli/subcommands/scaffold.ts
 import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
-import { existsSync as existsSync10 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname10, join as join27, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// src/ci/inject-gate-env.ts
+var SENTINEL = "# factory:gate-env";
+function injectGateEnvIntoWorkflow(text, gateEnv) {
+  const keys = Object.keys(gateEnv).sort();
+  if (keys.length === 0) {
+    return text;
+  }
+  const lines = text.split("\n");
+  const idx = lines.findIndex((l) => l.trim() === SENTINEL);
+  if (idx === -1) {
+    return text;
+  }
+  const indent = nonNull(/^[ \t]*/.exec(at(lines, idx)))[0];
+  const block = [`${indent}env:`, ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(nonNull(gateEnv[k]))}`)];
+  lines.splice(idx, 1, ...block);
+  return lines.join("\n");
+}
+
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 import { join as join25 } from "node:path";
-var log29 = createLogger("cli:target-settings");
+var log32 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -17667,18 +17332,10 @@ var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Agent"
 ];
 var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
-var STALE_DATA_DIR_ALLOW = [
-  "Read(${CLAUDE_PLUGIN_DATA}/**)",
-  "Write(${CLAUDE_PLUGIN_DATA}/**)",
-  "Edit(${CLAUDE_PLUGIN_DATA}/**)"
-];
-var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
 function buildTargetDataDirRules(opts) {
-  const baked = tildeShorten(opts.dataDir, opts.home);
   return {
-    allowGlobBase: baked,
-    additionalDir: opts.dataDir,
-    staleAdditionalDirs: baked === opts.dataDir ? [] : [baked]
+    allowGlobBase: tildeShorten(opts.dataDir, opts.home),
+    additionalDir: opts.dataDir
   };
 }
 function dataDirAllowRules(allowGlobBase) {
@@ -17692,24 +17349,19 @@ function mergeTargetSettings(existing, dataDirRules) {
   let changed = false;
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
-  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
-  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
   const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)];
-  const have = new Set(strippedAllow);
+  const have = new Set(currentAllow);
   const additions = targetAllow.filter((e) => !have.has(e));
-  if (removedStaleAllow || additions.length > 0) {
-    permissions.allow = [...strippedAllow, ...additions];
+  if (additions.length > 0) {
+    permissions.allow = [...currentAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
   }
   const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const staleDirs = /* @__PURE__ */ new Set([STALE_DATA_DIR_ADDITIONAL, ...dataDirRules.staleAdditionalDirs]);
-  const strippedDirs = currentDirs.filter((e) => !staleDirs.has(e));
-  const removedStaleDir = strippedDirs.length !== currentDirs.length;
-  const haveDirs = new Set(strippedDirs);
+  const haveDirs = new Set(currentDirs);
   const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
-  if (removedStaleDir || dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
+  if (dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }
@@ -17724,7 +17376,7 @@ function mergeTargetSettings(existing, dataDirRules) {
 async function ensureTargetSettings(opts) {
   const dir = join25(opts.targetRoot, ".claude");
   const path6 = join25(dir, "settings.json");
-  const created = !existsSync8(path6);
+  const created = !existsSync7(path6);
   let existing = {};
   if (!created) {
     const raw = await readFile15(path6, "utf8");
@@ -17732,7 +17384,7 @@ async function ensureTargetSettings(opts) {
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log29.warn(
+      log32.warn(
         `${path6} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
@@ -17746,14 +17398,14 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold-gates.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync8 } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname9, join as join26 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync9(join26(targetRoot, "deno.json")) || existsSync9(join26(targetRoot, "deno.jsonc"))) {
+  if (existsSync8(join26(targetRoot, "deno.json")) || existsSync8(join26(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync9(join26(targetRoot, "package.json"))) {
+  if (existsSync8(join26(targetRoot, "package.json"))) {
     return "npm";
   }
   return "custom";
@@ -17773,7 +17425,7 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync8(join26(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
   const raw = await readFile16(join26(targetRoot, file), "utf8");
   let parsed;
@@ -17793,7 +17445,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync8(join26(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -17803,7 +17455,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -17825,11 +17477,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join26(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync8(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -17902,7 +17554,7 @@ async function ensureGateContract(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log30 = createLogger("scaffold");
+var log33 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -17912,9 +17564,8 @@ Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
 not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
-Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
-detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
-quality-gate.yml template overwrites the repo's own workflow.
+The managed quality-gate.yml is rendered with the configured quality.gateEnv
+(set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -17962,7 +17613,7 @@ function resolveTemplatesDir() {
   let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     const candidate = join27(dir, "templates");
-    if (existsSync10(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    if (existsSync9(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname10(dir);
@@ -17990,15 +17641,15 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   const segs = entry.rel.split("/");
   const src = join27(templatesDir, ...segs);
   const dest = join27(targetRoot, ...segs);
-  if (!existsSync10(src)) {
-    log30.warn(`template missing, skipping: ${src}`);
+  if (!existsSync9(src)) {
+    log33.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
     const text = await readFile17(src, "utf8");
     return transform ? transform(text) : text;
   };
-  if (!existsSync10(dest)) {
+  if (!existsSync9(dest)) {
     await mkdir13(dirname10(dest), { recursive: true });
     await writeFile4(dest, await render(), "utf8");
     lists.created.push(entry.rel);
@@ -18019,7 +17670,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
 async function ensureGitignore(root, lists) {
   const path6 = join27(root, ".gitignore");
   const rel = relative(root, path6);
-  if (!existsSync10(path6)) {
+  if (!existsSync9(path6)) {
     await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
@@ -18036,25 +17687,16 @@ async function ensureGitignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
-  if (gateEnv.written.length > 0) {
-    log30.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
-  }
-  if (gateEnv.warnings.length > 0) {
-    log30.warn(
-      `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
-    );
-  }
-  const isNodePackage = existsSync10(join27(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync9(join27(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly === true && !isNodePackage) {
       continue;
     }
-    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
+    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, opts.config.quality.gateEnv) : void 0;
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
-    log30.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
+    log33.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -18064,14 +17706,14 @@ async function runScaffold(opts) {
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
-    log30.info(
+    log33.info(
       `wrote ${GATE_CONTRACT_REL} (stack: ${gates.stack}) \u2014 COMMIT it; 'factory run' requires the contract tracked`
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
   }
   if (await recommendFastCheck(opts.targetRoot)) {
-    log30.info(
+    log33.info(
       "property-based testing: fast-check not installed \u2014 consider 'npm i -D fast-check' so the test-writer can write property tests (advisory only)"
     );
   }
@@ -18120,13 +17762,7 @@ async function runScaffold(opts) {
     },
     settings: { created: settings.created, changed: settings.changed },
     stack: gates.stack,
-    gates_contract: gates.status,
-    // Include the detection report whenever a key was detected OR any anomaly
-    // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
-    // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
-    // imply a detected key, so they're subsumed by the detected-key check. Omitted
-    // only for a clean brand-new repo (no workflows, nothing to report).
-    ...Object.keys(gateEnv.detected).length > 0 || gateEnv.warnings.length > 0 || gateEnv.skippedExpressionRefs.length > 0 || gateEnv.droppedSecrets.length > 0 || gateEnv.droppedKeys.length > 0 ? { gateEnv } : {}
+    gates_contract: gates.status
   };
 }
 async function resolveScaffoldRepo(args, overrides = {}) {
@@ -18140,8 +17776,7 @@ async function resolveScaffoldRepo(args, overrides = {}) {
 async function run5(argv) {
   const args = parseArgs(argv, { booleans: ["provision"] });
   if (args.flag("help") === true) {
-    emitLine(HELP3);
-    return EXIT.OK;
+    return emitHelp(HELP3);
   }
   const waived = args.all("waive").map(String);
   for (const w of waived) {
@@ -18158,10 +17793,8 @@ async function run5(argv) {
     repo,
     config: loadConfig(),
     ghClient: new DefaultGhClient(),
-    // Bake the resolved data dir into the target permission rules, and thread it
-    // into CI build-env detection's config write.
+    // Bake the resolved data dir into the target permission rules.
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
-    dataDir,
     provision: args.flag("provision") === true,
     waiveMutation: waived.includes("mutation"),
     waiveCoverage: waived.includes("coverage")
@@ -18304,25 +17937,12 @@ function probeFrom(overrides) {
     commitsAhead: (base, branch) => git.commitsAhead(base, branch)
   };
 }
-async function resolveRunId2(state, args, action, overrides) {
-  const explicit = args.flag("run");
-  if (typeof explicit === "string" && explicit.length > 0) {
-    return explicit;
-  }
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`rescue ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
-}
 async function runScan(argv, overrides = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(SCAN_HELP);
-    return EXIT.OK;
+    return emitHelp(SCAN_HELP);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
+  const { state } = openState();
   const explicit = args.flag("run");
   const current = typeof explicit === "string" && explicit.length > 0 ? await state.read(explicit) : await readCurrentForCwd(state, overrides);
   if (current === null) {
@@ -18349,12 +17969,10 @@ async function runApply(argv, overrides = {}) {
     booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup", "reset-traceability"]
   });
   if (args.flag("help") === true) {
-    emitLine(APPLY_HELP);
-    return EXIT.OK;
+    return emitHelp(APPLY_HELP);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId2(state, args, "apply", overrides);
+  const { dataDir, state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "rescue apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
   const resetE2e = args.flag("reset-e2e") === true;
@@ -18386,13 +18004,11 @@ async function resumeRun(state, runId, dataDir, opts = {}) {
 async function runAuto(argv, overrides = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(AUTO_HELP);
-    return EXIT.OK;
+    return emitHelp(AUTO_HELP);
   }
   requireAutonomousMode();
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId2(state, args, "auto", overrides);
+  const { state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "rescue auto", overrides);
   const current = await state.read(runId);
   const scan = scanRun(current);
   const at2 = overrides.now?.() ?? nowIso();
@@ -18474,23 +18090,16 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
-function touchMetricOf(run10) {
-  const touches = run10.human_touches?.length;
-  if (touches === void 0 || touches === 0) {
-    return null;
-  }
-  return (run10.status === "completed" ? 1 : 0) / touches;
-}
 async function runFleet(state) {
   const all = await state.listRuns();
   const runs = all.map((r) => ({
     run_id: r.run_id,
     status: r.status,
-    touches: r.human_touches?.length ?? null,
+    touches: r.human_touches.length,
     metric: touchMetricOf(r)
   }));
-  const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0);
-  const totalTouches = withLedger.reduce((n, r) => n + nonNull(r.human_touches).length, 0);
+  const withLedger = all.filter((r) => r.human_touches.length > 0);
+  const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0);
   const completed = withLedger.filter((r) => r.status === "completed").length;
   const aggregate = totalTouches === 0 ? null : completed / totalTouches;
   emitJson({ kind: "fleet-score", runs, aggregate });
@@ -18499,11 +18108,9 @@ async function runFleet(state) {
 async function runScore(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["fleet"] });
   if (args.flag("help") === true) {
-    emitLine(HELP4);
-    return EXIT.OK;
+    return emitHelp(HELP4);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
+  const { dataDir, state } = openState();
   if (args.flag("fleet") === true) {
     return runFleet(state);
   }
@@ -18548,8 +18155,7 @@ Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    emitLine(HELP5);
-    return EXIT.OK;
+    return emitHelp(HELP5);
   }
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
@@ -18604,8 +18210,7 @@ function assertCurrentOwner(current, assertOwner) {
 async function run8(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    emitLine(HELP6);
-    return EXIT.OK;
+    return emitHelp(HELP6);
   }
   const explicit = args.flag("run");
   let runId;
@@ -18643,7 +18248,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log31 = createLogger("cli:statusline");
+var log34 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -18705,7 +18310,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log31.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log34.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
@@ -18714,7 +18319,7 @@ async function writeCache(rateLimits, deps) {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
     return null;
   } catch (err) {
-    log31.warn(`failed to write usage-cache.json: ${err.message}`);
+    log34.warn(`failed to write usage-cache.json: ${err.message}`);
     return `usage-cache unwritable: ${err.message}`;
   }
 }
@@ -18728,20 +18333,19 @@ async function passthrough(payload, deps) {
     const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log31.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log34.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log31.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log34.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
 async function runStatusline(argv = [], deps = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(HELP7);
-    return EXIT.OK;
+    return emitHelp(HELP7);
   }
   const payload = deps.readStdin ? await deps.readStdin() : await readStdin(deps.stdin);
   let parsed;
@@ -18765,11 +18369,11 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync11 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 import { readFile as readFile19 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log32 = createLogger("autonomy");
+var log35 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -18888,7 +18492,7 @@ function materializeMergedSettings(input) {
 }
 async function readPluginVersion(pluginRoot) {
   const path6 = join29(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync11(path6)) {
+  if (!existsSync10(path6)) {
     return void 0;
   }
   try {
@@ -18907,16 +18511,16 @@ async function runAutonomyEnsure(opts = {}) {
   const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync11(userSettingsPath)) {
+  if (existsSync10(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
       if (isObject2(parsed)) {
         userSettings = parsed;
       } else {
-        log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+        log35.warn(`${userSettingsPath} is not a JSON object; ignoring`);
       }
     } catch (err) {
-      log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log35.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join29(pluginRoot, "templates", "settings.autonomous.json");
@@ -18956,7 +18560,7 @@ function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path6.length > 0 && existsSync11(path6),
+    mergedSettingsPresent: path6.length > 0 && existsSync10(path6),
     mergedSettingsPath: path6
   };
   if (opts.json === true) {
@@ -18980,7 +18584,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
   return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
 async function readOnDiskVersion(path6) {
-  if (!existsSync11(path6)) {
+  if (!existsSync10(path6)) {
     return void 0;
   }
   try {
@@ -19025,7 +18629,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path6 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path6.length > 0 && existsSync11(path6);
+  const mergedSettingsPresent = path6.length > 0 && existsSync10(path6);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path6) : void 0;
   const decision = decideAutonomyPreflight({
@@ -19063,8 +18667,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 async function run9(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
-    emitLine(HELP8);
-    return EXIT.OK;
+    return emitHelp(HELP8);
   }
   const verb = args.positionals[0];
   if (verb === "status") {

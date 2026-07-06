@@ -4,8 +4,7 @@
  *
  * The new schema dropped the ~12 ad-hoc per-task fields the bash hook wrote
  * (worktree, executor_status, reviewer_status, prior_branch, …). On the new
- * design the subagent→orchestrator hand-off is the structured PhaseResult/SpawnRequest
- * (group0-seams §3).
+ * design the subagent→orchestrator hand-off is the structured PhaseResult/SpawnRequest.
  *
  * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it
  * parses the verdict and logs it loudly, but does NOT write to task.reviewers[].
