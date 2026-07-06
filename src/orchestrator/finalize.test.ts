@@ -545,6 +545,7 @@ describe('finalizeRun', () => {
                 t2: {
                     task_id: 't2',
                     status: 'executing',
+                    phase: 'exec',
                     depends_on: [],
                     risk_tier: 'medium',
                     escalation_rung: 0,

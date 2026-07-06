@@ -423,6 +423,18 @@ function refineTaskCrossFields(task: TaskState, ctx: z.RefinementCtx): void {
         }
     })
 
+    // In-flight status ⇒ phase cursor present: the orchestrator writes `phase` in
+    // lockstep with status on every record (markInFlight + record's advance), so an
+    // in-flight row without a cursor is stale state from an older factory version.
+    const inFlight = task.status === 'executing' || task.status === 'reviewing' || task.status === 'shipping'
+    if (inFlight && task.phase === undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['phase'],
+            message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor — phase is written in lockstep with status (state from an older factory version); start a fresh run`,
+        })
+    }
+
     // T3 defense-in-depth: spawn_in_flight.rung must never EXCEED escalation_rung.
     // A forward gap (spawn_in_flight.rung < escalation_rung) is a valid transient
     // state — the escalation bumped the rung and the next spawn will overwrite the

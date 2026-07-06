@@ -1635,7 +1635,10 @@ describe('runCancel (abandon a live run, Decision 35)', () => {
     async function setExecuting(runId: string, taskId: string): Promise<void> {
         await state.update(runId, (s) => ({
             ...s,
-            tasks: {...s.tasks, [taskId]: {...nonNull(s.tasks[taskId]), status: 'executing' as const}},
+            tasks: {
+                ...s.tasks,
+                [taskId]: {...nonNull(s.tasks[taskId]), status: 'executing' as const, phase: 'exec' as const},
+            },
         }))
     }
 

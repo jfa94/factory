@@ -235,7 +235,7 @@ describe('decideFinalize is pure + terminal-by-construction', () => {
     it('a non-terminal task THROWS, never wait-retry (anti-spin)', () => {
         const run = mkRun({
             a: {task_id: 'a', status: 'done', risk_tier: 'low'},
-            b: {task_id: 'b', status: 'reviewing', risk_tier: 'low'},
+            b: {task_id: 'b', status: 'reviewing', phase: 'verify', risk_tier: 'low'},
         })
         expect(() => decideFinalize(run)).toThrow(/non-terminal task/)
     })

@@ -7650,6 +7650,14 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  const inFlight = task.status === "executing" || task.status === "reviewing" || task.status === "shipping";
+  if (inFlight && task.phase === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["phase"],
+      message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor \u2014 phase is written in lockstep with status (state from an older factory version); start a fresh run`
+    });
+  }
   if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
@@ -8542,25 +8550,12 @@ function runTaskForPath(dataDir, absPath) {
   }
   return { run_id, task_id };
 }
-function statusToPhase(status) {
-  switch (status) {
-    case "executing":
-      return TaskPhaseEnum.enum.tests;
-    case "reviewing":
-      return TaskPhaseEnum.enum.verify;
-    case "shipping":
-      return TaskPhaseEnum.enum.ship;
-    case "pending":
-    case "done":
-    case "failed":
-      return null;
-  }
-}
+var IN_FLIGHT_STATUSES = /* @__PURE__ */ new Set(["executing", "reviewing", "shipping"]);
 function activePhaseOf(task) {
-  if (statusToPhase(task.status) === null) {
+  if (!IN_FLIGHT_STATUSES.has(task.status)) {
     return null;
   }
-  return task.phase ?? statusToPhase(task.status);
+  return task.phase ?? null;
 }
 function resolveActiveTask(run, explicitTaskId) {
   const taskId = explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";

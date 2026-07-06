@@ -6703,6 +6703,14 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  const inFlight = task.status === "executing" || task.status === "reviewing" || task.status === "shipping";
+  if (inFlight && task.phase === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["phase"],
+      message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor \u2014 phase is written in lockstep with status (state from an older factory version); start a fresh run`
+    });
+  }
   if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,

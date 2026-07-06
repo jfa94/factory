@@ -254,6 +254,7 @@ describe('applyRecordReviews record', () => {
                 [TASK_ID]: {
                     task_id: TASK_ID,
                     status: 'reviewing',
+                    phase: 'verify',
                     depends_on: [],
                     risk_tier: 'medium',
                     escalation_rung: 0,
@@ -935,6 +936,7 @@ async function seededProducerState(task: Partial<TaskState> = {}): Promise<{data
             t1: {
                 task_id: 't1',
                 status: task.status ?? 'executing',
+                phase: task.phase ?? 'exec',
                 depends_on: [],
                 risk_tier: 'medium',
                 escalation_rung: task.escalation_rung ?? 0,

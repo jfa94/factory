@@ -187,51 +187,27 @@ export function runTaskForPath(dataDir: string, absPath: string): RunTaskRef | n
  *
  * `taskId` resolution order mirrors the bash guard: explicit env
  * (`FACTORY_TASK_ID`), else the single in-flight task. Phase comes from the
- * persisted `TaskState.phase` cursor (written by the orchestrator in lockstep with
- * status on every record); status derivation (`statusToPhase`) is kept only as
- * the legacy fallback for states that predate the cursor.
+ * persisted `TaskState.phase` cursor — the orchestrator writes it in lockstep
+ * with status on every record, and the schema REJECTS an in-flight row without
+ * one (refineTaskCrossFields), so no derivation fallback exists.
  */
 export interface ActiveTask {
     readonly task: TaskState
-    /** The active in-flight phase (persisted cursor, status-derived fallback), or null if terminal/idle. */
+    /** The active in-flight phase (persisted cursor), or null if terminal/idle. */
     readonly phase: TaskPhase | null
 }
 
-/**
- * LEGACY FALLBACK: map an in-flight task status back to the phase it implies
- * (best-effort). Only consulted when the task has no persisted phase cursor;
- * status alone cannot tell `tests` from `exec` (both map to `executing` —
- * `producer_role` cannot disambiguate either, it lags the exec spawn), so the
- * cursor is the authoritative source.
- */
-function statusToPhase(status: TaskState['status']): TaskPhase | null {
-    switch (status) {
-        case 'executing':
-            // `tests` and `exec` both map to `executing`; without a cursor we assume
-            // the FIRST executing sub-phase (the stricter, test-writer-scoped one).
-            return TaskPhaseEnum.enum.tests
-        case 'reviewing':
-            return TaskPhaseEnum.enum.verify
-        case 'shipping':
-            return TaskPhaseEnum.enum.ship
-        case 'pending':
-        case 'done':
-        case 'failed':
-            return null
-    }
-}
+const IN_FLIGHT_STATUSES: ReadonlySet<TaskState['status']> = new Set(['executing', 'reviewing', 'shipping'])
 
 /**
- * The active phase for guard scoping: null when the task is not in-flight;
- * else the persisted phase cursor (written by the orchestrator in lockstep with
- * status on every record), falling back to status derivation for legacy
- * states that predate the cursor.
+ * The active phase for guard scoping: null when the task is not in-flight
+ * (cursor is history, not an active phase); else the persisted phase cursor.
  */
 function activePhaseOf(task: TaskState): TaskPhase | null {
-    if (statusToPhase(task.status) === null) {
+    if (!IN_FLIGHT_STATUSES.has(task.status)) {
         return null
-    } // terminal/pending — cursor is history, not an active phase
-    return task.phase ?? statusToPhase(task.status)
+    }
+    return task.phase ?? null
 }
 
 /**

@@ -147,7 +147,7 @@ describe('golden transcript — fixed PhaseResult sequence', () => {
         const ctx: PhaseContext = {
             run: baseRun({
                 a: {task_id: 'a', status: 'done', risk_tier: 'low'},
-                b: {task_id: 'b', status: 'executing', risk_tier: 'low'},
+                b: {task_id: 'b', status: 'executing', phase: 'exec', risk_tier: 'low'},
             }),
         }
         await expect(runPhase('finalize', ctx, scriptedHandlers('ship'))).rejects.toThrow(/non-terminal task/)

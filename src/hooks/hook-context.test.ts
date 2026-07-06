@@ -158,7 +158,7 @@ function run(tasks: Record<string, TaskState>): RunState {
     }
 }
 
-describe('resolveActiveTask — status-derived phase (legacy fallback, no cursor persisted)', () => {
+describe('resolveActiveTask — task selection (cursor written in lockstep with status)', () => {
     const origTaskId = process.env.FACTORY_TASK_ID
     afterEach(() => {
         if (origTaskId === undefined) {
@@ -168,21 +168,21 @@ describe('resolveActiveTask — status-derived phase (legacy fallback, no cursor
         }
     })
 
-    it('single executing task → phase tests', () => {
+    it('single executing task → its cursor phase', () => {
         delete process.env.FACTORY_TASK_ID
-        const active = resolveActiveTask(run({t1: task({status: 'executing'})}))
+        const active = resolveActiveTask(run({t1: task({status: 'executing', phase: 'tests'})}))
         expect(active?.phase).toBe('tests')
     })
 
-    it('single reviewing task → phase verify', () => {
+    it('single reviewing task → its cursor phase', () => {
         delete process.env.FACTORY_TASK_ID
-        const active = resolveActiveTask(run({t1: task({status: 'reviewing'})}))
+        const active = resolveActiveTask(run({t1: task({status: 'reviewing', phase: 'verify'})}))
         expect(active?.phase).toBe('verify')
     })
 
-    it('single shipping task → phase ship', () => {
+    it('single shipping task → its cursor phase', () => {
         delete process.env.FACTORY_TASK_ID
-        const active = resolveActiveTask(run({t1: task({status: 'shipping'})}))
+        const active = resolveActiveTask(run({t1: task({status: 'shipping', phase: 'ship'})}))
         expect(active?.phase).toBe('ship')
     })
 
@@ -190,8 +190,8 @@ describe('resolveActiveTask — status-derived phase (legacy fallback, no cursor
         delete process.env.FACTORY_TASK_ID
         const active = resolveActiveTask(
             run({
-                t1: task({task_id: 't1', status: 'executing'}),
-                t2: task({task_id: 't2', status: 'reviewing'}),
+                t1: task({task_id: 't1', status: 'executing', phase: 'tests'}),
+                t2: task({task_id: 't2', status: 'reviewing', phase: 'verify'}),
             })
         )
         expect(active).toBeNull()
@@ -201,8 +201,8 @@ describe('resolveActiveTask — status-derived phase (legacy fallback, no cursor
         delete process.env.FACTORY_TASK_ID
         const active = resolveActiveTask(
             run({
-                t1: task({task_id: 't1', status: 'executing'}),
-                t2: task({task_id: 't2', status: 'reviewing'}),
+                t1: task({task_id: 't1', status: 'executing', phase: 'tests'}),
+                t2: task({task_id: 't2', status: 'reviewing', phase: 'verify'}),
             }),
             't2'
         )
@@ -231,20 +231,15 @@ describe('resolveActiveTask phase source', () => {
         }
     })
 
-    it('prefers the persisted phase cursor over status derivation (exec window)', () => {
-        // status "executing" derives `tests`, but the cursor says `exec` —
-        // the cursor wins, so the test-writer guard must NOT fire.
+    it('an exec cursor on an executing row keeps the test-writer guard off (exec window)', () => {
+        // status "executing" with an `exec` cursor is the GREEN window —
+        // the test-writer guard must NOT fire.
         const active = resolveActiveTask(
             run({t1: task({status: 'executing', phase: 'exec', producer_role: 'test-writer'})}),
             't1'
         )
         expect(active?.phase).toBe('exec')
         expect(isTestWriterPhase(active)).toBe(false)
-    })
-
-    it('falls back to status derivation when no cursor is persisted (legacy state)', () => {
-        const active = resolveActiveTask(run({t1: task({status: 'executing'})}), 't1')
-        expect(active?.phase).toBe('tests')
     })
 
     it('terminal/pending stays null even with a stale cursor on the row', () => {
@@ -275,18 +270,24 @@ describe('resolveActiveTask phase source', () => {
 })
 
 describe('isTestWriterPhase', () => {
-    it('executing + test-writer role → true', () => {
-        const active = resolveActiveTask(run({t1: task({status: 'executing', producer_role: 'test-writer'})}), 't1')
+    it('executing tests-phase + test-writer role → true', () => {
+        const active = resolveActiveTask(
+            run({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})}),
+            't1'
+        )
         expect(isTestWriterPhase(active)).toBe(true)
     })
 
     it('executing + implementer role → false (GREEN phase, not test-writer)', () => {
-        const active = resolveActiveTask(run({t1: task({status: 'executing', producer_role: 'implementer'})}), 't1')
+        const active = resolveActiveTask(
+            run({t1: task({status: 'executing', phase: 'exec', producer_role: 'implementer'})}),
+            't1'
+        )
         expect(isTestWriterPhase(active)).toBe(false)
     })
 
     it('reviewing → false', () => {
-        const active = resolveActiveTask(run({t1: task({status: 'reviewing'})}), 't1')
+        const active = resolveActiveTask(run({t1: task({status: 'reviewing', phase: 'verify'})}), 't1')
         expect(isTestWriterPhase(active)).toBe(false)
     })
 

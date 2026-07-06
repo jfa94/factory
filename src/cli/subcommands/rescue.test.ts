@@ -28,6 +28,8 @@ const SPEC: SpecPointer = {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7
 const RUN = 'run-c'
 const AT = '2026-07-04T00:00:00.000Z'
 
+const IN_FLIGHT_DEFAULT_PHASE = {executing: 'exec', reviewing: 'verify', shipping: 'ship'} as const
+
 function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['status']}): TaskState {
     const base = {
         depends_on: [],
@@ -35,6 +37,9 @@ function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['st
         escalation_rung: 0,
         reviewers: [],
         merge_resyncs: 0,
+        ...(seed.status === 'executing' || seed.status === 'reviewing' || seed.status === 'shipping'
+            ? {phase: IN_FLIGHT_DEFAULT_PHASE[seed.status]}
+            : {}),
         ...seed,
     }
     if (seed.status === 'failed') {

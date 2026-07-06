@@ -58,7 +58,8 @@ function failedTask(id: string, failure_class: TaskState['failure_class'], reaso
 }
 
 function pendingTask(id: string, status: TaskState['status'] = 'pending'): TaskState {
-    return {task_id: id, status} as TaskState
+    const phase = status === 'executing' ? {phase: 'exec'} : {}
+    return {task_id: id, status, ...phase} as TaskState
 }
 
 function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunState {

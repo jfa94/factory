@@ -189,6 +189,7 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
                 t1: {
                     task_id: 't1',
                     status: 'reviewing',
+                    phase: 'verify',
                     risk_tier: 'high',
                     escalation_rung: 0,
                     depends_on: [],

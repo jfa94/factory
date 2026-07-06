@@ -91,6 +91,7 @@ describe('WS7 panel-run integration (D26/D27, Δ K)', () => {
             parseTaskState({
                 task_id: 't1',
                 status: 'reviewing',
+                phase: 'verify',
                 risk_tier: 'low' as RiskTier,
                 reviewers: res.reviewerResults,
             })

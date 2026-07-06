@@ -84,6 +84,7 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
             't-1': {
                 task_id: 't-1',
                 status: 'shipping' as const,
+                phase: 'ship' as const,
                 depends_on: [],
                 risk_tier: 'medium' as const,
                 escalation_rung: 0,
