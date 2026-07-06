@@ -19,7 +19,6 @@ import {createLogger} from '../../shared/index.js'
 import type {CoverageStore} from './coverage-store.js'
 import {classifySkip, loadGateContract, type GateContract, type GateContractLoad} from './gate-contract.js'
 import type {ExemptReader} from './tdd-exempt.js'
-import {GateMemo} from './memo.js'
 import type {GateTools} from './tools.js'
 import {GATE_IDS, ran, type GateId, type GateOutcome, type GateStrategy, type StrategyContext} from './strategy.js'
 import {testStrategy} from './strategies/test.js'
@@ -77,8 +76,6 @@ export interface GateContext {
     readonly gates?: readonly GateId[]
     /** tdd_exempt resolver for the tdd strategy. */
     readonly exemptReader?: ExemptReader
-    /** Memo for tip/tree-SHA caching (Δ N/O). Defaults to a fresh per-call memo. */
-    readonly memo?: GateMemo
     /**
      * Gate-contract loader (S7, Decision 46). Defaults to the real
      * {@link loadGateContract} over `ctx.worktree`; injectable for unit tests.
@@ -111,8 +108,8 @@ export interface GateRunResult {
 }
 
 /**
- * The single deterministic gate runner. Stateless apart from the optional memo;
- * `run` is idempotent given identical tool outputs.
+ * The single deterministic gate runner. Stateless; `run` is idempotent given
+ * identical tool outputs.
  */
 export class GateRunner {
     /**
@@ -123,22 +120,12 @@ export class GateRunner {
      */
     async run(ctx: GateContext): Promise<GateRunResult> {
         const gates = ctx.gates ?? GATE_IDS
-        const memo = ctx.memo ?? new GateMemo()
         const report: GateReportEntry[] = []
         const evidence: GateEvidence[] = []
         const skipped: {gate: GateId; reason: string}[] = []
 
-        // Tree-SHA evidence memo (Δ O): one tree object sha keys the per-gate evidence
-        // cache, so an identical-CONTENT re-run skips re-EXECUTING the tool. Resolved
-        // ONCE up front (it is worktree-level — same for every gate). A worktree whose
-        // tree is unresolvable is structurally broken; we fail LOUD rather than run
-        // gates we cannot key. The cache stores EVIDENCE only — the verdict is still
-        // re-derived by deriveAllGatesVerdict, so a hit never bypasses re-derivation.
-        const treeSha = await ctx.tools.git.treeSha({cwd: ctx.worktree})
-
-        // Gate contract (S7, Decision 46): loaded from the worktree — the contract is
-        // COMMITTED, so the tree SHA already keys any contract change. A committed-but-
-        // invalid contract is structural: fail LOUD, never degrade to legacy semantics.
+        // Gate contract (S7, Decision 46): loaded from the worktree (COMMITTED). A
+        // committed-but-invalid contract is structural: fail LOUD, never degrade.
         const load = await (ctx.loadContract ?? loadGateContract)(ctx.worktree)
         if (load.state === 'invalid') {
             throw new Error(
@@ -167,13 +154,6 @@ export class GateRunner {
                 log.debug(`gate ${id} skipped: ${reason}`)
                 continue
             }
-            const cached = memo.getEvidence(id, treeSha)
-            if (cached !== undefined) {
-                report.push({gate: id, outcome: {kind: 'ran', evidence: cached}})
-                evidence.push(cached)
-                log.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`)
-                continue
-            }
             const strategy = strategyFor(id)
             const sctx: StrategyContext<GateTools> = {
                 runId: ctx.runId,
@@ -183,7 +163,6 @@ export class GateRunner {
                 config: ctx.config,
                 tools: ctx.tools,
                 exemptReader: ctx.exemptReader,
-                memo,
                 contract,
                 coverageStore: ctx.coverageStore,
             }
@@ -199,15 +178,7 @@ export class GateRunner {
             report.push({gate: id, outcome})
             if (outcome.kind === 'ran') {
                 evidence.push(outcome.evidence)
-                // A contracted-but-unrunnable conversion is NOT memoized: installing the
-                // missing tool changes node_modules, not the git tree — a tree-SHA-keyed
-                // failure would outlive its own fix.
-                if (outcome.evidence.detail?.startsWith('contracted-but-unrunnable') !== true) {
-                    memo.putEvidence(id, treeSha, outcome.evidence)
-                }
             } else {
-                // Skips are not memoized: they carry no evidence, are excluded from the
-                // conjunction, and are cheap to re-evaluate (a not-applicable probe).
                 skipped.push({gate: outcome.gate, reason: outcome.reason})
                 log.debug(`gate ${id} skipped: ${outcome.reason}`)
             }

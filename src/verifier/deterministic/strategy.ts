@@ -15,13 +15,12 @@
 import type {GateEvidence} from '../../types/index.js'
 import type {Config} from '../../config/schema.js'
 import type {ExemptReader} from './tdd-exempt.js'
-import type {GateMemo} from './memo.js'
 import type {GateContract} from './gate-contract.js'
 import type {CoverageStore} from './coverage-store.js'
 import {GATE_IDS, type GateId} from './gate-id.js'
 
 // Re-exported from the leaf gate-id.ts so existing importers of strategy.ts are
-// unaffected, while memo.ts depends on the leaf directly (breaks the type cycle).
+// unaffected.
 export {GATE_IDS, type GateId}
 
 /**
@@ -87,11 +86,6 @@ export interface StrategyContext<TTools> {
      * not supply it.
      */
     readonly exemptReader?: ExemptReader | undefined
-    /**
-     * Tip/tree-SHA memo (Δ N/O). The tdd strategy memoizes by tip SHA; the runner
-     * may memoize evidence by tree SHA. Optional — absent means no memoization.
-     */
-    readonly memo?: GateMemo
     /**
      * The repo's gate contract (S7, Decision 46), when `.factory/gates.json` is
      * present in the worktree. Command gates (test/type/build/lint) execute a

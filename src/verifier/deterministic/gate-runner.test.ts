@@ -27,7 +27,6 @@ import {
 } from './fakes.js'
 import {GateRunner, strategyFor, type GateContext} from './gate-runner.js'
 import type {GateContract, GateContractLoad} from './gate-contract.js'
-import {GateMemo} from './memo.js'
 import type {CoverageSummary, GateTools} from './tools.js'
 
 const full: CoverageSummary = {lines: 100, branches: 100, functions: 100, statements: 100}
@@ -124,56 +123,6 @@ describe("GateRunner — Δ V derive-don't-store conjunction", () => {
     })
 })
 
-describe('GateRunner — tree-SHA evidence memo (Δ O)', () => {
-    it('serves an identical-content re-run from the memo (tool NOT re-invoked)', async () => {
-        const memo = new GateMemo()
-        const vitest = new FakeVitest(proc(0))
-        const git = new FakeGitProbe({
-            refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-            changedFiles: [],
-            commits: [],
-            treeSha: 'tree-A',
-        })
-        const tools = makeFakeTools({git, vitest})
-        const ctx: GateContext = {...baseCtx(tools, ['test']), memo}
-
-        const a = await new GateRunner().run(ctx)
-        const b = await new GateRunner().run(ctx)
-
-        expect(a.verdict.passed).toBe(true)
-        expect(b.verdict.passed).toBe(true)
-        // Same tree SHA + shared memo ⇒ the vitest tool ran ONCE; the second sweep was
-        // served from the evidence memo (the Δ O acceptance criterion).
-        expect(vitest.calls).toHaveLength(1)
-    })
-
-    it('re-runs the tool when the tree SHA changes (different content ⇒ memo miss)', async () => {
-        const memo = new GateMemo()
-        const vitest = new FakeVitest(proc(0))
-        const ctxFor = (tree: string): GateContext => ({
-            ...baseCtx(
-                makeFakeTools({
-                    git: new FakeGitProbe({
-                        refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-                        changedFiles: [],
-                        commits: [],
-                        treeSha: tree,
-                    }),
-                    vitest,
-                }),
-                ['test']
-            ),
-            memo,
-        })
-
-        await new GateRunner().run(ctxFor('tree-1'))
-        await new GateRunner().run(ctxFor('tree-2'))
-
-        // Distinct tree SHAs ⇒ no memo hit ⇒ the tool is invoked each run.
-        expect(vitest.calls).toHaveLength(2)
-    })
-})
-
 describe('GateRunner — gate contract (S7, Decision 46)', () => {
     /** A full 8-gate contract, everything waived except the overrides. */
     function contractWith(overrides: Partial<GateContract['gates']> = {}): GateContract {
@@ -252,39 +201,6 @@ describe('GateRunner — gate contract (S7, Decision 46)', () => {
                 loadContract: () => Promise.resolve({state: 'invalid', error: 'gates.test: required'}),
             })
         ).rejects.toThrow(/INVALID.*gates\.test/)
-    })
-
-    it('a contracted-but-unrunnable failure is NOT memoized (installing the tool fixes it)', async () => {
-        // Same tree SHA + shared memo across both runs: run 1 fails (no eslint), run 2
-        // has the tool installed — it must RUN and pass, not replay the stale failure
-        // (node_modules changes never move the git tree SHA).
-        const memo = new GateMemo()
-        const gitOpts = {
-            refs: {'origin/staging': 'sha-base', HEAD: 'sha-head'},
-            changedFiles: [],
-            commits: [],
-            treeSha: 'tree-C',
-        } as const
-        const contract = loads(contractWith({lint: {contracted: true}}))
-
-        const broken = makeFakeTools({git: new FakeGitProbe(gitOpts), fs: new FakeFs([])})
-        const first = await new GateRunner().run({
-            ...baseCtx(broken, ['lint']),
-            memo,
-            loadContract: contract,
-        })
-        expect(first.verdict.passed).toBe(false)
-
-        const fixed = makeFakeTools({
-            git: new FakeGitProbe(gitOpts),
-            eslint: new FakeEslint(proc(0)),
-        })
-        const second = await new GateRunner().run({
-            ...baseCtx(fixed, ['lint']),
-            memo,
-            loadContract: contract,
-        })
-        expect(second.verdict.passed).toBe(true)
     })
 })
 

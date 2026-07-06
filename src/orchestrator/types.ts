@@ -2,8 +2,7 @@
  * WS10 — orchestrator-local shared types (the reporter dependency bundle the engine
  * wires against).
  *
- * ARCHITECTURE (settled, Model A — see docs/rewrite/group0-seams.md §3.5/§4 and
- * the design-intent transcript):
+ * ARCHITECTURE (settled, Model A):
  *
  *   - HANDLERS are pure-ish REPORTERS. {@link import("./handlers.js").makePhaseHandlers}
  *     builds a {@link PhaseHandlers} whose methods read the frozen

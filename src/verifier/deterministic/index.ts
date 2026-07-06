@@ -1,7 +1,7 @@
 /**
  * WS6 — deterministic-verifier (gates) barrel. ONE GateRunner + per-gate
- * strategies, injectable tools + fakes, the clean-checkout gate-of-record, and the
- * memo. Downstream (WS8 producer, WS10 orchestrator, the verify handler) imports ONLY
+ * strategies, injectable tools + fakes, and the clean-checkout gate-of-record.
+ * Downstream (WS8 producer, WS10 orchestrator, the verify handler) imports ONLY
  * from here.
  *
  * It re-exports WS6's own surface; it imports the frozen seams (GateEvidence /
@@ -81,9 +81,6 @@ export {
 
 // tdd_exempt resolution
 export {isTddExempt, DefaultExemptReader, type ExemptReader, type DefaultExemptReaderArgs} from './tdd-exempt.js'
-
-// memoization (Δ N/O)
-export {GateMemo} from './memo.js'
 
 // injectable tool interfaces + default impls
 export {

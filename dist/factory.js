@@ -11015,36 +11015,6 @@ function contractCommand(contract, id) {
   return v.argv;
 }
 
-// src/verifier/deterministic/memo.ts
-var GateMemo = class {
-  /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
-  evidence = /* @__PURE__ */ new Map();
-  /** `${taskId}@${tipSha}` → the TDD verdict struct (re-derived by the runner). */
-  tdd = /* @__PURE__ */ new Map();
-  evKey(gate, treeSha) {
-    return `${gate}@${treeSha}`;
-  }
-  tddKey(taskId, tipSha) {
-    return `${taskId}@${tipSha}`;
-  }
-  /** Look up cached evidence for a gate at a tree sha (undefined = miss). */
-  getEvidence(gate, treeSha) {
-    return this.evidence.get(this.evKey(gate, treeSha));
-  }
-  /** Cache a gate's evidence at a tree sha. */
-  putEvidence(gate, treeSha, ev) {
-    this.evidence.set(this.evKey(gate, treeSha), ev);
-  }
-  /** Look up the memoized TDD verdict for a task at a tip sha (undefined = miss). */
-  getTdd(taskId, tipSha) {
-    return this.tdd.get(this.tddKey(taskId, tipSha));
-  }
-  /** Memoize the TDD verdict for a task at a tip sha. */
-  putTdd(taskId, tipSha, verdict) {
-    this.tdd.set(this.tddKey(taskId, tipSha), verdict);
-  }
-};
-
 // src/verifier/deterministic/scope.ts
 function isTestPath(file) {
   if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
@@ -11276,11 +11246,6 @@ var tddStrategy = {
     if (base === null) {
       return ran("tdd", false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`);
     }
-    const tipSha = await ctx.tools.git.revParse("HEAD", opts);
-    const memoized = ctx.memo?.getTdd(ctx.taskId, tipSha);
-    if (memoized !== void 0) {
-      return verdictToOutcome(memoized);
-    }
     const commits = await ctx.tools.git.commits(base, ctx.taskId, opts);
     if (isSquashedHistory(commits.map((c) => c.files))) {
       const verdict2 = {
@@ -11289,12 +11254,10 @@ var tddStrategy = {
         violations: [],
         note: "squashed history \u2014 TDD gate no-op"
       };
-      ctx.memo?.putTdd(ctx.taskId, tipSha, verdict2);
       return verdictToOutcome(verdict2);
     }
     const exempt = ctx.exemptReader ? await ctx.exemptReader.isExempt(ctx.taskId) : false;
     const verdict = deriveTddVerdict(commits, exempt);
-    ctx.memo?.putTdd(ctx.taskId, tipSha, verdict);
     return verdictToOutcome(verdict);
   }
 };
@@ -11626,11 +11589,9 @@ var GateRunner = class {
    */
   async run(ctx) {
     const gates = ctx.gates ?? GATE_IDS;
-    const memo = ctx.memo ?? new GateMemo();
     const report = [];
     const evidence = [];
     const skipped = [];
-    const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
     const load = await (ctx.loadContract ?? loadGateContract)(ctx.worktree);
     if (load.state === "invalid") {
       throw new Error(
@@ -11652,13 +11613,6 @@ var GateRunner = class {
         log18.debug(`gate ${id} skipped: ${reason}`);
         continue;
       }
-      const cached = memo.getEvidence(id, treeSha);
-      if (cached !== void 0) {
-        report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
-        evidence.push(cached);
-        log18.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
-        continue;
-      }
       const strategy = strategyFor(id);
       const sctx = {
         runId: ctx.runId,
@@ -11668,7 +11622,6 @@ var GateRunner = class {
         config: ctx.config,
         tools: ctx.tools,
         exemptReader: ctx.exemptReader,
-        memo,
         contract,
         coverageStore: ctx.coverageStore
       };
@@ -11680,9 +11633,6 @@ var GateRunner = class {
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
-        if (outcome.evidence.detail?.startsWith("contracted-but-unrunnable") !== true) {
-          memo.putEvidence(id, treeSha, outcome.evidence);
-        }
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
         log18.debug(`gate ${id} skipped: ${outcome.reason}`);

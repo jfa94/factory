@@ -79,15 +79,6 @@ export const tddStrategy: GateStrategy<GateTools> = {
             return ran('tdd', false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`)
         }
 
-        // Tip-SHA memoization (Δ N): serve a prior classification of this tip without
-        // re-running diff-tree. This is also the squashed-history no-op repeat: a second
-        // invocation on the same squashed tip is served from memo, never re-classified.
-        const tipSha = await ctx.tools.git.revParse('HEAD', opts)
-        const memoized = ctx.memo?.getTdd(ctx.taskId, tipSha)
-        if (memoized !== undefined) {
-            return verdictToOutcome(memoized)
-        }
-
         const commits = await ctx.tools.git.commits(base, ctx.taskId, opts)
 
         // Squash NO-OP: a single commit carrying both tests and impl is the squashed
@@ -99,13 +90,11 @@ export const tddStrategy: GateStrategy<GateTools> = {
                 violations: [],
                 note: 'squashed history — TDD gate no-op',
             }
-            ctx.memo?.putTdd(ctx.taskId, tipSha, verdict)
             return verdictToOutcome(verdict)
         }
 
         const exempt = ctx.exemptReader ? await ctx.exemptReader.isExempt(ctx.taskId) : false
         const verdict = deriveTddVerdict(commits, exempt)
-        ctx.memo?.putTdd(ctx.taskId, tipSha, verdict)
         return verdictToOutcome(verdict)
     },
 }
