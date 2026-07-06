@@ -104,10 +104,21 @@ describe('runDocsEmit', () => {
         expect(env.docs_branch).toBe(`docs-${RUN_ID}`)
         expect(env.base_ref).toBe('origin/develop')
         expect(env.worktree).toContain(RUN_ID)
-        // FakeGitClient records: "worktree add -b docs-run-1 <path> origin/staging-run-1"
-        expect(git.calls.some((c) => c.startsWith('worktree add') && c.includes(`-b docs-${RUN_ID}`))).toBe(true)
+        // FakeGitClient records: "worktree add -B docs-run-1 <path> origin/staging-run-1"
+        expect(git.calls.some((c) => c.startsWith('worktree add') && c.includes(`-B docs-${RUN_ID}`))).toBe(true)
         expect(env.prompt).toContain(env.worktree)
         expect(env.prompt).toContain(env.base_ref)
+    })
+
+    it('creates the docs branch with force `-B`, never bare `-b` (crash-resume wedge guard)', async () => {
+        // A crash between worktreeRemove (runDocsRecord) and the docs=done write can leave
+        // docs-<runId> behind after the worktree is gone; on resume the !worktreeExists branch
+        // re-runs worktree add. A bare `-b` would fatal on the surviving branch and wedge the
+        // run in EMIT before the RECORD-side attempt cap can fire. `-B` force-resets instead.
+        await runDocsEmit(deps(), RUN_ID)
+        const add = git.calls.find((c) => c.startsWith('worktree add'))
+        expect(add).toContain(`-B docs-${RUN_ID}`)
+        expect(add).not.toContain('-b docs-')
     })
 
     it('is idempotent when the worktree already exists (resume): no second worktree add', async () => {

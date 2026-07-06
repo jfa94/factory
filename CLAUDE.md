@@ -29,7 +29,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 ## Key entry points
 
 - `commands/run.md` — main entry (`--no-ship` to open PRs without merging; default: live. The runner loop runs in the invoking Claude Code session — see `skills/pipeline-runner/SKILL.md` for the protocol + CLI surface table). Four distinct lifecycle verbs (Decision 35): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`, `factory resume`) continues an unfinished run, `commands/rescue.md` repairs git/GitHub drift then resumes, `commands/debug.md` is the standalone review-fix loop.
-- `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next-task, next-action, rescue, score, state, scaffold, configure, config-defaults, debug, autonomy, statusline)
+- `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next-task, next-action, recover, rescue, score, state, scaffold, configure, config-defaults, debug, autonomy, statusline)
 - `src/orchestrator/orchestrator.ts` + `src/orchestrator/next.ts` — the task-level and run-level orchestrators behind `factory next-action`/`factory next-task` (record logic in `src/orchestrator/record.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)
 

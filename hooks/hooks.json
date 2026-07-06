@@ -84,7 +84,7 @@
                         "type": "command",
                         "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js subagent-stop",
                         "timeout": 15,
-                        "statusMessage": "Recording subagent verdict to state"
+                        "statusMessage": "Logging subagent verdict (observational)"
                     }
                 ]
             }

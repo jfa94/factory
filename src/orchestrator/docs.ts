@@ -74,7 +74,12 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
     // Idempotent on resume: a prior (failed) attempt leaves the worktree in place; real
     // `git worktree add` FATALS on an existing path, so reuse it instead of re-creating.
     if (!(await deps.git.worktreeExists(worktree))) {
-        await deps.git.worktreeAdd(['-b', docsBranch, worktree, `origin/${staging}`])
+        // `-B` (not `-b`): a crash between the worktree removal (runDocsRecord) and the
+        // `docs=done` state write can leave `docs-<runId>` behind after the worktree path
+        // is gone — a bare `-b` fatals on re-entry, wedging the run in EMIT before the
+        // RECORD-side attempt cap can fire. `-B` force-creates/resets, matching the e2e
+        // sibling's crash-safety.
+        await deps.git.worktreeAdd(['-B', docsBranch, worktree, `origin/${staging}`])
     } else if ((run.docs?.attempts ?? 0) >= 1) {
         // Retry: reset dirty worktree to staging tip so the prior failed commit/edit doesn't
         // bleed into the new attempt (preserves "at most one docs commit" invariant).

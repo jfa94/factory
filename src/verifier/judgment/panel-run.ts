@@ -126,21 +126,13 @@ async function adjudicateReviewer(
  *   - otherwise ⇒ `approve`.
  */
 function reviewerResultOf(a: AdjudicatedReviewer): ReviewerResult {
-    if (a.hadVerifierError || a.rawVerdict === 'error') {
-        return {
-            reviewer: a.reviewer,
-            verdict: 'error',
-            confirmed_blockers: a.confirmedBlockers.length,
-        }
-    }
-    if (a.confirmedBlockers.length > 0) {
-        return {
-            reviewer: a.reviewer,
-            verdict: 'blocked',
-            confirmed_blockers: a.confirmedBlockers.length,
-        }
-    }
-    return {reviewer: a.reviewer, verdict: 'approve', confirmed_blockers: 0}
+    const verdict: ReviewerResult['verdict'] =
+        a.hadVerifierError || a.rawVerdict === 'error'
+            ? 'error'
+            : a.confirmedBlockers.length > 0
+              ? 'blocked'
+              : 'approve'
+    return {reviewer: a.reviewer, verdict, confirmed_blockers: a.confirmedBlockers.length}
 }
 
 /** Inputs to {@link runPanel}. */

@@ -8575,6 +8575,9 @@ function parseGhJson(result, schema, where) {
   const raw = parseJson(result.stdout, where);
   return schema.parse(raw);
 }
+function ghApiFailure(path6, r) {
+  return new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+}
 var DefaultGhClient = class {
   runner;
   constructor(runner = defaultGhRunner) {
@@ -8710,7 +8713,7 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw ghApiFailure(path6, r);
     }
     if (r.truncated) {
       throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped protection JSON`);
@@ -8755,7 +8758,7 @@ var DefaultGhClient = class {
       if (/404|Not Found/i.test(r.stderr)) {
         return false;
       }
-      throw new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw ghApiFailure(path6, r);
     }
     if (r.truncated) {
       throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
@@ -11115,7 +11118,7 @@ function filterDedup(files, keep) {
 // src/verifier/deterministic/strategies/proc-strategy.ts
 var EXCERPT_MAX_CHARS = 1e3;
 function excerpt(text) {
-  const trimmed = text.trim();
+  const trimmed = redactSecrets(text).trim();
   if (trimmed.length <= EXCERPT_MAX_CHARS) {
     return trimmed;
   }
@@ -12521,21 +12524,8 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   };
 }
 function reviewerResultOf(a) {
-  if (a.hadVerifierError || a.rawVerdict === "error") {
-    return {
-      reviewer: a.reviewer,
-      verdict: "error",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  if (a.confirmedBlockers.length > 0) {
-    return {
-      reviewer: a.reviewer,
-      verdict: "blocked",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
+  const verdict = a.hadVerifierError || a.rawVerdict === "error" ? "error" : a.confirmedBlockers.length > 0 ? "blocked" : "approve";
+  return { reviewer: a.reviewer, verdict, confirmed_blockers: a.confirmedBlockers.length };
 }
 async function runPanel(input) {
   const redact = input.redact ?? true;
@@ -14674,7 +14664,7 @@ async function runDocsEmit(deps, runId) {
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
   if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
+    await deps.git.worktreeAdd(["-B", docsBranch, worktree, `origin/${staging}`]);
   } else if ((run11.docs?.attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
@@ -16106,6 +16096,9 @@ async function resolveSpec2(specStore, opts) {
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   const seeded = seedTasksFromSpec(request);
   const branch = runStagingBranch(opts.runId);
+  if (state.exists(opts.runId)) {
+    throw new Error(`state: run '${opts.runId}' already exists`);
+  }
   if (stagingDeps !== void 0) {
     await ensureStaging({
       gitClient: stagingDeps.gitClient,
@@ -16604,13 +16597,12 @@ async function runCreate(argv, overrides = {}) {
     };
   };
   await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "launch" });
+  const out = approveSpec ? await park(result.run) : { run: result.run };
   if (result.kind === "created") {
-    const out2 = approveSpec ? await park(result.run) : { run: result.run };
-    emitJson({ kind: "created", ...out2 });
+    emitJson({ kind: "created", ...out });
     return EXIT.OK;
   }
   await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "conflict" });
-  const out = approveSpec ? await park(result.run) : { run: result.run };
   emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
   return EXIT.OK;
 }

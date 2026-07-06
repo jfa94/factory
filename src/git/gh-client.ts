@@ -206,6 +206,11 @@ export function parseGhJson<T>(result: ExecResult, schema: z.ZodType<T>, where: 
     return schema.parse(raw)
 }
 
+/** Uniform Error for a non-zero `gh api <path>` exit — shared by the protection reads. */
+function ghApiFailure(path: string, r: ExecResult): Error {
+    return new Error(`gh api ${path} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
+}
+
 /** Default GhClient over the real (or an injected) gh runner. */
 export class DefaultGhClient implements GhClient {
     private readonly runner: GhRunner
@@ -372,7 +377,7 @@ export class DefaultGhClient implements GhClient {
                     hasMergeQueue: false,
                 }
             }
-            throw new Error(`gh api ${path} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
+            throw ghApiFailure(path, r)
         }
         if (r.truncated) {
             throw new Error(`gh api ${path}: output truncated — refusing to parse clipped protection JSON`)
@@ -436,7 +441,7 @@ export class DefaultGhClient implements GhClient {
             if (/404|Not Found/i.test(r.stderr)) {
                 return false
             }
-            throw new Error(`gh api ${path} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
+            throw ghApiFailure(path, r)
         }
         if (r.truncated) {
             throw new Error(`gh api ${path}: output truncated — refusing to parse clipped ruleset JSON`)

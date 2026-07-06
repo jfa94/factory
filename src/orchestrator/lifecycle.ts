@@ -174,6 +174,18 @@ async function createRunFromManifest(
     // that a mid-run naming-scheme change could desync). Reused below for the actual cut.
     const branch = runStagingBranch(opts.runId)
 
+    // Fast-fail a run-id collision BEFORE any branch mutation. The `fresh` path
+    // (explicit --run-id) skips the active-run scan, so without this an id colliding
+    // with a live run would fast-forward/push + re-provision THAT run's staging branch
+    // via ensureStaging/provisionProtection below, only to be rejected afterward by
+    // state.create. Match create()'s throw string exactly so the "clobbers loudly if
+    // runId exists" contract is preserved — the throw just moves earlier.
+    // ponytail: closes the deterministic --run-id reuse case; create()'s under-lock
+    // re-check stays the backstop for the (unrealistic) concurrent same-id race.
+    if (state.exists(opts.runId)) {
+        throw new Error(`state: run '${opts.runId}' already exists`)
+    }
+
     // Decision 33: cut + protect the per-run staging branch BEFORE persisting the run row.
     // Both helpers are state-free (they key off `branch`, derived from opts.runId) and
     // idempotent. Persisting LAST (mirrors supersedeRun's resume-safe ordering) makes

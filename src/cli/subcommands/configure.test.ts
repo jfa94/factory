@@ -146,6 +146,24 @@ describe('factory configure', () => {
         expect(stderr.join('')).toMatch(/cannot be combined/)
     })
 
+    it('--get rejects an unknown config key', async () => {
+        await expect(configureCommand.run(['--get', 'bogus.key'])).rejects.toThrow(/unknown config key/)
+    })
+
+    it('--get rejects traversing into a non-object leaf', async () => {
+        await expect(configureCommand.run(['--get', 'quality.holdoutPercent.foo'])).rejects.toThrow(/not an object/)
+    })
+
+    it("--set rejects a malformed token with no '='", async () => {
+        await expect(configureCommand.run(['--set', 'keyWithoutEquals'])).rejects.toThrow(/expects 'key.path=value'/)
+        expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
+    })
+
+    it('--set rejects an invalid key path (empty segment)', async () => {
+        await expect(configureCommand.run(['--set', 'a..b=1'])).rejects.toThrow(/invalid key path/)
+        expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
+    })
+
     it('--help returns OK', async () => {
         expect(await configureCommand.run(['--help'])).toBe(EXIT.OK)
         expect(stdout.join('')).toMatch(/factory configure/)

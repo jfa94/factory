@@ -8,6 +8,7 @@
  * LOUD on truncated output (never judge a clipped run), else report observed =
  * `exit 0` with a `<label> exit=<code>` detail.
  */
+import {redactSecrets} from '../../../shared/index.js'
 import {contractCommand} from '../gate-contract.js'
 import type {GateId} from '../gate-id.js'
 import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
@@ -17,9 +18,16 @@ import type {GateTools, ProcResult, ToolRunOpts} from '../tools.js'
 /** Cap for the stderr/stdout excerpt appended to a failing gate's detail (chars). */
 const EXCERPT_MAX_CHARS = 1000
 
-/** Trim + cap raw process output for inclusion in a gate's detail (fix-forward channel). */
+/**
+ * Scrub secrets, then trim + cap raw process output for a gate's detail (fix-forward
+ * channel). Redaction is unconditional here (unlike sast.ts's config-gated scrub): a
+ * gate detail flows verbatim to the run's failure_reason and is auto-posted to the
+ * originating PRD issue comment (world-readable on a public repo), so build/lint/type/
+ * coverage stderr must never carry an env secret to that sink. Both callers
+ * (procOutcome, coverage's measurementFailure) route through here.
+ */
 export function excerpt(text: string): string {
-    const trimmed = text.trim()
+    const trimmed = redactSecrets(text).trim()
     if (trimmed.length <= EXCERPT_MAX_CHARS) {
         return trimmed
     }

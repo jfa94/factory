@@ -46,6 +46,16 @@ describe('procOutcome', () => {
         expect(detail.length).toBeLessThan(1200)
         expect(detail).toContain('truncated')
     })
+
+    it('redacts a secret in the failing-gate stderr before it reaches the detail (public-comment sink)', () => {
+        // Assembled at runtime so this source file carries no committable secret.
+        const secret = 'AKIA' + 'IOSFODNN7EXAMPLE' // matches AKIA[0-9A-Z]{16}
+        const out = procOutcome('build', 'npm run build', proc(1, '', `env dump: AWS_KEY=${secret}`))
+        const detail = (out as GateRan).evidence.detail ?? ''
+        expect(detail).toContain('npm run build exit=1')
+        expect(detail).not.toContain(secret)
+        expect(detail).toContain('[REDACTED]')
+    })
 })
 
 describe('procStrategy — contract command (S7, Decision 46)', () => {

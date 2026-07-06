@@ -685,6 +685,39 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         expect(git.calls.some((c) => c.startsWith('checkout -B'))).toBe(false)
     })
 
+    it('fresh intent with a colliding run-id throws BEFORE mutating staging (no ensureStaging/provisionProtection)', async () => {
+        // Regression (Codex): the fresh path (explicit --run-id) skips the active-run scan,
+        // so a run-id colliding with a live run used to fast-forward/push + re-provision THAT
+        // run's staging branch via ensureStaging/provisionProtection, only to be rejected
+        // afterward by state.create. The early state.exists guard fast-fails before any git/gh.
+        await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-dup'})
+
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const {defaultConfig} = await import('../../config/schema.js')
+        await expect(
+            resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-dup', intent: 'fresh'},
+                {
+                    gitClient: git,
+                    ghClient: gh,
+                    config: defaultConfig(),
+                    targetRoot: '/target',
+                    orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-dup',
+                    owner: 'acme',
+                    repo: 'widgets',
+                }
+            )
+        ).rejects.toThrow(/already exists/)
+
+        // Guard threw before ensureStaging/provisionProtection touched the colliding branch.
+        expect(git.calls).toHaveLength(0)
+        expect(gh.calls).toHaveLength(0)
+    })
+
     it('A3: a staging-provision failure persists NO run row — the retry creates fresh, not `exists`', async () => {
         // Regression: createRunFromManifest used to persist the run row (state.create +
         // update) BEFORE cutting+protecting staging. A provision throw (401/403/5xx/network)

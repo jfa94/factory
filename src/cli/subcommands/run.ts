@@ -412,14 +412,13 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     // S11: mirror the human_touches appends to metrics.jsonl (observability only —
     // the derived metric reads state, never this stream).
     await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'launch'})
+    const out = approveSpec ? await park(result.run) : {run: result.run}
     if (result.kind === 'created') {
-        const out = approveSpec ? await park(result.run) : {run: result.run}
         emitJson({kind: 'created', ...out})
         return EXIT.OK
     }
     // kind === "superseded"
     await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'conflict'})
-    const out = approveSpec ? await park(result.run) : {run: result.run}
     emitJson({kind: 'superseded', ...out, supersededId: result.supersededId})
     return EXIT.OK
 }
