@@ -502,8 +502,8 @@ loud on resume), it combines freely. See
 [Quota pacing — `--ignore-quota`](../explanation/quota-pacing.md#--ignore-quota--the-per-run-pacing-override).
 
 `--run` defaults to **this repo's current run** — resolved from the caller's
-checkout (`origin` remote → `<dataDir>/current/<repoKey>`), falling back to the
-legacy global pointer when the repo can't be derived (see
+checkout (`origin` remote → `<dataDir>/current/<repoKey>`); if the repo can't be
+derived there is no current run (see
 [Per-repo current](#per-repo-current-run-resolution)). Emits one of:
 
 - `{kind:"resumed", run}` — window recovered (or the run was already running).
@@ -534,8 +534,10 @@ in two different checkouts don't shadow each other:
 
 1. derive the repo from the checkout's `origin` remote;
 2. read `<dataDir>/current/<repoKey>` → that repo's current run;
-3. if the repo can't be derived (no `origin`), fall back to the legacy global
-   `runs/current` (the repo-less "most recent") — degrade-safe, never an error.
+3. if the repo can't be derived (no `origin`), there is no current run (`null`,
+   never an error). The global repo-less `runs/current` pointer still exists, but
+   it serves the **no-cwd consumers** (statusline ticks, `hook-context`,
+   `next-task`) — the cwd-based reporters never fall back to it.
 
 `--run <id>` always wins over this resolution; `next-action` ignores it entirely
 (always requires `--run`). `next-task` is the one exception — it stays on the global
@@ -684,8 +686,8 @@ factory score --fleet
 Emits `{ kind:"score", summary }`. The summary carries the S11 touch metric:
 `touches` (length of the run's `human_touches` ledger) and `touch_metric`
 (derived, never stored: `(completed ? 1 : 0) / touches` — `launch` counts, so a
-clean lights-out run scores exactly `1.0`). Legacy runs without the ledger report
-both as `null`.
+clean lights-out run scores exactly `1.0`). A run with an empty ledger reports
+`touches: 0` and `touch_metric: null` (the 0-division guard).
 
 `--fleet` reports the metric across **every** run in the store: emits
 `{ kind:"fleet-score", runs:[{run_id, status, touches, metric}], aggregate }`

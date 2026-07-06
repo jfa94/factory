@@ -134,9 +134,9 @@ of re-running the suite.
 
 **Fail-closed rules:** any non-measured answer — command failed, summary missing,
 summary invalid — FAILS the gate naming which side broke (`head` or `base <sha>`)
-with a stderr excerpt. An unresolvable base ref fails too. The only skips are an
-explicitly uncontracted entry (`uncontracted: <reason>`, the committed waiver) and
-`no-gate-contract` on legacy pre-contract worktrees.
+with a stderr excerpt. An unresolvable base ref fails too. The only skip is an
+explicitly uncontracted entry (`uncontracted: <reason>`, the committed waiver) —
+a worktree with no `.factory/gates.json` at all fails loud naming `factory scaffold`.
 
 **Scaffold contracts it on npm** when a vitest coverage provider
 (`@vitest/coverage-v8` or `@vitest/coverage-istanbul`) is installed; otherwise

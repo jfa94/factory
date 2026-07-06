@@ -112,7 +112,7 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
  * create); the matching non-terminal run is found via {@link StateManager.findActiveByOwner}.
  *
  * Fail-SAFE: when no session id is present in the environment, fall back to the
- * legacy global `runs/current` resolution ({@link loadActiveRun}) so behavior is
+ * global repo-less `runs/current` resolution ({@link loadActiveRun}) so behavior is
  * unchanged (and never MORE permissive) where the env signal is unavailable. A
  * session id that owns no run → `null` (pass through), so a concurrent run owned by
  * another session is never inherited.

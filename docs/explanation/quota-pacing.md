@@ -102,8 +102,8 @@ to `proceed`: when true the gate
 returns `null` unconditionally — it neither reads the usage signal nor writes state.
 The flag is persisted on the run (`RunState.ignore_quota`,
 default `false`) so **both orchestrators** (`factory next-task`/`factory next-action`) and the
-runner read it straight from state — no per-call flag threading. A legacy run with
-no field reads as `false` and is unaffected.
+runner read it straight from state — no per-call flag threading. The schema
+defaults it to `false`.
 
 Two entry points set it:
 
