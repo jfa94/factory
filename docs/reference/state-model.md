@@ -206,6 +206,11 @@ The `next-action` orchestrator reads it to resume after a crash; it is written b
 
 - The lossy `status` (executing / reviewing / shipping …) stays the **human-facing**
   summary; `phase` is the **machine cursor**.
+- **In-flight ⇒ cursor present (schema invariant, Decision 52).** `refineTaskCrossFields`
+  rejects any `executing` / `reviewing` / `shipping` row whose `phase` is absent — the
+  orchestrator writes `phase` in lockstep with `status`, so an in-flight row without a
+  cursor is stale state from an older factory version (loud parse error naming "start a
+  fresh run", not a `status → phase` guess table).
 - **Absent** = not started — the orchestrator resumes at `preflight`.
 - On a **terminal** row (`done` / `failed`), `phase` holds the _last in-flight
   stage_, not a resume point — terminal writers do not clear it.

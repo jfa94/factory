@@ -88,7 +88,8 @@ That is the Model-A split. Read these two files in order:
 
 1. `commands/run.md` — the `/factory:run` entry point (the spine).
 2. `skills/pipeline-runner/SKILL.md` — the runner's full event loop: the
-   Iron Laws, the orchestrator surface (`next-task` / `next-action`), the agent-spawn matrix, and the
+   Iron Laws, the orchestrator surface (`next-task` / `next-action`), the `agent_type`
+   each spawn envelope carries (the runner spawns it verbatim — no spawn matrix), and the
    four phases (preconditions → spec → create → drive → completion).
 
 As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE

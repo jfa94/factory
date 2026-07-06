@@ -626,7 +626,10 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
 
 - `{ kind:"spawn", run_id, task_id, phase, result_key, request, holdout?, expects, worktree, base_ref }`
   — the agents to run (`request.agents`) and what to feed back. Each agent carries
-  `{ role, model, max_turns, prompt_ref, isolation, effort? }`; `effort` (the `Agent`
+  `{ role, agent_type, model, max_turns, prompt_ref, isolation, effort? }`; `agent_type`
+  is the runner-facing `Task(subagent_type)` value the runner spawns **verbatim**
+  (`AGENT_TYPE_BY_ROLE`, `src/core/phase-machine/spawn.ts`, Decision 52) — there is no
+  prose spawn matrix for the runner to re-derive. `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
