@@ -24,6 +24,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {access, readFile, readdir, rm} from 'node:fs/promises'
+import {isEnoent} from '../shared/fs-errors.js'
 import {join} from 'node:path'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {parseJson, stringifyJson} from '../shared/json.js'
@@ -113,7 +114,7 @@ export class SpecStore {
         try {
             entries = await readdir(repoRoot)
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err
@@ -158,7 +159,7 @@ export class SpecStore {
         try {
             entries = await readdir(repoRoot)
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return false
             }
             throw err
@@ -289,7 +290,7 @@ export class SpecStore {
         try {
             raw = await readFile(path, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 throw new Error(
                     `spec ${specId} has no PRD snapshot (created by an older factory version) — ` +
                         `re-run with \`--supersede\` to regenerate the spec`

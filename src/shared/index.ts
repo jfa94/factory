@@ -44,3 +44,5 @@ export type {FileLockTuning, FileLockOptions} from './file-lock.js'
 export {UsageError, isUsageError} from './usage-error.js'
 
 export {nonNull, at, getOrThrow} from './assert.js'
+
+export {isEnoent} from './fs-errors.js'

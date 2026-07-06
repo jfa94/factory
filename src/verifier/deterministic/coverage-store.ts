@@ -17,6 +17,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import path from 'node:path'
 import type {CoverageSummary} from './tools.js'
 
@@ -68,7 +69,7 @@ export class FsCoverageStore implements CoverageStore {
         try {
             raw = await readFile(file, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err

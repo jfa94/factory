@@ -24,6 +24,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
+import {isEnoent} from '../shared/fs-errors.js'
 import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
 import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
@@ -301,7 +302,7 @@ export async function buildWorktreeSource(worktree: string, reviews: readonly Ra
             const text = await readFile(resolved, 'utf8')
             lines.set(file, text.split('\n'))
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            if (!isEnoent(err)) {
                 throw err
             }
             lines.set(file, null) // genuinely absent → unverifiable → dropped

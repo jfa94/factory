@@ -16,6 +16,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {appendFile, mkdir, readFile} from 'node:fs/promises'
+import {isEnoent} from './fs-errors.js'
 import {dirname} from 'node:path'
 import {JsonParseError} from './json.js'
 import {at} from './assert.js'
@@ -42,7 +43,7 @@ export async function readJsonl<T = unknown>(path: string): Promise<T[]> {
     try {
         text = await readFile(path, 'utf8')
     } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (isEnoent(err)) {
             return []
         }
         throw err

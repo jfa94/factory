@@ -26,6 +26,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {mkdir, readFile, readdir, rename, rm, symlink, unlink} from 'node:fs/promises'
+import {isEnoent} from '../../shared/fs-errors.js'
 import {existsSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../../shared/file-lock.js'
@@ -278,7 +279,7 @@ export class StateManager {
         try {
             raw = await readFile(statePath, 'utf8')
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return null
             }
             throw err
@@ -304,7 +305,7 @@ export class StateManager {
         try {
             entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (isEnoent(err)) {
                 return []
             }
             throw err
@@ -317,7 +318,7 @@ export class StateManager {
             try {
                 runs.push(await this.read(entry.name))
             } catch (err) {
-                if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                if (isEnoent(err)) {
                     continue
                 } // no state.json yet
                 log.warn(`state: skipping unreadable run '${entry.name}': ${(err as Error).message}`)

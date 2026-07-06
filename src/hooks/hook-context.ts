@@ -18,6 +18,7 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- read-only path resolution (exists/lstat/readlink) for the hook's own decision; no writes, paths are internal derived paths under evaluation */
 import {existsSync} from 'node:fs'
+import {isEnoent} from '../shared/fs-errors.js'
 import {lstat, readlink} from 'node:fs/promises'
 import {isAbsolute, relative, sep} from 'node:path'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
@@ -74,7 +75,7 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
         // Only genuine absence means "no active run". Anything else (EACCES, EIO, …)
         // is an unreadable data dir → rethrow, which the guard pipeline maps to a
         // fail-closed deny rather than a silent allow.
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (isEnoent(err)) {
             return null
         }
         throw err

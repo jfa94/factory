@@ -5907,6 +5907,13 @@ ${result.stderr.trim()}`
 
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir2, readFile as readFile2 } from "node:fs/promises";
+
+// src/shared/fs-errors.ts
+function isEnoent(err) {
+  return err instanceof Error && err.code === "ENOENT";
+}
+
+// src/shared/jsonl.ts
 import { dirname as dirname2 } from "node:path";
 
 // src/shared/assert.ts
@@ -7413,7 +7420,7 @@ var StateManager = class _StateManager {
     try {
       raw = await readFile3(statePath, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -7437,7 +7444,7 @@ var StateManager = class _StateManager {
     try {
       entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return [];
       }
       throw err;
@@ -7450,7 +7457,7 @@ var StateManager = class _StateManager {
       try {
         runs.push(await this.read(entry.name));
       } catch (err) {
-        if (err.code === "ENOENT") {
+        if (isEnoent(err)) {
           continue;
         }
         log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
@@ -9761,7 +9768,7 @@ var SpecStore = class {
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -9800,7 +9807,7 @@ var SpecStore = class {
     try {
       entries = await readdir2(repoRoot);
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return false;
       }
       throw err;
@@ -9897,7 +9904,7 @@ var SpecStore = class {
     try {
       raw = await readFile4(path6, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         throw new Error(
           `spec ${specId} has no PRD snapshot (created by an older factory version) \u2014 re-run with \`--supersede\` to regenerate the spec`
         );
@@ -10628,7 +10635,7 @@ async function loadGateContract(rootAbs) {
   try {
     raw = await readFile5(join9(rootAbs, GATE_CONTRACT_REL), "utf8");
   } catch (err) {
-    if (err.code === "ENOENT") {
+    if (isEnoent(err)) {
       return { state: "absent" };
     }
     return { state: "invalid", error: `unreadable: ${err.message}` };
@@ -11330,7 +11337,7 @@ async function readJsonOrNull(file) {
   try {
     raw = await readFile6(file, "utf8");
   } catch (err) {
-    if (err.code !== "ENOENT") {
+    if (!isEnoent(err)) {
       log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
     }
     return null;
@@ -11764,7 +11771,7 @@ var FsCoverageStore = class {
     try {
       raw = await readFile8(file, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -12370,7 +12377,7 @@ var FsHoldoutStore = class {
       await readFile9(this.path(runId, taskId), "utf8");
       return true;
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return false;
       }
       throw err;
@@ -13703,7 +13710,7 @@ async function buildWorktreeSource(worktree, reviews) {
       const text = await readFile13(resolved, "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
-      if (err.code !== "ENOENT") {
+      if (!isEnoent(err)) {
         throw err;
       }
       lines.set(file, null);

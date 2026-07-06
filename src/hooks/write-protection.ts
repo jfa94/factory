@@ -39,13 +39,12 @@ import {
     toolNameOf,
     type HookDecision,
     type HookInput,
+    readStdin,
 } from './hook-io.js'
+import {SEGMENT_SPLIT_RE, basenameOf, unquote} from './token-helpers.js'
 
 /** Tools that perform a write and are therefore subject to TCB write-deny. */
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
-
-/** Compound-command / substitution splitter (same idiom as secret-guard). */
-const SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/
 
 /**
  * RHS of every output redirection: `> f`, `>> f`, `>| f`, `2> f`, `&> f`,
@@ -63,24 +62,6 @@ const ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 /** Pass-through wrappers skipped when locating the segment's binary. */
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'nohup', 'time', 'nice', 'stdbuf', 'xargs'])
-
-/** Strip one layer of surrounding single/double quotes from a token. */
-function unquote(tok: string): string {
-    let t = tok
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-        t = t.slice(1, -1)
-    }
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
-        t = t.slice(1, -1)
-    }
-    return t
-}
-
-/** Basename of a path-like token (last `/`-separated component). */
-function basenameOf(tok: string): string {
-    const parts = tok.split('/')
-    return parts[parts.length - 1] ?? tok
-}
 
 /** All non-flag args (the tee/rm/truncate rule). */
 function nonFlagArgs(args: string[]): string[] {
@@ -249,7 +230,7 @@ export async function runWriteProtection(
 ): Promise<ExitCode> {
     let input: HookInput | null
     try {
-        const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin()
+        const raw = deps.readRaw ? await deps.readRaw() : await readStdin()
         input = parseHookInput(raw)
     } catch {
         const decision = deny('malformed_hook_input', 'write-protection: unparseable hook input')
@@ -259,13 +240,4 @@ export async function runWriteProtection(
     const decision = decideWriteProtection(input, deps)
     emitPermissionDecision(decision)
     return decisionToExitCode(decision)
-}
-
-/** Read all of process.stdin as utf-8. */
-async function readAllStdin(): Promise<string> {
-    const chunks: Buffer[] = []
-    for await (const chunk of process.stdin) {
-        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array))
-    }
-    return Buffer.concat(chunks).toString('utf8')
 }

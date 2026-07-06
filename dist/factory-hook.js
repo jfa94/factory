@@ -1834,6 +1834,11 @@ function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
+// src/shared/fs-errors.ts
+function isEnoent(err) {
+  return err instanceof Error && err.code === "ENOENT";
+}
+
 // src/shared/assert.ts
 function nonNull(x, msg) {
   if (x == null) {
@@ -1974,7 +1979,8 @@ var UsageError = class extends Error {
   }
 };
 
-// src/hooks/git-args.ts
+// src/hooks/token-helpers.ts
+var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
 function unquote(tok) {
   let t = tok;
   if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
@@ -1985,10 +1991,12 @@ function unquote(tok) {
   }
   return t;
 }
-function basename2(tok) {
+function basenameOf(tok) {
   const parts = tok.split("/");
   return parts[parts.length - 1] ?? tok;
 }
+
+// src/hooks/git-args.ts
 function parseGitInvocation(command) {
   const ENV_PREFIX_RE2 = /^([A-Za-z_][A-Za-z0-9_]*)=/;
   const tokens = [];
@@ -2020,7 +2028,7 @@ function parseGitInvocation(command) {
   let i = 0;
   let foundGit = false;
   while (i < n) {
-    if (basename2(at(tokens, i)) === "git") {
+    if (basenameOf(at(tokens, i)) === "git") {
       foundGit = true;
       i++;
       break;
@@ -2426,7 +2434,7 @@ async function decideBranchProtection(input, deps = {}) {
 async function runBranchProtection(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "branch-protection: unparseable hook input");
@@ -2437,17 +2445,10 @@ async function runBranchProtection(_argv = [], deps = {}) {
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
 }
-async function readAllStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 // src/config/load.ts
 import { existsSync as existsSync2, readFileSync } from "node:fs";
-import { basename as basename3, dirname as dirname2, join as join2, resolve, sep } from "node:path";
+import { basename as basename2, dirname as dirname2, join as join2, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 
 // node_modules/zod/v3/external.js
@@ -6697,12 +6698,12 @@ function expectedDataDir(opts) {
   if (!current.startsWith(dataRoot + sep)) {
     return null;
   }
-  const currentBase = basename3(current);
+  const currentBase = basename2(current);
   if (currentBase === PLUGIN_NAME || currentBase.startsWith(`${PLUGIN_NAME}-`)) {
     return null;
   }
-  const pluginFromPath = basename3(dirname2(pluginRoot));
-  const marketplaceFromPath = basename3(dirname2(dirname2(pluginRoot)));
+  const pluginFromPath = basename2(dirname2(pluginRoot));
+  const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
   const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
@@ -6965,25 +6966,10 @@ function isTcbProtected(candidatePath, ctx = {}, cwd = process.cwd()) {
 // src/hooks/write-protection.ts
 var log5 = createLogger("write-protection");
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
-var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
 var REDIRECT_TARGET_RE = /(?:\d+|&)?>{1,2}\|?\s*("[^"]+"|'[^']+'|[^\s;|&<>()`]+)/g;
 var INPUT_REDIRECT_RE = /<+\s*[^\s;|&<>()`]*/g;
 var ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "command", "nohup", "time", "nice", "stdbuf", "xargs"]);
-function unquote2(tok) {
-  let t = tok;
-  if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-    t = t.slice(1, -1);
-  }
-  if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
-    t = t.slice(1, -1);
-  }
-  return t;
-}
-function basenameOf(tok) {
-  const parts = tok.split("/");
-  return parts[parts.length - 1] ?? tok;
-}
 function nonFlagArgs(args) {
   return args.filter((a) => !a.startsWith("-"));
 }
@@ -7030,11 +7016,11 @@ var WRITE_BINARIES = {
 function bashWriteTargets(command) {
   const out = /* @__PURE__ */ new Set();
   for (const m of command.matchAll(REDIRECT_TARGET_RE)) {
-    out.add(unquote2(nonNull(m[1])));
+    out.add(unquote(nonNull(m[1])));
   }
   for (const seg of command.split(SEGMENT_SPLIT_RE)) {
     const cleaned = seg.replace(REDIRECT_TARGET_RE, " ").replace(INPUT_REDIRECT_RE, " ");
-    const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).map(unquote2);
+    const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).map(unquote);
     let i = 0;
     while (i < tokens.length) {
       const tok = nonNull(tokens[i]);
@@ -7092,7 +7078,7 @@ function decideWriteProtection(input, deps = {}) {
 async function runWriteProtection(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin2();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "write-protection: unparseable hook input");
@@ -7102,13 +7088,6 @@ async function runWriteProtection(_argv = [], deps = {}) {
   const decision = decideWriteProtection(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin2() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/holdout-guard.ts
@@ -7185,7 +7164,7 @@ function decideHoldoutGuard(input, deps = {}) {
 async function runHoldoutGuard(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin3();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "holdout-guard: unparseable hook input");
@@ -7195,13 +7174,6 @@ async function runHoldoutGuard(_argv = [], deps = {}) {
   const decision = decideHoldoutGuard(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin3() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/secret-guard.ts
@@ -7225,7 +7197,7 @@ var PATH_BLOCKLIST = [
   /\.(gpg|asc|ppk)$/
 ];
 function findGitCommitOrPush(command) {
-  for (const seg of command.split(/&&|\|\||;|&|\||\n|\$\(|`|\)/)) {
+  for (const seg of command.split(SEGMENT_SPLIT_RE)) {
     const inv = parseGitInvocation(seg);
     if (inv.subcommand === "commit") {
       return { isCommit: true, inv };
@@ -7388,7 +7360,7 @@ async function decideSecretGuard(input, deps = {}) {
 async function runSecretGuard(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin4();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "secret-guard: unparseable hook input");
@@ -7398,13 +7370,6 @@ async function runSecretGuard(_argv = [], deps = {}) {
   const decision = await decideSecretGuard(input, deps);
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin4() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/verifier/deterministic/scope.ts
@@ -8220,7 +8185,7 @@ var StateManager = class _StateManager {
     try {
       raw = await readFile(statePath, "utf8");
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return null;
       }
       throw err;
@@ -8244,7 +8209,7 @@ var StateManager = class _StateManager {
     try {
       entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
     } catch (err) {
-      if (err.code === "ENOENT") {
+      if (isEnoent(err)) {
         return [];
       }
       throw err;
@@ -8257,7 +8222,7 @@ var StateManager = class _StateManager {
       try {
         runs.push(await this.read(entry.name));
       } catch (err) {
-        if (err.code === "ENOENT") {
+        if (isEnoent(err)) {
           continue;
         }
         log7.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
@@ -8488,7 +8453,7 @@ async function loadActiveRun(opts = {}) {
     const st = await lstat(link);
     isLink = st.isSymbolicLink() || st.isDirectory();
   } catch (err) {
-    if (err.code === "ENOENT") {
+    if (isEnoent(err)) {
       return null;
     }
     throw err;
@@ -8666,7 +8631,7 @@ async function decidePipelineGuards(input, deps = {}) {
 async function runPipelineGuards(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin5();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch {
     const decision2 = deny("malformed_hook_input", "pipeline-guards: unparseable hook input");
@@ -8687,13 +8652,6 @@ async function runPipelineGuards(_argv = [], deps = {}) {
   }
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
-}
-async function readAllStdin5() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/subagent-stop.ts
