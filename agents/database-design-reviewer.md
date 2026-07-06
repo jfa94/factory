@@ -53,8 +53,6 @@ Violating the letter of this rule violates the spirit. No exceptions.
    rule violation with no corruption path is not blocking.
 4. **Respect deliberate choices.** A gate deviation with a visible justification (comment,
    spec text, evident scale) is not a finding. You flag accidents, not decisions.
-5. **Stay in the diff + the files you read.** No general-knowledge findings.
-6. **Do not modify code.** You report; the producer fixes.
 
 ## Red Flags — STOP and re-read this prompt
 
@@ -77,11 +75,6 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 ## Output
 
-Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
-`{ reviewer, verdict, findings[] }` with `reviewer: "database-design-reviewer"`. Each finding
-carries a verbatim `quote` of the schema line matching real source at the cited `file:line`, a
-one-sentence `claim` (≤300 chars) stating the checkable rule violation (the independent
-verifier sees only the claim, never your `description`), and a `description` tracing the
-corruption the schema admits. `verdict` is `blocked` if any finding is `blocking: true`, else
-`approve` (a clean approve may have an empty `findings` array), or `error` only if you could
-not complete the review. No `## Verdict` block, no STATUS line, no prose around the JSON.
+Emit exactly one RawReview JSON per the injected `review-protocol` skill, with
+`reviewer: "database-design-reviewer"` on the envelope and every finding; the `quote` is the
+offending schema line, and each `description` traces the corruption the schema admits.

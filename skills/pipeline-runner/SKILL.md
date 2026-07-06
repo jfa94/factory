@@ -180,7 +180,7 @@ REFILL (run at loop entry and after every completion):
                       "spawn" → spawn EVERY entry in tenv.manifest.agents IN THE
                                 BACKGROUND (count-agnostic — spawn however many the
                                 manifest names, never assume a panel size), per the
-                                collection contract + spawn matrix below; add the task
+                                collection contract + spawn rule below; add the task
                                 to the table with tenv.result_key + the agent ids
                       "done"  → report tenv.outcome (a drop is loud + classified);
                                 REFILL again (a terminal task may unblock dependents)
@@ -358,12 +358,10 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    content-conditional `database-design-reviewer` when the task diff touches migration/schema
    files, Decision 51; each `subagent_type` = the entry's `agent_type` VERBATIM,
    isolation `"worktree"`, model mapped from each agent's `model`,
-   `max_turns` from the manifest). Construct each prompt per
-   `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff <tenv.base_ref>`,
-   emit ONE RawReview JSON:
-   `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","claim","description" } ] }`
-   (`quote` and `claim` REQUIRED — `claim` is the one-sentence checkable assertion, ≤300
-   chars; `file`+`line` make a finding citable; `findings` may be empty.)
+   `max_turns` from the manifest). Each prompt: inspect via
+   `git -C <tenv.worktree> diff <tenv.base_ref>` and emit ONE RawReview JSON exactly per
+   `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
+   reviewer via its frontmatter `skills:` — do not restate the shape).
 
     **Cross-vendor quality-reviewer (Δ U/S5).** The manifest carries the engine's
     resolved `cross_vendor` stamp; it decides how the `quality-reviewer` entry runs:

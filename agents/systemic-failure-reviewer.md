@@ -95,23 +95,17 @@ For each stateful surface in scope:
 6. **Anchor each candidate** — for each candidate, collect ≥2 verbatim quotes tracing the chain: trigger site, stuck/wrong-state site, and the missing repair site (or evidence of its absence). If you cannot collect ≥2 anchors, drop the candidate.
 7. **Verify anchors** — `Read` each cited file at the claimed line. Confirm the verbatim quote matches (±2 lines, collapsed whitespace). If any anchor fails to verify, drop the whole finding.
 
-## Output
+## Output — deltas from the injected `review-protocol` skill
 
-Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
-`{ reviewer, verdict, findings[] }` with `reviewer: "systemic-failure-reviewer"`. Each finding:
+Emit exactly one RawReview JSON per the protocol, with `reviewer: "systemic-failure-reviewer"`
+on the envelope and every finding, plus these role-specific deltas:
 
-- **Primary anchor** → `quote`/`file`/`line` (the CLI citation-verifies this exact substring).
-- **`claim`** — one sentence (≤300 chars) stating the checkable failure mode; the independent
-  verifier sees only the claim, never your `description`.
-- **`description`** leads with `[failure_mode: <name>]`, then the one-sentence `scenario`,
-  then any 2nd+ anchors quoted inline as `path:line "verbatim"`. Example:
+- The **primary anchor** fills `quote`/`file`/`line`; every **`description`** leads with
+  `[failure_mode: <name>]`, then the one-sentence `scenario`, then any 2nd+ anchors quoted
+  inline as `path:line "verbatim"`. Example:
   `[failure_mode: stuck-state] When the TDD gate rejects a test-writer commit, the retry loop
 re-runs the same generator with unchanged inputs → same rejection every time, no escape.
 src/producer/retry.ts:42 "for (let i = 0; i < MAX; i++) { await run(task); }"`
-
-`verdict` is `blocked` if any finding is `blocking: true`, else `approve` (a clean approve may
-have an empty `findings` array), or `error` only if you could not complete the review. No
-`## Verdict` block, no STATUS line, no prose around the JSON.
 
 **Severity / blocking:**
 
@@ -119,7 +113,7 @@ have an empty `findings` array), or `error` only if you could not complete the r
 - `error` + `blocking: true` — degraded recovery / brittle cross-stage contract that breaks under a realistic input; partial impact; the guard holding it back could fail.
 - `warning` + `blocking: false` — latent stuck state behind a guard that currently holds, or `over-pinned-contract` with limited blast radius.
 
-**Findings cap: ≤3.** Multi-anchor systemic findings carry higher blast radius and more false-discovery risk per slot. Drop the tail by scenario concreteness × blast radius. A single well-grounded `critical` finding is worth more than three speculative `warning` ones.
+**Findings cap: ≤3** (NOT the protocol's 10). Multi-anchor systemic findings carry higher blast radius and more false-discovery risk per slot. Drop the tail by scenario concreteness × blast radius. A single well-grounded `critical` finding is worth more than three speculative `warning` ones.
 
 ## Honesty
 

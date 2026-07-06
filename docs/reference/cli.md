@@ -635,10 +635,9 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
   `base_ref` is the per-run staging base that worktree forked from
   (`origin/staging-<run-id>`); the panel and holdout validator diff against THIS, never
   a bare `origin/staging` (which namespace-collides after a repo branch rename). Its
-  branch is resolved via `resolveStagingBranch(run_id, run.staging_branch)` — the name
-  pinned in `RunState` at create ([state model](./state-model.md#runstate)), not
-  recomputed — so it stays fixed to the branch already pushed to origin even if the
-  naming scheme changes mid-run.
+  branch is `run.staging_branch` — the name pinned in `RunState` at create
+  ([state model](./state-model.md#runstate)), never recomputed — so it stays fixed
+  to the branch already pushed to origin even if the naming scheme changes mid-run.
 - `{ kind:"done", run_id, task_id, outcome }` — the task is `done` or a
   classified `failed`.
 - `{ kind:"pause", run_id, task_id, scope, reason, resets_at_epoch? }`.

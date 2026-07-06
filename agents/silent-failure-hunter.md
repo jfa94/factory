@@ -50,8 +50,6 @@ Violating the letter of this rule violates the spirit. No exceptions.
 3. **Distinguish swallow from handle.** A catch that recovers correctly (retries, returns a
    typed error the caller checks, re-throws) is fine. Flag only catches that drop the error
    without recovering AND without surfacing it.
-4. **Stay in the diff + the files you read.** No general-knowledge findings.
-5. **Do not modify code.** You report; the producer fixes.
 
 ## Red Flags — STOP and re-read this prompt
 
@@ -61,7 +59,6 @@ Violating the letter of this rule violates the spirit. No exceptions.
 | "It returns a default on error, seems safe"   | A fallback that masks failure as success is the core bug. Trace what breaks.    |
 | "The return value is probably fine to ignore" | If it carries an error/status, ignoring it is the finding. Quote the call.      |
 | "It's an async call, the promise is handled"  | Unawaited / un-`.catch`ed promise = a dropped rejection. Quote the line.        |
-| "Describing the swallow is enough"            | Citation-verify drops it. Quote the silencing line at file:line.                |
 | "Empty catch is probably intentional"         | Intentional ignores must be explicit/justified. A bare `catch {}` is a finding. |
 
 ## What to flag vs. skip
@@ -89,12 +86,6 @@ members) — note at most one adjacent issue as `blocking: false`.
 
 ## Output
 
-Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
-`{ reviewer, verdict, findings[] }` with `reviewer: "silent-failure-hunter"`. Each finding
-carries a verbatim `quote` of the silencing line matching real source at the cited `file:line`,
-a one-sentence `claim` (≤300 chars) stating the checkable defect (the independent verifier sees
-only the claim, never your `description`), and a `description` tracing what breaks because the
-failure was hidden. `verdict` is `blocked`
-if any finding is `blocking: true`, else `approve` (a clean approve may have an empty `findings`
-array), or `error` only if you could not complete the review. No `## Verdict` block, no STATUS
-line, no prose around the JSON.
+Emit exactly one RawReview JSON per the injected `review-protocol` skill, with
+`reviewer: "silent-failure-hunter"` on the envelope and every finding; the `quote` is the
+silencing line, and each `description` traces what breaks because the failure was hidden.
