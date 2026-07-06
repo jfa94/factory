@@ -18,6 +18,7 @@
  * no-`--run` fallback is guarded against a foreign run by `--assert-owner`.
  */
 import {DefaultGitClient, resolveRepo, type GitClient} from '../git/index.js'
+import {optionalString, UsageError, type ParsedArgs} from './args.js'
 import type {RunState, StateManager} from '../core/state/index.js'
 
 /** Test seam: inject the git client + cwd (parity with {@link RunCreateOverrides}). */
@@ -45,4 +46,27 @@ export async function readCurrentForCwd(
         return null
     }
     return state.readCurrentForRepo(repo)
+}
+
+/**
+ * Resolve `runId` from `--run`, falling back to the caller-repo current run (LOUD
+ * if neither is available) — the shared head of every command that defaults to the
+ * active run (`resume`/`finalize`/phase commands, `rescue apply`/`auto`). `label`
+ * is the error-message prefix (e.g. `run finalize`, `rescue apply`).
+ */
+export async function resolveRunIdOrCurrent(
+    state: StateManager,
+    args: ParsedArgs,
+    label: string,
+    overrides: CurrentRunOverrides = {}
+): Promise<string> {
+    const explicit = optionalString(args.flag('run'))
+    if (explicit !== undefined) {
+        return explicit
+    }
+    const current = await readCurrentForCwd(state, overrides)
+    if (current === null) {
+        throw new UsageError(`${label}: no --run given and no current run`)
+    }
+    return current.run_id
 }

@@ -5943,6 +5943,9 @@ function nowIso() {
 function nowEpoch() {
   return Math.floor(Date.now() / 1e3);
 }
+function epochToIso(epochSeconds) {
+  return new Date(epochSeconds * 1e3).toISOString();
+}
 
 // src/shared/secret-patterns.ts
 var SECRET_CONTENT_PATTERNS = [
@@ -7716,6 +7719,10 @@ function emitJson(value) {
 function emitLine(line) {
   process.stdout.write(line + "\n");
 }
+function emitHelp(text) {
+  emitLine(text);
+  return EXIT.OK;
+}
 function emitError(line) {
   process.stderr.write(line + "\n");
 }
@@ -7752,8 +7759,7 @@ bare string. Examples:
 async function run(argv) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(HELP);
-    return EXIT.OK;
+    return emitHelp(HELP);
   }
   const sets = args.all("set");
   const unsets = args.all("unset");
@@ -9202,6 +9208,13 @@ function durationSeconds(startedAt, endedAt) {
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
+function touchMetricOf(run10) {
+  const touches = run10.human_touches.length;
+  if (touches === 0) {
+    return null;
+  }
+  return (run10.status === "completed" ? 1 : 0) / touches;
+}
 function buildRunSummary(run10, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
@@ -9218,7 +9231,7 @@ function buildRunSummary(run10, report, opts = {}) {
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
   const touches = run10.human_touches.length;
-  const touchMetric = touches === 0 ? null : (run10.status === "completed" ? 1 : 0) / touches;
+  const touchMetric = touchMetricOf(run10);
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -10268,20 +10281,6 @@ function decideSpecReview(verdict, opts = {}) {
   };
 }
 
-// src/spec/pipeline.ts
-function buildManifest(repo, issueNumber, generated) {
-  const specId = makeSpecId(issueNumber, generated.slug);
-  const slug = specId.replace(/^\d+-/, "");
-  return parseSpecManifest({
-    spec_id: specId,
-    issue_number: issueNumber,
-    slug,
-    repo,
-    generated_at: nowIso(),
-    tasks: generated.tasks
-  });
-}
-
 // src/spec/build.ts
 import { join as join8 } from "node:path";
 var PRD_FILE2 = "prd.json";
@@ -10379,6 +10378,18 @@ async function storeSpec(deps, repo, issue) {
   const prd = await readJsonFile(prdPath);
   const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
+}
+function buildManifest(repo, issueNumber, generated) {
+  const specId = makeSpecId(issueNumber, generated.slug);
+  const slug = specId.replace(/^\d+-/, "");
+  return parseSpecManifest({
+    spec_id: specId,
+    issue_number: issueNumber,
+    slug,
+    repo,
+    generated_at: nowIso(),
+    tasks: generated.tasks
+  });
 }
 
 // src/producer/agents.ts
@@ -12568,6 +12579,15 @@ async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
   return parseE2eReport(result.stdout, result.code);
 }
 
+// src/orchestrator/readiness.ts
+function depsSatisfied(run10, depends) {
+  return depends.every((d) => run10.tasks[d]?.status === "done");
+}
+function isUnsatisfiableDep(run10, depId) {
+  const dep = run10.tasks[depId];
+  return dep === void 0 || dep.status === "failed";
+}
+
 // src/rescue/scan.ts
 function dispositionOf(status, failureClass) {
   if (status === "done") {
@@ -12580,15 +12600,6 @@ function dispositionOf(status, failureClass) {
     return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
   }
   return "stuck";
-}
-function depsSatisfied(run10, depends) {
-  return depends.every((d) => run10.tasks[d]?.status === "done");
-}
-function hasUnsatisfiableDep(run10, depends) {
-  return depends.some((d) => {
-    const dep = run10.tasks[d];
-    return dep === void 0 || dep.status === "failed";
-  });
 }
 function scanRun(run10) {
   const all = Object.values(run10.tasks);
@@ -12609,7 +12620,7 @@ function scanRun(run10) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || t.depends_on.some((d) => isUnsatisfiableDep(run10, d)))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run10.e2e_phase?.status === "failed";
@@ -14496,13 +14507,6 @@ async function applyCircuitBreaker(deps, runId) {
 }
 
 // src/orchestrator/next.ts
-function depsSatisfied2(run10, task) {
-  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
-}
-function isUnsatisfiableDep(run10, depId) {
-  const dep = run10.tasks[depId];
-  return dep === void 0 || dep.status === "failed";
-}
 async function wantsDocs(deps, run10) {
   if (run10.docs?.status === "done") {
     return false;
@@ -14649,7 +14653,7 @@ async function nextTask(deps, runId) {
     run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run10, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run10, t.depends_on));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -15670,51 +15674,6 @@ async function runAssessmentRecord(deps, runId, results) {
   return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
 }
 
-// src/cli/wiring.ts
-function splitRepo(slug) {
-  if (!isValidRepoSlug(slug)) {
-    throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
-  }
-  const parts = slug.split("/");
-  return { owner: at(parts, 0), repo: at(parts, 1) };
-}
-async function loadOrchestratorDeps(opts) {
-  const deps = await loadCliDeps(opts);
-  return {
-    ...deps,
-    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
-    now: nowEpoch,
-    docsApplicable: () => isDocsApplicable(process.cwd())
-  };
-}
-async function loadCliDeps(opts) {
-  const dataDir = resolveDataDir(opts);
-  const dirOpts = { ...opts, dataDir };
-  const config = loadConfig(dirOpts);
-  const state = new StateManager({ ...dirOpts });
-  const run10 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
-  const { owner, repo } = splitRepo(run10.spec.repo);
-  return {
-    config,
-    spec,
-    git: new DefaultGitClient(),
-    gh: new DefaultGhClient(),
-    tools: defaultGateTools(config.quality.gateEnv),
-    artifacts: new FsArtifactStore(dataDir),
-    holdout: new FsHoldoutStore(dataDir),
-    dataDir,
-    owner,
-    repo,
-    // The explicit `--ship-mode` flag overrides; otherwise honor the value
-    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
-    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
-    shipMode: opts.shipMode ?? run10.ship_mode,
-    state,
-    run: run10
-  };
-}
-
 // src/orchestrator/lifecycle.ts
 function seedTasksFromSpec(request) {
   const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
@@ -15837,7 +15796,7 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
     case "not-resumable":
       return { kind: "resumed", run: run10 };
     case "resume": {
-      const at2 = new Date(nowEpochSec * 1e3).toISOString();
+      const at2 = epochToIso(nowEpochSec);
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
@@ -15865,6 +15824,55 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 // src/cli/subcommands/run.ts
 import { join as join22 } from "node:path";
 
+// src/cli/wiring.ts
+function splitRepo(slug) {
+  if (!isValidRepoSlug(slug)) {
+    throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
+  }
+  const parts = slug.split("/");
+  return { owner: at(parts, 0), repo: at(parts, 1) };
+}
+async function loadOrchestratorDeps(opts) {
+  const deps = await loadCliDeps(opts);
+  return {
+    ...deps,
+    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
+    now: nowEpoch,
+    docsApplicable: () => isDocsApplicable(process.cwd())
+  };
+}
+function openState() {
+  const dataDir = resolveDataDir({});
+  return { dataDir, state: new StateManager({ dataDir }) };
+}
+async function loadCliDeps(opts) {
+  const dataDir = resolveDataDir(opts);
+  const dirOpts = { ...opts, dataDir };
+  const config = loadConfig(dirOpts);
+  const state = new StateManager({ ...dirOpts });
+  const run10 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
+  const { owner, repo } = splitRepo(run10.spec.repo);
+  return {
+    config,
+    spec,
+    git: new DefaultGitClient(),
+    gh: new DefaultGhClient(),
+    tools: defaultGateTools(config.quality.gateEnv),
+    artifacts: new FsArtifactStore(dataDir),
+    holdout: new FsHoldoutStore(dataDir),
+    dataDir,
+    owner,
+    repo,
+    // The explicit `--ship-mode` flag overrides; otherwise honor the value
+    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
+    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
+    shipMode: opts.shipMode ?? run10.ship_mode,
+    state,
+    run: run10
+  };
+}
+
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
   const cwd = overrides.cwd ?? process.cwd();
@@ -15876,6 +15884,17 @@ async function readCurrentForCwd(state, overrides = {}) {
     return null;
   }
   return state.readCurrentForRepo(repo);
+}
+async function resolveRunIdOrCurrent(state, args, label, overrides = {}) {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== void 0) {
+    return explicit;
+  }
+  const current = await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    throw new UsageError(`${label}: no --run given and no current run`);
+  }
+  return current.run_id;
 }
 
 // src/autonomy/mode.ts
@@ -16102,8 +16121,7 @@ async function runCreate(argv, overrides = {}) {
     booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e", "approve-spec"]
   });
   if (args.flag("help") === true) {
-    emitLine(CREATE_HELP);
-    return EXIT.OK;
+    return emitHelp(CREATE_HELP);
   }
   requireAutonomousMode();
   const cwd = overrides.cwd ?? process.cwd();
@@ -16246,8 +16264,7 @@ async function runCreate(argv, overrides = {}) {
 async function runResume(argv) {
   const args = parseArgs(argv, { booleans: ["no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
-    emitLine(RESUME_HELP);
-    return EXIT.OK;
+    return emitHelp(RESUME_HELP);
   }
   if (args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
@@ -16258,7 +16275,7 @@ async function runResume(argv) {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "resume");
+  const runId = await resolveRunIdOrCurrent(state, args, "resume");
   if (args.flag("ignore-quota") === true) {
     await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
   }
@@ -16270,41 +16287,31 @@ async function runResume(argv) {
   emitJson(envelope);
   return EXIT.OK;
 }
-async function resolveRunId(state, args, action, overrides = {}) {
-  const explicit = optionalString(args.flag("run"));
-  if (explicit !== void 0) {
-    return explicit;
-  }
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`run ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
-}
 async function runFinalize(argv) {
   const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP);
-    return EXIT.OK;
+    return emitHelp(FINALIZE_HELP);
   }
   const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "finalize");
+  const { dataDir, state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "run finalize");
+  emitJson(await finalizedEnvelope(dataDir, runId, shipMode));
+  return EXIT.OK;
+}
+async function finalizedEnvelope(dataDir, runId, shipMode) {
   const deps = await loadCliDeps({
     dataDir,
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
   const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
-  emitJson({
+  return {
     kind: "finalized",
     run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     failure_comment_posted: failureCommentPosted
-  });
-  return EXIT.OK;
+  };
 }
 var DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
@@ -16318,9 +16325,8 @@ function phaseCommand(opts) {
       emitLine(opts.help);
       return EXIT.OK;
     }
-    const dataDir = resolveDataDir({});
-    const state = new StateManager({ dataDir });
-    const runId = await resolveRunId(state, args, opts.phase);
+    const { dataDir, state } = openState();
+    const runId = await resolveRunIdOrCurrent(state, args, `run ${opts.phase}`);
     const deps = await loadCliDeps({ dataDir, runId });
     const results = await parseResultsFlag(args, async (path6) => opts.parse(await readJsonInput(path6)));
     emitJson(results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId));
@@ -16403,8 +16409,7 @@ async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
 async function runCancel(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["cleanup"] });
   if (args.flag("help") === true) {
-    emitLine(CANCEL_HELP);
-    return EXIT.OK;
+    return emitHelp(CANCEL_HELP);
   }
   const dataDir = resolveDataDir(overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {});
   const state = new StateManager({ dataDir });
@@ -16545,8 +16550,7 @@ async function run3(argv) {
   }
   const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
   if (args.flag("help") === true) {
-    emitLine(SPEC_HELP);
-    return EXIT.OK;
+    return emitHelp(SPEC_HELP);
   }
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
@@ -17028,19 +17032,7 @@ async function debugFinalize(deps, runId, shipMode) {
   if (!new StateManager({ dataDir: deps.dataDir }).exists(runId)) {
     return { kind: "nothing-to-ship", run_id: runId };
   }
-  const cliDeps = await loadCliDeps({
-    dataDir: deps.dataDir,
-    runId,
-    ...shipMode !== void 0 ? { shipMode } : {}
-  });
-  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(cliDeps, runId);
-  return {
-    kind: "finalized",
-    run: run10,
-    report,
-    ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
-    failure_comment_posted: failureCommentPosted
-  };
+  return finalizedEnvelope(deps.dataDir, runId, shipMode);
 }
 function wireDeps2(overrides = {}) {
   const hasDataDirOverride = overrides.dataDir !== void 0;
@@ -17065,8 +17057,7 @@ function parseMaxPasses(raw) {
 async function runDebugStart(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["full", "no-ship", "author-e2e"] });
   if (args.flag("help") === true) {
-    emitLine(START_HELP);
-    return EXIT.OK;
+    return emitHelp(START_HELP);
   }
   const base = optionalString(args.flag("base"));
   const maxPassesRaw = optionalString(args.flag("max-passes"));
@@ -17086,8 +17077,7 @@ async function runDebugStart(argv, overrides = {}) {
 async function runDebugReview(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["emit", "record"] });
   if (args.flag("help") === true) {
-    emitLine(REVIEW_HELP);
-    return EXIT.OK;
+    return emitHelp(REVIEW_HELP);
   }
   const emit2 = args.flag("emit") === true;
   const record = args.flag("record") === true;
@@ -17122,8 +17112,7 @@ async function runDebugSpec(argv, overrides = {}) {
   }
   const args = parseArgs(argv.slice(1), {});
   if (args.flag("help") === true) {
-    emitLine(SPEC_SUB_HELP);
-    return EXIT.OK;
+    return emitHelp(SPEC_SUB_HELP);
   }
   const runId = args.requireFlag("run");
   const deps = wireDeps2(overrides);
@@ -17133,8 +17122,7 @@ async function runDebugSpec(argv, overrides = {}) {
 async function runDebugSeed(argv, overrides = {}) {
   const args = parseArgs(argv, {});
   if (args.flag("help") === true) {
-    emitLine(SEED_HELP);
-    return EXIT.OK;
+    return emitHelp(SEED_HELP);
   }
   const runId = args.requireFlag("run");
   const deps = wireDeps2(overrides);
@@ -17144,8 +17132,7 @@ async function runDebugSeed(argv, overrides = {}) {
 async function runDebugFinalize(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
-    emitLine(FINALIZE_HELP2);
-    return EXIT.OK;
+    return emitHelp(FINALIZE_HELP2);
   }
   const runId = args.requireFlag("run");
   const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
@@ -17189,7 +17176,7 @@ Usage:
 Exit OK with {"current": null} when there is no current run.`;
 function summarize2(run10) {
   const lines = [
-    `run ${run10.run_id}  status=${run10.status}  execution_mode=`,
+    `run ${run10.run_id}  status=${run10.status}  execution_mode=${run10.execution_mode}`,
     `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
     `tasks (${Object.keys(run10.tasks).length}):`
   ];
@@ -17211,8 +17198,7 @@ function summarize2(run10) {
 async function runState(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["summary"] });
   if (args.flag("help") === true) {
-    emitLine(HELP2);
-    return EXIT.OK;
+    return emitHelp(HELP2);
   }
   const state = new StateManager();
   const runId = args.positionals[0];
@@ -17725,8 +17711,7 @@ async function resolveScaffoldRepo(args, overrides = {}) {
 async function run5(argv) {
   const args = parseArgs(argv, { booleans: ["provision"] });
   if (args.flag("help") === true) {
-    emitLine(HELP3);
-    return EXIT.OK;
+    return emitHelp(HELP3);
   }
   const waived = args.all("waive").map(String);
   for (const w of waived) {
@@ -17887,25 +17872,12 @@ function probeFrom(overrides) {
     commitsAhead: (base, branch) => git.commitsAhead(base, branch)
   };
 }
-async function resolveRunId2(state, args, action, overrides) {
-  const explicit = args.flag("run");
-  if (typeof explicit === "string" && explicit.length > 0) {
-    return explicit;
-  }
-  const current = await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    throw new UsageError(`rescue ${action}: no --run given and no current run`);
-  }
-  return current.run_id;
-}
 async function runScan(argv, overrides = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(SCAN_HELP);
-    return EXIT.OK;
+    return emitHelp(SCAN_HELP);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
+  const { state } = openState();
   const explicit = args.flag("run");
   const current = typeof explicit === "string" && explicit.length > 0 ? await state.read(explicit) : await readCurrentForCwd(state, overrides);
   if (current === null) {
@@ -17932,12 +17904,10 @@ async function runApply(argv, overrides = {}) {
     booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup", "reset-traceability"]
   });
   if (args.flag("help") === true) {
-    emitLine(APPLY_HELP);
-    return EXIT.OK;
+    return emitHelp(APPLY_HELP);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId2(state, args, "apply", overrides);
+  const { dataDir, state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "rescue apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
   const resetE2e = args.flag("reset-e2e") === true;
@@ -17969,13 +17939,11 @@ async function resumeRun(state, runId, dataDir, opts = {}) {
 async function runAuto(argv, overrides = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(AUTO_HELP);
-    return EXIT.OK;
+    return emitHelp(AUTO_HELP);
   }
   requireAutonomousMode();
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId2(state, args, "auto", overrides);
+  const { state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "rescue auto", overrides);
   const current = await state.read(runId);
   const scan = scanRun(current);
   const at2 = overrides.now?.() ?? nowIso();
@@ -18057,13 +18025,6 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
-function touchMetricOf(run10) {
-  const touches = run10.human_touches.length;
-  if (touches === 0) {
-    return null;
-  }
-  return (run10.status === "completed" ? 1 : 0) / touches;
-}
 async function runFleet(state) {
   const all = await state.listRuns();
   const runs = all.map((r) => ({
@@ -18082,11 +18043,9 @@ async function runFleet(state) {
 async function runScore(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["fleet"] });
   if (args.flag("help") === true) {
-    emitLine(HELP4);
-    return EXIT.OK;
+    return emitHelp(HELP4);
   }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
+  const { dataDir, state } = openState();
   if (args.flag("fleet") === true) {
     return runFleet(state);
   }
@@ -18131,8 +18090,7 @@ Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    emitLine(HELP5);
-    return EXIT.OK;
+    return emitHelp(HELP5);
   }
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
@@ -18187,8 +18145,7 @@ function assertCurrentOwner(current, assertOwner) {
 async function run8(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    emitLine(HELP6);
-    return EXIT.OK;
+    return emitHelp(HELP6);
   }
   const explicit = args.flag("run");
   let runId;
@@ -18323,8 +18280,7 @@ async function passthrough(payload, deps) {
 async function runStatusline(argv = [], deps = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    emitLine(HELP7);
-    return EXIT.OK;
+    return emitHelp(HELP7);
   }
   const payload = deps.readStdin ? await deps.readStdin() : await readStdin(deps.stdin);
   let parsed;
@@ -18646,8 +18602,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 async function run9(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
-    emitLine(HELP8);
-    return EXIT.OK;
+    return emitHelp(HELP8);
   }
   const verb = args.positionals[0];
   if (verb === "status") {

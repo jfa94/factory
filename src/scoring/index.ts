@@ -19,7 +19,7 @@ export type {
     BuildPartialReportOptions,
 } from './partial-report.js'
 
-export {buildRunSummary, renderRunSummaryMarkdown} from './summary.js'
+export {buildRunSummary, renderRunSummaryMarkdown, touchMetricOf} from './summary.js'
 export type {RunSummary, RunEffort, ShippedPr, BuildRunSummaryOptions} from './summary.js'
 
 export {emitMetric, readMetrics, recordRunFinalized} from './telemetry.js'

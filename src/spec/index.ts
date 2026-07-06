@@ -71,7 +71,7 @@ export {
 } from './review.js'
 
 // Durable spec-request builder (shared by the `spec store` CLI seam).
-export {buildManifest} from './pipeline.js'
+export {buildManifest} from './build.js'
 
 // Deterministic spec-build seam (resolve → gate → store; the `factory spec`
 // CLI + `/factory:debug`'s synthetic-PRD deps both drive these unchanged).

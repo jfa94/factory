@@ -10,11 +10,12 @@
  * rescue-diagnostic/rescue-reconciler spawns live in the command/skill layer.
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {openState} from '../wiring.js'
 import {parseArgs, UsageError} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
-import {loadConfig, resolveDataDir} from '../../config/index.js'
-import {StateManager} from '../../core/state/index.js'
-import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
+import {emitJson, emitLine, emitHelp} from '../io.js'
+import {loadConfig} from '../../config/index.js'
+import {type StateManager} from '../../core/state/index.js'
+import {readCurrentForCwd, type CurrentRunOverrides, resolveRunIdOrCurrent} from '../current.js'
 import {scanRun, applyRescue, assessWork, type RescueScan, type WorkProbe} from '../../rescue/index.js'
 import {DefaultGitClient, DefaultGhClient, type GhClient} from '../../git/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
@@ -185,36 +186,13 @@ function probeFrom(overrides: RescueOverrides): WorkProbe {
     }
 }
 
-/**
- * Resolve `runId` from `--run`, falling back to `runs/current` (LOUD if neither is
- * available). Mirrors the run-lifecycle commands' default-to-active-run behavior.
- */
-async function resolveRunId(
-    state: StateManager,
-    args: ReturnType<typeof parseArgs>,
-    action: string,
-    overrides: CurrentRunOverrides
-): Promise<string> {
-    const explicit = args.flag('run')
-    if (typeof explicit === 'string' && explicit.length > 0) {
-        return explicit
-    }
-    const current = await readCurrentForCwd(state, overrides)
-    if (current === null) {
-        throw new UsageError(`rescue ${action}: no --run given and no current run`)
-    }
-    return current.run_id
-}
-
 export async function runScan(argv: string[], overrides: RescueOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv)
     if (args.flag('help') === true) {
-        emitLine(SCAN_HELP)
-        return EXIT.OK
+        return emitHelp(SCAN_HELP)
     }
 
-    const dataDir = resolveDataDir({})
-    const state = new StateManager({dataDir})
+    const {state} = openState()
 
     // A missing run is a routed answer here, not a usage error — the scan behind
     // /factory:resume must be safe to fire blind.
@@ -252,13 +230,11 @@ export async function runApply(argv: string[], overrides: CurrentRunOverrides = 
         booleans: ['include-dead-ends', 'reset-e2e', 'recheck-rollup', 'reset-traceability'],
     })
     if (args.flag('help') === true) {
-        emitLine(APPLY_HELP)
-        return EXIT.OK
+        return emitHelp(APPLY_HELP)
     }
 
-    const dataDir = resolveDataDir({})
-    const state = new StateManager({dataDir})
-    const runId = await resolveRunId(state, args, 'apply', overrides)
+    const {dataDir, state} = openState()
+    const runId = await resolveRunIdOrCurrent(state, args, 'rescue apply', overrides)
     const tasks = args.all('task')
     const includeDeadEnds = args.flag('include-dead-ends') === true
     const resetE2e = args.flag('reset-e2e') === true
@@ -312,14 +288,12 @@ async function resumeRun(
 export async function runAuto(argv: string[], overrides: RescueOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv)
     if (args.flag('help') === true) {
-        emitLine(AUTO_HELP)
-        return EXIT.OK
+        return emitHelp(AUTO_HELP)
     }
     requireAutonomousMode()
 
-    const dataDir = resolveDataDir({})
-    const state = new StateManager({dataDir})
-    const runId = await resolveRunId(state, args, 'auto', overrides)
+    const {state} = openState()
+    const runId = await resolveRunIdOrCurrent(state, args, 'rescue auto', overrides)
     const current = await state.read(runId)
     const scan = scanRun(current)
 

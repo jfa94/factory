@@ -8,7 +8,7 @@
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
-import {emitJson, emitLine, emitError} from '../io.js'
+import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {defaultSpecBuildRoot} from '../../core/state/paths.js'
 import {
@@ -113,8 +113,7 @@ async function run(argv: string[]): Promise<ExitCode> {
 
     const args = parseArgs(argv.slice(1), {booleans: ['supersede']})
     if (args.flag('help') === true) {
-        emitLine(SPEC_HELP)
-        return EXIT.OK
+        return emitHelp(SPEC_HELP)
     }
 
     // Validate the required --issue FIRST (synchronous usage edge), then resolve the

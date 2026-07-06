@@ -8,7 +8,8 @@ import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {readCurrentForCwd} from './current.js'
+import {readCurrentForCwd, resolveRunIdOrCurrent} from './current.js'
+import {parseArgs} from './args.js'
 import {StateManager} from '../core/state/index.js'
 import {FakeGitClient} from '../git/index.js'
 import type {SpecPointer} from '../core/state/index.js'
@@ -70,5 +71,33 @@ describe("readCurrentForCwd — per-repo current run from the caller's checkout"
     it('returns null when there is no run at all', async () => {
         const state = mgr()
         expect(await readCurrentForCwd(state, {gitClient: git('acme/widgets'), cwd: '/x'})).toBeNull()
+    })
+})
+
+describe('resolveRunIdOrCurrent — --run flag with current-run fallback', () => {
+    it('returns the explicit --run value without touching the store', async () => {
+        const state = mgr()
+        const id = await resolveRunIdOrCurrent(state, parseArgs(['--run', 'run-X']), 'run finalize', {
+            gitClient: git(null),
+            cwd: '/x',
+        })
+        expect(id).toBe('run-X')
+    })
+
+    it("falls back to the caller repo's current run", async () => {
+        const state = mgr()
+        await state.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specWidgets})
+        const id = await resolveRunIdOrCurrent(state, parseArgs([]), 'rescue apply', {
+            gitClient: git('acme/widgets'),
+            cwd: '/x',
+        })
+        expect(id).toBe('run-A')
+    })
+
+    it('throws a labeled UsageError when neither --run nor a current run exists', async () => {
+        const state = mgr()
+        await expect(
+            resolveRunIdOrCurrent(state, parseArgs([]), 'rescue apply', {gitClient: git(null), cwd: '/x'})
+        ).rejects.toThrow('rescue apply: no --run given and no current run')
     })
 })

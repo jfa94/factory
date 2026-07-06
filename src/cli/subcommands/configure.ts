@@ -13,7 +13,7 @@
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitHelp} from '../io.js'
 import {
     loadConfig,
     readRawConfig,
@@ -43,8 +43,7 @@ bare string. Examples:
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv)
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
     const sets = args.all('set')

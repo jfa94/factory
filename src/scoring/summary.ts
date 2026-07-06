@@ -98,6 +98,15 @@ function durationSeconds(startedAt: string, endedAt: string | null): number | nu
  * Pure — no I/O, no clock except the injectable `now`. The report is passed in
  * (not re-derived) so the summary and the partial report agree by construction.
  */
+/** S11 — `(completed ? 1 : 0) / touches`, or null on an empty ledger (0-division guard). Derived, never stored. */
+export function touchMetricOf(run: {status: string; human_touches: readonly unknown[]}): number | null {
+    const touches = run.human_touches.length
+    if (touches === 0) {
+        return null
+    }
+    return (run.status === 'completed' ? 1 : 0) / touches
+}
+
 export function buildRunSummary(
     run: RunState,
     report: PartialRunReport,
@@ -124,9 +133,9 @@ export function buildRunSummary(
         ...(s.branch !== undefined ? {branch: s.branch} : {}),
     }))
 
-    // S11 touch metric — derived, never stored. Empty ledger → null (0-division guard).
+    // S11 touch metric — derived, never stored (see touchMetricOf).
     const touches = run.human_touches.length
-    const touchMetric = touches === 0 ? null : (run.status === 'completed' ? 1 : 0) / touches
+    const touchMetric = touchMetricOf(run)
 
     return {
         run_id: run.run_id,

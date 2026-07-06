@@ -28,7 +28,7 @@ import {fileURLToPath} from 'node:url'
 
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, optionalString} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
+import {emitJson, emitHelp} from '../io.js'
 import {createLogger} from '../../shared/index.js'
 import {
     DefaultGitClient,
@@ -492,8 +492,7 @@ export async function resolveScaffoldRepo(
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['provision']})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
     // --waive takes exactly "mutation" or "coverage" (the scaffold-waivable gates).

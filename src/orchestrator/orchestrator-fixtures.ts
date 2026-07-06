@@ -8,6 +8,7 @@
  * identically. New option is additive-only.
  */
 import {mkdtemp, rm} from 'node:fs/promises'
+import {epochToIso} from '../shared/time.js'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -189,9 +190,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
             opts.runStatusOverride !== undefined
                 ? {
                       status: opts.runStatusOverride,
-                      ...(isTerminalRunStatus(opts.runStatusOverride)
-                          ? {ended_at: new Date(NOW * 1000).toISOString()}
-                          : {}),
+                      ...(isTerminalRunStatus(opts.runStatusOverride) ? {ended_at: epochToIso(NOW)} : {}),
                   }
                 : {}
         return {...s, ...statusPatch, tasks: next}

@@ -25,11 +25,11 @@
 import {join} from 'node:path'
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError, optionalString, parseResultsFlag} from '../args.js'
-import {emitJson, emitLine, emitError} from '../io.js'
+import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {StateManager, specDir} from '../../core/state/index.js'
 import {SpecStore} from '../../spec/index.js'
-import {makeRunId, validateId} from '../../shared/ids.js'
+import {makeRunId, validateId} from '../../shared/index.js'
 import {nowEpoch} from '../../shared/time.js'
 import {nonNull} from '../../shared/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
@@ -50,7 +50,7 @@ import {
     TraceabilityResultsSchema,
     readJsonInput,
 } from '../../orchestrator/index.js'
-import {loadCliDeps, type CliDeps} from '../wiring.js'
+import {loadCliDeps, type CliDeps, openState} from '../wiring.js'
 import {emitMetric} from '../../scoring/index.js'
 import {
     DefaultGitClient,
@@ -60,7 +60,7 @@ import {
     type GitClient,
     type GhClient,
 } from '../../git/index.js'
-import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
+import {readCurrentForCwd, type CurrentRunOverrides, resolveRunIdOrCurrent} from '../current.js'
 import {requireAutonomousMode} from '../../autonomy/mode.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
 import {
@@ -233,8 +233,7 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
         booleans: ['new', 'no-ship', 'supersede', 'resume', 'ignore-quota', 'e2e', 'approve-spec'],
     })
     if (args.flag('help') === true) {
-        emitLine(CREATE_HELP)
-        return EXIT.OK
+        return emitHelp(CREATE_HELP)
     }
     // Mandatory autonomous-mode gate: the pipeline runs unattended, no opt-out.
     // A run can only be born in the foreground runner session (which has the
@@ -421,8 +420,7 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
 async function runResume(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['no-ship', 'ignore-quota', 'e2e']})
     if (args.flag('help') === true) {
-        emitLine(RESUME_HELP)
-        return EXIT.OK
+        return emitHelp(RESUME_HELP)
     }
     // --no-ship/--e2e select ship/e2e at CREATE; a resumed run keeps them as born
     // (immutable). Silently ignoring these flags here is the quieter twin of the
@@ -439,7 +437,7 @@ async function runResume(argv: string[]): Promise<ExitCode> {
     const dataDir = resolveDataDir({})
     const config = loadConfig({dataDir})
     const state = new StateManager({dataDir})
-    const runId = await resolveRunId(state, args, 'resume')
+    const runId = await resolveRunIdOrCurrent(state, args, 'resume')
 
     // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
     // to resume regardless of the live reading. Persisting also prevents re-suspension on
@@ -457,56 +455,51 @@ async function runResume(argv: string[]): Promise<ExitCode> {
     return EXIT.OK
 }
 
-/**
- * Resolve `runId` from `--run`, falling back to `runs/current` (LOUD if neither is
- * available — the shared head of `resume`/`finalize`, which both default to the
- * active run).
- */
-async function resolveRunId(
-    state: StateManager,
-    args: ReturnType<typeof parseArgs>,
-    action: string,
-    overrides: CurrentRunOverrides = {}
-): Promise<string> {
-    const explicit = optionalString(args.flag('run'))
-    if (explicit !== undefined) {
-        return explicit
-    }
-    const current = await readCurrentForCwd(state, overrides)
-    if (current === null) {
-        throw new UsageError(`run ${action}: no --run given and no current run`)
-    }
-    return current.run_id
-}
-
 async function runFinalize(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['no-ship']})
     if (args.flag('help') === true) {
-        emitLine(FINALIZE_HELP)
-        return EXIT.OK
+        return emitHelp(FINALIZE_HELP)
     }
 
     // --no-ship forces no-merge for THIS finalize; otherwise honor the run's persisted
     // ship_mode (loadCliDeps falls back to it — never a hard-coded default).
     const shipMode: RunState['ship_mode'] | undefined = args.flag('no-ship') === true ? 'no-merge' : undefined
-    const dataDir = resolveDataDir({})
-    const state = new StateManager({dataDir})
-    const runId = await resolveRunId(state, args, 'finalize')
+    const {dataDir, state} = openState()
+    const runId = await resolveRunIdOrCurrent(state, args, 'run finalize')
 
+    emitJson(await finalizedEnvelope(dataDir, runId, shipMode))
+    return EXIT.OK
+}
+
+/**
+ * The shared finalize core — `loadCliDeps` → `finalizeRun` → the `finalized`
+ * envelope. `run finalize` and `debug finalize` both delegate here so the two
+ * commands can never drift (debug adds only its nothing-to-ship guard).
+ */
+export async function finalizedEnvelope(
+    dataDir: string,
+    runId: string,
+    shipMode?: RunState['ship_mode']
+): Promise<{
+    kind: 'finalized'
+    run: RunState
+    report: Awaited<ReturnType<typeof finalizeRun>>['report']
+    rollup?: Exclude<Awaited<ReturnType<typeof finalizeRun>>['rollup'], undefined>
+    failure_comment_posted: boolean
+}> {
     const deps = await loadCliDeps({
         dataDir,
         runId,
         ...(shipMode !== undefined ? {shipMode} : {}),
     })
     const {run, report, rollup, failureCommentPosted} = await finalizeRun(deps, runId)
-    emitJson({
+    return {
         kind: 'finalized',
         run,
         report,
         ...(rollup !== undefined ? {rollup} : {}),
         failure_comment_posted: failureCommentPosted,
-    })
-    return EXIT.OK
+    }
 }
 
 const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
@@ -533,9 +526,8 @@ function phaseCommand<R>(opts: {
             emitLine(opts.help)
             return EXIT.OK
         }
-        const dataDir = resolveDataDir({})
-        const state = new StateManager({dataDir})
-        const runId = await resolveRunId(state, args, opts.phase)
+        const {dataDir, state} = openState()
+        const runId = await resolveRunIdOrCurrent(state, args, `run ${opts.phase}`)
         const deps = await loadCliDeps({dataDir, runId})
         const results = await parseResultsFlag(args, async (path) => opts.parse(await readJsonInput<unknown>(path)))
         emitJson(results !== undefined ? await opts.record(deps, runId, results) : await opts.emit(deps, runId))
@@ -674,8 +666,7 @@ async function resolveCancelRunId(
 export async function runCancel(argv: string[], overrides: RunCancelOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['cleanup']})
     if (args.flag('help') === true) {
-        emitLine(CANCEL_HELP)
-        return EXIT.OK
+        return emitHelp(CANCEL_HELP)
     }
 
     const dataDir = resolveDataDir(overrides.dataDir !== undefined ? {dataDir: overrides.dataDir} : {})

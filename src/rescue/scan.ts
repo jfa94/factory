@@ -29,6 +29,7 @@
  * silent omission.
  */
 import {isTerminalTaskStatus, isTerminalRunStatus} from '../types/index.js'
+import {depsSatisfied, isUnsatisfiableDep} from '../orchestrator/readiness.js'
 import type {RunState, RunStatus, TaskStatus, FailureClass} from '../types/index.js'
 
 /** What rescue can do with a task. */
@@ -130,19 +131,6 @@ function dispositionOf(status: TaskStatus, failureClass: FailureClass | undefine
     return 'stuck'
 }
 
-// The engine's readiness predicates, mirrored here so scan stays decoupled from the
-// run-level orchestrator. These are DEFINITIONAL (the meaning of "ready" / "blocked") and stable;
-// the source of truth is src/orchestrator/next.ts (depsSatisfied / isUnsatisfiableDep).
-function depsSatisfied(run: RunState, depends: readonly string[]): boolean {
-    return depends.every((d) => run.tasks[d]?.status === 'done')
-}
-function hasUnsatisfiableDep(run: RunState, depends: readonly string[]): boolean {
-    return depends.some((d) => {
-        const dep = run.tasks[d]
-        return dep === undefined || dep.status === 'failed'
-    })
-}
-
 /**
  * Survey a run and classify every task for rescue. Pure + read-only — no state
  * writes, no gh, no agent spawns (the diagnostic LLM is the runner's job;
@@ -173,7 +161,9 @@ export function scanRun(run: RunState): RescueScan {
     // cascade-failed (a dep failed/missing). If no task is actionable yet non-terminal
     // work remains, a re-drive throws — that is `would_deadlock`.
     const actionablePending = all.some(
-        (t) => t.status === 'pending' && (depsSatisfied(run, t.depends_on) || hasUnsatisfiableDep(run, t.depends_on))
+        (t) =>
+            t.status === 'pending' &&
+            (depsSatisfied(run, t.depends_on) || t.depends_on.some((d) => isUnsatisfiableDep(run, d)))
     )
     const would_deadlock = !allTerminal && !actionablePending
     const e2e_failed = run.e2e_phase?.status === 'failed'

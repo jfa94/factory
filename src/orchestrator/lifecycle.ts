@@ -12,6 +12,7 @@
  * tdd_exempt); dangling/self/cyclic/duplicate edges are caught LOUDLY at seed time.
  */
 import {seedTaskRows, assertAcyclic, type StateManager} from '../core/state/index.js'
+import {epochToIso} from '../shared/time.js'
 import type {SpecStore, SpecManifest} from '../spec/index.js'
 import {planResume, type UsageReading} from '../quota/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
@@ -438,7 +439,7 @@ export async function applyResume(
             // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
             return {kind: 'resumed', run}
         case 'resume': {
-            const at = new Date(nowEpochSec * 1000).toISOString()
+            const at = epochToIso(nowEpochSec)
             const updated = await state.update(runId, (s) => ({
                 ...s,
                 status: plan.clear.status,

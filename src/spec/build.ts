@@ -38,7 +38,7 @@ import {join} from 'node:path'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {stringifyJson, readJsonFile} from '../shared/json.js'
 import {specBuildDir} from '../core/state/paths.js'
-import type {SpecStore} from './store.js'
+import {makeSpecId, type SpecStore} from './store.js'
 import type {GhClient, Prd} from './gh.js'
 import {runSpecGates, specifiabilityGate} from './gates.js'
 import {decideSpecReview, parseReviewVerdict} from './review.js'
@@ -51,9 +51,11 @@ import {
     type GenerateContext,
     type ReviseContext,
     type ReviewContext,
+    type GenerateResult,
 } from './agents.js'
-import {buildManifest} from './pipeline.js'
 import type {Config, SpecPointer} from '../types/index.js'
+import {parseSpecManifest, type SpecManifest} from './schema.js'
+import {nowIso} from '../shared/time.js'
 
 /** Scratch file names threaded between the three actions. */
 const PRD_FILE = 'prd.json'
@@ -296,4 +298,24 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     const prd = await readJsonFile<Prd>(prdPath)
     const pointer = await deps.store.write(request, generated.specMd, prd)
     return {kind: 'stored', repo, issue, pointer}
+}
+
+/**
+ * Build the durable request from a passing generate result. Exported so the
+ * `factory spec store` CLI seam produces a request IDENTICALLY to any in-process
+ * caller (one source of truth for slug re-derivation + spec-id construction).
+ */
+export function buildManifest(repo: string, issueNumber: number, generated: GenerateResult): SpecManifest {
+    const specId = makeSpecId(issueNumber, generated.slug)
+    // Re-derive the canonical slug from the spec_id so the request slug always
+    // matches the path segment (the generator's raw slug is sanitized by makeSpecId).
+    const slug = specId.replace(/^\d+-/, '')
+    return parseSpecManifest({
+        spec_id: specId,
+        issue_number: issueNumber,
+        slug,
+        repo,
+        generated_at: nowIso(),
+        tasks: generated.tasks,
+    })
 }

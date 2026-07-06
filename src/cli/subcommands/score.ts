@@ -6,13 +6,13 @@
  * the runner surfaces. Nothing here writes state.
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {openState} from '../wiring.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
-import {emitJson, emitLine} from '../io.js'
-import {resolveDataDir} from '../../config/index.js'
-import {StateManager} from '../../core/state/index.js'
+import {emitJson, emitHelp} from '../io.js'
+import {type StateManager} from '../../core/state/index.js'
 import {readCurrentForCwd, type CurrentRunOverrides} from '../current.js'
 import {SpecStore} from '../../spec/index.js'
-import {buildPartialReport, buildRunSummary} from '../../scoring/index.js'
+import {buildPartialReport, buildRunSummary, touchMetricOf} from '../../scoring/index.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 const HELP = `factory score — report a run's outcome summary (read-only)
@@ -28,15 +28,6 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`
-
-/** S11 — `(completed ? 1 : 0) / touches`, or null on an empty ledger (0-division guard). */
-function touchMetricOf(run: {status: string; human_touches: unknown[]}): number | null {
-    const touches = run.human_touches.length
-    if (touches === 0) {
-        return null
-    }
-    return (run.status === 'completed' ? 1 : 0) / touches
-}
 
 /** `factory score --fleet` — the store-wide touch-metric roll-up (read-only). */
 async function runFleet(state: StateManager): Promise<ExitCode> {
@@ -58,12 +49,10 @@ async function runFleet(state: StateManager): Promise<ExitCode> {
 export async function runScore(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['fleet']})
     if (args.flag('help') === true) {
-        emitLine(HELP)
-        return EXIT.OK
+        return emitHelp(HELP)
     }
 
-    const dataDir = resolveDataDir({})
-    const state = new StateManager({dataDir})
+    const {dataDir, state} = openState()
     if (args.flag('fleet') === true) {
         return runFleet(state)
     }
