@@ -131,7 +131,10 @@ function deps(): SpecBuildDeps {
         store: new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')}),
         gh: fakeGh,
         config: loadConfig({dataDir}),
-        dataDir,
+        // Scratch root shares the test's own tmp dataDir (fine here — tests don't
+        // need scratch/durable separated, just isolated per-test, which dataDir
+        // already is). Production wires this to defaultSpecBuildRoot() instead.
+        scratchRoot: dataDir,
     }
 }
 

@@ -11,9 +11,14 @@ import {
     type BuildDebugReportInput,
 } from './spec-source.js'
 import {resolveSpec, specifiabilityGate} from '../spec/index.js'
+import {defaultSpecBuildRoot, specBuildDir} from '../core/state/paths.js'
 import type {Finding} from '../verifier/judgment/finding.js'
 
-const REPO = 'owner/app'
+// Distinct from the REPO fixture in debug.test.ts / debug/integration.test.ts:
+// wireDebugSpecDeps now roots scratch at the shared defaultSpecBuildRoot() (an OS
+// temp dir, not a per-test tmp dataDir), so a repo collision across these files
+// would race under vitest's parallel file execution.
+const REPO = 'owner/app-source'
 
 function finding(overrides: Partial<Finding> = {}): Finding {
     return {
@@ -189,7 +194,10 @@ describe('wireDebugSpecDeps', () => {
     it('wires a SpecBuildDeps with a ReportGhClient seeded from the report', async () => {
         const report = {title: 'T', body: 'B'}
         const deps = wireDebugSpecDeps(report, dataDir)
-        expect(deps.dataDir).toBe(dataDir)
+        // scratchRoot is the OS temp dir (defaultSpecBuildRoot()), independent of
+        // dataDir — debug specs share the durable store with real specs but not the
+        // transient scratch root, which is never durable state either way.
+        expect(deps.scratchRoot).toBe(defaultSpecBuildRoot())
         expect(deps.gh).toBeInstanceOf(ReportGhClient)
         const prd = await deps.gh.fetchPrd(999)
         expect(prd.title).toBe('T')
@@ -205,6 +213,14 @@ describe('integration: resolveSpec accepts wireDebugSpecDeps unchanged', () => {
     })
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})
+        // resolveSpec (via the real wireDebugSpecDeps) writes prd.json under the
+        // shared OS-temp scratch root, not dataDir — clean it up so it doesn't
+        // leak between test runs (REPO is unique to this file, so no cross-file
+        // collision, but same-file reruns would otherwise see a stale prd.json).
+        await rm(specBuildDir(defaultSpecBuildRoot(), REPO, debugIssueNumber(1)), {
+            recursive: true,
+            force: true,
+        })
     })
 
     it('resolveSpec(wireDebugSpecDeps(report), repo, debugIssueNumber(1)) emits a generate envelope whose spawn.context reflects the synthetic Prd', async () => {

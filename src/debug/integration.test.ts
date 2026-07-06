@@ -49,12 +49,16 @@ import {defaultConfig, type Config} from '../config/index.js'
 import {StateManager} from '../core/state/index.js'
 import {SpecStore, type SpecManifest} from '../spec/index.js'
 import {stringifyJson} from '../shared/json.js'
-import {specBuildDir} from '../core/state/paths.js'
+import {specBuildDir, defaultSpecBuildRoot} from '../core/state/paths.js'
 import type {ReviewerVerifications} from '../orchestrator/record.js'
 import type {PlaywrightTool, E2eProcResult} from '../verifier/e2e/index.js'
 import {nonNull} from '../shared/index.js'
 
-const REPO = 'owner/app'
+// 'owner/app-integ', not 'owner/app': debug.test.ts's own gate/store round-trip
+// test uses the same synthetic issue number against the same shared OS-temp
+// defaultSpecBuildRoot() (not a per-test dataDir), so a shared repo string would
+// race under vitest's parallel file execution.
+const REPO = 'owner/app-integ'
 
 let dataDir: string
 let cwd: string
@@ -97,6 +101,10 @@ afterEach(async () => {
     process.chdir(originalCwd)
     await rm(dataDir, {recursive: true, force: true})
     await rm(cwd, {recursive: true, force: true})
+    // The spec sub-loop fixture below writes scratch under the shared OS-temp
+    // defaultSpecBuildRoot() (not dataDir) — clean up so repeat runs don't see a
+    // stale generated.json/verdict.json from a prior run.
+    await rm(specBuildDir(defaultSpecBuildRoot(), REPO, 2_000_000_001), {recursive: true, force: true})
 })
 
 /** Write a citable source file so citation-verify (finding-verifier replay) accepts a finding against it. */
@@ -262,7 +270,7 @@ describe('Scenario B — 2-pass residual-finding convergence', () => {
         // gate/store round-trip test uses (a real spec-generator agent is never
         // spawned here; the CLI reads this file exactly as it would that agent's
         // output).
-        const buildDir = specBuildDir(dataDir, REPO, 2_000_000_001)
+        const buildDir = specBuildDir(defaultSpecBuildRoot(), REPO, 2_000_000_001)
         await mkdir(buildDir, {recursive: true})
         await writeFile(
             join(buildDir, 'generated.json'),

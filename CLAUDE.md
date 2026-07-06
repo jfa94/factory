@@ -41,7 +41,6 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 
 - `skills/pipeline-runner/SKILL.md` — full runner protocol (the in-session parallel event loop)
 - `skills/test-driven-development/SKILL.md` — TDD discipline for subagents
-- `skills/prd-to-spec/SKILL.md` — converts PRD issues to spec + tasks.json
 - `skills/review-protocol/SKILL.md` — the RawReview JSON output contract every risk-invariant-panel reviewer emits (CLI citation-verifies + records it into the merge gate)
 - `skills/rescue-protocol/SKILL.md` — recover a stalled run (`factory rescue scan|apply` → resume)
 

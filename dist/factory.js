@@ -7167,6 +7167,7 @@ import { existsSync as existsSync4 } from "node:fs";
 import { dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
+import { tmpdir } from "node:os";
 import { join as join3 } from "node:path";
 var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
@@ -7230,14 +7231,18 @@ function docsFactoryDir(docsRoot, specId) {
   validateId(specId, "spec-id");
   return join3(docsRoot, DOCS_FACTORY_DIR, specId);
 }
-function specBuildRoot(dataDir) {
-  return join3(dataDir, SPEC_BUILD_DIR);
+var SPEC_BUILD_TMP_NAMESPACE = "factory-spec-build";
+function defaultSpecBuildRoot() {
+  return join3(tmpdir(), SPEC_BUILD_TMP_NAMESPACE);
 }
-function specBuildDir(dataDir, repo, issueNumber) {
+function specBuildRoot(root) {
+  return join3(root, SPEC_BUILD_DIR);
+}
+function specBuildDir(root, repo, issueNumber) {
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
     throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`);
   }
-  return join3(specBuildRoot(dataDir), repoKey(repo), String(issueNumber));
+  return join3(specBuildRoot(root), repoKey(repo), String(issueNumber));
 }
 
 // src/core/state/manager.ts
@@ -10623,8 +10628,8 @@ import { join as join9 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
-function scratchPaths(dataDir, repo, issue) {
-  const dir = specBuildDir(dataDir, repo, issue);
+function scratchPaths(scratchRoot, repo, issue) {
+  const dir = specBuildDir(scratchRoot, repo, issue);
   return {
     prdPath: join9(dir, PRD_FILE2),
     generatedPath: join9(dir, GENERATED_FILE),
@@ -10643,7 +10648,7 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
+  const { prdPath, generatedPath } = scratchPaths(deps.scratchRoot, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
   const specifiability = specifiabilityGate(prd.body);
   if (!specifiability.passed) {
@@ -10666,7 +10671,7 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   };
 }
 async function gateSpec(deps, repo, issue) {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.scratchRoot, repo, issue);
   const prd = await readJsonFile(prdPath);
   const generated = parseGenerateResult(await readJsonFile(generatedPath));
   const gates = runSpecGates(prd, generated.tasks);
@@ -10693,7 +10698,7 @@ async function gateSpec(deps, repo, issue) {
   };
 }
 async function storeSpec(deps, repo, issue) {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.scratchRoot, repo, issue);
   const generated = parseGenerateResult(await readJsonFile(generatedPath));
   const verdict = parseReviewVerdict(await readJsonFile(verdictPath));
   const decision = decideSpecReview(verdict, {
@@ -11741,7 +11746,7 @@ async function readJsonOrNull(file) {
 
 // src/verifier/deterministic/tools.ts
 import { access as access3, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir as tmpdir2 } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -11961,7 +11966,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
     return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
   }
   async measureAtBase(baseSha, cmd, opts) {
-    const scratch = await mkdtemp(path3.join(tmpdir(), "factory-cov-base-"));
+    const scratch = await mkdtemp(path3.join(tmpdir2(), "factory-cov-base-"));
     const wt = path3.join(scratch, "wt");
     try {
       const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
@@ -16862,7 +16867,8 @@ value that disagrees with the remote fails loud.
 
 The in-session runner drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
-through <dataDir>/spec-build/<repo>/<issue>/{prd,generated,verdict}.json.
+through the OS temp dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict}.json
+(transient pre-validation agent output, never the plugin data dir).
 
 Actions:
   resolve  Reuse an existing spec by issue, else fetch the PRD + emit the generate spawn.
@@ -16882,7 +16888,7 @@ function wireDeps() {
     store: new SpecStore({ dataDir }),
     gh: new RealGhClient({ bodyMaxBytes: config.spec.prdBodyMaxBytes }),
     config,
-    dataDir
+    scratchRoot: defaultSpecBuildRoot()
   };
 }
 var ACTIONS = {
@@ -17129,7 +17135,7 @@ function wireDebugSpecDeps(report, dataDirOverride) {
     store: new SpecStore({ dataDir }),
     gh: new ReportGhClient(report),
     config,
-    dataDir
+    scratchRoot: defaultSpecBuildRoot()
   };
 }
 

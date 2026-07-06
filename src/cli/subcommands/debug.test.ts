@@ -19,6 +19,7 @@ import {nonNull} from '../../shared/index.js'
 import {FakeGitClient} from '../../git/index.js'
 import {loadConfig} from '../../config/index.js'
 import {StateManager} from '../../core/state/index.js'
+import {specBuildDir, defaultSpecBuildRoot} from '../../core/state/paths.js'
 import {SpecStore, buildManifest} from '../../spec/index.js'
 import {makePrd} from '../../orchestrator/orchestrator-fixtures.js'
 import {createRun} from '../../orchestrator/lifecycle.js'
@@ -68,6 +69,10 @@ afterEach(async () => {
     process.chdir(originalCwd)
     await rm(dataDir, {recursive: true, force: true})
     await rm(cwd, {recursive: true, force: true})
+    // The gate/store round-trip test below writes scratch fixtures under the
+    // shared OS-temp defaultSpecBuildRoot() (not dataDir) — clean up so repeat
+    // runs don't see a stale generated.json/verdict.json from a prior run.
+    await rm(specBuildDir(defaultSpecBuildRoot(), REPO, 2_000_000_001), {recursive: true, force: true})
 })
 
 describe('debugStart', () => {
@@ -394,9 +399,12 @@ describe('debug spec resolve|gate|store — pass-through', () => {
         await debugSpecResolve(d, started.run_id)
 
         const {mkdir, writeFile} = await import('node:fs/promises')
-        const {specBuildDir} = await import('../../core/state/paths.js')
         const {stringifyJson} = await import('../../shared/json.js')
-        const buildDir = specBuildDir(dataDir, REPO, 2_000_000_001)
+        // Scratch root is the shared OS temp dir (defaultSpecBuildRoot()), not this
+        // test's per-test dataDir — mirrors production wireDeps()/wireDebugSpecDeps().
+        // Cleaned up in afterEach below (REPO must stay unique across test files that
+        // touch this same fixed root — see debug/integration.test.ts's comment).
+        const buildDir = specBuildDir(defaultSpecBuildRoot(), REPO, 2_000_000_001)
         await mkdir(buildDir, {recursive: true})
         await writeFile(
             join(buildDir, 'generated.json'),

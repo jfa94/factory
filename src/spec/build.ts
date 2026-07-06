@@ -13,12 +13,14 @@
  * `SpecBuildDeps` — living here (not in the CLI) keeps that reuse from
  * creating a cli↔debug package cycle.
  *
- * State is threaded through a TRANSIENT scratch dir, `specBuildDir(dataDir,repo,issue)`,
- * holding three files: `prd.json` (written by `resolve`), `generated.json` (written
- * by the runner after spawning the generator), and `verdict.json` (written by
- * the runner after spawning the reviewer). Every action takes a (repo, issue)
- * pair and recomputes the scratch dir, so the runner never threads paths
- * by hand — each envelope also echoes the concrete paths.
+ * State is threaded through a TRANSIENT scratch dir, `specBuildDir(scratchRoot,repo,issue)`,
+ * rooted at the OS temp dir (`defaultSpecBuildRoot()`) — NOT the plugin dataDir the
+ * durable stores use, since this holds only pre-validation agent output, never
+ * durable state. It holds three files: `prd.json` (written by `resolve`),
+ * `generated.json` (written by the runner after spawning the generator), and
+ * `verdict.json` (written by the runner after spawning the reviewer). Every action
+ * takes a (repo, issue) pair and recomputes the scratch dir, so the runner never
+ * threads paths by hand — each envelope also echoes the concrete paths.
  *
  * Loop (runner-owned):
  *   resolve → reuse(pointer)  → DONE (go straight to `run create`)
@@ -130,12 +132,18 @@ export interface SpecBuildDeps {
     readonly store: SpecStore
     readonly gh: GhClient
     readonly config: Config
-    readonly dataDir: string
+    /**
+     * Root for the transient generate/review scratch files (NOT the plugin dataDir —
+     * `store`/`config` already carry their own dataDir closure independently).
+     * Production wiring points this at {@link defaultSpecBuildRoot} (the OS temp
+     * dir); tests pass their own isolated tmp root for cleanup/collision safety.
+     */
+    readonly scratchRoot: string
 }
 
 /** Resolve the three scratch paths for a (repo, issue) build. */
 function scratchPaths(
-    dataDir: string,
+    scratchRoot: string,
     repo: string,
     issue: number
 ): {
@@ -143,7 +151,7 @@ function scratchPaths(
     generatedPath: string
     verdictPath: string
 } {
-    const dir = specBuildDir(dataDir, repo, issue)
+    const dir = specBuildDir(scratchRoot, repo, issue)
     return {
         prdPath: join(dir, PRD_FILE),
         generatedPath: join(dir, GENERATED_FILE),
@@ -184,7 +192,7 @@ export async function resolveSpec(
     }
 
     const prd = await deps.gh.fetchPrd(issue, {repo})
-    const {prdPath, generatedPath} = scratchPaths(deps.dataDir, repo, issue)
+    const {prdPath, generatedPath} = scratchPaths(deps.scratchRoot, repo, issue)
     await atomicWriteFile(prdPath, stringifyJson(prd))
 
     // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
@@ -222,7 +230,7 @@ export async function resolveSpec(
  * it is parsed loudly via {@link parseGenerateResult}.
  */
 export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
-    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.dataDir, repo, issue)
+    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.scratchRoot, repo, issue)
     const prd = await readJsonFile<Prd>(prdPath)
     const generated = parseGenerateResult(await readJsonFile(generatedPath))
 
@@ -262,7 +270,7 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
  * `generated.json` and `verdict.json` are UNTRUSTED agent output → parsed loudly.
  */
 export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
-    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.dataDir, repo, issue)
+    const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.scratchRoot, repo, issue)
     const generated = parseGenerateResult(await readJsonFile(generatedPath))
     const verdict = parseReviewVerdict(await readJsonFile(verdictPath))
 

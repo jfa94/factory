@@ -28,6 +28,7 @@
  */
 import type {Config} from '../config/index.js'
 import {loadConfig, resolveDataDir} from '../config/index.js'
+import {defaultSpecBuildRoot} from '../core/state/paths.js'
 import {SpecStore, type GhClient, type Prd, type SpecBuildDeps} from '../spec/index.js'
 import type {Finding} from '../verifier/judgment/finding.js'
 
@@ -173,7 +174,9 @@ export function buildDebugReport(input: BuildDebugReportInput): {
  * comes from the synthetic issue-number range ({@link DEBUG_ISSUE_BASE}), not
  * from a separate store. `gh` is swapped for a {@link ReportGhClient} seeded
  * with the rendered report so the unchanged `resolveSpec`/`gateSpec`/`storeSpec`
- * never touch the network.
+ * never touch the network. The generate/review scratch root is the OS temp dir
+ * ({@link defaultSpecBuildRoot}), same as the real spec CLI — it is transient
+ * pre-validation agent output, not durable state, so it does not share `dataDir`.
  */
 export function wireDebugSpecDeps(
     report: {readonly title: string; readonly body: string},
@@ -185,6 +188,6 @@ export function wireDebugSpecDeps(
         store: new SpecStore({dataDir}),
         gh: new ReportGhClient(report),
         config,
-        dataDir,
+        scratchRoot: defaultSpecBuildRoot(),
     }
 }

@@ -26,7 +26,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - Counter-example: a list of files to change and functions to add — that is implementation, not a PRD.
 - **relationships**: seeds one Run; converted into a Spec by Spec Generation.
 - **synonyms**: —
-- **code anchor**: `skills/prd-to-spec/SKILL.md`
+- **code anchor**: `agents/spec-generator.md`
 
 ### Spec
 

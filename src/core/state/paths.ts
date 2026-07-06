@@ -1,21 +1,28 @@
 /**
  * WS1 — the two-store filesystem layout (plan §"State storage model").
  *
- * All run/spec state lives OUTSIDE the target repo, under the plugin data dir
- * (`resolveDataDir()` from src/config). This is a hard requirement: the holdout
+ * All DURABLE run/spec state lives OUTSIDE the target repo, under the plugin data
+ * dir (`resolveDataDir()` from src/config). This is a hard requirement: the holdout
  * answer-key must be unreadable from an implementer worktree (Decision 5 / Δ Y), so
  * state cannot live in-repo.
  *
- * Two stores:
+ * Two durable stores:
  *   - DURABLE spec store:  <dataDir>/specs/<repo-key>/<spec-id>/   (Δ X)
  *       Reused across runs; keyed by (repo, spec-id), NOT by run id.
  *   - EPHEMERAL run store: <dataDir>/runs/<run-id>/                 (per run)
  *       state.json + audit.jsonl + metrics.jsonl + holdouts/ + reviews/.
  *
+ * A THIRD, non-durable area — the spec-build scratch dir ({@link specBuildDir}) —
+ * is NOT part of this dataDir-rooted layout: it holds only transient, pre-validation
+ * agent output threaded between subprocess invocations, so it is rooted at the OS
+ * temp dir instead ({@link defaultSpecBuildRoot}) and never needs to survive past
+ * one generate/review loop.
+ *
  * `<repo-key>` is a sanitized path segment derived from a "owner/name" repo id
  * (the slash and any unsafe char recorded to '-') so the spec store is one flat,
  * inspectable directory level per repo.
  */
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {validateId} from '../../shared/ids.js'
 
@@ -178,22 +185,35 @@ export function docsFactoryDir(docsRoot: string, specId: string): string {
     return join(docsRoot, DOCS_FACTORY_DIR, specId)
 }
 
-/** `<dataDir>/spec-build`. */
-export function specBuildRoot(dataDir: string): string {
-    return join(dataDir, SPEC_BUILD_DIR)
+/** Namespace subdir under the OS temp dir, so spec-build scratch doesn't scatter loose files into shared temp clutter. */
+const SPEC_BUILD_TMP_NAMESPACE = 'factory-spec-build'
+
+/**
+ * The production root for {@link specBuildDir} — the OS temp dir, namespaced.
+ * Callers that need isolation (tests) pass their own `root` to `specBuildDir`
+ * directly instead of using this default.
+ */
+export function defaultSpecBuildRoot(): string {
+    return join(tmpdir(), SPEC_BUILD_TMP_NAMESPACE)
+}
+
+/** `<root>/spec-build`. `root` is typically {@link defaultSpecBuildRoot}, NOT the plugin dataDir. */
+export function specBuildRoot(root: string): string {
+    return join(root, SPEC_BUILD_DIR)
 }
 
 /**
- * `<dataDir>/spec-build/<repo-key>/<issue>` — the TRANSIENT scratch dir for an
+ * `<root>/spec-build/<repo-key>/<issue>` — the TRANSIENT scratch dir for an
  * in-progress spec build. Holds the prd/generated/verdict JSON threaded between
  * the runner-driven `factory spec resolve|gate|store` actions. Keyed by the
  * stable PRD issue number (not a spec-id — no spec exists yet), and DISCARDABLE:
  * unlike {@link specDir} this is never reused across runs, just a handoff buffer
- * for one generate/review loop.
+ * for one generate/review loop. `root` is root-agnostic (any caller-supplied
+ * directory works); production wiring passes {@link defaultSpecBuildRoot}.
  */
-export function specBuildDir(dataDir: string, repo: string, issueNumber: number): string {
+export function specBuildDir(root: string, repo: string, issueNumber: number): string {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
         throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`)
     }
-    return join(specBuildRoot(dataDir), repoKey(repo), String(issueNumber))
+    return join(specBuildRoot(root), repoKey(repo), String(issueNumber))
 }

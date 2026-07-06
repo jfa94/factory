@@ -1,9 +1,16 @@
 # State Model
 
-All run and spec state lives **outside** the target repo, under the plugin data
-dir (`$CLAUDE_PLUGIN_DATA`, resolved by `src/config`). This is a hard requirement:
-the holdout answer-key must be unreadable from an implementer worktree, so state
-cannot live in-repo. Defined in `src/core/state/`.
+All durable run and spec state lives **outside** the target repo, under the plugin
+data dir (`$CLAUDE_PLUGIN_DATA`, resolved by `src/config`). This is a hard
+requirement: the holdout answer-key must be unreadable from an implementer
+worktree, so state cannot live in-repo. Defined in `src/core/state/`.
+
+The two stores below are the whole of that model. A **third area — the transient
+spec-build scratch** (pre-validation agent handshake JSON) — is deliberately **not**
+part of it: it holds nothing durable, so it lives in the OS temp dir rather than the
+data dir. It is still outside the target repo (the holdout invariant is untouched),
+just outside the two-store model too. See [Transient spec-build scratch](#transient-scratch)
+below.
 
 ## Two stores
 
@@ -11,8 +18,6 @@ cannot live in-repo. Defined in `src/core/state/`.
 $CLAUDE_PLUGIN_DATA/
 ├── specs/<repo-key>/<spec-id>/        # DURABLE spec store — reused across runs
 │   └── {spec.md,tasks.json,prd.json,spec.meta.json}
-├── spec-build/<repo-key>/<issue>/     # TRANSIENT spec-build scratch
-│   └── {prd,generated,verdict}.json
 ├── current/<repo-key>                # symlink → that repo's current run (CLI-only)
 ├── worktrees/<run-id>/<task-id>/     # producer worktrees (write-scope ownership)
 └── runs/
@@ -34,9 +39,16 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   a **durable PRD snapshot** `prd.json`, written by `SpecStore.write` and backfilled once
   on reuse of a pre-Decision-47 spec. The end-of-run traceability phase audits this
   snapshot rather than re-fetching a possibly-edited PRD from GitHub.
-- **Transient spec-build scratch** — `spec-build/<repo-key>/<issue>/`, a
-  discardable handoff buffer for one generate/review loop (keyed by issue, since no
-  spec-id exists yet).
+- <a id="transient-scratch"></a>**Transient spec-build scratch** _(not under the
+  data dir)_ — a discardable handoff buffer for one generate/review loop, holding
+  `{prd,generated,verdict}.json`. It lives at
+  `<os-tmpdir>/factory-spec-build/spec-build/<repo-key>/<issue>/`
+  (`defaultSpecBuildRoot()` → `specBuildDir()`, `src/core/state/paths.ts`), keyed by
+  issue since no spec-id exists yet. Deliberately **rooted at the OS temp dir, not
+  `$CLAUDE_PLUGIN_DATA`**: it is pre-validation agent output, never durable state, so
+  the `SpecBuildDeps.scratchRoot` closure that carries it is independent of the
+  durable-store `dataDir` (`src/spec/build.ts`). The two-store integrity model below
+  does not cover it.
 - **Ephemeral run store** — `runs/<run-id>/`, one per run.
 - **Per-repo current pointer** — `current/<repo-key>` → `../runs/<run-id>`, in a
   tree **separate** from `runs/` so `listRuns` (which scans `runs/` only) is

@@ -10,6 +10,7 @@ import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
+import {defaultSpecBuildRoot} from '../../core/state/paths.js'
 import {
     SpecStore,
     RealGhClient,
@@ -37,7 +38,8 @@ value that disagrees with the remote fails loud.
 
 The in-session runner drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
-through <dataDir>/spec-build/<repo>/<issue>/{prd,generated,verdict}.json.
+through the OS temp dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict}.json
+(transient pre-validation agent output, never the plugin data dir).
 
 Actions:
   resolve  Reuse an existing spec by issue, else fetch the PRD + emit the generate spawn.
@@ -60,7 +62,7 @@ function wireDeps(): SpecBuildDeps {
         store: new SpecStore({dataDir}),
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
-        dataDir,
+        scratchRoot: defaultSpecBuildRoot(),
     }
 }
 

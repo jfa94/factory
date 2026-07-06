@@ -116,8 +116,14 @@ for a clean brand-new repo (no workflows, nothing to report), keeping that repor
 Reporter. The deterministic spec-build seam. The spec pipeline needs two agent
 spawns (spec-generator + spec-reviewer), which the runner owns; the CLI owns
 the deterministic glue. State is threaded through a transient scratch dir
-(`spec-build/<repo>/<issue>/{prd,generated,verdict}.json`). Each action takes
-`--repo` + `--issue` and emits one envelope naming the next step.
+(`<os-tmpdir>/factory-spec-build/spec-build/<repo-key>/<issue>/{prd,generated,verdict}.json`)
+rooted at the **OS temp dir** (`defaultSpecBuildRoot()`, `src/core/state/paths.ts`),
+**not** the plugin data dir the durable/ephemeral stores use — these files are
+pre-validation agent output that never needs to survive one generate/review loop.
+The `SpecBuildDeps.scratchRoot` field carries this root independently of the
+durable-store `dataDir` (`src/spec/build.ts`); tests inject their own isolated tmp
+root. Each action takes `--repo` + `--issue` and emits one envelope naming the next
+step.
 
 ```
 factory spec resolve --repo <owner/name> --issue <n> [--supersede]

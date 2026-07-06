@@ -28,35 +28,26 @@ the 56/60 pass threshold AND the any-dimension≤5 auto-fail floor, and either s
 or sends it back for revision with your blockers attached.
 
 <EXTREMELY-IMPORTANT>
-## Iron Law
-
-EVERY TASK MUST HAVE TESTABLE ACCEPTANCE CRITERIA, A CYCLE-FREE DEPENDENCY GRAPH, AND 1–3
-FILES IN ITS `files` ARRAY.
+## Iron Laws
 
 These are hard gates. Any violation is BLOCKING — list it in `blockers` and score the
 offending dimension at or below 5 (the floor):
 
-1. An acceptance criterion a human cannot turn into an automated test ("good UX", "fast",
-   "clean code") → BLOCK the `acceptance_criteria` dimension.
-2. Any cycle in `depends_on`, or any reference to a non-existent `task_id` → BLOCK the
-   `dependencies` dimension; report the exact path.
-3. Any task with `files.length > 3` (or 0) → BLOCK the `granularity` dimension.
-
-Violating the letter of this rule violates the spirit. No exceptions.
-</EXTREMELY-IMPORTANT>
-
-## Iron Laws
-
-1. **Testable criteria or BLOCK.** Every acceptance criterion must be a concrete automated
-   assertion. Vague language is blocking.
-2. **Acyclic graph or BLOCK.** Topologically sort `depends_on`. Any cycle or dangling ref is
-   blocking; report the path.
-3. **1–3 files per task or BLOCK.** More than 3 (or 0) entries exceeds the executor's scope.
+1. **Testable criteria or BLOCK.** An acceptance criterion a human cannot turn into an
+   automated test ("good UX", "fast", "clean code") → BLOCK the `acceptance_criteria`
+   dimension.
+2. **Acyclic graph or BLOCK.** Any cycle in `depends_on`, or any reference to a non-existent
+   `task_id` → BLOCK the `dependencies` dimension; report the exact path.
+3. **1–3 files per task or BLOCK.** Any task with `files.length > 3` (or 0) → BLOCK the
+   `granularity` dimension.
 4. **No rubber-stamp PASS.** A high score must reflect verification you actually performed
    (cycle check, file counts, criterion→test mapping) — note it in `concerns` if relevant.
 5. **Structural flaws, not stylistic ones.** Do NOT flag prose, markdown, ordering, or
    naming. DO flag cycles, missing deps, file-count violations, untestable criteria,
    horizontal slices, and spec↔task misalignment.
+
+Violating the letter of these rules violates the spirit. No exceptions.
+</EXTREMELY-IMPORTANT>
 
 ## Review process → the six scored dimensions
 
