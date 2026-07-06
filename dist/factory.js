@@ -17278,18 +17278,10 @@ var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Agent"
 ];
 var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
-var STALE_DATA_DIR_ALLOW = [
-  "Read(${CLAUDE_PLUGIN_DATA}/**)",
-  "Write(${CLAUDE_PLUGIN_DATA}/**)",
-  "Edit(${CLAUDE_PLUGIN_DATA}/**)"
-];
-var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
 function buildTargetDataDirRules(opts) {
-  const baked = tildeShorten(opts.dataDir, opts.home);
   return {
-    allowGlobBase: baked,
-    additionalDir: opts.dataDir,
-    staleAdditionalDirs: baked === opts.dataDir ? [] : [baked]
+    allowGlobBase: tildeShorten(opts.dataDir, opts.home),
+    additionalDir: opts.dataDir
   };
 }
 function dataDirAllowRules(allowGlobBase) {
@@ -17303,24 +17295,19 @@ function mergeTargetSettings(existing, dataDirRules) {
   let changed = false;
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
-  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
-  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
   const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)];
-  const have = new Set(strippedAllow);
+  const have = new Set(currentAllow);
   const additions = targetAllow.filter((e) => !have.has(e));
-  if (removedStaleAllow || additions.length > 0) {
-    permissions.allow = [...strippedAllow, ...additions];
+  if (additions.length > 0) {
+    permissions.allow = [...currentAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
   }
   const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const staleDirs = /* @__PURE__ */ new Set([STALE_DATA_DIR_ADDITIONAL, ...dataDirRules.staleAdditionalDirs]);
-  const strippedDirs = currentDirs.filter((e) => !staleDirs.has(e));
-  const removedStaleDir = strippedDirs.length !== currentDirs.length;
-  const haveDirs = new Set(strippedDirs);
+  const haveDirs = new Set(currentDirs);
   const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
-  if (removedStaleDir || dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
+  if (dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }

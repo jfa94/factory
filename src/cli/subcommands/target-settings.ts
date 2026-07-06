@@ -74,26 +74,6 @@ export const FACTORY_TARGET_BASE_ALLOWLIST: readonly string[] = [
 const DATA_DIR_VERBS = ['Read', 'Write', 'Edit'] as const
 
 /**
- * STALE allow entries the OLD emitter wrote: the literal `${CLAUDE_PLUGIN_DATA}`
- * placeholder form. We migrate these away (strip on re-merge) because the
- * placeholder does NOT work: env-var interpolation inside permission rules is
- * undocumented in Claude Code, AND `CLAUDE_PLUGIN_DATA` is session-globally
- * corruptible by other plugins (the Codex plugin's SessionStart hook re-exports
- * its OWN data dir into `$CLAUDE_ENV_FILE`), so the rule resolves to the wrong
- * dir or stays literal — never matching factory's data dir. Matched EXACTLY (not
- * via a `.includes("${CLAUDE_PLUGIN_DATA}")` heuristic) so a user rule that
- * legitimately references the var is never clobbered.
- */
-const STALE_DATA_DIR_ALLOW: readonly string[] = [
-    'Read(${CLAUDE_PLUGIN_DATA}/**)',
-    'Write(${CLAUDE_PLUGIN_DATA}/**)',
-    'Edit(${CLAUDE_PLUGIN_DATA}/**)',
-]
-
-/** The stale literal-placeholder `additionalDirectories` entry (see {@link STALE_DATA_DIR_ALLOW}). */
-const STALE_DATA_DIR_ADDITIONAL = '${CLAUDE_PLUGIN_DATA}'
-
-/**
  * The baked, per-install data-dir permission strings. Built from the CLI-resolved
  * canonical data dir (which already CORRECTS the foreign-plugin env-var leak via
  * `resolveDataDir`), NOT from the runtime `${CLAUDE_PLUGIN_DATA}` placeholder — so
@@ -115,8 +95,6 @@ export interface TargetDataDirRules {
      * leak for a rule that actually matches.
      */
     readonly additionalDir: string
-    /** Stale `additionalDirectories` entries a PREVIOUS emitter wrote (the tilde form); stripped on re-merge. */
-    readonly staleAdditionalDirs: readonly string[]
 }
 
 /**
@@ -124,8 +102,7 @@ export interface TargetDataDirRules {
  * globs prefer the `~`-tilde form (documented to expand; keeps a committed target
  * `.claude/settings.json` free of `$HOME`), falling back to the absolute path when
  * the data dir is outside `$HOME` (e.g. a custom `CLAUDE_PLUGIN_DATA`).
- * `additionalDir` is ALWAYS absolute — see {@link TargetDataDirRules.additionalDir};
- * the old tilde entry is returned as stale so the merge migrates it away.
+ * `additionalDir` is ALWAYS absolute — see {@link TargetDataDirRules.additionalDir}.
  */
 export function buildTargetDataDirRules(opts: {
     /** The absolute, canonical data dir (from `resolveDataDir()`). */
@@ -133,11 +110,9 @@ export function buildTargetDataDirRules(opts: {
     /** `$HOME`, for the tilde shortening. */
     readonly home: string
 }): TargetDataDirRules {
-    const baked = tildeShorten(opts.dataDir, opts.home)
     return {
-        allowGlobBase: baked,
+        allowGlobBase: tildeShorten(opts.dataDir, opts.home),
         additionalDir: opts.dataDir,
-        staleAdditionalDirs: baked === opts.dataDir ? [] : [baked],
     }
 }
 
@@ -167,22 +142,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Migrate-and-union the factory permission rules into `existing` and force
+ * Union the factory permission rules into `existing` and force
  * `worktree.baseRef:"head"`, preserving every other key. Pure: clones the input
  * and never mutates it.
  *
- * For both `permissions.allow` and `permissions.additionalDirectories` the merge:
- *   1. STRIPS the stale entries older emitters wrote (exact-string match): the
- *      literal `${CLAUDE_PLUGIN_DATA}` placeholders ({@link STALE_DATA_DIR_ALLOW})
- *      and, for `additionalDirectories`, the `~`-tilde dir form
- *      ({@link TargetDataDirRules.staleAdditionalDirs}), and
- *   2. UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST} + the
- *      baked data-dir rules from `dataDirRules`), order-preserving, deduped.
- *
- * `changed` is driven off `removedStale || additions.length > 0` so a repo that
- * still carries the stale placeholder is rewritten even when the baked rules are
- * already present. Idempotent: re-merging an already-baked, stale-free settings
- * reports `changed:false`.
+ * For both `permissions.allow` and `permissions.additionalDirectories` the merge
+ * UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST} + the baked
+ * data-dir rules from `dataDirRules`), order-preserving, deduped. `changed` is
+ * additions-only. Idempotent: re-merging an already-baked settings reports
+ * `changed:false`.
  */
 export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRules: TargetDataDirRules): MergeResult {
     // Structured clone so the caller's object is never mutated (test isolation +
@@ -190,37 +158,32 @@ export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRu
     const settings: Record<string, unknown> = structuredClone(existing)
     let changed = false
 
-    // permissions.allow — strip the stale placeholder rules (migration), then union
-    // the base allow-list + the baked data-dir rules. User entries kept first.
+    // permissions.allow — union the base allow-list + the baked data-dir rules.
+    // User entries kept first.
     const permissions = isObject(settings.permissions) ? settings.permissions : {}
     const currentAllow = Array.isArray(permissions.allow)
         ? permissions.allow.filter((e): e is string => typeof e === 'string')
         : []
-    const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e))
-    const removedStaleAllow = strippedAllow.length !== currentAllow.length
     const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)]
-    const have = new Set(strippedAllow)
+    const have = new Set(currentAllow)
     const additions = targetAllow.filter((e) => !have.has(e))
-    if (removedStaleAllow || additions.length > 0) {
-        permissions.allow = [...strippedAllow, ...additions]
+    if (additions.length > 0) {
+        permissions.allow = [...currentAllow, ...additions]
         settings.permissions = permissions
         changed = true
     }
 
-    // permissions.additionalDirectories — same strip-then-union so the built-in file
-    // tools never trip the working-directory boundary on out-of-tree data-dir writes
+    // permissions.additionalDirectories — same union so the built-in file tools
+    // never trip the working-directory boundary on out-of-tree data-dir writes
     // (`results/<run>`, `worktrees/<run>/<task>`). The single baked parent entry
     // grants recursive access to every managed subdir.
     const currentDirs = Array.isArray(permissions.additionalDirectories)
         ? permissions.additionalDirectories.filter((e): e is string => typeof e === 'string')
         : []
-    const staleDirs = new Set([STALE_DATA_DIR_ADDITIONAL, ...dataDirRules.staleAdditionalDirs])
-    const strippedDirs = currentDirs.filter((e) => !staleDirs.has(e))
-    const removedStaleDir = strippedDirs.length !== currentDirs.length
-    const haveDirs = new Set(strippedDirs)
+    const haveDirs = new Set(currentDirs)
     const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e))
-    if (removedStaleDir || dirAdditions.length > 0) {
-        permissions.additionalDirectories = [...strippedDirs, ...dirAdditions]
+    if (dirAdditions.length > 0) {
+        permissions.additionalDirectories = [...currentDirs, ...dirAdditions]
         settings.permissions = permissions
         changed = true
     }

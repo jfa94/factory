@@ -40,14 +40,6 @@ const RULES: TargetDataDirRules = buildTargetDataDirRules({dataDir: DATA_DIR, ho
 
 const BAKED_ALLOW = [`Read(${TILDE_BASE}/**)`, `Write(${TILDE_BASE}/**)`, `Edit(${TILDE_BASE}/**)`]
 
-// The stale literal-placeholder strings the OLD emitter wrote (migration targets).
-const STALE_ALLOW = [
-    'Read(${CLAUDE_PLUGIN_DATA}/**)',
-    'Write(${CLAUDE_PLUGIN_DATA}/**)',
-    'Edit(${CLAUDE_PLUGIN_DATA}/**)',
-]
-const STALE_ADDITIONAL = '${CLAUDE_PLUGIN_DATA}'
-
 let root: string
 
 beforeEach(async () => {
@@ -108,15 +100,12 @@ describe('buildTargetDataDirRules', () => {
         // Verified live: the tilde form left the working-directory-boundary prompt
         // firing on out-of-tree task-worktree writes (run-20260630-095544).
         expect(RULES.additionalDir).toBe(DATA_DIR)
-        // The old tilde entry is surfaced as stale so the merge migrates it away.
-        expect(RULES.staleAdditionalDirs).toEqual([TILDE_BASE])
     })
 
     it('falls back to the absolute path when the data dir is OUTSIDE $HOME', () => {
         const abs = buildTargetDataDirRules({dataDir: '/var/lib/factory-x', home: HOME})
         expect(abs.allowGlobBase).toBe('/var/lib/factory-x')
         expect(abs.additionalDir).toBe('/var/lib/factory-x')
-        expect(abs.staleAdditionalDirs).toEqual([]) // tilde form never existed → nothing stale
     })
 })
 
@@ -183,7 +172,7 @@ describe('mergeTargetSettings', () => {
         const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
         expect(dirs).toContain(DATA_DIR)
         expect(dirs).not.toContain(TILDE_BASE)
-        expect(dirs).not.toContain(STALE_ADDITIONAL)
+        expect(dirs).not.toContain('${CLAUDE_PLUGIN_DATA}')
     })
 
     it("unions additionalDirectories, preserving the user's own entries", () => {
@@ -208,18 +197,6 @@ describe('mergeTargetSettings', () => {
         expect(dirs).toContain(DATA_DIR)
     })
 
-    it('migrates the stale TILDE additionalDirectories entry a previous emitter wrote', () => {
-        // Repos scaffolded between the placeholder era and this fix carry the tilde
-        // form, which Claude Code never matched (the observed prompt regression).
-        const stale = {permissions: {additionalDirectories: [TILDE_BASE, '/my/extra/dir']}}
-        const {settings, changed} = mergeTargetSettings(stale, RULES)
-        expect(changed).toBe(true)
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).not.toContain(TILDE_BASE) // stale tilde gone
-        expect(dirs).toContain(DATA_DIR) // absolute baked in
-        expect(dirs).toContain('/my/extra/dir') // user entry preserved
-    })
-
     it('reports changed when baseRef was not yet head even if allow-list is complete', () => {
         const base = mergeTargetSettings({}, RULES).settings
         ;(base.worktree as {baseRef: string}).baseRef = 'fresh'
@@ -237,63 +214,6 @@ describe('mergeTargetSettings', () => {
             expect(changed).toBe(true)
             expect(settings.worktree).toEqual({baseRef: 'head'})
         }
-    })
-
-    describe('migration of stale ${CLAUDE_PLUGIN_DATA} placeholder rules', () => {
-        it('strips the stale allow + additionalDirectories entries and bakes the resolved dir', () => {
-            // A repo scaffolded by the OLD emitter: literal placeholder rules on disk.
-            const stale = {
-                permissions: {
-                    allow: [...FACTORY_TARGET_BASE_ALLOWLIST, ...STALE_ALLOW],
-                    additionalDirectories: [STALE_ADDITIONAL],
-                },
-                worktree: {baseRef: 'head'},
-            }
-            const {settings, changed} = mergeTargetSettings(stale, RULES)
-            expect(changed).toBe(true) // stale → baked is a real change
-
-            const allow = (settings.permissions as {allow: string[]}).allow
-            for (const s of STALE_ALLOW) {
-                expect(allow).not.toContain(s)
-            } // stale gone
-            for (const b of BAKED_ALLOW) {
-                expect(allow).toContain(b)
-            } // baked in
-
-            const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-            expect(dirs).not.toContain(STALE_ADDITIONAL)
-            expect(dirs).toContain(DATA_DIR)
-        })
-
-        it('re-merge after migration is a stable no-op with zero placeholders left', () => {
-            const stale = {
-                permissions: {
-                    allow: [...STALE_ALLOW],
-                    additionalDirectories: [STALE_ADDITIONAL],
-                },
-            }
-            const migrated = mergeTargetSettings(stale, RULES).settings
-            const {changed, settings} = mergeTargetSettings(migrated, RULES)
-            expect(changed).toBe(false)
-            expect(JSON.stringify(settings)).not.toContain('${CLAUDE_PLUGIN_DATA}')
-            const allow = (settings.permissions as {allow: string[]}).allow
-            expect(new Set(allow).size).toBe(allow.length) // no dupes
-        })
-
-        it('strips ONLY the exact stale strings — a user rule referencing the var differently is kept', () => {
-            // Exact-string match: a legitimately-different rule that mentions the var
-            // (e.g. a Bash echo) must survive the migration, never get heuristically nuked.
-            const userVarRule = 'Bash(echo ${CLAUDE_PLUGIN_DATA})'
-            const existing = {
-                permissions: {allow: [userVarRule, ...STALE_ALLOW]},
-            }
-            const {settings} = mergeTargetSettings(existing, RULES)
-            const allow = (settings.permissions as {allow: string[]}).allow
-            expect(allow).toContain(userVarRule) // user's distinct rule preserved
-            for (const s of STALE_ALLOW) {
-                expect(allow).not.toContain(s)
-            } // exact stale stripped
-        })
     })
 })
 
@@ -331,29 +251,6 @@ describe('ensureTargetSettings', () => {
         const allow = (written.permissions as {allow: string[]}).allow
         expect(allow).toContain('Bash(make:*)')
         expect(allow).toContain('Bash(factory:*)')
-    })
-
-    it('migrates a repo with stale placeholder rules on disk to the baked form', async () => {
-        await mkdir(join(root, '.claude'), {recursive: true})
-        await writeFile(
-            settingsPath(),
-            JSON.stringify({
-                permissions: {
-                    allow: [...FACTORY_TARGET_BASE_ALLOWLIST, ...STALE_ALLOW, 'Bash(make:*)'],
-                    additionalDirectories: [STALE_ADDITIONAL],
-                },
-                worktree: {baseRef: 'head'},
-            }),
-            'utf8'
-        )
-        const result = await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
-        expect(result.changed).toBe(true)
-        const raw = await readFile(settingsPath(), 'utf8')
-        expect(raw).not.toContain('${CLAUDE_PLUGIN_DATA}') // stale gone from disk
-        const written = await readSettings()
-        const allow = (written.permissions as {allow: string[]}).allow
-        expect(allow).toContain('Bash(make:*)') // user entry preserved
-        expect(allow).toContain(`Edit(${TILDE_BASE}/**)`) // baked rule present
     })
 
     it('is idempotent on disk: a second run reports no change', async () => {
