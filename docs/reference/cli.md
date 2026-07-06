@@ -48,29 +48,12 @@ factory configure                          # print the resolved config
 factory configure --get <key.path>         # print one resolved value
 factory configure --set <key.path=value>   # set (repeatable), validate, persist
 factory configure --unset <key.path>       # revert a key to its default (repeatable)
-factory configure --detect-gate-env        # auto-detect CI build env → gap-fill quality.gateEnv
 ```
 
 Values parse as JSON when possible (numbers, booleans, arrays), else as a bare
 string. `--get` cannot be combined with `--set`/`--unset`. Example:
 `factory configure --set quality.holdoutPercent=25`. Keys are in
 [configuration.md](./configuration.md).
-
-`--detect-gate-env` scans `.github/workflows/*.yml` for every step/job-level `env:`
-literal (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`) and **gap-fills**
-`quality.gateEnv` from `process.cwd()` — the operator always wins (an existing key is
-never overwritten; a detected value that differs is reported as a conflict). It is
-**mutually exclusive** with `--get`/`--set`/`--unset` (combining them is a usage error),
-writes the overlay only when there are new keys, and prints a `DetectReport`:
-`{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, droppedKeys,
-warnings, sources, gateEnv }`. Entries are failed — never silently — for: a `${{ }}` expression
-ref (`skippedExpressionRefs`), a secret-shaped value (`droppedSecrets`), a reserved loader/path-injection
-KEY (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX KEY name
-(`droppedKeys`, with `reason: "reserved"` / `"invalid-name"`), and anything inside a `run: |` block
-scalar. Detection is biased to MISS (block-style space-indented YAML only — an _unquoted_ exotic-YAML
-value is skipped, never mangled; a _quoted_ look-alike is kept); the escape hatch for a miss is
-`--set quality.gateEnv.<KEY>=<value>`. `scaffold` runs the same detection automatically (see
-[`scaffold`](#scaffold)).
 
 ## `scaffold`
 
@@ -82,17 +65,12 @@ base) — **refusing loudly** when `develop` is not protected, unless `--provisi
 set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
-Before writing any template, scaffold **auto-detects the repo's CI build env** (the same
-detection as [`configure --detect-gate-env`](#configure)) and gap-fills `quality.gateEnv`.
-This runs FIRST by design: `quality-gate.yml` is a managed template scaffold overwrites, so
-detecting first captures the repo author's CI env into the durable config overlay before the
-managed file clobbers the author's workflow. The resolved `quality.gateEnv` is then **rendered
-back into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
+The configured `quality.gateEnv` (set via `factory configure --set quality.gateEnv.<KEY>=<value>`)
+is **rendered into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
 (`src/ci/inject-gate-env.ts`) replaces the template's `# factory:gate-env` marker with a real
 `env:` block — so one config drives both the local merge gate and this repo's GitHub CI. Drift
 is measured against the _rendered_ template, so an injected managed file stays byte-identical
-across re-runs. An unparseable workflow is surfaced loudly (`log.warn` + a `warnings` entry),
-never swallowed.
+across re-runs; an empty `gateEnv` leaves the marker untouched.
 
 ```
 factory scaffold [--repo <owner/name>] [--provision]
@@ -104,12 +82,8 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
-protection, settings, gateEnv? }`. SEED gate configs are scaffold-once / project-owned — an
-existing one is reported under `files_present`, never flagged (no `files_outdated`). The
-optional `gateEnv` field is the CI build-env detection `DetectReport`; it is included whenever a
-key was detected **or any anomaly surfaced** (a parse `warnings` entry, or an expression-ref /
-secret / key fail), so a malformed workflow is never silently swallowed. It is **omitted** only
-for a clean brand-new repo (no workflows, nothing to report), keeping that report unchanged.
+protection, settings }`. SEED gate configs are scaffold-once / project-owned — an
+existing one is reported under `files_present`, never flagged (no `files_outdated`).
 
 ## `spec <resolve|gate|store>`
 

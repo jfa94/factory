@@ -42,7 +42,7 @@ import {
     type GhClient,
 } from '../../git/index.js'
 import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
-import {applyGateEnvDetection, injectGateEnvIntoWorkflow, type DetectReport} from '../../ci/index.js'
+import {injectGateEnvIntoWorkflow} from '../../ci/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {GATE_CONTRACT_REL} from '../../verifier/deterministic/gate-contract.js'
@@ -61,9 +61,8 @@ Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
 not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 Per-run staging branches are minted at run create — scaffold no longer touches them.
-Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
-detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
-quality-gate.yml template overwrites the repo's own workflow.
+The managed quality-gate.yml is rendered with the configured quality.gateEnv
+(set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -144,13 +143,6 @@ export interface ScaffoldOptions {
      * emitted rules never carry the broken `${CLAUDE_PLUGIN_DATA}` placeholder.
      */
     readonly dataDirRules: TargetDataDirRules
-    /**
-     * The CLI-resolved factory data dir (where the config overlay lives). Threaded
-     * into CI build-env detection so the gateEnv gap-fill writes the SAME overlay
-     * the rest of the factory reads — and so the injectable scaffold core stays pure
-     * of the ambient `$CLAUDE_PLUGIN_DATA` (units inject a temp dir).
-     */
-    readonly dataDir: string
     /** --provision: write protection when missing instead of refusing. */
     readonly provision: boolean
     /** --waive mutation: record the mutation gate as waived instead of refusing. */
@@ -186,14 +178,6 @@ export interface ScaffoldReport {
     readonly stack: GateContractStack
     /** Whether `.factory/gates.json` was freshly resolved+written or already present. */
     readonly gates_contract: 'created' | 'present'
-    /**
-     * CI build-env auto-detection: the gateEnv gap-fill run BEFORE the managed
-     * `quality-gate.yml` template overwrites the repo's own workflow, capturing the
-     * repo author's build env into the durable config overlay. Omitted when nothing
-     * was detected (no workflows / no literal env), so a brand-new repo's report is
-     * unchanged.
-     */
-    readonly gateEnv?: DetectReport
 }
 
 /**
@@ -363,29 +347,12 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
     const lists: FileLists = {created: [], present: [], updated: []}
 
-    // 0. Auto-detect CI build env → gap-fill quality.gateEnv, BEFORE the managed
-    //    quality-gate.yml template (step 1) overwrites the repo's own workflow. This
-    //    captures the repo author's build env into the durable config overlay while
-    //    that file is still the author's; gap-fill never clobbers an operator value.
-    const gateEnv = await applyGateEnvDetection(opts.targetRoot, {dataDir: opts.dataDir})
-    if (gateEnv.written.length > 0) {
-        log.info(`detected ${gateEnv.written.length} CI build-env var(s) → quality.gateEnv`)
-    }
-    // Surface unparseable workflows LOUDLY and independent of the report's JSON shape —
-    // a silently-swallowed parse failure here means the managed template overwrites the
-    // repo's workflow with zero signal (the CRITICAL silent-failure this guards).
-    if (gateEnv.warnings.length > 0) {
-        log.warn(
-            `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` +
-                gateEnv.warnings.map((w) => w.workflow).join(', ')
-        )
-    }
-
     // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
     //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
     //       The `nodeOnly` SEED configs apply only to a Node-package target. The managed
-    //       quality-gate.yml is rendered with the resolved gateEnv injected into its
-    //       build step (single source of truth for the local gate AND this repo's CI).
+    //       quality-gate.yml is rendered with the CONFIGURED quality.gateEnv injected
+    //       into its build step (manual-only: `factory configure --set quality.gateEnv.*`;
+    //       single source of truth for the local gate AND this repo's CI).
     const isNodePackage = existsSync(join(opts.targetRoot, 'package.json'))
     for (const entry of TEMPLATE_MANIFEST) {
         if (entry.nodeOnly === true && !isNodePackage) {
@@ -393,7 +360,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         }
         const transform =
             entry.rel === QUALITY_GATE_REL
-                ? (text: string) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv)
+                ? (text: string) => injectGateEnvIntoWorkflow(text, opts.config.quality.gateEnv)
                 : undefined
         await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform)
     }
@@ -492,18 +459,6 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         settings: {created: settings.created, changed: settings.changed},
         stack: gates.stack,
         gates_contract: gates.status,
-        // Include the detection report whenever a key was detected OR any anomaly
-        // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
-        // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
-        // imply a detected key, so they're subsumed by the detected-key check. Omitted
-        // only for a clean brand-new repo (no workflows, nothing to report).
-        ...(Object.keys(gateEnv.detected).length > 0 ||
-        gateEnv.warnings.length > 0 ||
-        gateEnv.skippedExpressionRefs.length > 0 ||
-        gateEnv.droppedSecrets.length > 0 ||
-        gateEnv.droppedKeys.length > 0
-            ? {gateEnv}
-            : {}),
     }
 }
 
@@ -561,10 +516,8 @@ async function run(argv: string[]): Promise<ExitCode> {
         repo,
         config: loadConfig(),
         ghClient: new DefaultGhClient(),
-        // Bake the resolved data dir into the target permission rules, and thread it
-        // into CI build-env detection's config write.
+        // Bake the resolved data dir into the target permission rules.
         dataDirRules: buildTargetDataDirRules({dataDir, home: homedir()}),
-        dataDir,
         provision: args.flag('provision') === true,
         waiveMutation: waived.includes('mutation'),
         waiveCoverage: waived.includes('coverage'),

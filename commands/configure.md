@@ -11,9 +11,6 @@ arguments:
     - name: '--unset'
       description: 'Revert a key to its default (repeatable)'
       required: false
-    - name: '--detect-gate-env'
-      description: 'Auto-detect CI build env → gap-fill quality.gateEnv (standalone)'
-      required: false
 ---
 
 # /factory:configure
@@ -78,50 +75,9 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 >
 > A purely numeric value is JSON-coerced to a number (rejected by the string-only schema) —
 > quote it: `--set quality.gateEnv.PORT='"54321"'`.
-
-#### Auto-detecting `gateEnv` from CI
-
-`--set` is the escape hatch; the **preferred** way to populate `quality.gateEnv` is to let
-factory read your CI workflow and gap-fill the placeholders for you:
-
-```bash
-factory configure --detect-gate-env
-```
-
-This scans `.github/workflows/*.yml` for every step/job-level `env:` literal and merges them
-into `quality.gateEnv`. It is **standalone and mutually exclusive** with `--get`/`--set`/`--unset`
-(combining them is a usage error). It writes immediately (only when there are new keys) and
-prints a `DetectReport` JSON: `detected`, `written`, `skipped`, `conflicts`,
-`skippedExpressionRefs`, `droppedSecrets`, `droppedKeys`, `warnings`, `sources` (provenance per
-key), and the resolved `gateEnv`.
-
-**Gap-fill — the operator always wins.** Detection only fills keys you have not set:
-
-- key absent from your overlay → **written**;
-- key present and equal → **skipped** (idempotent re-run);
-- key present and different → reported as a **conflict** (your value is preserved, never
-  overwritten).
-
-**Filters drop an entry before it can reach `gateEnv`:**
-
-1. any value containing `${{` (a GitHub expression ref like `${{ secrets.* }}` — unusable and
-   unsafe at gate time) → `skippedExpressionRefs`;
-2. any value the secret scanner flags (defense-in-depth — gateEnv is placeholders, not a secret
-   store) → `droppedSecrets`;
-3. any reserved loader/path-injection **key** (`PATH`, `NODE_PATH`, `LD_PRELOAD`,
-   `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX key name → `droppedKeys` (reason `reserved` /
-   `invalid-name`). A reserved key would hijack the gate subprocess (gateEnv merges over
-   `process.env`); `NODE_OPTIONS` and `GIT_*` are legit build vars and are **kept**;
-4. structurally, anything inside a `run: |` block scalar is never read as env.
-
-Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with space
-indentation only. An UNQUOTED value opening with exotic YAML (an anchor `&`, alias `*`, tag `!`,
-or flow collection `{`/`[`) is skipped rather than emitted mangled; a quoted look-alike like
-`"[draft]"` is a plain string and IS kept. A file it cannot structurally parse at all (e.g. tab
-indentation) is skipped wholesale and listed under `warnings`. For any var detection misses, fall
-back to `--set quality.gateEnv.<KEY>=<value>`. `factory scaffold` runs this same detection
-automatically and **injects the resolved `gateEnv` into the managed `quality-gate.yml`** so one
-config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md)).
+>
+> `factory scaffold` **renders the configured `gateEnv` into the managed `quality-gate.yml`**
+> so one config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md)).
 
 ### Spec apex gate (`spec.*`)
 

@@ -24,7 +24,6 @@ import {
     unsetAtPath,
     getAtPath,
 } from '../../config/index.js'
-import {applyGateEnvDetection} from '../../ci/index.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 const HELP = `factory configure — inspect or edit the config overlay
@@ -34,7 +33,6 @@ Usage:
   factory configure --get <key.path>        Print one resolved value as JSON
   factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
   factory configure --unset <key.path>      Revert a key to its default (repeatable)
-  factory configure --detect-gate-env       Detect CI build env → gap-fill quality.gateEnv
 
 Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
@@ -52,15 +50,6 @@ async function run(argv: string[]): Promise<ExitCode> {
     const sets = args.all('set')
     const unsets = args.all('unset')
     const getKey = args.flag('get')
-
-    // --detect-gate-env: auto-detect CI build env and gap-fill quality.gateEnv.
-    if (args.flag('detect-gate-env') === true) {
-        if (sets.length > 0 || unsets.length > 0 || typeof getKey === 'string') {
-            throw new UsageError('--detect-gate-env cannot be combined with --get/--set/--unset')
-        }
-        emitJson(await applyGateEnvDetection(process.cwd()))
-        return EXIT.OK
-    }
 
     // --get: read one resolved value (defaults applied).
     if (typeof getKey === 'string') {

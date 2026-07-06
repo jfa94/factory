@@ -49,7 +49,6 @@ interface GateContractFixture {
 
 let root: string
 let templatesDir: string
-let dataDir: string
 
 /**
  * A minimal npm fixture that satisfies the gate-contract FLOOR (S7, Decision 46):
@@ -75,16 +74,12 @@ async function seedNpmFixture(dir: string): Promise<void> {
 
 beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'factory-scaffold-'))
-    // Isolated config-overlay dir so CI build-env detection's gateEnv write (and the
-    // no-op read when nothing is detected) never touches the host data dir.
-    dataDir = await mkdtemp(join(tmpdir(), 'factory-scaffold-data-'))
     templatesDir = resolveTemplatesDir()
     await seedNpmFixture(root)
 })
 
 afterEach(async () => {
     await rm(root, {recursive: true, force: true})
-    await rm(dataDir, {recursive: true, force: true})
 })
 
 describe('runScaffold', () => {
@@ -96,7 +91,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         })
@@ -156,7 +150,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         })
@@ -187,7 +180,6 @@ describe('runScaffold', () => {
                     repo: 'widgets',
                     config: cfg,
                     dataDirRules: DATA_DIR_RULES,
-                    dataDir,
                     ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
                     provision: false,
                 })
@@ -207,7 +199,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         })
@@ -226,7 +217,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         }
@@ -246,7 +236,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         }
@@ -272,7 +261,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         }
@@ -303,7 +291,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
         }
@@ -343,7 +330,6 @@ describe('runScaffold', () => {
                 repo: 'widgets',
                 config: cfg,
                 dataDirRules: DATA_DIR_RULES,
-                dataDir,
                 ghClient: new FakeGhClient(), // no protection seeded → disabled
                 provision: false,
             })
@@ -359,7 +345,6 @@ describe('runScaffold', () => {
             repo: 'widgets',
             config: cfg,
             dataDirRules: DATA_DIR_RULES,
-            dataDir,
             ghClient: gh,
             provision: true,
         })
@@ -369,138 +354,47 @@ describe('runScaffold', () => {
         expect(gh.calls).toContain(`api PUT protection ${BASE}`)
     })
 
-    it("auto-detects the repo's CI build env into quality.gateEnv BEFORE the managed template overwrites it", async () => {
-        // The repo ships its OWN quality-gate.yml carrying build placeholders. scaffold
-        // MANAGES (overwrites) that file — so detection must capture the env into the
-        // durable config overlay first. Mirror goodbyespy: a literal build env + a
-        // `${{ secrets.* }}` ref that must be dropped.
-        const wfDir = join(root, '.github', 'workflows')
-        await mkdir(wfDir, {recursive: true})
-        await writeFile(
-            join(wfDir, 'quality-gate.yml'),
-            `jobs:
-  quality:
-    steps:
-      - run: pnpm build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-          DEPLOY_TOKEN: \${{ secrets.DEPLOY_TOKEN }}
-`,
-            'utf8'
-        )
-
-        const report = await runScaffold({
-            targetRoot: root,
-            templatesDir,
-            owner: 'acme',
-            repo: 'widgets',
-            config: cfg,
-            dataDirRules: DATA_DIR_RULES,
-            dataDir,
-            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
-            provision: false,
-        })
-
-        // The literal placeholder was captured; the secret ref was dropped.
-        expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe('http://localhost:54321')
-        expect(report.gateEnv?.written).toEqual(['NEXT_PUBLIC_SUPABASE_URL'])
-        expect(report.gateEnv?.skippedExpressionRefs.map((r) => r.key)).toEqual(['DEPLOY_TOKEN'])
-
-        // It landed in the durable overlay (the same one the rest of the factory reads).
-        const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as {
-            quality: {gateEnv: Record<string, string>}
-        }
-        expect(overlay.quality.gateEnv).toEqual({
-            NEXT_PUBLIC_SUPABASE_URL: 'http://localhost:54321',
-        })
-
-        // The managed template DID overwrite the repo's workflow afterward — proving the
-        // ordering: detect first, then clobber.
-        expect(report.files_updated).toContain('.github/workflows/quality-gate.yml')
-    })
-
-    it('omits the gateEnv report field when the repo has no detectable build env', async () => {
-        const report = await runScaffold({
-            targetRoot: root,
-            templatesDir,
-            owner: 'acme',
-            repo: 'widgets',
-            config: cfg,
-            dataDirRules: DATA_DIR_RULES,
-            dataDir,
-            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
-            provision: false,
-        })
-        expect(report).not.toHaveProperty('gateEnv')
-        expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
-    })
-
-    const baseArgs = () => ({
+    const baseArgs = (config = cfg) => ({
         targetRoot: root,
         templatesDir,
         owner: 'acme',
         repo: 'widgets',
-        config: cfg,
+        config,
         dataDirRules: DATA_DIR_RULES,
-        dataDir,
         ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
         provision: false,
     })
 
-    const writeRepoWorkflow = async (text: string) => {
-        const wfDir = join(root, '.github', 'workflows')
-        await mkdir(wfDir, {recursive: true})
-        await writeFile(join(wfDir, 'quality-gate.yml'), text, 'utf8')
+    /** cfg with a configured gateEnv (manual-only: `factory configure --set quality.gateEnv.*`). */
+    const GATEENV_CFG = {
+        ...cfg,
+        quality: {...cfg.quality, gateEnv: {NEXT_PUBLIC_SUPABASE_URL: 'http://localhost:54321'}},
     }
 
-    const GATEENV_WF = `jobs:
-  quality:
-    steps:
-      - run: pnpm build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-`
-
-    it('injects the resolved gateEnv into the WRITTEN managed quality-gate.yml (CI parity)', async () => {
-        await writeRepoWorkflow(GATEENV_WF)
-        const report = await runScaffold(baseArgs())
+    it('renders the configured gateEnv into the WRITTEN managed quality-gate.yml (CI parity)', async () => {
+        await runScaffold(baseArgs(GATEENV_CFG))
 
         const written = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
-        // The marker became a real env: block carrying the detected placeholder (quoted).
+        // The marker became a real env: block carrying the configured value (quoted).
         expect(written).not.toContain('# factory:gate-env')
         expect(written).toContain('          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321"')
-        expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe('http://localhost:54321')
     })
 
-    it('leaves the gate-env marker in place when there is no detectable build env', async () => {
+    it('leaves the gate-env marker in place when no gateEnv is configured', async () => {
         await runScaffold(baseArgs())
         const written = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
         // No injection happened — the marker survives for a future scaffold to fill.
         expect(written).toContain('# factory:gate-env')
     })
 
-    it('re-scaffold re-injects a byte-identical file (idempotent round-trip, no spurious update)', async () => {
-        await writeRepoWorkflow(GATEENV_WF)
-        await runScaffold(baseArgs()) // detect + overwrite + inject
+    it('re-scaffold re-renders a byte-identical file (idempotent round-trip, no spurious update)', async () => {
+        await runScaffold(baseArgs(GATEENV_CFG))
         const wf = join(root, '.github', 'workflows', 'quality-gate.yml')
         const first = await readFile(wf, 'utf8')
 
-        const second = await runScaffold(baseArgs()) // re-detect injected env (skipped) + re-inject
+        const second = await runScaffold(baseArgs(GATEENV_CFG))
         expect(await readFile(wf, 'utf8')).toBe(first)
         expect(second.files_updated).not.toContain('.github/workflows/quality-gate.yml')
-    })
-
-    it('surfaces an unparseable workflow in the report (warnings) instead of swallowing it', async () => {
-        // Tab indentation → MalformedWorkflow → the file is skipped with a warning. The
-        // report MUST still carry the gateEnv field so the parse failure isn't silent (the
-        // CRITICAL omission-gate fix), even though nothing was detected.
-        const wfDir = join(root, '.github', 'workflows')
-        await mkdir(wfDir, {recursive: true})
-        await writeFile(join(wfDir, 'bad.yml'), 'jobs:\n\tj:\n\t\tsteps:\n', 'utf8')
-
-        const report = await runScaffold(baseArgs())
-        expect(report.gateEnv).toBeDefined()
-        expect(report.gateEnv?.warnings.map((w) => w.workflow)).toContain('bad.yml')
     })
 
     describe('gate contract (S7, Decision 46)', () => {

@@ -2,11 +2,10 @@
  * Tests for injecting the resolved gateEnv INTO the managed quality-gate.yml. A pure
  * string render: the `# factory:gate-env` marker becomes a real `env:` block at the
  * marker's indentation; an empty map leaves the marker; a missing marker is a no-op
- * (so re-injecting an already-injected file is stable). Closes the loop by re-detecting.
+ * (so re-injecting an already-injected file is stable).
  */
 import {describe, it, expect} from 'vitest'
 import {injectGateEnvIntoWorkflow} from './inject-gate-env.js'
-import {detectGateEnv, type WorkflowSource} from './detect-gate-env.js'
 
 const TEMPLATE = `jobs:
   quality:
@@ -15,11 +14,6 @@ const TEMPLATE = `jobs:
         # factory:gate-env
       - run: pnpm deps:validate
 `
-
-const source = (text: string): WorkflowSource => ({
-    listWorkflows: () => ['quality-gate.yml'],
-    readWorkflow: () => text,
-})
 
 describe('injectGateEnvIntoWorkflow', () => {
     it('replaces the marker with an env: block at the marker indent, keys sorted, values quoted', () => {
@@ -41,11 +35,5 @@ describe('injectGateEnvIntoWorkflow', () => {
     it('is a no-op (idempotent) when there is no marker — e.g. an already-injected file', () => {
         const once = injectGateEnvIntoWorkflow(TEMPLATE, {A: '1'})
         expect(injectGateEnvIntoWorkflow(once, {A: '1'})).toBe(once)
-    })
-
-    it('round-trips: the injected block re-detects to the same gateEnv', () => {
-        const env = {NEXT_PUBLIC_URL: 'http://localhost:54321', PORT: '5432'}
-        const injected = injectGateEnvIntoWorkflow(TEMPLATE, env)
-        expect(detectGateEnv(source(injected)).gateEnv).toEqual(env)
     })
 })

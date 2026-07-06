@@ -4,7 +4,7 @@
  * touching the host's config.
  */
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {mkdtemp, rm, readFile, mkdir, writeFile} from 'node:fs/promises'
+import {mkdtemp, rm, readFile} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -12,7 +12,6 @@ import {join} from 'node:path'
 import {configureCommand} from './configure.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import type {Config} from '../../config/index.js'
-import type {DetectReport} from '../../ci/index.js'
 
 let dataDir: string
 let prevEnv: string | undefined
@@ -46,7 +45,6 @@ afterEach(async () => {
 })
 
 const out = (): Config => JSON.parse(stdout.join('')) as Config
-const outReport = (): DetectReport => JSON.parse(stdout.join('')) as DetectReport
 
 describe('factory configure', () => {
     it('prints the resolved config (all defaults) when no overlay exists', async () => {
@@ -167,77 +165,5 @@ describe('factory configure', () => {
     it('--help returns OK', async () => {
         expect(await configureCommand.run(['--help'])).toBe(EXIT.OK)
         expect(stdout.join('')).toMatch(/factory configure/)
-    })
-
-    describe('--detect-gate-env', () => {
-        const WORKFLOW = `jobs:
-  quality:
-    steps:
-      - run: pnpm build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-          API_TOKEN: \${{ secrets.API_TOKEN }}
-`
-        let repoRoot: string
-        let prevCwd: string
-
-        const enterRepo = async (withWorkflow: boolean) => {
-            repoRoot = await mkdtemp(join(tmpdir(), 'factory-configure-repo-'))
-            if (withWorkflow) {
-                const dir = join(repoRoot, '.github', 'workflows')
-                await mkdir(dir, {recursive: true})
-                await writeFile(join(dir, 'quality-gate.yml'), WORKFLOW, 'utf8')
-            }
-            prevCwd = process.cwd()
-            process.chdir(repoRoot)
-        }
-
-        afterEach(async () => {
-            if (prevCwd) {
-                process.chdir(prevCwd)
-            }
-            if (repoRoot) {
-                await rm(repoRoot, {recursive: true, force: true})
-            }
-        })
-
-        it('detects into an empty config, writing the literal var and dropping the secret ref', async () => {
-            await enterRepo(true)
-            const code = await configureCommand.run(['--detect-gate-env'])
-            expect(code).toBe(EXIT.OK)
-            const report = outReport()
-            expect(report.written).toEqual(['NEXT_PUBLIC_SUPABASE_URL'])
-            expect(report.skippedExpressionRefs.map((r) => r.key)).toEqual(['API_TOKEN'])
-            // Sparse overlay holds only the detected literal.
-            const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
-            expect(overlay).toEqual({
-                quality: {gateEnv: {NEXT_PUBLIC_SUPABASE_URL: 'http://localhost:54321'}},
-            })
-        })
-
-        it('re-running is idempotent (written empty, overlay unchanged)', async () => {
-            await enterRepo(true)
-            await configureCommand.run(['--detect-gate-env'])
-            const overlay = await readFile(join(dataDir, 'config.json'), 'utf8')
-            stdout.length = 0
-            await configureCommand.run(['--detect-gate-env'])
-            expect(outReport().written).toEqual([])
-            expect(await readFile(join(dataDir, 'config.json'), 'utf8')).toBe(overlay)
-        })
-
-        it('writes nothing when there is no workflow dir', async () => {
-            await enterRepo(false)
-            const code = await configureCommand.run(['--detect-gate-env'])
-            expect(code).toBe(EXIT.OK)
-            expect(outReport().written).toEqual([])
-            expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
-        })
-
-        it('--detect-gate-env combined with --set is a USAGE error', async () => {
-            await enterRepo(true)
-            const code = await configureCommand.run(['--detect-gate-env', '--set', 'x=1'])
-            expect(code).toBe(EXIT.USAGE)
-            expect(stderr.join('')).toMatch(/cannot be combined/)
-        })
     })
 })
