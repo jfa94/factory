@@ -84,6 +84,7 @@ describe('factory state', () => {
         const code = await stateCommand.run(['run-s', '--summary'])
         expect(code).toBe(EXIT.OK)
         expect(stdout.join('')).toMatch(/run run-s/)
+        expect(stdout.join('')).toMatch(/execution_mode=(sequential|balanced)/)
         expect(stdout.join('')).toMatch(/acme\/widgets#12/)
     })
 
