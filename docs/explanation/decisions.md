@@ -1677,6 +1677,51 @@ records EVENTS (irrecoverable history), never derivable state.
 
 ---
 
+## Decision 50 — Content-Conditional DB-Design Specialist Reviewer
+
+**Date:** 2026-07-06
+
+**Context:** Schema mistakes (missing constraints, float money, one-step
+destructive migrations) are the most expensive defect class and no panel lens
+owned them. Folding the lens into `quality-reviewer` (the Decision 43 route) was
+rejected: DB design applies to a small minority of diffs, and carrying its
+rubric on every task dilutes the reviewer's attention. But the panel is
+deliberately risk-invariant (Decision 26) — `buildPanelManifest` has no tier
+parameter — so a conditional reviewer needed a principled carve-out.
+
+**Decision:**
+
+- **The invariant is about RISK TIERS, not content.** Risk-invariance guards
+  against the engine skimping review on an unreliable risk-tier _judgment_.
+  "The diff touches a migration file" is a deterministic _fact about content_,
+  and the specialist is strictly ADDITIVE: the four-lens floor
+  (`PANEL_ROLES`) always runs; a DB-touching task gets floor + specialist.
+  Review only ever gets stricter, never laxer.
+- **`database-design-reviewer`** — a fifth `SpawnRole` with its own charter
+  (`agents/database-design-reviewer.md`) and rubric skill
+  (`skills/database-design-review/SKILL.md`, a review-framed distillation of
+  relational-design Iron Laws + Decision Gates). Emits the same RawReview;
+  flows through citation-verify + finding-verifier unchanged.
+- **Trigger = ground truth, derive-don't-store:** `touchesDatabase`
+  (`db-detect.ts`) runs `git diff --name-only base...HEAD` in the task
+  worktree and matches built-in path patterns (`migrations/`, `db/migrate/`,
+  `alembic/versions/`, `drizzle/`, `schema.prisma`, `*.sql`). No config
+  surface, no persisted roster decision — the spawn site (handlers verify) and
+  the record site (`enforcePanelRoster` caller) both re-derive from the same
+  worktree tip, so they cannot disagree.
+- **`panelRolesFor(dbApplicable)`** is the ONLY sanctioned roster sizing;
+  roster enforcement fails closed both ways (expected-but-missing specialist →
+  synthesized error; unexpected specialist on a non-DB diff → demoted to
+  error).
+
+**Consequences:** migration/schema diffs get a dedicated fresh-context schema
+review at zero cost to non-DB tasks; the risk-invariance property stays
+structurally true (still no tier parameter anywhere in the panel); and
+`*.sql` deliberately over-matches (seeds/queries) — the charter instructs the
+specialist to approve non-schema SQL rather than the engine guessing intent.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

@@ -8155,6 +8155,7 @@ var SpawnRoleEnum = external_exports.enum([
   "quality-reviewer",
   "silent-failure-hunter",
   "systemic-failure-reviewer",
+  "database-design-reviewer",
   "scribe"
 ]);
 var AgentSpecSchema = external_exports.object({
@@ -12207,11 +12208,15 @@ var PANEL_ROLES = [
   "silent-failure-hunter",
   "systemic-failure-reviewer"
 ];
+var DB_DESIGN_ROLE = "database-design-reviewer";
+function panelRolesFor(dbApplicable) {
+  return dbApplicable ? [...PANEL_ROLES, DB_DESIGN_ROLE] : PANEL_ROLES;
+}
 function promptRefFor(role) {
   return `reviews/prompts/${role}.md`;
 }
-function buildPanelManifest(resumePhase, model, maxTurns, crossVendor) {
-  const agents = PANEL_ROLES.map((role) => ({
+function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false) {
+  const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
     isolation: "worktree",
     model,
@@ -12224,6 +12229,29 @@ function buildPanelManifest(resumePhase, model, maxTurns, crossVendor) {
     agents,
     ...cross_vendor !== void 0 ? { cross_vendor } : {}
   });
+}
+
+// src/verifier/judgment/db-detect.ts
+var DB_PATH_PATTERNS = [
+  /(^|\/)migrations\//,
+  // generic + supabase/migrations, django, alembic-as-migrations
+  /(^|\/)db\/migrate\//,
+  // rails
+  /(^|\/)alembic\/versions\//,
+  // alembic default layout
+  /(^|\/)drizzle\//,
+  // drizzle-kit output
+  /(^|\/)schema\.prisma$/,
+  // prisma
+  /\.sql$/i
+  // bare SQL anywhere
+];
+function isDbPath(path6) {
+  return DB_PATH_PATTERNS.some((p) => p.test(path6));
+}
+async function touchesDatabase(git, baseRef, opts) {
+  const changed = await git.changedFiles(baseRef, opts);
+  return changed.some(isDbPath);
 }
 
 // src/verifier/judgment/vendor.ts
@@ -13681,6 +13709,8 @@ function makePhaseHandlers(deps) {
         coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id))
       };
       const gate = await new GateRunner().run(gateCtx);
+      const dbApplicable = await touchesDatabase(deps.tools.git, gateCtx.baseRef, { cwd: worktree });
+      const expectedRoster = panelRolesFor(dbApplicable);
       const panelSpawn = async () => {
         const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
         if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
@@ -13696,11 +13726,12 @@ function makePhaseHandlers(deps) {
             "verify",
             resolveReviewModel(deps.config),
             deps.config.review.maxTurnsDeep,
-            crossVendor
+            crossVendor,
+            dbApplicable
           )
         );
       };
-      if (task.reviewers.length < PANEL_ROLES.length) {
+      if (task.reviewers.length < expectedRoster.length) {
         return panelSpawn();
       }
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
@@ -14127,19 +14158,19 @@ function composeFixFindings(adjudicated, gateEvidence) {
   const fromGates = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed).map((g) => ({ reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed` }));
   return [...fromReviewers, ...fromGates];
 }
-var PANEL_ROLE_SET = new Set(PANEL_ROLES);
-function enforcePanelRoster(reviews) {
+function enforcePanelRoster(reviews, expectedRoles = PANEL_ROLES) {
+  const expected = new Set(expectedRoles);
   const out = reviews.map((r) => {
-    if (PANEL_ROLE_SET.has(r.reviewer)) {
+    if (expected.has(r.reviewer)) {
       return r;
     }
     log23.warn(
-      `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${PANEL_ROLES.length} fixed panel roles may gate)`
+      `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${expectedRoles.length} expected panel roles may gate)`
     );
     return { ...r, verdict: "error" };
   });
   const present = new Set(reviews.map((r) => r.reviewer));
-  for (const role of PANEL_ROLES) {
+  for (const role of expectedRoles) {
     if (!present.has(role)) {
       log23.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
       out.push({ reviewer: role, verdict: "error", findings: [] });
@@ -14154,14 +14185,16 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview));
+  const baseRef = resolveStagingBranch(runId, run11.staging_branch);
+  const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
+  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
   const makeRunner2 = makeReplayRunnerFactory(input);
   const gateCtx = {
     runId,
     taskId,
     worktree,
-    baseRef: resolveStagingBranch(runId, run11.staging_branch),
+    baseRef,
     config: deps.config,
     tools: deps.tools,
     exemptReader: taskExemptReader(deps, worktree),

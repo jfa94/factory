@@ -8430,6 +8430,7 @@ var SpawnRoleEnum = external_exports.enum([
   "quality-reviewer",
   "silent-failure-hunter",
   "systemic-failure-reviewer",
+  "database-design-reviewer",
   "scribe"
 ]);
 var AgentSpecSchema = external_exports.object({

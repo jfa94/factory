@@ -38,6 +38,8 @@ import {
     runPanel,
     parseRawReview,
     PANEL_ROLES,
+    panelRolesFor,
+    touchesDatabase,
     type RawReview,
     type SourceReader,
     type FindingVerifierRunner,
@@ -379,32 +381,39 @@ function composeFixFindings(
     return [...fromReviewers, ...fromGates]
 }
 
-const PANEL_ROLE_SET: ReadonlySet<string> = new Set(PANEL_ROLES)
-
 /**
  * Roster enforcement (D26): `derivePanelVerdict` is unanimity over WHATEVER
  * reviews arrived, so any all-approve SUBSET of the panel would clear the merge
  * gate. At this record seam — the last hop before the verdict is derived — every
- * {@link PANEL_ROLES} entry must be present: a missing role becomes a synthesized
+ * `expectedRoles` entry must be present: a missing role becomes a synthesized
  * `error` review and an unknown reviewer name is demoted to `error` (never counted
- * as an approve). Both fail the gate LOUDLY. The cross-vendor slot is an EXECUTOR
- * of a roster role (quality-reviewer via Codex), never an extra reviewer name, so
- * no extra name is legitimate. /factory:debug calls runPanel directly and is
- * deliberately outside this check (whole-scope review, not the task merge gate).
+ * as an approve). Both fail the gate LOUDLY. `expectedRoles` is the Decision 50
+ * content-conditional roster (`panelRolesFor` — the four-lens floor, plus the
+ * `database-design-reviewer` when the task diff touches DB files); it defaults to
+ * the floor so pre-existing callers/tests keep their contract. An UNEXPECTED
+ * specialist (present but not in the expected roster) is demoted like any unknown
+ * name — fail-closed. The cross-vendor slot is an EXECUTOR of a roster role
+ * (quality-reviewer via Codex), never an extra reviewer name, so no extra name is
+ * legitimate. /factory:debug calls runPanel directly and is deliberately outside
+ * this check (whole-scope review, not the task merge gate).
  */
-export function enforcePanelRoster(reviews: readonly RawReview[]): RawReview[] {
+export function enforcePanelRoster(
+    reviews: readonly RawReview[],
+    expectedRoles: readonly string[] = PANEL_ROLES
+): RawReview[] {
+    const expected: ReadonlySet<string> = new Set(expectedRoles)
     const out: RawReview[] = reviews.map((r) => {
-        if (PANEL_ROLE_SET.has(r.reviewer)) {
+        if (expected.has(r.reviewer)) {
             return r
         }
         log.warn(
             `panel roster: unknown reviewer '${r.reviewer}' — verdict demoted to error ` +
-                `(only the ${PANEL_ROLES.length} fixed panel roles may gate)`
+                `(only the ${expectedRoles.length} expected panel roles may gate)`
         )
         return {...r, verdict: 'error'}
     })
     const present = new Set(reviews.map((r) => r.reviewer))
-    for (const role of PANEL_ROLES) {
+    for (const role of expectedRoles) {
         if (!present.has(role)) {
             log.warn(`panel roster: reviewer '${role}' missing from results — synthesized error verdict`)
             out.push({reviewer: role, verdict: 'error', findings: []})
@@ -430,11 +439,16 @@ export async function applyRecordReviews(
         throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`)
     }
     const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const baseRef = resolveStagingBranch(runId, run.staging_branch)
 
     // 1. parse reviews + build the worktree source and the replay verifier factory
     //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
     //    fast rather than burning a full deterministic gate sweep first).
-    const reviews = enforcePanelRoster(input.reviews.map(parseRawReview))
+    //    The expected roster is RE-DERIVED from the same worktree tip the spawn site
+    //    derived from (Decision 50, derive-don't-store) — reviewers run in their own
+    //    isolated worktrees, so the task tip is unchanged between spawn and record.
+    const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, {cwd: worktree})
+    const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable))
     const source = await buildWorktreeSource(worktree, reviews)
     const makeRunner = makeReplayRunnerFactory(input)
 
@@ -443,7 +457,7 @@ export async function applyRecordReviews(
         runId,
         taskId,
         worktree,
-        baseRef: resolveStagingBranch(runId, run.staging_branch),
+        baseRef,
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),

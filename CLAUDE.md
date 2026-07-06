@@ -25,6 +25,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 - `implementation-reviewer` — spec alignment: does the code address the spec, not just pass tests?
 - `quality-reviewer` — adversarial code quality, plus the folded security, architecture, and type-design dimensions (Decision 43); Codex is the preferred executor when available.
 - Plus `silent-failure-hunter` and `systemic-failure-reviewer`; blockers pass through an independent finding-verifier before reaching the producer (verify-then-fix, Decision 27).
+- `database-design-reviewer` — content-conditional specialist (Decision 50): appended to the panel only when the task diff touches migration/schema files (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`); additive-only, so risk-invariance holds.
 
 ## Key entry points
 

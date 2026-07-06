@@ -158,6 +158,8 @@ export type {GateContext, GateRunResult, GateReportEntry, GateTools} from '../ve
 export {
     runPanel,
     PANEL_ROLES,
+    panelRolesFor,
+    touchesDatabase,
     buildPanelManifest,
     resolveReviewModel,
     resolveJudgmentConfig,
