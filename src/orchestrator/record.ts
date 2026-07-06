@@ -57,7 +57,6 @@ import {
 import {createLogger, UsageError} from '../shared/index.js'
 import type {GateEvidence, GateVerdict, ReviewerResult, ProducerRole, TaskPhase, FixFinding} from '../types/index.js'
 import type {HandlerDeps} from './types.js'
-import {resolveStagingBranch} from './deps.js'
 import type {StateManager} from './deps.js'
 
 const log = createLogger('record')
@@ -439,7 +438,7 @@ export async function applyRecordReviews(
         throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`)
     }
     const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
-    const baseRef = resolveStagingBranch(runId, run.staging_branch)
+    const baseRef = run.staging_branch
 
     // 1. parse reviews + build the worktree source and the replay verifier factory
     //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail

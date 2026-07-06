@@ -6720,7 +6720,7 @@ var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window"
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
-  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+  /** Cumulative attempt count (1-indexed). Written on `failed` markers only; a `done` marker omits it. */
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
@@ -6828,7 +6828,7 @@ var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(2).default(2),
+  schema_version: external_exports.literal(3).default(3),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
@@ -6851,12 +6851,10 @@ var RunStateSchema = external_exports.object({
    * merge target, rollup source — reads the branch the run ACTUALLY created, not a
    * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
    * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
-   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
-   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
-   * does not apply.
+   * the already-pushed branch. Git provenance / immutable identity — NOT a derived
+   * verdict, so derive-don't-store does not apply.
    */
-  staging_branch: external_exports.string().min(1).optional(),
+  staging_branch: external_exports.string().min(1),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6889,15 +6887,15 @@ var RunStateSchema = external_exports.object({
    * `recover` (an approved rescue apply that did work). The second sanctioned
    * stored-EVENT exception (with `self_heal`): which touches happened is history
    * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
-   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
+   * guarded to n/a on an empty ledger — never a fabricated number.
    */
   human_touches: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
       at: external_exports.string()
     })
-  ).optional(),
+  ).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -7253,16 +7251,16 @@ var StateManager = class _StateManager {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
   /**
-   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-   * `schema_version` absent or === 2 → pass through to parseRunState normally.
-   * Any other value → the file predates the current schema; ephemeral runs can't be
-   * migrated, so the user gets a clear "start a fresh run" message.
+   * Reject any state file not stamped with the CURRENT schema version, with a clear
+   * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+   * the version, so an unstamped file predates the current schema. Ephemeral runs
+   * can't be migrated; the remedy is always a fresh run.
    */
   static guardedParse(raw, context) {
     const v = raw?.schema_version;
-    if (v !== void 0 && v !== 2) {
+    if (v !== 3) {
       throw new UsageError(
-        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported \u2014 start a fresh run`
+        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported \u2014 this state was created by an older factory version; start a fresh run`
       );
     }
     return parseRunState(raw);
@@ -7327,7 +7325,7 @@ var StateManager = class _StateManager {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
-      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},
@@ -8914,12 +8912,6 @@ function runStagingBranch(runId) {
   }
   return `${RUN_STAGING_PREFIX}-${runId}`;
 }
-function resolveStagingBranch(runId, pinned) {
-  if (pinned !== void 0 && pinned.length > 0) {
-    return pinned;
-  }
-  return runStagingBranch(runId);
-}
 
 // src/scoring/partial-report.ts
 function buildPartialReport(run10, request, opts = {}) {
@@ -9216,8 +9208,8 @@ function buildRunSummary(run10, report, opts = {}) {
     ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
-  const touches = run10.human_touches?.length ?? null;
-  const touchMetric = touches === null || touches === 0 ? null : (run10.status === "completed" ? 1 : 0) / touches;
+  const touches = run10.human_touches.length;
+  const touchMetric = touches === 0 ? null : (run10.status === "completed" ? 1 : 0) / touches;
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -9894,9 +9886,8 @@ var SpecStore = class {
     }
   }
   /**
-   * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
-   * spec predates the snapshot — never a silent null (traceability would audit
-   * nothing).
+   * Read the durable PRD snapshot (S9). LOUD with the regenerate remedy when the
+   * snapshot is missing — never a silent null (traceability would audit nothing).
    */
   async readPrd(repo, specId) {
     const path6 = join7(specDir(this.dataDir, repo, specId), PRD_FILE);
@@ -9906,17 +9897,12 @@ var SpecStore = class {
     } catch (err) {
       if (err.code === "ENOENT") {
         throw new Error(
-          `spec ${specId} predates the S9 PRD snapshot \u2014 run \`factory spec resolve --issue ${issueOf(specId) ?? "<n>"}\` to backfill, or \`--supersede\` to regenerate`
+          `spec ${specId} has no PRD snapshot (created by an older factory version) \u2014 re-run with \`--supersede\` to regenerate the spec`
         );
       }
       throw err;
     }
     return parsePrd(parseJson(raw, path6), path6);
-  }
-  /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
-  async writePrd(repo, specId, prd) {
-    await atomicWriteFile(join7(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd));
-    log17.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`);
   }
   /** Build the run-facing {@link SpecPointer} from a request. */
   toPointer(request) {
@@ -10306,9 +10292,6 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
   }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
-    if (!await deps.store.hasPrd(repo, existing.spec_id)) {
-      await deps.store.writePrd(repo, existing.spec_id, await deps.gh.fetchPrd(issue, { repo }));
-    }
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
@@ -12676,7 +12659,7 @@ function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAs
 
 // src/rescue/assess.ts
 async function assessWork(run10, probe) {
-  const baseRef = `origin/${resolveStagingBranch(run10.run_id, run10.staging_branch)}`;
+  const baseRef = `origin/${run10.staging_branch}`;
   const baseResolved = await probe.refExists(baseRef);
   const tasks = [];
   for (const t of Object.values(run10.tasks)) {
@@ -12895,7 +12878,7 @@ async function applyRescue(state, runId, opts = {}) {
       ...run10,
       tasks: nextTasks,
       // S11: a manual apply that did work IS a human touch.
-      human_touches: [...run10.human_touches ?? [], { kind: "recover", at: opts.at ?? nowIso() }],
+      human_touches: [...run10.human_touches, { kind: "recover", at: opts.at ?? nowIso() }],
       ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run10.e2e_phase)) } : {},
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
@@ -12959,7 +12942,7 @@ async function finalizeRun(deps, runId) {
   const failureCommentPosted = run10.debug ? false : await commentFailuresOnPrd(deps, run10, report);
   let rollupResult;
   if (terminal === "completed") {
-    const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
+    const stagingBranch = run10.staging_branch;
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
     await deps.git.push("origin", stagingBranch);
@@ -13227,7 +13210,7 @@ function makePhaseHandlers(deps) {
     async preflight(ctx) {
       const task = requireTask3(ctx, "preflight");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
-      const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch);
+      const staging = ctx.run.staging_branch;
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
         {
@@ -13315,7 +13298,7 @@ function makePhaseHandlers(deps) {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree,
-        baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
+        baseRef: ctx.run.staging_branch,
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
@@ -13798,7 +13781,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-  const baseRef = resolveStagingBranch(runId, run10.staging_branch);
+  const baseRef = run10.staging_branch;
   const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
   const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
@@ -14008,7 +13991,7 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: resolveStagingBranch(runId, ctx.run.staging_branch),
+    base: ctx.run.staging_branch,
     // Gate the MERGED-PR fallback on the number state still remembers: a crash-resume
     // keeps pr_number (idempotent no-op), but e2e-reopen clears it so a fresh PR opens
     // for the reopened commits instead of rebinding the already-merged one. See pr.ts.
@@ -14026,7 +14009,7 @@ async function shipTask(deps, ctx) {
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
+    stagingBranch: ctx.run.staging_branch,
     dataDir: deps.dataDir
   });
   const outcome = await serializer.merge(pr.number);
@@ -14165,7 +14148,7 @@ async function nextAction(deps, runId, taskId, results) {
         const spawnPhase = asSpawnPhase(phase);
         const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const base_ref = `origin/${resolveStagingBranch(runId, run10.staging_branch)}`;
+        const base_ref = `origin/${run10.staging_branch}`;
         const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
@@ -14204,7 +14187,7 @@ async function nextAction(deps, runId, taskId, results) {
       case "wait-retry": {
         if (result.phase === "ship") {
           const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId);
-          const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
+          const stagingBranch = run10.staging_branch;
           if (!await deps.git.worktreeExists(resyncWorktree)) {
             const step2 = await failStep(
               deps,
@@ -14307,7 +14290,7 @@ function buildScribePrompt(worktree, baseRef) {
 }
 async function runDocsEmit(deps, runId) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const base = deps.config.git.baseBranch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
@@ -14334,7 +14317,7 @@ async function runDocsEmit(deps, runId) {
 var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 async function runDocsRecord(deps, runId, results) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
@@ -14404,7 +14387,7 @@ async function readRequirements(deps, runId) {
 }
 async function runTraceabilityEmit(deps, runId) {
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const base = deps.config.git.baseBranch;
   const worktree = traceWorktreePath(deps.dataDir, runId);
   const baseRef = `origin/${base}`;
@@ -14825,7 +14808,7 @@ async function runE2eEmit(deps, runId) {
   return runSuiteAndDecide(deps, runId);
 }
 async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const base = deps.config.git.baseBranch;
   const branch = e2eBranchName(runId);
   const worktree = e2eWorktreePath(deps.dataDir, runId);
@@ -14904,7 +14887,7 @@ async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
   if (cursor === void 0) {
     throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`);
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const branch = adjudicateBranchName(runId);
   const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
@@ -14988,7 +14971,7 @@ async function runE2eRecord(deps, runId, results) {
   }
   const cfg = deps.config.e2e;
   const run10 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const critical = results.manifest.filter((e) => e.kind === "critical");
   const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run10.tasks));
   if (unknownTaskIds.length > 0) {
@@ -15109,7 +15092,7 @@ async function recordAdjudication(deps, runId, run10, results) {
     const reason = "e2e adjudication: regression verdict \u2014 " + regressions2.map((v) => `${v.spec_path}: ${v.reason}`).join("; ");
     return failAdjudication(deps, runId, worktree, reason);
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
     cwd: worktree
   });
@@ -15330,7 +15313,7 @@ async function runSuiteAndDecide(deps, runId) {
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
@@ -15548,7 +15531,7 @@ async function runAssessmentEmit(deps, runId) {
       reason: run10.e2e_assessment.reason ?? "e2e assessment failed"
     };
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const branch = assessBranchName(runId);
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
@@ -15641,7 +15624,7 @@ async function runAssessmentRecord(deps, runId, results) {
       attempts
     );
   }
-  const staging = resolveStagingBranch(runId, run10.staging_branch);
+  const staging = run10.staging_branch;
   const testDirPrefix = `${deps.config.e2e.testDir}/`;
   const changed = await deps.git.diffNames(staging, assessBranchName(runId), { cwd: worktree });
   const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && f !== "playwright.config.ts");
@@ -15739,7 +15722,7 @@ async function resolveSpec2(specStore, opts) {
   }
   if (!await specStore.hasPrd(request.repo, request.spec_id)) {
     throw new Error(
-      `run create: spec ${request.spec_id} has no durable PRD snapshot (predates S9) \u2014 run \`factory spec resolve --issue ${request.issue_number}\` to backfill, or \`--supersede\` to regenerate`
+      `run create: spec ${request.spec_id} has no PRD snapshot (created by an older factory version) \u2014 re-run with \`--supersede\` to regenerate the spec`
     );
   }
   return request;
@@ -15792,7 +15775,7 @@ async function createRun(state, specStore, opts) {
   return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
 }
 async function supersedeRun(state, existing, stagingDeps) {
-  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
+  const branch = existing.staging_branch;
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
   await state.finalize(existing.run_id, "superseded");
@@ -15822,7 +15805,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
         const run10 = await state.update(created.run_id, (s) => ({
           ...s,
-          human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
+          human_touches: [...s.human_touches, { kind: "conflict", at: s.started_at }]
         }));
         return { kind: "superseded", run: run10, supersededId };
       }
@@ -15852,7 +15835,7 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
-        ...opts.touch === false ? {} : { human_touches: [...s.human_touches ?? [], { kind: "resume", at: at2 }] }
+        ...opts.touch === false ? {} : { human_touches: [...s.human_touches, { kind: "resume", at: at2 }] }
       }));
       return { kind: "resumed", run: updated, cleared: true };
     }
@@ -16430,7 +16413,7 @@ async function runCancel(argv, overrides = {}) {
   const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
   const run10 = await state.finalize(runId, "failed");
   const cleanup = args.flag("cleanup") === true;
-  const branch = resolveStagingBranch(run10.run_id, run10.staging_branch);
+  const branch = run10.staging_branch;
   let cleanedUp = false;
   let cleanupError;
   if (cleanup) {
@@ -18087,8 +18070,8 @@ Usage:
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
 function touchMetricOf(run10) {
-  const touches = run10.human_touches?.length;
-  if (touches === void 0 || touches === 0) {
+  const touches = run10.human_touches.length;
+  if (touches === 0) {
     return null;
   }
   return (run10.status === "completed" ? 1 : 0) / touches;
@@ -18098,11 +18081,11 @@ async function runFleet(state) {
   const runs = all.map((r) => ({
     run_id: r.run_id,
     status: r.status,
-    touches: r.human_touches?.length ?? null,
+    touches: r.human_touches.length,
     metric: touchMetricOf(r)
   }));
-  const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0);
-  const totalTouches = withLedger.reduce((n, r) => n + nonNull(r.human_touches).length, 0);
+  const withLedger = all.filter((r) => r.human_touches.length > 0);
+  const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0);
   const completed = withLedger.filter((r) => r.status === "completed").length;
   const aggregate = totalTouches === 0 ? null : completed / totalTouches;
   emitJson({ kind: "fleet-score", runs, aggregate });

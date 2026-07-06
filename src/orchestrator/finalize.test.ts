@@ -107,6 +107,7 @@ describe('finalizeRun', () => {
         git = new FakeGitClient()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: REPO, spec_id: SPEC_ID, issue_number: ISSUE},
         })
     })
@@ -668,6 +669,7 @@ describe('finalizeRun — run.debug defers PRD-facing calls to the debug driver'
         git = new FakeGitClient()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: REPO, spec_id: SPEC_ID, issue_number: ISSUE},
         })
     })

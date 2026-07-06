@@ -33,16 +33,22 @@ function task(over: Partial<TaskState> = {}): TaskState {
 
 function run(tasks: Record<string, TaskState>): RunState {
     return {
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-x',
+        staging_branch: 'staging-run-x',
         status: 'running',
         execution_mode: 'balanced',
         spec: SPEC,
         tasks,
+        ship_mode: 'live',
+        ignore_quota: false,
+        human_touches: [],
+        e2e: false,
+        debug: false,
         started_at: 't',
         updated_at: 't',
         ended_at: null,
-    } as RunState
+    }
 }
 
 /** A fake manager: findActiveByOwner returns the supplied run regardless of session. */

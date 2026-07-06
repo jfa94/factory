@@ -51,6 +51,7 @@ function mkRun(
 ): RunState {
     return parseRunState({
         run_id: 'run-scan-1',
+        staging_branch: 'staging-run-scan-1',
         status,
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
         tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),

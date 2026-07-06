@@ -7,6 +7,7 @@ import {parseRunState, type RunState} from '../state/index.js'
 const ctx: PhaseContext = {
     run: parseRunState({
         run_id: 'run-20260604-000000',
+        staging_branch: 'staging-run-20260604-000000',
         spec: {repo: 'o/r', spec_id: '1-x', issue_number: 1},
         started_at: '2026-06-04T00:00:00.000Z',
         updated_at: '2026-06-04T00:00:00.000Z',
@@ -172,6 +173,7 @@ describe('decideFinalize is pure + terminal-by-construction', () => {
     const mkRun = (tasks: Record<string, unknown>): RunState =>
         parseRunState({
             run_id: 'run-20260604-000000',
+            staging_branch: 'staging-run-20260604-000000',
             spec: {repo: 'o/r', spec_id: '1-x', issue_number: 1},
             started_at: '2026-06-04T00:00:00.000Z',
             updated_at: '2026-06-04T00:00:00.000Z',

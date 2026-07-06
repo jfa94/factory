@@ -18,7 +18,6 @@
  * git-touching part is isolated behind an injected {@link WorkProbe} — trivially
  * testable, and the scan classification has no new dependency.
  */
-import {resolveStagingBranch} from '../git/run-staging.js'
 import type {RunState} from '../types/index.js'
 
 /**
@@ -73,7 +72,7 @@ export interface WorkAssessment {
 export async function assessWork(run: RunState, probe: WorkProbe): Promise<WorkAssessment> {
     // The SAME per-run base the gates diff against — `staging-<run-id>` (hyphen), via
     // the pinned name when present. A generic `staging` would yield wrong counts.
-    const baseRef = `origin/${resolveStagingBranch(run.run_id, run.staging_branch)}`
+    const baseRef = `origin/${run.staging_branch}`
     const baseResolved = await probe.refExists(baseRef)
 
     const tasks: TaskWork[] = []

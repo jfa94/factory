@@ -22,6 +22,7 @@ beforeEach(async () => {
     git = new FakeGitClient({remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging'}})
     await state.create({
         run_id: RUN_ID,
+        staging_branch: `staging-${RUN_ID}`,
         spec: {repo: 'acme/widgets', spec_id: '42-x', issue_number: 42},
     })
 })

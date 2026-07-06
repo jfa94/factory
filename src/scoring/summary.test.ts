@@ -44,6 +44,7 @@ function mkRun(
     const status = opts.status ?? 'failed'
     return parseRunState({
         run_id: 'run-sum-1',
+        staging_branch: 'staging-run-sum-1',
         status,
         execution_mode: 'balanced',
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
@@ -357,14 +358,14 @@ describe('touch metric (S11 — derived, never stored)', () => {
         expect(summary.touch_metric).toBe(0)
     })
 
-    it('a legacy run without the ledger reads n/a (null) — never a fabricated number', () => {
+    it('an empty ledger reads 0 touches with an n/a metric — never a fabricated number', () => {
         const summary = buildRunSummary(
             mkRun([{task_id: 'a', status: 'done'}], {status: 'completed'}),
             report({run_status: 'completed'}),
             {now: NOW}
         )
-        expect(summary.touches).toBeNull()
+        expect(summary.touches).toBe(0)
         expect(summary.touch_metric).toBeNull()
-        expect(renderRunSummaryMarkdown(summary)).not.toContain('Human touches')
+        expect(renderRunSummaryMarkdown(summary)).toContain('**Human touches:** 0 · touch metric n/a')
     })
 })

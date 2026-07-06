@@ -36,7 +36,6 @@
 import {copyFile, mkdir, writeFile} from 'node:fs/promises'
 import {dirname, isAbsolute, join} from 'node:path'
 import {
-    resolveStagingBranch,
     resetTaskRow,
     parseProducerStatus,
     runE2e,
@@ -250,7 +249,7 @@ async function prepareAuthorSpawn(
     boot: BootConfig,
     testDir: string
 ): Promise<E2eAction> {
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const branch = e2eBranchName(runId)
     const worktree = e2eWorktreePath(deps.dataDir, runId)
@@ -366,7 +365,7 @@ async function prepareAdjudicatorSpawn(
     if (cursor === undefined) {
         throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`)
     }
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const branch = adjudicateBranchName(runId)
     const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId)
 
@@ -502,7 +501,7 @@ export async function runE2eRecord(deps: E2eRunDeps, runId: string, results: E2e
 
     const cfg = deps.config.e2e
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const critical = results.manifest.filter((e) => e.kind === 'critical')
 
     // The author picks task_ids off the spec it was handed, but nothing upstream
@@ -707,7 +706,7 @@ async function recordAdjudication(
     }
 
     // All intentional — gate the rewritten specs exactly like fresh-authored ones.
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
         cwd: worktree,
     })
@@ -1015,7 +1014,7 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
         return {kind: 'failed', run_id: runId, reason}
     }
 
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const worktree = e2eRunWorktreePath(deps.dataDir, runId)
     const provision = deps.provision ?? provisionWorktree
     await deps.git.fetch('origin', staging)

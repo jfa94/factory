@@ -50,7 +50,7 @@ describe('loadActiveRun — runs/current resolution', () => {
 
     it('VALID symlink → parsed ActiveRun', async () => {
         const mgr = new StateManager({dataDir})
-        await mgr.create({run_id: 'run-20260101-000000', spec: SPEC})
+        await mgr.create({run_id: 'run-20260101-000000', staging_branch: 'staging-run-20260101-000000', spec: SPEC})
         const active = await loadActiveRun({dataDir})
         expect(active).not.toBeNull()
         expect(nonNull(active).dataDir).toBe(dataDir)
@@ -100,7 +100,7 @@ describe('loadOwnerScopedRun — session-scoped active run (run-isolation L1.3)'
 
     it('with CLAUDE_CODE_SESSION_ID set → resolves the run THAT session owns', async () => {
         const mgr = new StateManager({dataDir})
-        await mgr.create({run_id: 'run-1', spec: SPEC, owner_session: 'sess-A'})
+        await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-A'})
         const active = await loadOwnerScopedRun({dataDir, env: {CLAUDE_CODE_SESSION_ID: 'sess-A'}})
         expect(active?.run.run_id).toBe('run-1')
         expect(active?.dataDir).toBe(dataDir)
@@ -110,14 +110,14 @@ describe('loadOwnerScopedRun — session-scoped active run (run-isolation L1.3)'
         // A concurrent run owned by another session is the `current` target; an
         // unrelated session must NOT inherit it (the cross-session leak this fixes).
         const mgr = new StateManager({dataDir})
-        await mgr.create({run_id: 'run-1', spec: SPEC, owner_session: 'sess-B'})
+        await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-B'})
         const active = await loadOwnerScopedRun({dataDir, env: {CLAUDE_CODE_SESSION_ID: 'sess-A'}})
         expect(active).toBeNull()
     })
 
     it("with NO session id in env → falls back to today's global runs/current behavior", async () => {
         const mgr = new StateManager({dataDir})
-        await mgr.create({run_id: 'run-1', spec: SPEC, owner_session: 'sess-B'})
+        await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-B'})
         // env carries no CLAUDE_CODE_SESSION_ID → fail-safe to the global pointer.
         const active = await loadOwnerScopedRun({dataDir, env: {}})
         expect(active?.run.run_id).toBe('run-1')
@@ -140,16 +140,22 @@ function task(over: Partial<TaskState> = {}): TaskState {
 
 function run(tasks: Record<string, TaskState>): RunState {
     return {
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-x',
+        staging_branch: 'staging-run-x',
         status: 'running',
         execution_mode: 'balanced',
         spec: SPEC,
         tasks,
+        ship_mode: 'live',
+        ignore_quota: false,
+        human_touches: [],
+        e2e: false,
+        debug: false,
         started_at: 't',
         updated_at: 't',
         ended_at: null,
-    } as RunState
+    }
 }
 
 describe('resolveActiveTask — status-derived phase (legacy fallback, no cursor persisted)', () => {

@@ -43,8 +43,8 @@ afterEach(async () => {
 describe("readCurrentForCwd — per-repo current run from the caller's checkout", () => {
     it("resolves THIS repo's current run, never another repo's (cross-repo isolation)", async () => {
         const state = mgr()
-        await state.create({run_id: 'run-A', spec: specWidgets})
-        await state.create({run_id: 'run-B', spec: specOther})
+        await state.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specWidgets})
+        await state.create({run_id: 'run-B', staging_branch: 'staging-run-B', spec: specOther})
 
         const inWidgets = await readCurrentForCwd(state, {gitClient: git('acme/widgets'), cwd: '/x'})
         const inOther = await readCurrentForCwd(state, {gitClient: git('acme/other'), cwd: '/y'})
@@ -54,14 +54,14 @@ describe("readCurrentForCwd — per-repo current run from the caller's checkout"
 
     it('returns null for a repo with no current run (no cross-repo leak via global)', async () => {
         const state = mgr()
-        await state.create({run_id: 'run-A', spec: specWidgets}) // global → run-A
+        await state.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specWidgets}) // global → run-A
         const found = await readCurrentForCwd(state, {gitClient: git('acme/unrelated'), cwd: '/z'})
         expect(found).toBeNull()
     })
 
     it("falls back to the GLOBAL pointer when the repo can't be derived (no origin)", async () => {
         const state = mgr()
-        await state.create({run_id: 'run-A', spec: specWidgets})
+        await state.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specWidgets})
         // No origin remote → resolveRepo throws → degrade to the repo-less most-recent.
         const found = await readCurrentForCwd(state, {gitClient: git(null), cwd: '/scratch'})
         expect(found?.run_id).toBe('run-A')

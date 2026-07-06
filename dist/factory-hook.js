@@ -7667,7 +7667,7 @@ var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window"
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
-  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+  /** Cumulative attempt count (1-indexed). Written on `failed` markers only; a `done` marker omits it. */
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
@@ -7775,7 +7775,7 @@ var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(2).default(2),
+  schema_version: external_exports.literal(3).default(3),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
@@ -7798,12 +7798,10 @@ var RunStateSchema = external_exports.object({
    * merge target, rollup source — reads the branch the run ACTUALLY created, not a
    * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
    * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
-   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
-   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
-   * does not apply.
+   * the already-pushed branch. Git provenance / immutable identity — NOT a derived
+   * verdict, so derive-don't-store does not apply.
    */
-  staging_branch: external_exports.string().min(1).optional(),
+  staging_branch: external_exports.string().min(1),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7836,15 +7834,15 @@ var RunStateSchema = external_exports.object({
    * `recover` (an approved rescue apply that did work). The second sanctioned
    * stored-EVENT exception (with `self_heal`): which touches happened is history
    * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
-   * Absent on legacy runs → metric reads n/a, never a fabricated number.
+   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
+   * guarded to n/a on an empty ledger — never a fabricated number.
    */
   human_touches: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
       at: external_exports.string()
     })
-  ).optional(),
+  ).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -8060,16 +8058,16 @@ var StateManager = class _StateManager {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
   /**
-   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-   * `schema_version` absent or === 2 → pass through to parseRunState normally.
-   * Any other value → the file predates the current schema; ephemeral runs can't be
-   * migrated, so the user gets a clear "start a fresh run" message.
+   * Reject any state file not stamped with the CURRENT schema version, with a clear
+   * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+   * the version, so an unstamped file predates the current schema. Ephemeral runs
+   * can't be migrated; the remedy is always a fresh run.
    */
   static guardedParse(raw, context) {
     const v = raw?.schema_version;
-    if (v !== void 0 && v !== 2) {
+    if (v !== 3) {
       throw new UsageError(
-        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported \u2014 start a fresh run`
+        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported \u2014 this state was created by an older factory version; start a fresh run`
       );
     }
     return parseRunState(raw);
@@ -8134,7 +8132,7 @@ var StateManager = class _StateManager {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
-      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},

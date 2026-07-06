@@ -83,7 +83,7 @@ describe('rescue scan/apply/auto', () => {
             return true
         })
         state = new StateManager({dataDir})
-        await state.create({run_id: RUN, spec: SPEC})
+        await state.create({run_id: RUN, staging_branch: `staging-${RUN}`, spec: SPEC})
     })
 
     afterEach(async () => {
@@ -419,7 +419,7 @@ describe('rescue scan/apply/auto', () => {
         expect((env.resume as {kind: string}).kind).toBe('resumed')
         const run = await state.read(RUN)
         expect(run.status).toBe('running')
-        expect(run.human_touches?.map((t) => t.kind)).toEqual(['recover'])
+        expect(run.human_touches.map((t) => t.kind)).toEqual(['recover'])
         const mirrors = (await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')
         expect(mirrors.map((m) => m.data)).toEqual([{kind: 'recover'}])
     })
@@ -510,7 +510,7 @@ describe('rescue scan/apply/auto', () => {
         const code = await runAuto(['--run', RUN], {now: () => AT})
         expect(code).toBe(EXIT.OK)
         expect(out().kind).toBe('recovered')
-        expect((await state.read(RUN)).human_touches).toBeUndefined()
+        expect((await state.read(RUN)).human_touches).toEqual([])
         expect((await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')).toHaveLength(0)
     })
 })

@@ -33,7 +33,6 @@ import {
     mergeGateBlockReason,
     createTaskWorktree,
     provisionWorktree,
-    resolveStagingBranch,
     GateRunner,
     FsCoverageStore,
     buildPanelManifest,
@@ -217,7 +216,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         async preflight(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'preflight')
             const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id)
-            const staging = resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
+            const staging = ctx.run.staging_branch
             // Parallel preflights share the main repo's .git: `fetch` + `worktree add`
             // contend on index.lock, and the shared origin/<staging> tracking ref can move
             // between one task's fetch and another's assertBaseIsStagingTip — spuriously
@@ -332,7 +331,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 runId: ctx.run.run_id,
                 taskId: task.task_id,
                 worktree,
-                baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
+                baseRef: ctx.run.staging_branch,
                 config: deps.config,
                 tools: deps.tools,
                 exemptReader: taskExemptReader(deps, worktree),

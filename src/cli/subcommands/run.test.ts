@@ -432,7 +432,7 @@ describe('createRun', () => {
         // Fabricate a pre-S9 spec dir: written normally, snapshot removed.
         await rm(join(specDir(dataDir, REPO, '42-checkout'), 'prd.json'))
         await expect(createRun(state, store, {repo: REPO, specId: '42-checkout', runId: 'run-pre-s9'})).rejects.toThrow(
-            /no durable PRD snapshot.*factory spec resolve --issue 42/s
+            /has no PRD snapshot.*--supersede/s
         )
         // Nothing was created — the refusal is pre-run (no paid-run-then-fail).
         await expect(state.read('run-pre-s9')).rejects.toThrow()
@@ -793,9 +793,9 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         if (r.kind !== 'superseded') {
             throw new Error('narrowing')
         }
-        expect(r.run.human_touches?.map((t) => t.kind)).toEqual(['launch', 'conflict'])
+        expect(r.run.human_touches.map((t) => t.kind)).toEqual(['launch', 'conflict'])
         // The OLD run's ledger is untouched (launch only).
-        expect((await state.read('run-old')).human_touches?.map((t) => t.kind)).toEqual(['launch'])
+        expect((await state.read('run-old')).human_touches.map((t) => t.kind)).toEqual(['launch'])
     })
 
     it("--supersede tears down the OLD run's PINNED branch, not a recompute (revert guard)", async () => {
@@ -1926,6 +1926,7 @@ describe('applyResume', () => {
     async function createBareRun(runId: string): Promise<void> {
         await state.create({
             run_id: runId,
+            staging_branch: `staging-${runId}`,
             spec: {repo: REPO, spec_id: '42-checkout', issue_number: 42},
         })
     }
@@ -2000,7 +2001,7 @@ describe('applyResume', () => {
         expect(env.run.status).toBe('running')
         // S11: no park was cleared → no `cleared` flag, no human touch appended.
         expect(env.cleared).toBeUndefined()
-        expect((await state.read('r1')).human_touches).toBeUndefined()
+        expect((await state.read('r1')).human_touches).toEqual([])
     })
 
     it("appends the 'resume' human touch on a real clear, flagged cleared:true (S11)", async () => {
@@ -2017,7 +2018,7 @@ describe('applyResume', () => {
         const env = asResumed(await applyResume(state, 'r1', underCurve(), defaultConfig(), NOW, {touch: false}))
         expect(env.cleared).toBe(true)
         expect(env.run.status).toBe('running')
-        expect(env.run.human_touches).toBeUndefined()
+        expect(env.run.human_touches).toEqual([])
     })
 
     it.each(['completed', 'failed', 'superseded'] as const)(
@@ -2185,7 +2186,11 @@ describe('runDocs — CLI-level integration (T)', () => {
         const dataDir = await mkdtemp(join(tmpdir(), 'run-docs-cli-'))
         const state = new StateManager({dataDir})
         const runId = 'run-docs-cli-1'
-        await state.create({run_id: runId, spec: {repo: REPO, spec_id: '9-x', issue_number: 9}})
+        await state.create({
+            run_id: runId,
+            staging_branch: `staging-${runId}`,
+            spec: {repo: REPO, spec_id: '9-x', issue_number: 9},
+        })
         const git = new FakeGitClient({remoteHeads: {[`staging-${runId}`]: 'sha-staging'}})
         const deps: DocsRunDeps = {state, git, config: defaultConfig(), dataDir}
 
@@ -2202,7 +2207,11 @@ describe('runDocs — CLI-level integration (T)', () => {
         const dataDir = await mkdtemp(join(tmpdir(), 'run-docs-cli-cap-'))
         const state = new StateManager({dataDir})
         const runId = 'run-docs-cli-cap-1'
-        await state.create({run_id: runId, spec: {repo: REPO, spec_id: '9-x', issue_number: 9}})
+        await state.create({
+            run_id: runId,
+            staging_branch: `staging-${runId}`,
+            spec: {repo: REPO, spec_id: '9-x', issue_number: 9},
+        })
         const git = new FakeGitClient({remoteHeads: {[`staging-${runId}`]: 'sha-staging'}})
         const deps: DocsRunDeps = {state, git, config: defaultConfig(), dataDir}
 

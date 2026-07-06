@@ -26,7 +26,6 @@
 import {join} from 'node:path'
 import {z} from 'zod'
 import {
-    resolveStagingBranch,
     provisionWorktree,
     isTerminalTaskStatus,
     E2eAffectedSpecSchema,
@@ -182,7 +181,7 @@ export async function runAssessmentEmit(deps: AssessmentRunDeps, runId: string):
         }
     }
 
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const branch = assessBranchName(runId)
     const worktree = assessmentWorktreePath(deps.dataDir, runId)
 
@@ -325,7 +324,7 @@ export async function runAssessmentRecord(
 
     // Merge guard: the assessor's branch may only touch e2e machinery — anything else
     // would land unreviewed code in the target repo just by being on this branch.
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const testDirPrefix = `${deps.config.e2e.testDir}/`
     const changed = await deps.git.diffNames(staging, assessBranchName(runId), {cwd: worktree})
     const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && f !== 'playwright.config.ts')

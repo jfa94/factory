@@ -44,6 +44,7 @@ function task(seed: TaskSeed): TaskState {
 function mkRun(seeds: readonly TaskSeed[], status: RunStatus = 'failed'): RunState {
     return parseRunState({
         run_id: 'run-auto-1',
+        staging_branch: 'staging-run-auto-1',
         status,
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
         tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),

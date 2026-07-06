@@ -483,7 +483,7 @@ export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>
 export const DocsPhaseSchema = z.object({
     status: z.enum(['done', 'failed']),
     reason: z.string().optional(),
-    /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+    /** Cumulative attempt count (1-indexed). Written on `failed` markers only; a `done` marker omits it. */
     attempts: z.number().int().nonnegative().optional(),
     ended_at: z.string(),
 })
@@ -730,7 +730,7 @@ export type ShipMode = z.infer<typeof ShipModeEnum>
  */
 export const RunStateSchema = z.object({
     /** State-schema version (independent of plugin version). */
-    schema_version: z.literal(2).default(2),
+    schema_version: z.literal(3).default(3),
     /** `run-YYYYMMDD-HHMMSS`. */
     run_id: z.string().min(1),
     status: RunStatusEnum.default('running'),
@@ -755,12 +755,10 @@ export const RunStateSchema = z.object({
      * merge target, rollup source — reads the branch the run ACTUALLY created, not a
      * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
      * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-     * the already-pushed branch. Optional for backward-compat: legacy runs predating the
-     * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
-     * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
-     * does not apply.
+     * the already-pushed branch. Git provenance / immutable identity — NOT a derived
+     * verdict, so derive-don't-store does not apply.
      */
-    staging_branch: z.string().min(1).optional(),
+    staging_branch: z.string().min(1),
 
     /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
     spec: SpecPointerSchema,
@@ -801,8 +799,8 @@ export const RunStateSchema = z.object({
      * `recover` (an approved rescue apply that did work). The second sanctioned
      * stored-EVENT exception (with `self_heal`): which touches happened is history
      * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-     * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
-     * Absent on legacy runs → metric reads n/a, never a fabricated number.
+     * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
+     * guarded to n/a on an empty ledger — never a fabricated number.
      */
     human_touches: z
         .array(
@@ -811,7 +809,7 @@ export const RunStateSchema = z.object({
                 at: z.string(),
             })
         )
-        .optional(),
+        .default([]),
 
     /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
     docs: DocsPhaseSchema.optional(),

@@ -280,9 +280,8 @@ export class SpecStore {
     }
 
     /**
-     * Read the durable PRD snapshot (S9). LOUD with the backfill remedy when the
-     * spec predates the snapshot — never a silent null (traceability would audit
-     * nothing).
+     * Read the durable PRD snapshot (S9). LOUD with the regenerate remedy when the
+     * snapshot is missing — never a silent null (traceability would audit nothing).
      */
     async readPrd(repo: string, specId: string): Promise<Prd> {
         const path = join(specDir(this.dataDir, repo, specId), PRD_FILE)
@@ -292,8 +291,8 @@ export class SpecStore {
         } catch (err) {
             if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
                 throw new Error(
-                    `spec ${specId} predates the S9 PRD snapshot — run \`factory spec resolve ` +
-                        `--issue ${issueOf(specId) ?? '<n>'}\` to backfill, or \`--supersede\` to regenerate`
+                    `spec ${specId} has no PRD snapshot (created by an older factory version) — ` +
+                        `re-run with \`--supersede\` to regenerate the spec`
                 )
             }
             throw err
@@ -301,12 +300,6 @@ export class SpecStore {
         // Re-validate at the read boundary: a corrupt/hand-edited snapshot must fail
         // LOUD here, not launder through an `as` cast into the traceability gate.
         return parsePrd(parseJson(raw, path), path)
-    }
-
-    /** Backfill the PRD snapshot onto an existing spec dir (S9 reuse-time backfill). */
-    async writePrd(repo: string, specId: string, prd: Prd): Promise<void> {
-        await atomicWriteFile(join(specDir(this.dataDir, repo, specId), PRD_FILE), stringifyJson(prd))
-        log.info(`backfilled PRD snapshot for spec ${specId} in ${repo}`)
     }
 
     /** Build the run-facing {@link SpecPointer} from a request. */

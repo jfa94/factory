@@ -86,7 +86,6 @@ export {
     provisionProtection,
     runScopedBranch,
     runStagingBranch,
-    resolveStagingBranch,
     ensureStaging,
     rollup,
 } from '../git/index.js'

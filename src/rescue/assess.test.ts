@@ -36,6 +36,7 @@ function mkRun(seeds: readonly TaskSeed[], extra: Partial<RunState> = {}): RunSt
     const status = extra.status ?? 'failed'
     return parseRunState({
         run_id: 'run-1',
+        staging_branch: 'staging-run-1',
         status,
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
         tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),

@@ -91,7 +91,7 @@ describe('score happy paths', () => {
 
         await new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')}).write(MANIFEST, '# spec', makePrd())
         const state = new StateManager({dataDir})
-        await state.create({run_id: 'run-s', spec: SPEC})
+        await state.create({run_id: 'run-s', staging_branch: 'staging-run-s', spec: SPEC})
         await state.update('run-s', (s) => ({
             ...s,
             status: 'failed',
@@ -185,28 +185,24 @@ describe('score --fleet (S11 — the store-wide touch-metric roll-up)', () => {
 
     const out = () => JSON.parse(stdout.join('')) as Record<string, unknown>
 
-    async function seedRun(runId: string, status: 'completed' | 'failed', touches: number | null): Promise<void> {
+    async function seedRun(runId: string, status: 'completed' | 'failed', touches: number): Promise<void> {
         const state = new StateManager({dataDir})
-        await state.create({run_id: runId, spec: SPEC})
+        await state.create({run_id: runId, staging_branch: `staging-${runId}`, spec: SPEC})
         await state.update(runId, (s) => ({
             ...s,
             status,
             ended_at: '2026-06-01T00:00:00.000Z',
-            ...(touches !== null
-                ? {
-                      human_touches: Array.from({length: touches}, (_, i) => ({
-                          kind: i === 0 ? ('launch' as const) : ('resume' as const),
-                          at: '2026-06-01T00:00:00.000Z',
-                      })),
-                  }
-                : {}),
+            human_touches: Array.from({length: touches}, (_, i) => ({
+                kind: i === 0 ? ('launch' as const) : ('resume' as const),
+                at: '2026-06-01T00:00:00.000Z',
+            })),
         }))
     }
 
-    it('rolls up per-run touches + metric and the fleet aggregate; legacy runs are n/a', async () => {
+    it('rolls up per-run touches + metric and the fleet aggregate; empty-ledger runs are n/a', async () => {
         await seedRun('run-a', 'completed', 2) // 0.5
         await seedRun('run-b', 'failed', 1) // 0
-        await seedRun('run-c', 'completed', null) // legacy — excluded from the aggregate
+        await seedRun('run-c', 'completed', 0) // empty ledger — excluded from the aggregate
 
         const code = await scoreCommand.run(['--fleet'])
         expect(code).toBe(EXIT.OK)
@@ -223,7 +219,7 @@ describe('score --fleet (S11 — the store-wide touch-metric roll-up)', () => {
         expect(runs.find((r) => r.run_id === 'run-c')).toEqual({
             run_id: 'run-c',
             status: 'completed',
-            touches: null,
+            touches: 0,
             metric: null,
         })
         // aggregate = sum(completed with ledger) / sum(touches with ledger) = 1 / 3

@@ -62,8 +62,8 @@ export interface CreateRunArgs {
     ship_mode?: RunState['ship_mode']
     /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
     owner_session?: RunState['owner_session']
-    /** The per-run staging branch to PIN on the row (Decision 33); recomputed if absent. */
-    staging_branch?: RunState['staging_branch']
+    /** The per-run staging branch to PIN on the row (Decision 33). */
+    staging_branch: RunState['staging_branch']
     /** Quota-gate bypass from `--ignore-quota`; persisted so both orchestrators skip the gate. */
     ignore_quota?: RunState['ignore_quota']
     /** e2e-phase opt-in from `--e2e` (Decision 39); persisted so `wantsE2e` reads it live. */
@@ -94,16 +94,16 @@ export class StateManager {
     }
 
     /**
-     * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
-     * `schema_version` absent or === 2 → pass through to parseRunState normally.
-     * Any other value → the file predates the current schema; ephemeral runs can't be
-     * migrated, so the user gets a clear "start a fresh run" message.
+     * Reject any state file not stamped with the CURRENT schema version, with a clear
+     * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
+     * the version, so an unstamped file predates the current schema. Ephemeral runs
+     * can't be migrated; the remedy is always a fresh run.
      */
     private static guardedParse(raw: unknown, context: string): RunState {
         const v = (raw as Record<string, unknown> | null)?.schema_version
-        if (v !== undefined && v !== 2) {
+        if (v !== 3) {
             throw new UsageError(
-                `run state at '${context}' uses schema v${JSON.stringify(v)}; only v2 is supported — start a fresh run`
+                `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported — this state was created by an older factory version; start a fresh run`
             )
         }
         return parseRunState(raw)
@@ -185,7 +185,7 @@ export class StateManager {
             // Stamp the owning session only when known (best-effort) — an absent owner
             // leaves the field undefined and the Stop gate falls back to unscoped behavior.
             ...(args.owner_session !== undefined ? {owner_session: args.owner_session} : {}),
-            ...(args.staging_branch !== undefined ? {staging_branch: args.staging_branch} : {}),
+            staging_branch: args.staging_branch,
             ...(args.ignore_quota !== undefined ? {ignore_quota: args.ignore_quota} : {}),
             ...(args.e2e !== undefined ? {e2e: args.e2e} : {}),
             ...(args.debug !== undefined ? {debug: args.debug} : {}),

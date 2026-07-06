@@ -67,8 +67,9 @@ function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunStat
         record[t.task_id] = t
     }
     return parseRunState({
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-1',
+        staging_branch: 'staging-run-1',
         status: 'failed',
         execution_mode: 'balanced',
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},

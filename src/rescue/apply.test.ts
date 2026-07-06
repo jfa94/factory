@@ -58,7 +58,7 @@ describe('applyRescue', () => {
             dataDir,
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
         })
-        await state.create({run_id: RUN_ID, spec: SPEC})
+        await state.create({run_id: RUN_ID, staging_branch: `staging-${RUN_ID}`, spec: SPEC})
     })
 
     afterEach(async () => {
@@ -656,7 +656,7 @@ describe('applyRescue', () => {
             const result = await applyRescue(state, RUN_ID, {auto: {at: '2026-07-04T00:00:00.000Z'}})
             expect(result.reset).toEqual(['a'])
             expect(result.touched).toBe(false)
-            expect((await state.read(RUN_ID)).human_touches).toBeUndefined()
+            expect((await state.read(RUN_ID)).human_touches).toEqual([])
         })
 
         it('auto is mutually exclusive with the manual target options (loud throw)', async () => {
@@ -684,7 +684,7 @@ describe('applyRescue', () => {
             await seed([{task_id: 'a', status: 'done'}])
             const result = await applyRescue(state, RUN_ID)
             expect(result.touched).toBe(false)
-            expect((await state.read(RUN_ID)).human_touches).toBeUndefined()
+            expect((await state.read(RUN_ID)).human_touches).toEqual([])
         })
 
         it('appends AFTER an existing ledger, never clobbering it', async () => {
@@ -694,7 +694,7 @@ describe('applyRescue', () => {
             }))
             await seed([{task_id: 'a', status: 'executing', started_at: '2026-06-08T00:00:00.000Z'}])
             await applyRescue(state, RUN_ID, {at: '2026-07-04T00:00:00.000Z'})
-            expect((await state.read(RUN_ID)).human_touches?.map((t) => t.kind)).toEqual(['launch', 'recover'])
+            expect((await state.read(RUN_ID)).human_touches.map((t) => t.kind)).toEqual(['launch', 'recover'])
         })
     })
 })

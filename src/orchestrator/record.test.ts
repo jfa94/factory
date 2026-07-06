@@ -92,6 +92,7 @@ describe('applyRecordHoldout record', () => {
         verdictStore = new InMemoryHoldoutVerdictStore()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
         deps = {
@@ -240,6 +241,7 @@ describe('applyRecordReviews record', () => {
         verdictStore = new InMemoryHoldoutVerdictStore()
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
         await state.update(RUN_ID, (s) => ({
@@ -908,6 +910,7 @@ async function seededProducerState(task: Partial<TaskState> = {}): Promise<{data
     })
     await state.create({
         run_id: RUN_ID,
+        staging_branch: `staging-${RUN_ID}`,
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
     })
     await state.update(RUN_ID, (s) => ({

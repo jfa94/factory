@@ -64,6 +64,7 @@ describe('loadCliDeps', () => {
         await specs.write(makeManifest(repo, specId, issue), '# spec\n', makePrd())
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo, spec_id: specId, issue_number: issue},
         })
     }
@@ -106,6 +107,7 @@ describe('loadCliDeps', () => {
         await specs.write(makeManifest('acme/widgets', '42-checkout', 42), '# spec\n', makePrd())
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
             ship_mode: 'live',
         })
@@ -118,6 +120,7 @@ describe('loadCliDeps', () => {
         await specs.write(makeManifest('acme/widgets', '42-checkout', 42), '# spec\n', makePrd())
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
             ship_mode: 'live',
         })
@@ -134,6 +137,7 @@ describe('loadCliDeps', () => {
         // Create a run whose pointer references a spec that was never written.
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '99-missing', issue_number: 99},
         })
         await expect(loadCliDeps({dataDir, runId: RUN_ID})).rejects.toThrow()

@@ -169,6 +169,7 @@ beforeEach(async () => {
     })
     await state.create({
         run_id: RUN_ID,
+        staging_branch: `staging-${RUN_ID}`,
         spec: {repo: REPO, spec_id: SPEC.spec_id, issue_number: SPEC.issue_number},
     })
     // Seed run.tasks 1:1 from SPEC (mirrors seedTasksFromSpec at run-creation time in

@@ -6,7 +6,6 @@
  * the runner surfaces. Nothing here writes state.
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
-import {nonNull} from '../../shared/index.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine} from '../io.js'
 import {resolveDataDir} from '../../config/index.js'
@@ -30,10 +29,10 @@ Usage:
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`
 
-/** S11 — `(completed ? 1 : 0) / touches`, or null without a ledger (legacy run). */
-function touchMetricOf(run: {status: string; human_touches?: unknown[] | undefined}): number | null {
-    const touches = run.human_touches?.length
-    if (touches === undefined || touches === 0) {
+/** S11 — `(completed ? 1 : 0) / touches`, or null on an empty ledger (0-division guard). */
+function touchMetricOf(run: {status: string; human_touches: unknown[]}): number | null {
+    const touches = run.human_touches.length
+    if (touches === 0) {
         return null
     }
     return (run.status === 'completed' ? 1 : 0) / touches
@@ -45,11 +44,11 @@ async function runFleet(state: StateManager): Promise<ExitCode> {
     const runs = all.map((r) => ({
         run_id: r.run_id,
         status: r.status,
-        touches: r.human_touches?.length ?? null,
+        touches: r.human_touches.length,
         metric: touchMetricOf(r),
     }))
-    const withLedger = all.filter((r) => (r.human_touches?.length ?? 0) > 0)
-    const totalTouches = withLedger.reduce((n, r) => n + nonNull(r.human_touches).length, 0)
+    const withLedger = all.filter((r) => r.human_touches.length > 0)
+    const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0)
     const completed = withLedger.filter((r) => r.status === 'completed').length
     const aggregate = totalTouches === 0 ? null : completed / totalTouches
     emitJson({kind: 'fleet-score', runs, aggregate})

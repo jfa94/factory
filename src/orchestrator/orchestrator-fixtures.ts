@@ -155,6 +155,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
 
     await state.create({
         run_id: runId,
+        staging_branch: `staging-${runId}`,
         spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
     })
 

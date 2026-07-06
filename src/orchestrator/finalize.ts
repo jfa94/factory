@@ -40,7 +40,6 @@ import {
     renderFailureComment,
     failureCommentMarker,
     recordRunFinalized,
-    resolveStagingBranch,
     scanRun,
     effectiveAutoResets,
     type Config,
@@ -224,7 +223,7 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
     //    On failed, develop is untouched (the PRD failure comment is already posted above).
     let rollupResult: RollupResult | undefined
     if (terminal === 'completed') {
-        const stagingBranch = resolveStagingBranch(runId, run.staging_branch)
+        const stagingBranch = run.staging_branch
         // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
         // (no force-push) so the rollup PR is up-to-date. A conflict here is
         // non-auto-recoverable → surfaces for rescue.

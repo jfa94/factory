@@ -16,7 +16,7 @@ import {parseArgs} from '../args.js'
 import {FakeGitClient} from '../../git/index.js'
 import {loadConfig} from '../../config/index.js'
 import {stringifyJson} from '../../shared/json.js'
-import {specBuildDir, specDir} from '../../core/state/paths.js'
+import {specBuildDir} from '../../core/state/paths.js'
 import {SpecStore, buildManifest, SPEC_DEFAULTS, type GhClient, type Prd} from '../../spec/index.js'
 import {at} from '../../shared/index.js'
 
@@ -182,33 +182,6 @@ describe('resolveSpec', () => {
         }
         expect(env.pointer.issue_number).toBe(ISSUE)
         expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`)
-    })
-
-    it('Δ S9: reuse backfills a missing PRD snapshot exactly once (pre-S9 spec)', async () => {
-        const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
-        const pointer = await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
-        await rm(join(specDir(dataDir, REPO, pointer.spec_id), 'prd.json')) // fabricate pre-S9
-
-        let fetches = 0
-        const countingDeps: SpecBuildDeps = {
-            ...deps(),
-            gh: {
-                fetchPrd(n: number): Promise<Prd> {
-                    fetches++
-                    return Promise.resolve({...PRD, issue_number: n})
-                },
-            },
-        }
-
-        const env = await resolveSpec(countingDeps, REPO, ISSUE)
-        expect(env.kind).toBe('reuse')
-        expect(fetches).toBe(1)
-        expect((await store.readPrd(REPO, pointer.spec_id)).body).toBe(PRD_BODY)
-
-        // Second resolve: the snapshot now exists → reuse without a fetch.
-        const env2 = await resolveSpec(countingDeps, REPO, ISSUE)
-        expect(env2.kind).toBe('reuse')
-        expect(fetches).toBe(1)
     })
 
     it('emits the apex-pinned generate spawn + writes prd.json when no spec exists', async () => {

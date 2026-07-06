@@ -55,6 +55,7 @@ describe('applyQuotaGate', () => {
         })
         await state.create({
             run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
         })
     })

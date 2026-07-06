@@ -55,7 +55,6 @@ import {emitMetric} from '../../scoring/index.js'
 import {
     DefaultGitClient,
     DefaultGhClient,
-    resolveStagingBranch,
     resolveRepo,
     splitRepoSlug,
     type GitClient,
@@ -700,7 +699,7 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
     const cleanup = args.flag('cleanup') === true
     // Resolve the PINNED branch (Decision 33) so any teardown targets the branch the run
     // actually cut, never a recompute a mid-run rename could have desynced.
-    const branch = resolveStagingBranch(run.run_id, run.staging_branch)
+    const branch = run.staging_branch
     let cleanedUp = false
     let cleanupError: string | undefined
     if (cleanup) {

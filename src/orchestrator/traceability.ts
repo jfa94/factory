@@ -19,14 +19,7 @@ import {join} from 'node:path'
 import {z} from 'zod'
 import {getOrThrow, nowIso} from '../shared/index.js'
 import {parseProducerStatus} from './deps.js'
-import {
-    resolveStagingBranch,
-    SpecStore,
-    type Config,
-    type GitClient,
-    type SpecManifest,
-    type StateManager,
-} from './deps.js'
+import {SpecStore, type Config, type GitClient, type SpecManifest, type StateManager} from './deps.js'
 import {extractPrdRequirements} from '../spec/index.js'
 import type {TraceabilityVerdictRow} from '../core/state/schema.js'
 
@@ -121,7 +114,7 @@ async function readRequirements(deps: TraceabilityRunDeps, runId: string): Promi
 /** Emit the traceability spawn request: prepare the detached staging-tip worktree. */
 export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: string): Promise<TraceabilityAction> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const worktree = traceWorktreePath(deps.dataDir, runId)
     const baseRef = `origin/${base}`

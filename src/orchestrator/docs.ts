@@ -2,7 +2,7 @@ import {join} from 'node:path'
 import {z} from 'zod'
 import {nowIso} from '../shared/index.js'
 import {parseProducerStatus} from './deps.js'
-import {resolveStagingBranch, type Config, type GitClient, type StateManager} from './deps.js'
+import {type Config, type GitClient, type StateManager} from './deps.js'
 
 export interface DocsRunDeps {
     readonly state: StateManager
@@ -63,7 +63,7 @@ function buildScribePrompt(worktree: string, baseRef: string): string {
 /** Emit the docs spawn request: prepare the staging-rooted worktree, name scribe. */
 export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<DocsAction> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const docsBranch = `docs-${runId}`
     const worktree = docsWorktreePath(deps.dataDir, runId)
@@ -109,7 +109,7 @@ export async function runDocsRecord(
     results: DocsResults
 ): Promise<Extract<DocsAction, {kind: 'done' | 'suspend'}>> {
     const run = await deps.state.read(runId)
-    const staging = resolveStagingBranch(runId, run.staging_branch)
+    const staging = run.staging_branch
     const docsBranch = `docs-${runId}`
     const worktree = docsWorktreePath(deps.dataDir, runId)
     const outcome = parseProducerStatus(results.status)

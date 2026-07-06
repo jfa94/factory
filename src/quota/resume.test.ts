@@ -15,8 +15,9 @@ const NOW = 1_700_000_000
  */
 function suspendedRun(): RunState {
     return parseRunState({
-        schema_version: 2,
+        schema_version: 3,
         run_id: 'run-20260604-000000',
+        staging_branch: 'staging-run-20260604-000000',
         status: 'suspended',
         execution_mode: 'balanced',
         spec: {repo: 'owner/name', spec_id: '12-thing', issue_number: 12},
