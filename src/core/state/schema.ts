@@ -480,6 +480,40 @@ export const QuotaCheckpointSchema = z.discriminatedUnion('binding_window', [
 export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>
 
 // ---------------------------------------------------------------------------
+// Phase-marker factories (module-private)
+// ---------------------------------------------------------------------------
+// The four run-level phase markers share one spine — status / reason? /
+// attempts? / ended_at — with per-marker extras spliced in at TWO fixed slots
+// (after `reason`, after `attempts`) so declaration order — and therefore the
+// PERSISTED key order (StateManager.update re-serializes in Zod shape order) —
+// stays byte-stable with the previous hand-written schemas. Per-marker
+// `attempts` semantics are documented on each marker's doc comment.
+
+/** Marker that is written once, CONCLUDED: `status` + `ended_at` required (docs, traceability). */
+function concludedPhaseMarker<S1 extends z.ZodRawShape, S2 extends z.ZodRawShape>(afterReason: S1, afterAttempts: S2) {
+    return z.object({
+        status: z.enum(['done', 'failed']),
+        reason: z.string().optional(),
+        ...afterReason,
+        attempts: z.number().int().nonnegative().optional(),
+        ...afterAttempts,
+        ended_at: z.string(),
+    })
+}
+
+/** Marker that can be OPEN/cleared mid-run: `status` + `ended_at` optional (e2e phase, e2e assessment). */
+function openPhaseMarker<S1 extends z.ZodRawShape, S2 extends z.ZodRawShape>(afterReason: S1, afterAttempts: S2) {
+    return z.object({
+        status: z.enum(['done', 'failed']).optional(),
+        reason: z.string().optional(),
+        ...afterReason,
+        attempts: z.number().int().nonnegative().optional(),
+        ...afterAttempts,
+        ended_at: z.string().optional(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Docs phase marker (engine-owned documentation phase)
 // ---------------------------------------------------------------------------
 
@@ -491,14 +525,9 @@ export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>
  * with a run that finalizes `completed` (docs never gates the rollup).
  * Absent until the phase runs. Not applicable (no /docs, opted out) leaves it absent —
  * `next` decides applicability read-only, so there is no `skipped` value.
+ * `attempts` — cumulative count (1-indexed); written on `failed` markers only.
  */
-export const DocsPhaseSchema = z.object({
-    status: z.enum(['done', 'failed']),
-    reason: z.string().optional(),
-    /** Cumulative attempt count (1-indexed). Written on `failed` markers only; a `done` marker omits it. */
-    attempts: z.number().int().nonnegative().optional(),
-    ended_at: z.string(),
-})
+export const DocsPhaseSchema = concludedPhaseMarker({}, {})
 export type DocsPhase = z.infer<typeof DocsPhaseSchema>
 
 // ---------------------------------------------------------------------------
@@ -526,16 +555,15 @@ export type TraceabilityVerdictRow = z.infer<typeof TraceabilityVerdictRowSchema
  * delta: traceability is a delivery gate, never best-effort-done). Verdicts
  * live IN the marker (recorded agent judgment, like `task.failure_reason`) —
  * a sidecar file would add a parse seam that can desync from `status`.
+ * `attempts` — cumulative CRASH attempts (verdicts are judgment, never retried).
  */
-export const TraceabilityPhaseSchema = z.object({
-    status: z.enum(['done', 'failed']),
-    reason: z.string().optional(),
-    /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
-    attempts: z.number().int().nonnegative().optional(),
-    /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
-    verdicts: z.array(TraceabilityVerdictRowSchema).default([]),
-    ended_at: z.string(),
-})
+export const TraceabilityPhaseSchema = concludedPhaseMarker(
+    {},
+    {
+        /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+        verdicts: z.array(TraceabilityVerdictRowSchema).default([]),
+    }
+)
 export type TraceabilityPhase = z.infer<typeof TraceabilityPhaseSchema>
 
 // ---------------------------------------------------------------------------
@@ -622,40 +650,40 @@ export type E2eAdjudication = z.infer<typeof E2eAdjudicationSchema>
  *   - `status` "done"  — every critical spec is green; the run proceeds to docs.
  *   - `status` "failed"— run FAILS: residual critical red, an unmappable critical
  *                        regression, or a cap-exhausted critical (Decision 39).
+ * `attempts` — cumulative suite-pass count across ALL passes (1-indexed).
  */
-export const E2ePhaseSchema = z.object({
-    status: z.enum(['done', 'failed']).optional(),
-    reason: z.string().optional(),
-    /**
-     * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-     * didn't block completion (Decision 39: only critical red gates). Distinct from
-     * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
-     * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
-     */
-    advisory: z.string().optional(),
-    /** Cumulative attempt count across ALL passes (1-indexed). */
-    attempts: z.number().int().nonnegative().optional(),
-    /**
-     * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
-     * automatic re-spawn before the phase fails; distinct from `attempts` (suite
-     * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
-     */
-    author_attempts: z.number().int().nonnegative().optional(),
-    /** The author's spec→task manifest, fixed once authored and reused across passes. */
-    manifest: z.array(E2eManifestEntrySchema).default([]),
-    /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
-    reopen_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
-    /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
-    adjudication: E2eAdjudicationSchema.optional(),
-    /**
-     * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
-     * A spec failing AGAIN after its one adjudication is a regression — the run
-     * fails rather than adjudicating in a loop. Survives rescue's reset (like
-     * `reopen_counts`): the cap holds across the whole run.
-     */
-    adjudication_counts: z.record(z.string(), z.number().int().nonnegative()).optional(),
-    ended_at: z.string().optional(),
-})
+export const E2ePhaseSchema = openPhaseMarker(
+    {
+        /**
+         * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+         * didn't block completion (Decision 39: only critical red gates). Distinct from
+         * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+         * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+         */
+        advisory: z.string().optional(),
+    },
+    {
+        /**
+         * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+         * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+         * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+         */
+        author_attempts: z.number().int().nonnegative().optional(),
+        /** The author's spec→task manifest, fixed once authored and reused across passes. */
+        manifest: z.array(E2eManifestEntrySchema).default([]),
+        /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+        reopen_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+        /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+        adjudication: E2eAdjudicationSchema.optional(),
+        /**
+         * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+         * A spec failing AGAIN after its one adjudication is a regression — the run
+         * fails rather than adjudicating in a loop. Survives rescue's reset (like
+         * `reopen_counts`): the cap holds across the whole run.
+         */
+        adjudication_counts: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    }
+)
 export type E2ePhase = z.infer<typeof E2ePhaseSchema>
 
 /**
@@ -685,26 +713,25 @@ export type E2eAffectedSpec = z.infer<typeof E2eAffectedSpecSchema>
  *   - `status` "done"  — machinery validated (or steady-state) — tasks may proceed.
  *   - `status` "failed"— boot/machinery impossible: the run FAILS LOUD (every
  *                        non-terminal task swept `blocked-environmental`).
+ * `reason` — plain-language failure verdict (set IFF failed — T3 below).
+ * `attempts` — assessor spawn attempts so far (crash-retry bookkeeping, cap 2).
  */
-export const E2eAssessmentSchema = z.object({
-    status: z.enum(['done', 'failed']).optional(),
-    /** Plain-language failure verdict (set IFF failed — T3 below). */
-    reason: z.string().optional(),
-    /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
-    warning: z.string().optional(),
-    /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
-    resolved: z
-        .object({
-            start_command: z.string().min(1).optional(),
-            base_url: z.string().min(1).optional(),
-        })
-        .optional(),
-    /** Coverage forecast over EXISTING committed specs (empty when none exist). */
-    affected_specs: z.array(E2eAffectedSpecSchema).default([]),
-    /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
-    attempts: z.number().int().nonnegative().optional(),
-    ended_at: z.string().optional(),
-})
+export const E2eAssessmentSchema = openPhaseMarker(
+    {
+        /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+        warning: z.string().optional(),
+        /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+        resolved: z
+            .object({
+                start_command: z.string().min(1).optional(),
+                base_url: z.string().min(1).optional(),
+            })
+            .optional(),
+        /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+        affected_specs: z.array(E2eAffectedSpecSchema).default([]),
+    },
+    {}
+)
 export type E2eAssessment = z.infer<typeof E2eAssessmentSchema>
 
 // ---------------------------------------------------------------------------
