@@ -126,7 +126,7 @@ Three sub-layers:
   the TDD gate (`strategies/tdd.ts`) and the gate evidence memo.
 - **judgment** (`judgment/`) — the risk-invariant four-reviewer panel (`panel.ts`,
   `panel-run.ts`) plus the content-conditional `database-design-reviewer` specialist
-  appended when the diff touches schema files (`db-detect.ts`, Decision 50),
+  appended when the diff touches schema files (`db-detect.ts`, Decision 51),
   citation-verify (`citation-verify.ts`), and the independent finding-verifier
   (`finding-verifier.ts`) for verify-then-fix.
 - **holdout** (`holdout/`) — the answer-key split, store, validator prompt, and

@@ -57,7 +57,7 @@ does **not** do this for the merge gate. Every reviewer runs on every task:
 
 A fifth reviewer, `database-design-reviewer`, is a **content-conditional specialist**
 appended to the panel only when the task diff touches relational-schema files
-(Decision 50). This does not weaken risk-invariance: the trigger is a deterministic
+(Decision 51). This does not weaken risk-invariance: the trigger is a deterministic
 fact about diff _content_ — `touchesDatabase` (`src/verifier/judgment/db-detect.ts`)
 matches the changed paths against built-in globs (`migrations/`, `db/migrate/`,
 `alembic/versions/`, `drizzle/`, `schema.prisma`, `*.sql`) — not a risk-tier judgment,

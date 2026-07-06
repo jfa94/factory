@@ -218,7 +218,7 @@ finding). The overall merge gate is the subject of
 A fifth **content-conditional** reviewer, `database-design-reviewer`, is appended to
 the panel only when the task diff touches relational-schema files — migrations,
 `*.sql`, or ORM schema (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`;
-[Decision 50](../explanation/decisions.md)). It is strictly additive: the four-lens
+[Decision 51](../explanation/decisions.md)). It is strictly additive: the four-lens
 floor always runs, and a DB-touching task gets floor + specialist. The trigger is diff
 _content_, not risk tier, so it does not weaken risk-invariance.
 

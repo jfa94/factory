@@ -35,7 +35,7 @@ arguments:
 
 Start a **fresh** pipeline run. The `factory` CLI is the engine (ALL control flow); the
 runner is a dumb loop. `/factory:run` never silently reuses an existing run — to continue
-one, use `/factory:resume`; to repair a stalled one, use `/factory:rescue`. Reject the call
+or repair one, use `/factory:resume` (it routes itself). Reject the call
 with a clear message if neither or both of `--issue`/`--spec-id` are given. `--repo` is
 OPTIONAL — the CLI auto-derives it from the `origin` remote of the current checkout (pass
 `--repo <owner/name>` only to override; an explicit value that disagrees with the remote fails

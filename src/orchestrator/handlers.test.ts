@@ -590,7 +590,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
     })
 
-    // Decision 50 — a probe whose diff touches a migration file (otherwise identical
+    // Decision 51 — a probe whose diff touches a migration file (otherwise identical
     // to greenProbe) triggers the content-conditional database-design-reviewer.
     function dbProbe(): FakeGitProbe {
         return new FakeGitProbe({
@@ -603,7 +603,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         })
     }
 
-    it('D50: verify spawns floor + database-design-reviewer when the diff touches DB files', async () => {
+    it('D51: verify spawns floor + database-design-reviewer when the diff touches DB files', async () => {
         const handlers = makePhaseHandlers(makeDeps({tools: makeFakeTools({git: dbProbe()})}))
         const ctx = await ctxFor({task_id: 't-multi', reviewers: []})
         const result = await handlers.verify(ctx)
@@ -616,7 +616,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(result.request.agents.map((a) => a.role)).toContain('database-design-reviewer')
     })
 
-    it('D50: on a DB-touching diff a persisted floor-only roster is a SUBSET — verify re-spawns', async () => {
+    it('D51: on a DB-touching diff a persisted floor-only roster is a SUBSET — verify re-spawns', async () => {
         const handlers = makePhaseHandlers(makeDeps({tools: makeFakeTools({git: dbProbe()})}))
         const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()}) // 4 approvals, no specialist
         const result = await handlers.verify(ctx)

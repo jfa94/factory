@@ -79,8 +79,9 @@ exists for the spec, `factory run create` exits `3` and emits
 - **Cancel** — leave the existing run untouched.
 
 Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that
-resume cannot untangle (tasks stuck mid-phase, or git/GitHub drift), use
-[`/factory:rescue`](./rescue-a-stalled-run.md) instead.
+a bare resume cannot untangle (tasks stuck mid-phase, or git/GitHub drift),
+[`/factory:resume`](./rescue-a-stalled-run.md) proposes the repairs and applies
+the subset you approve.
 
 If the existing run is **weekly-parked** (suspended on the 7d quota window), `run
 create` instead emits `{kind:"pause", scope:"7d", …}` and exits `3` — a hard

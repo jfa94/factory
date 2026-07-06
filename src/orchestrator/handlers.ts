@@ -340,7 +340,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             }
             const gate = await new GateRunner().run(gateCtx)
 
-            // Decision 50 — content-conditional DB specialist: derived from the diff
+            // Decision 51 — content-conditional DB specialist: derived from the diff
             // (never stored); record.ts re-derives from the same worktree tip.
             const dbApplicable = await touchesDatabase(deps.tools.git, gateCtx.baseRef, {cwd: worktree})
             const expectedRoster = panelRolesFor(dbApplicable)
@@ -375,7 +375,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             // NOT identity: `reviewer` is a bare string whose format isn't proven equal to the
             // roster values, so an identity predicate risks a permanent re-spawn loop — a count
             // check catches the subset case and is footgun-free. The expected roster is the
-            // Decision 50 content-conditional one (floor + DB specialist when applicable),
+            // Decision 51 content-conditional one (floor + DB specialist when applicable),
             // re-derived above from the same worktree tip record.ts derives from. The sanctioned
             // record path already runs enforcePanelRoster, so there's no known live trigger;
             // this is defense-in-depth.

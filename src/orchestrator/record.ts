@@ -387,7 +387,7 @@ function composeFixFindings(
  * gate. At this record seam — the last hop before the verdict is derived — every
  * `expectedRoles` entry must be present: a missing role becomes a synthesized
  * `error` review and an unknown reviewer name is demoted to `error` (never counted
- * as an approve). Both fail the gate LOUDLY. `expectedRoles` is the Decision 50
+ * as an approve). Both fail the gate LOUDLY. `expectedRoles` is the Decision 51
  * content-conditional roster (`panelRolesFor` — the four-lens floor, plus the
  * `database-design-reviewer` when the task diff touches DB files); it defaults to
  * the floor so pre-existing callers/tests keep their contract. An UNEXPECTED
@@ -445,7 +445,7 @@ export async function applyRecordReviews(
     //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
     //    fast rather than burning a full deterministic gate sweep first).
     //    The expected roster is RE-DERIVED from the same worktree tip the spawn site
-    //    derived from (Decision 50, derive-don't-store) — reviewers run in their own
+    //    derived from (Decision 51, derive-don't-store) — reviewers run in their own
     //    isolated worktrees, so the task tip is unchanged between spawn and record.
     const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, {cwd: worktree})
     const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable))

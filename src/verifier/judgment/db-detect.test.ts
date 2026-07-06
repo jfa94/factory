@@ -2,7 +2,7 @@ import {describe, it, expect} from 'vitest'
 import {isDbPath, touchesDatabase} from './db-detect.js'
 import {FakeGitProbe} from '../deterministic/fakes.js'
 
-describe('Decision 50 — DB-touch detection', () => {
+describe('Decision 51 — DB-touch detection', () => {
     // Exhaustive over the supported layouts (finite domain — property test by enumeration).
     const DB_PATHS = [
         'migrations/0001_init.sql',

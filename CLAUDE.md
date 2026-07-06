@@ -25,12 +25,12 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 - `implementation-reviewer` — spec alignment: does the code address the spec, not just pass tests?
 - `quality-reviewer` — adversarial code quality, plus the folded security, architecture, and type-design dimensions (Decision 43); Codex is the preferred executor when available.
 - Plus `silent-failure-hunter` and `systemic-failure-reviewer`; blockers pass through an independent finding-verifier before reaching the producer (verify-then-fix, Decision 27).
-- `database-design-reviewer` — content-conditional specialist (Decision 50): appended to the panel only when the task diff touches migration/schema files (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`); additive-only, so risk-invariance holds.
+- `database-design-reviewer` — content-conditional specialist (Decision 51): appended to the panel only when the task diff touches migration/schema files (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`); additive-only, so risk-invariance holds.
 
 ## Key entry points
 
-- `commands/run.md` — main entry (`--no-ship` to open PRs without merging; default: live. The runner loop runs in the invoking Claude Code session — see `skills/pipeline-runner/SKILL.md` for the protocol + CLI surface table). Four distinct lifecycle verbs (Decision 35): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`, `factory resume`) continues an unfinished run, `commands/rescue.md` repairs git/GitHub drift then resumes, `commands/debug.md` is the standalone review-fix loop.
-- `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next-task, next-action, recover, rescue, score, state, scaffold, configure, config-defaults, debug, autonomy, statusline)
+- `commands/run.md` — main entry (`--no-ship` to open PRs without merging; default: live. The runner loop runs in the invoking Claude Code session — see `skills/pipeline-runner/SKILL.md` for the protocol + CLI surface table). Three lifecycle verbs (Decisions 35+50): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`) is THE repair verb — scans, resumes a clean park promptless, else proposes a consent-gated repair plan (approve any subset) then resumes, `commands/debug.md` is the standalone review-fix loop.
+- `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next-task, next-action, rescue, score, state, scaffold, configure, config-defaults, debug, autonomy, statusline)
 - `src/orchestrator/orchestrator.ts` + `src/orchestrator/next.ts` — the task-level and run-level orchestrators behind `factory next-action`/`factory next-task` (record logic in `src/orchestrator/record.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)
 
@@ -43,7 +43,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 - `skills/pipeline-runner/SKILL.md` — full runner protocol (the in-session parallel event loop)
 - `skills/test-driven-development/SKILL.md` — TDD discipline for subagents
 - `skills/review-protocol/SKILL.md` — the RawReview JSON output contract every risk-invariant-panel reviewer emits (CLI citation-verifies + records it into the merge gate)
-- `skills/rescue-protocol/SKILL.md` — recover a stalled run (`factory rescue scan|apply` → resume)
+- `skills/rescue-protocol/SKILL.md` — the consent-gated repair protocol behind `/factory:resume`'s repair route (scan → diagnose → propose → approved-subset apply → resume)
 
 ## Known gaps (deliberate)
 

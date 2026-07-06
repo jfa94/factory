@@ -18,7 +18,8 @@ Derived sets in the scan envelope:
 
 - `resettable` = `stuck` ∪ `recoverable` — what a **default** `apply` resets.
 - `dead_ends` = the `dead-end` task ids — reset only on explicit assertion.
-- `needs_rescue` = `resettable.length > 0`.
+- `needs_rescue` = `resettable.length > 0` OR a failed e2e verdict/assessment, a failed
+  traceability audit, or a pending rollup — run-level blocks only an explicit apply flag clears.
 - `would_deadlock` = non-terminal work remains but **no** task is actionable (none ready,
   none cascade-droppable). This is exactly the shape the orchestrator throws on — the signal that
   `factory run resume` alone cannot recover the run and rescue is required first. A terminal

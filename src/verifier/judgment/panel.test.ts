@@ -89,7 +89,7 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         })
     })
 
-    describe('Decision 50 content-conditional DB specialist', () => {
+    describe('Decision 51 content-conditional DB specialist', () => {
         it('panelRolesFor(false) is EXACTLY the four-lens floor', () => {
             expect(panelRolesFor(false)).toEqual(PANEL_ROLES)
         })

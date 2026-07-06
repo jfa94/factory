@@ -519,8 +519,8 @@ Action (Decision 35 — a top-level verb, distinct from `run`/`rescue`/`debug`).
 Re-checks the live quota window and resumes a paused/suspended run if the binding
 window recovered. Reads nothing else; leaves state untouched when blocked. A terminal
 run is a loud error (nothing to resume). `factory run resume` is a thin alias of this
-command. Unsure whether the run needs resume or rescue? Use
-[`recover`](#recover) — it routes for you (resume IS its route 3).
+command. The documented operator entry is `/factory:resume` (Decision 50) — it runs
+[`rescue scan`](#rescue-scan) first and routes for you; this verb is its clean-park path.
 
 ```
 factory resume [--run <id>] [--ignore-quota]
@@ -728,44 +728,14 @@ both as `null`.
 where `aggregate = sum(completed) / sum(touches)` over runs carrying the ledger
 (`null` when none do). Malformed run dirs warn + skip (tolerant `listRuns`).
 
-## `recover`
+## `rescue <scan|apply|auto>`
 
-**The primary repair verb** (S10, Decision 48). Self-routing: scans the run and
-does whatever a stalled run needs — nothing, resume, rescue-apply + reopen, or
-page a human. `resume` and `rescue` remain as the underlying primitives /
-flag-rich escape hatch; start with `recover`.
-
-```
-factory recover [--run <id>] [--auto] [--dry-run]
-```
-
-Routes (resolved in order) and their envelopes — all `EXIT.OK`:
-
-| Route | Condition                | Envelope                                                                                                                                                                                                                                               |
-| ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1     | no run resolves          | `{kind:"nothing", reason:"no-run"}`                                                                                                                                                                                                                    |
-| 2     | `completed`/`superseded` | `{kind:"nothing", …}` + a `--recheck-rollup` hint when `rollup_pending` (stays human-asserted)                                                                                                                                                         |
-| 3     | parked + clean scan      | resume via the normal quota gate → `{kind:"resumed"}` or `{kind:"pause"}`, each with a **derived** `awaiting` cause (`quota`/`e2e`/`docs`/`traceability`/`spec-approval`/`unknown` — never stored)                                                     |
-| 4     | resettable work          | rescue-apply + reopen (+ the resume gate if a park survives) → `{kind:"rescued", reset, reopened, reconcile, resume?}`; `reconcile:true` when the git probe flags drift — the command doc then spawns `rescue-reconciler`; the CLI never spawns agents |
-| 5     | dead-ends only           | `{kind:"page", dead_ends, hints}` with per-task `rescue apply --task <id> --include-dead-ends` hints                                                                                                                                                   |
-
-`--dry-run` emits the scan + chosen route, writes nothing (subsumes `rescue scan`).
-
-`--auto` is the runner's bounded self-heal (fired ONCE after a failed finalize;
-mutually exclusive with `--dry-run`). It resets only the _effective_ auto-safe set
-(resettable tasks that stay actionable post-reset — never dead-ends, e2e resets,
-rollup rechecks, or git drift) and stamps `self_heal {attempts, last_at}` — the
-sanctioned stored-event exception. It requires `attempts === 0`; a blocked auto
-(`attempts > 0`, empty effective set, or dead-ends only) emits `{kind:"page"}`
-and posts ONE deduped PRD comment. `--auto` never appends a human touch.
-
-## `rescue <scan|apply>`
-
-The flag-rich **escape hatch** under [`recover`](#recover) — reach for it when
-you need to name exact tasks, include dead-ends, reset e2e, or recheck a rollup.
-`rescue scan` is equivalent to `recover --dry-run`. The `/factory:rescue` command
-pairs these subcommands with the `rescue-reconciler` agent (git/GitHub drift
-repair) before handing off to [`resume`](#resume) — see
+The repair plumbing under **`/factory:resume`** (Decision 50 — ONE consent-gated
+repair verb; it absorbed `factory recover`, Decision 48's surface). `scan` is the
+read-only scan + route the command layer acts on; `apply` is the ONLY mutation —
+what approved plan items execute; `auto` is the runner's bounded self-heal. The
+`/factory:resume` command pairs these with the `rescue-diagnostic` +
+`rescue-reconciler` agents — the CLI itself never spawns agents or prompts. See
 [Rescue a stalled run](../guides/rescue-a-stalled-run.md).
 
 ### `rescue scan`
@@ -776,8 +746,24 @@ Reporter (read-only). Classifies every task and reports what a re-drive would do
 factory rescue scan [--run <id>]
 ```
 
-Emits a `RescueScan`: `{ run_id, run_status, counts, resettable, dead_ends,
-needs_rescue, e2e_failed, e2e_assessment_failed, rollup_pending, would_deadlock, summary, tasks }`.
+Emits a `RescueScan` plus the routing `/factory:resume` acts on: `{ run_id, run_status,
+counts, resettable, dead_ends, needs_rescue, e2e_failed, e2e_assessment_failed,
+traceability_failed, rollup_pending, would_deadlock, summary, tasks, work,
+route, reconcile, hints, awaiting? }`. The routing fields:
+
+- `route` — `nothing` (no run, or terminal with nothing repairable) | `resume`
+  (clean: a park, or a healthy `running` re-entry) | `repair` (`needs_rescue` or
+  dead-ends — propose before touching). With no resolvable run the envelope is
+  `{kind:"nothing", reason:"no-run", route:"nothing"}` — safe to fire blind.
+- `reconcile` — `true` when the git probe flags drift (staging base unresolvable,
+  or a recorded task branch missing): the command layer spawns `rescue-reconciler`.
+- `hints` — one exact `factory rescue apply …` command per proposable repair
+  (default reset, per-dead-end `--task <id> --include-dead-ends`, `--reset-e2e`,
+  `--reset-traceability`, `--recheck-rollup`). These are the plan items the
+  consent prompt renders — and the manual escape hatch when declined.
+- `awaiting` — present only when the run is parked: the **derived** cause
+  (`quota`/`e2e`/`traceability`/`docs`/`spec-approval`/`unknown` — never stored).
+
 Dispositions: `shipped`, `runnable`, `stuck` (crashed in-flight), `recoverable`
 (`blocked-environmental` fail), `dead-end` (`spec-defect`/`capability-budget` fail).
 Default-resettable = `stuck ∪ recoverable`. `e2e_failed` is `true` iff
@@ -816,23 +802,46 @@ Backed by new `GitClient.refExists`/`commitsAhead` (`src/git/git-client.ts`).
 
 ### `rescue apply`
 
-Writer. Resets the resettable tasks to `pending` and reopens a terminal run.
+Writer. Resets the resettable tasks to `pending` and reopens a terminal run. This
+is what an approved `/factory:resume` repair plan executes — every flag is a human
+assertion an approved plan item carries.
 
 ```
-factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
+factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--reset-traceability] [--recheck-rollup]
 ```
 
-| Flag                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--reset-e2e`         | Clears a `failed` e2e-phase verdict so it re-enters, **and** drops a `failed` run-start `e2e_assessment` (Decision 40 D3) so the assessment re-runs. A post-authoring e2e-phase failure keeps its manifest + reopen counts + `adjudication_counts` and drops any live `adjudication` cursor; a pre-authoring failure (empty manifest) drops `e2e_phase` entirely so the author re-spawns. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable. The phase repair is **decoupled from reopening**: it also fires on a **non-terminal** run (e.g. a crash between e2e's `markFailed` and finalize left the run `running`), so the documented recovery never silently no-ops. |
-| `--recheck-rollup`    | Reopens a `completed` run whose rollup **armed but never landed** (`rollup_pending`) so a re-drive re-enters `finalizeRun` and its `rollup()` resume-guard picks up the now-merged PR (PRD-close + branch-GC). Use only after confirming the queued merge landed — alone sufficient to reopen a terminal run, and its repair likewise applies on a non-terminal run. Reopen only: `apply` never mutates the `rollup` pointer, only `finalizeRun` does.                                                                                                                                                                                                                                                                                                 |
+| Flag                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--task <id>`          | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--include-dead-ends`  | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `--reset-e2e`          | Clears a `failed` e2e-phase verdict so it re-enters, **and** drops a `failed` run-start `e2e_assessment` (Decision 40 D3) so the assessment re-runs. A post-authoring e2e-phase failure keeps its manifest + reopen counts + `adjudication_counts` and drops any live `adjudication` cursor; a pre-authoring failure (empty manifest) drops `e2e_phase` entirely so the author re-spawns. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable. The phase repair is **decoupled from reopening**: it also fires on a **non-terminal** run (e.g. a crash between e2e's `markFailed` and finalize left the run `running`), so the documented recovery never silently no-ops. |
+| `--recheck-rollup`     | Reopens a `completed` run whose rollup **armed but never landed** (`rollup_pending`) so a re-drive re-enters `finalizeRun` and its `rollup()` resume-guard picks up the now-merged PR (PRD-close + branch-GC). Use only after confirming the queued merge landed — alone sufficient to reopen a terminal run, and its repair likewise applies on a non-terminal run. Reopen only: `apply` never mutates the `rollup` pointer, only `finalizeRun` does.                                                                                                                                                                                                                                                                                                 |
+| `--reset-traceability` | Clears a `failed` PRD-traceability audit (S9, Decision 47) so it re-runs. Use only once the unmet PRD intent is genuinely addressed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends failed;
 reopens a terminal run to `running` when it reset work (or when `--reset-e2e` clears
-a failed e2e phase, or `--recheck-rollup` targets an armed-not-landed rollup).
-Idempotent. Emits `{ run_id, run_status, reset, reopened, skipped }`.
+a failed e2e phase, `--reset-traceability` clears a failed audit, or
+`--recheck-rollup` targets an armed-not-landed rollup).
+Idempotent. Emits `{ run_id, run_status, reset, reopened, skipped, resume? }`. An
+apply that did work also clears any surviving park itself (the `resume` field, run
+`{touch:false}`), so the whole approved plan costs exactly ONE `recover` human touch
+(Decision 49) and the follow-up `factory resume` is a touchless re-entry.
+
+### `rescue auto`
+
+The runner's bounded self-heal, fired ONCE after a failed finalize (Decision 48's
+`--auto`, renamed by Decision 50). Never operator-typed.
+
+```
+factory rescue auto [--run <id>]
+```
+
+Resets only the _effective_ auto-safe set (resettable tasks that stay actionable
+post-reset — never dead-ends, e2e resets, traceability resets, rollup rechecks, or
+git drift) and stamps `self_heal {attempts, last_at}` — the sanctioned stored-event
+exception. Requires `attempts === 0`; a blocked auto (`attempts > 0`, empty
+effective set, or dead-ends only) emits `{kind:"page"}` and posts ONE deduped PRD
+comment pointing at `factory rescue scan`. Never appends a human touch.
 
 ## `autonomy <ensure|status|preflight>`
 

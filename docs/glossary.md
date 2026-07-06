@@ -96,7 +96,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 
 ## Run continuation & recovery
 
-> A PRD has **at most one active Run at any time**. An unfinished Run is never a finished outcome — it is something a person continues, repairs, or replaces. Resume, Rescue, and Supersede name those three choices; Recover is the single front door that routes to the right one of them so an operator need not diagnose the Run first. None of a Run's work reaches the shared codebase until the whole PRD is delivered; an unfinished Run's work stays private to that attempt, so continuing, repairing, or replacing it never disturbs already-delivered work.
+> A PRD has **at most one active Run at any time**. An unfinished Run is never a finished outcome — it is something a person continues, repairs, or replaces. Resume, Rescue, and Supersede name those three choices; **`/factory:resume`** is the single front door that routes to the right one of them so an operator need not diagnose the Run first. None of a Run's work reaches the shared codebase until the whole PRD is delivered; an unfinished Run's work stays private to that attempt, so continuing, repairing, or replacing it never disturbs already-delivered work.
 
 ### Resume
 
@@ -130,7 +130,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Recover
 
 - **type**: Operation (on a Run)
-- **status**: accepted
+- **status**: orphaned (Decision 50 removed the `factory recover` command; its self-routing front-door role moved into `/factory:resume` and its unattended self-heal into `factory rescue auto` — entry retained for domain-expert review)
 - **definition**: The single self-routing front door for an unfinished Run: it inspects the Run and does whatever the Run actually needs — nothing (already healthy or already delivered), Resume it (a benign park clears), Rescue it (there is resettable work to repair), or page a person (only a human fix remains). Recover is not a fourth choice alongside Resume/Rescue/Supersede — it is the router that picks the right one of them, so an operator does not have to diagnose the Run first. It also has a bounded, unattended self-heal mode used by the runner: after a Run fails to finalize, it attempts exactly ONE automatic repair-and-continue cycle, and if that cannot make progress it pages the person on the PRD rather than looping.
 - **invariants**:
     - Recover only routes to existing operations (Resume, Rescue); it introduces no repair power of its own.
@@ -140,7 +140,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - An operator runs Recover on a stalled Run without knowing why it stalled; Recover clears a capacity park by resuming it.
     - A Run fails to finalize because one Task wedged; the runner's one self-heal cycle reopens and continues it, no person involved.
     - Counter-example: the only remaining problem is a dead-end Task needing a human fix — Recover pages the person instead of burning capacity on a repair that cannot succeed.
-- **relationships**: routes to Resume or Rescue; escalates to a human page when neither can help; the runner's post-finalize safety net.
+- **relationships**: routes to Resume or Rescue; escalates to a human page when neither can help; the runner's post-finalize safety net; superseded by Resume as the operator front door (Decision 50).
 - **synonyms**: —
 
 ### Supersede

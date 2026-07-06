@@ -6885,7 +6885,7 @@ var RunStateSchema = external_exports.object({
    * `applyRescue` mutation that performs an `--auto` reset. A sanctioned
    * stored-EVENT exception to derive-don't-store (precedent: the retired
    * `paused_minutes`): "how many self-heal cycles already ran" is history no
-   * state/git re-derivation can recover. `factory recover --auto` requires
+   * state/git re-derivation can recover. `factory rescue auto` requires
    * `attempts === 0`, bounding the self-heal loop to ONE cycle per run.
    */
   self_heal: external_exports.object({
@@ -6896,7 +6896,7 @@ var RunStateSchema = external_exports.object({
    * Human-intervention ledger (S11): one entry per human action on the run —
    * `launch` (run create), `conflict` (a `--supersede` resolution, stamped on the
    * NEW run alongside its launch), `resume` (a human resume clearing a park),
-   * `recover` (a manual rescue apply / recover). The second sanctioned
+   * `recover` (an approved rescue apply that did work). The second sanctioned
    * stored-EVENT exception (with `self_heal`): which touches happened is history
    * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
    * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.
@@ -6969,75 +6969,75 @@ function reasonIffFailed(ctx, opts) {
     });
   }
 }
-function refineRunCrossFields(run11, ctx) {
+function refineRunCrossFields(run10, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run11.quota != null && !quotaStatuses.includes(run11.status)) {
+  if (run10.quota != null && !quotaStatuses.includes(run10.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run11.run_id}' carries a quota checkpoint but status is '${run11.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run10.run_id}' carries a quota checkpoint but status is '${run10.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
-  if (isTerminalRunStatus(run11.status) !== (run11.ended_at != null)) {
+  if (isTerminalRunStatus(run10.status) !== (run10.ended_at != null)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["ended_at"],
-      message: isTerminalRunStatus(run11.status) ? `run '${run11.run_id}' is terminal ('${run11.status}') but has no ended_at` : `run '${run11.run_id}' is '${run11.status}' (non-terminal) but carries ended_at`
+      message: isTerminalRunStatus(run10.status) ? `run '${run10.run_id}' is terminal ('${run10.status}') but has no ended_at` : `run '${run10.run_id}' is '${run10.status}' (non-terminal) but carries ended_at`
     });
   }
-  if (run11.docs !== void 0) {
+  if (run10.docs !== void 0) {
     reasonIffFailed(ctx, {
-      runId: run11.run_id,
+      runId: run10.run_id,
       path: ["docs", "reason"],
       label: "docs phase",
-      status: run11.docs.status,
-      reason: run11.docs.reason
+      status: run10.docs.status,
+      reason: run10.docs.reason
     });
   }
-  if (run11.traceability !== void 0) {
+  if (run10.traceability !== void 0) {
     reasonIffFailed(ctx, {
-      runId: run11.run_id,
+      runId: run10.run_id,
       path: ["traceability", "reason"],
       label: "traceability phase",
-      status: run11.traceability.status,
-      reason: run11.traceability.reason
+      status: run10.traceability.status,
+      reason: run10.traceability.reason
     });
-    if (run11.traceability.status === "done" && run11.traceability.verdicts.some((v) => v.verdict === "unmet")) {
+    if (run10.traceability.status === "done" && run10.traceability.verdicts.some((v) => v.verdict === "unmet")) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["traceability", "verdicts"],
-        message: `run '${run11.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`
+        message: `run '${run10.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`
       });
     }
   }
-  if (run11.e2e_phase?.status !== void 0) {
-    const isFailed = run11.e2e_phase.status === "failed";
+  if (run10.e2e_phase?.status !== void 0) {
+    const isFailed = run10.e2e_phase.status === "failed";
     reasonIffFailed(ctx, {
-      runId: run11.run_id,
+      runId: run10.run_id,
       path: ["e2e_phase", "reason"],
       label: "e2e phase",
-      status: run11.e2e_phase.status,
-      reason: run11.e2e_phase.reason
+      status: run10.e2e_phase.status,
+      reason: run10.e2e_phase.reason
     });
-    const hasAdvisory = run11.e2e_phase.advisory != null && run11.e2e_phase.advisory.length > 0;
+    const hasAdvisory = run10.e2e_phase.advisory != null && run10.e2e_phase.advisory.length > 0;
     if (isFailed && hasAdvisory) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "advisory"],
-        message: `run '${run11.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
+        message: `run '${run10.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
   }
-  if (run11.e2e_assessment?.status !== void 0) {
+  if (run10.e2e_assessment?.status !== void 0) {
     reasonIffFailed(ctx, {
-      runId: run11.run_id,
+      runId: run10.run_id,
       path: ["e2e_assessment", "reason"],
       label: "e2e assessment",
-      status: run11.e2e_assessment.status,
-      reason: run11.e2e_assessment.reason
+      status: run10.e2e_assessment.status,
+      reason: run10.e2e_assessment.reason
     });
   }
-  for (const [k, value] of Object.entries(run11.tasks)) {
+  for (const [k, value] of Object.entries(run10.tasks)) {
     if (k !== value.task_id) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
@@ -8291,8 +8291,8 @@ function checkResult(phase, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run11) {
-  const tasks = Object.values(run11.tasks);
+function decideFinalize(run10) {
+  const tasks = Object.values(run10.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -8919,7 +8919,8 @@ async function ensureOnStaging(args) {
   const remote = args.remote ?? "origin";
   const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
   const opts = { cwd: args.path };
-  log8.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`);
+  log8.debug(`ensureOnStaging: reset --hard + checkout -B ${args.branch} ${remote}/${base}`);
+  await args.gitClient.resetHardClean(`${remote}/${base}`, opts);
   await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts);
 }
 async function resyncTaskBranchOntoStaging(args) {
@@ -8968,14 +8969,14 @@ async function resolveSetupCommand(worktreePath, setupCommand, fileExists) {
 }
 async function provisionWorktree(args) {
   const fileExists = args.fileExists ?? defaultFileExists;
-  const run11 = args.run ?? defaultRun;
+  const run10 = args.run ?? defaultRun;
   const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
   if (command === null) {
     log9.debug(`no setupCommand and no lockfile in ${args.path} \u2014 skipping worktree provisioning`);
     return;
   }
   log9.info(`provisioning worktree: ${command} (cwd=${args.path})`);
-  const res = await run11(command, args.path);
+  const res = await run10(command, args.path);
   if (res.code !== 0) {
     const detail = res.stderr.trim();
     throw new Error(
@@ -9259,17 +9260,17 @@ function resolveStagingBranch(runId, pinned) {
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run11, request, opts = {}) {
+function buildPartialReport(run10, request, opts = {}) {
   const specById = new Map(request.tasks.map((t) => [t.task_id, t]));
   const orderOf = new Map(request.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
-  for (const task of Object.values(run11.tasks)) {
+  for (const task of Object.values(run10.tasks)) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run11.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run10.run_id})`
       );
     }
     if (task.status === "done") {
@@ -9298,11 +9299,11 @@ function buildPartialReport(run11, request, opts = {}) {
   failures.sort(bySpecOrder);
   incomplete.sort(bySpecOrder);
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
-    spec_id: run11.spec.spec_id,
-    issue_number: run11.spec.issue_number,
-    repo: run11.spec.repo,
+    run_id: run10.run_id,
+    run_status: run10.status,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
     generated_at: opts.now ?? nowIso(),
     totals: {
       total: shipped.length + failures.length + incomplete.length,
@@ -9313,34 +9314,34 @@ function buildPartialReport(run11, request, opts = {}) {
     shipped,
     failures,
     incomplete,
-    ...run11.e2e_phase?.status === "failed" ? { e2e_failure: run11.e2e_phase.reason } : {},
-    ...run11.e2e_phase?.status === "done" && run11.e2e_phase.advisory !== void 0 ? { e2e_advisory: run11.e2e_phase.advisory } : {},
-    ...buildE2eNarrative(run11),
-    ...buildTraceability(run11),
-    ...buildCrossVendorAbsences(run11, bySpecOrder),
+    ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
+    ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {},
+    ...buildE2eNarrative(run10),
+    ...buildTraceability(run10),
+    ...buildCrossVendorAbsences(run10, bySpecOrder),
     ...opts.warnings !== void 0 && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}
   };
 }
-function buildCrossVendorAbsences(run11, bySpecOrder) {
-  const absences = Object.values(run11.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: nonNull(t.cross_vendor_absent).reason })).sort(bySpecOrder);
+function buildCrossVendorAbsences(run10, bySpecOrder) {
+  const absences = Object.values(run10.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: nonNull(t.cross_vendor_absent).reason })).sort(bySpecOrder);
   return absences.length > 0 ? { cross_vendor_absences: absences } : {};
 }
-function buildTraceability(run11) {
-  const gaps = (run11.traceability?.verdicts ?? []).filter((v) => v.verdict !== "met");
+function buildTraceability(run10) {
+  const gaps = (run10.traceability?.verdicts ?? []).filter((v) => v.verdict !== "met");
   return {
-    ...run11.traceability?.status === "failed" ? { traceability_failure: run11.traceability.reason ?? "PRD traceability audit failed" } : {},
+    ...run10.traceability?.status === "failed" ? { traceability_failure: run10.traceability.reason ?? "PRD traceability audit failed" } : {},
     ...gaps.length > 0 ? { traceability_gaps: gaps } : {}
   };
 }
-function buildE2eNarrative(run11) {
-  const journeys = (run11.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
-  const reopened = Object.entries(run11.e2e_phase?.reopen_counts ?? {}).filter(([, n]) => n > 0).map(([id]) => id).sort();
-  const warning = run11.e2e_assessment?.warning;
+function buildE2eNarrative(run10) {
+  const journeys = (run10.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
+  const reopened = Object.entries(run10.e2e_phase?.reopen_counts ?? {}).filter(([, n]) => n > 0).map(([id]) => id).sort();
+  const warning = run10.e2e_assessment?.warning;
   return {
     ...journeys.length > 0 ? { e2e_journeys: journeys } : {},
     ...reopened.length > 0 ? { e2e_reopened: reopened } : {},
     ...warning !== void 0 ? { e2e_warnings: [warning] } : {},
-    ...run11.e2e_assessment?.status === "failed" ? { e2e_assessment_failure: run11.e2e_assessment.reason ?? "e2e assessment failed" } : {}
+    ...run10.e2e_assessment?.status === "failed" ? { e2e_assessment_failure: run10.e2e_assessment.reason ?? "e2e assessment failed" } : {}
   };
 }
 function splitReason(reason) {
@@ -9361,7 +9362,7 @@ function renderFailureComment(report, selfHealEligible = false) {
   if (selfHealEligible) {
     lines.push(
       "",
-      "_Self-heal: the runner retries the recoverable failure(s) once via `factory recover --auto` before paging a human._"
+      "_Self-heal: the runner retries the recoverable failure(s) once via `factory rescue auto` before paging a human._"
     );
   }
   if (report.e2e_failure !== void 0) {
@@ -9538,12 +9539,12 @@ function durationSeconds(startedAt, endedAt) {
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
-function buildRunSummary(run11, report, opts = {}) {
+function buildRunSummary(run10, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
     failuresByClass[f.failure_class] += 1;
   }
-  const tasks = Object.values(run11.tasks);
+  const tasks = Object.values(run10.tasks);
   const effort = {
     reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
     max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
@@ -9553,20 +9554,20 @@ function buildRunSummary(run11, report, opts = {}) {
     ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
-  const touches = run11.human_touches?.length ?? null;
-  const touchMetric = touches === null || touches === 0 ? null : (run11.status === "completed" ? 1 : 0) / touches;
+  const touches = run10.human_touches?.length ?? null;
+  const touchMetric = touches === null || touches === 0 ? null : (run10.status === "completed" ? 1 : 0) / touches;
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
-    execution_mode: run11.execution_mode,
-    spec_id: run11.spec.spec_id,
-    issue_number: run11.spec.issue_number,
-    repo: run11.spec.repo,
+    run_id: run10.run_id,
+    run_status: run10.status,
+    execution_mode: run10.execution_mode,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
     generated_at: opts.now ?? nowIso(),
     timing: {
-      started_at: run11.started_at,
-      ended_at: run11.ended_at,
-      duration_seconds: durationSeconds(run11.started_at, run11.ended_at)
+      started_at: run10.started_at,
+      ended_at: run10.ended_at,
+      duration_seconds: durationSeconds(run10.started_at, run10.ended_at)
     },
     totals: report.totals,
     failures_by_class: failuresByClass,
@@ -9889,14 +9890,14 @@ function selectProducerModel(riskTier, config) {
 }
 
 // src/quota/resume.ts
-function planResume(run11, reading, config, nowEpoch2) {
-  if (run11.status !== "paused" && run11.status !== "suspended") {
-    return { kind: "not-resumable", status: run11.status };
+function planResume(run10, reading, config, nowEpoch2) {
+  if (run10.status !== "paused" && run10.status !== "suspended") {
+    return { kind: "not-resumable", status: run10.status };
   }
-  if (run11.ignore_quota) {
+  if (run10.ignore_quota) {
     return { kind: "resume", clear: clearCheckpoint() };
   }
-  if (run11.quota === void 0) {
+  if (run10.quota === void 0) {
     return { kind: "resume", clear: clearCheckpoint() };
   }
   const decision = evaluate(reading, config, nowEpoch2);
@@ -12283,12 +12284,12 @@ async function resolveCrossVendor(codexModel, probe) {
 
 // src/verifier/judgment/codex-probe.ts
 var CODEX_PROBE_TIMEOUT_MS = 5e3;
-function makeCodexProbe(run11 = exec) {
+function makeCodexProbe(run10 = exec) {
   let memo;
   return {
     vendor: "codex",
     available() {
-      memo ??= run11("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then((r) => r.code === 0);
+      memo ??= run10("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then((r) => r.code === 0);
       return memo;
     }
   };
@@ -12976,17 +12977,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied(run11, depends) {
-  return depends.every((d) => run11.tasks[d]?.status === "done");
+function depsSatisfied(run10, depends) {
+  return depends.every((d) => run10.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run11, depends) {
+function hasUnsatisfiableDep(run10, depends) {
   return depends.some((d) => {
-    const dep = run11.tasks[d];
+    const dep = run10.tasks[d];
     return dep === void 0 || dep.status === "failed";
   });
 }
-function scanRun(run11) {
-  const all = Object.values(run11.tasks);
+function scanRun(run10) {
+  const all = Object.values(run10.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -13004,17 +13005,17 @@ function scanRun(run11) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run11, t.depends_on) || hasUnsatisfiableDep(run11, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
-  const e2e_failed = run11.e2e_phase?.status === "failed";
-  const e2e_assessment_failed = run11.e2e_assessment?.status === "failed";
-  const traceability_failed = run11.traceability?.status === "failed";
-  const rollup_pending = run11.rollup?.merged === false;
+  const e2e_failed = run10.e2e_phase?.status === "failed";
+  const e2e_assessment_failed = run10.e2e_assessment?.status === "failed";
+  const traceability_failed = run10.traceability?.status === "failed";
+  const rollup_pending = run10.rollup?.merged === false;
   const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending;
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
+    run_id: run10.run_id,
+    run_status: run10.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -13032,7 +13033,7 @@ function scanRun(run11) {
     rollup_pending,
     would_deadlock,
     summary: summarize(
-      run11.status,
+      run10.status,
       resettable.length,
       dead_ends.length,
       would_deadlock,
@@ -13062,11 +13063,11 @@ function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAs
 }
 
 // src/rescue/assess.ts
-async function assessWork(run11, probe) {
-  const baseRef = `origin/${resolveStagingBranch(run11.run_id, run11.staging_branch)}`;
+async function assessWork(run10, probe) {
+  const baseRef = `origin/${resolveStagingBranch(run10.run_id, run10.staging_branch)}`;
   const baseResolved = await probe.refExists(baseRef);
   const tasks = [];
-  for (const t of Object.values(run11.tasks)) {
+  for (const t of Object.values(run10.tasks)) {
     if (t.status === "done") {
       continue;
     }
@@ -13098,7 +13099,7 @@ async function assessWork(run11, probe) {
 }
 
 // src/rescue/auto.ts
-function effectiveAutoResets(run11, scan) {
+function effectiveAutoResets(run10, scan) {
   const resets = new Set(scan.resettable);
   const clean = /* @__PURE__ */ new Map();
   function closureClean(id, visiting) {
@@ -13109,7 +13110,7 @@ function effectiveAutoResets(run11, scan) {
     if (visiting.has(id)) {
       return true;
     }
-    const task = run11.tasks[id];
+    const task = run10.tasks[id];
     if (task === void 0) {
       return false;
     }
@@ -13129,7 +13130,7 @@ function effectiveAutoResets(run11, scan) {
     return ok;
   }
   return scan.resettable.filter(
-    (id) => nonNull(run11.tasks[id]).depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
+    (id) => nonNull(run10.tasks[id]).depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
   );
 }
 
@@ -13177,15 +13178,15 @@ function resetTaskRow(task, opts = {}) {
     ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
   };
 }
-function selectTargets(run11, opts) {
+function selectTargets(run10, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run11.tasks[id];
+      const task = run10.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run11.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run10.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -13200,7 +13201,7 @@ function selectTargets(run11, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run11);
+  const scan = scanRun(run10);
   const targets = opts.includeDeadEnds === true ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
@@ -13211,32 +13212,32 @@ async function applyRescue(state, runId, opts = {}) {
       "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability)"
     );
   }
-  const updated = await state.update(runId, (run11) => {
+  const updated = await state.update(runId, (run10) => {
     if (opts.auto !== void 0) {
-      const attempts = run11.self_heal?.attempts ?? 0;
+      const attempts = run10.self_heal?.attempts ?? 0;
       const noop = (blocked) => {
         result = {
           run_id: runId,
-          run_status: run11.status,
+          run_status: run10.status,
           reset: [],
           reopened: false,
           skipped: [],
           auto_blocked: blocked,
           touched: false
         };
-        return run11;
+        return run10;
       };
       if (attempts > 0) {
         return noop("attempts");
       }
-      const targets2 = effectiveAutoResets(run11, scanRun(run11));
+      const targets2 = effectiveAutoResets(run10, scanRun(run10));
       if (targets2.length === 0) {
         return noop("empty");
       }
-      const reopen2 = isTerminalRunStatus(run11.status);
+      const reopen2 = isTerminalRunStatus(run10.status);
       result = {
         run_id: runId,
-        run_status: reopen2 ? "running" : run11.status,
+        run_status: reopen2 ? "running" : run10.status,
         reset: targets2,
         reopened: reopen2,
         skipped: [],
@@ -13244,46 +13245,46 @@ async function applyRescue(state, runId, opts = {}) {
         touched: false
         // self-heal is not a human (S11)
       };
-      const nextTasks2 = { ...run11.tasks };
+      const nextTasks2 = { ...run10.tasks };
       for (const id of targets2) {
-        nextTasks2[id] = resetTaskRow(nonNull(run11.tasks[id]));
+        nextTasks2[id] = resetTaskRow(nonNull(run10.tasks[id]));
       }
       return {
-        ...run11,
+        ...run10,
         tasks: nextTasks2,
         self_heal: { attempts: attempts + 1, last_at: opts.auto.at },
         ...reopen2 ? { status: "running", ended_at: null } : {}
       };
     }
-    const { targets, skipped } = selectTargets(run11, opts);
-    const wasTerminal = isTerminalRunStatus(run11.status);
-    const e2eReset = opts.resetE2e === true && run11.e2e_phase?.status === "failed";
-    const assessReset = opts.resetE2e === true && run11.e2e_assessment?.status === "failed";
-    const traceReset = opts.resetTraceability === true && run11.traceability?.status === "failed";
-    const rollupRecheck = opts.recheckRollup === true && run11.rollup?.merged === false;
+    const { targets, skipped } = selectTargets(run10, opts);
+    const wasTerminal = isTerminalRunStatus(run10.status);
+    const e2eReset = opts.resetE2e === true && run10.e2e_phase?.status === "failed";
+    const assessReset = opts.resetE2e === true && run10.e2e_assessment?.status === "failed";
+    const traceReset = opts.resetTraceability === true && run10.traceability?.status === "failed";
+    const rollupRecheck = opts.recheckRollup === true && run10.rollup?.merged === false;
     const reopen = wasTerminal && (targets.length > 0 || e2eReset || assessReset || traceReset || rollupRecheck);
     const didWork = targets.length > 0 || reopen || e2eReset || assessReset || traceReset || rollupRecheck;
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run11.status,
+      run_status: reopen ? "running" : run10.status,
       reset: targets,
       reopened: reopen,
       skipped,
       touched: didWork
     };
     if (!didWork) {
-      return run11;
+      return run10;
     }
-    const nextTasks = { ...run11.tasks };
+    const nextTasks = { ...run10.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(nonNull(run11.tasks[id]));
+      nextTasks[id] = resetTaskRow(nonNull(run10.tasks[id]));
     }
     return {
-      ...run11,
+      ...run10,
       tasks: nextTasks,
       // S11: a manual apply that did work IS a human touch.
-      human_touches: [...run11.human_touches ?? [], { kind: "recover", at: opts.at ?? nowIso() }],
-      ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run11.e2e_phase)) } : {},
+      human_touches: [...run10.human_touches ?? [], { kind: "recover", at: opts.at ?? nowIso() }],
+      ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run10.e2e_phase)) } : {},
       // Decision 40: drop the WHOLE failed assessment (no manifest worth preserving)
       // so wantsE2eAssessment re-fires a fresh assessor on the next drive.
       ...assessReset ? { e2e_assessment: void 0 } : {},
@@ -13309,7 +13310,7 @@ Spec: \`${report.spec_id}\` \xB7 Run: \`${report.run_id}\``;
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
-async function commentFailuresOnPrd(deps, run11, report) {
+async function commentFailuresOnPrd(deps, run10, report) {
   if (report.failures.length === 0 && report.e2e_failure === void 0 && report.traceability_failure === void 0) {
     return false;
   }
@@ -13322,7 +13323,7 @@ async function commentFailuresOnPrd(deps, run11, report) {
     log21.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
     return false;
   }
-  const selfHealEligible = (run11.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run11, scanRun(run11)).length > 0;
+  const selfHealEligible = (run10.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run10, scanRun(run10)).length > 0;
   await deps.gh.issueComment({
     repo: report.repo,
     number: report.issue_number,
@@ -13332,21 +13333,21 @@ async function commentFailuresOnPrd(deps, run11, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run11 = await deps.state.read(runId);
-  const taskTerminal = decideFinalize(run11).run_status;
-  const terminal = run11.e2e_phase?.status === "failed" || run11.e2e_assessment?.status === "failed" || run11.traceability?.status === "failed" ? "failed" : taskTerminal;
+  const run10 = await deps.state.read(runId);
+  const taskTerminal = decideFinalize(run10).run_status;
+  const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" || run10.traceability?.status === "failed" ? "failed" : taskTerminal;
   const contract = await loadGateContract(process.cwd());
   const warnings = contract.state === "absent" ? [
     "gates ran without a .factory/gates.json contract (legacy pre-contract run) \u2014 run `factory scaffold` and commit the contract"
   ] : [];
-  const report = buildPartialReport({ ...run11, status: terminal }, deps.spec, { now, warnings });
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now, warnings });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
-  const failureCommentPosted = run11.debug ? false : await commentFailuresOnPrd(deps, run11, report);
+  const failureCommentPosted = run10.debug ? false : await commentFailuresOnPrd(deps, run10, report);
   let rollupResult;
   if (terminal === "completed") {
-    const stagingBranch = resolveStagingBranch(runId, run11.staging_branch);
+    const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
     await deps.git.push("origin", stagingBranch);
@@ -13361,7 +13362,7 @@ async function finalizeRun(deps, runId) {
     });
     const rr = rollupResult;
     if (rollupResult.merged) {
-      if (!run11.debug) {
+      if (!run10.debug) {
         if (!rollupResult.resumed) {
           await deps.gh.issueComment({
             repo: report.repo,
@@ -13448,8 +13449,8 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
   if (decision.action === "fail") {
     return failStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run11 = await deps.state.read(runId);
-  const task = run11.tasks[taskId];
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -14050,8 +14051,8 @@ async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
   if (nextPhase(info.phase) !== info.after) {
     throw new Error(`record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`);
   }
-  const run11 = await state.read(runId);
-  if (run11.tasks[taskId] === void 0) {
+  const run10 = await state.read(runId);
+  if (run10.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -14179,13 +14180,13 @@ function enforcePanelRoster(reviews, expectedRoles = PANEL_ROLES) {
   return out;
 }
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
-  const run11 = await deps.state.read(runId);
-  const task = run11.tasks[taskId];
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-  const baseRef = resolveStagingBranch(runId, run11.staging_branch);
+  const baseRef = resolveStagingBranch(runId, run10.staging_branch);
   const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
   const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
@@ -14321,7 +14322,7 @@ async function applyQuotaGate(deps, runId, ignoreQuota = false) {
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
       log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      const run11 = await deps.state.update(runId, (s) => ({
+      const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
         quota: patch.quota
@@ -14330,18 +14331,18 @@ async function applyQuotaGate(deps, runId, ignoreQuota = false) {
         scope: decision.kind === "pause-5h" ? "5h" : "7d",
         reason: decision.reason,
         resets_at_epoch: decision.resetsAtEpoch,
-        run: run11
+        run: run10
       };
     }
     case "unavailable-halt": {
       const patch = buildUnavailableCheckpoint();
       log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
-      const run11 = await deps.state.update(runId, (s) => ({
+      const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
         quota: patch.quota
       }));
-      return { scope: "unavailable", reason: decision.reason, run: run11 };
+      return { scope: "unavailable", reason: decision.reason, run: run10 };
     }
     default:
       return assertNever(decision);
@@ -14427,10 +14428,10 @@ async function shipTask(deps, ctx) {
 // src/orchestrator/orchestrator.ts
 var log26 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
-function requireTask2(run11, taskId) {
-  const task = run11.tasks[taskId];
+function requireTask2(run10, taskId) {
+  const task = run10.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`orchestrator: run '${run11.run_id}' has no task '${taskId}'`);
+    throw new Error(`orchestrator: run '${run10.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -14516,12 +14517,12 @@ function doneFromStep(runId, taskId, step) {
   return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
 }
 async function nextAction(deps, runId, taskId, results) {
-  let run11 = await deps.state.read(runId);
-  let task = requireTask2(run11, taskId);
+  let run10 = await deps.state.read(runId);
+  let task = requireTask2(run10, taskId);
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "done", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run11.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.ignore_quota);
   if (stop !== null) {
     return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }
@@ -14537,10 +14538,10 @@ async function nextAction(deps, runId, taskId, results) {
   }
   const handlers = makePhaseHandlers(deps);
   for (; ; ) {
-    run11 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, phase);
+    run10 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, phase);
     cursorPersisted = true;
-    task = requireTask2(run11, taskId);
-    const ctx = { run: run11, task, attempt: task.escalation_rung + 1 };
+    task = requireTask2(run10, taskId);
+    const ctx = { run: run10, task, attempt: task.escalation_rung + 1 };
     const result = phase === "ship" ? await shipTask(deps, ctx) : await runPhase(phase, ctx, handlers);
     switch (result.kind) {
       case "advance": {
@@ -14552,7 +14553,7 @@ async function nextAction(deps, runId, taskId, results) {
         const spawnPhase = asSpawnPhase(phase);
         const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const base_ref = `origin/${resolveStagingBranch(runId, run11.staging_branch)}`;
+        const base_ref = `origin/${resolveStagingBranch(runId, run10.staging_branch)}`;
         const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
@@ -14591,7 +14592,7 @@ async function nextAction(deps, runId, taskId, results) {
       case "wait-retry": {
         if (result.phase === "ship") {
           const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId);
-          const stagingBranch = resolveStagingBranch(runId, run11.staging_branch);
+          const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
           if (!await deps.git.worktreeExists(resyncWorktree)) {
             const step2 = await failStep(
               deps,
@@ -14693,8 +14694,8 @@ function buildScribePrompt(worktree, baseRef) {
   ].join("\n");
 }
 async function runDocsEmit(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const base = deps.config.git.baseBranch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
@@ -14703,7 +14704,7 @@ async function runDocsEmit(deps, runId) {
   await deps.git.fetch("origin", base);
   if (!await deps.git.worktreeExists(worktree)) {
     await deps.git.worktreeAdd(["-B", docsBranch, worktree, `origin/${staging}`]);
-  } else if ((run11.docs?.attempts ?? 0) >= 1) {
+  } else if ((run10.docs?.attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   return {
@@ -14720,8 +14721,8 @@ async function runDocsEmit(deps, runId) {
 }
 var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 async function runDocsRecord(deps, runId, results) {
-  const run11 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
@@ -14733,7 +14734,7 @@ async function runDocsRecord(deps, runId, results) {
     return { kind: "done", run_id: runId };
   }
   const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
-  const attempts = (run11.docs?.attempts ?? 0) + 1;
+  const attempts = (run10.docs?.attempts ?? 0) + 1;
   const docsRecord = { status: "failed", reason, attempts, ended_at: nowIso() };
   if (attempts >= MAX_DOCS_ATTEMPTS) {
     await deps.state.update(runId, (s) => ({ ...s, docs: docsRecord }));
@@ -14779,8 +14780,8 @@ function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   ].join("\n");
 }
 async function readRequirements(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  const prd = await new SpecStore({ dataDir: deps.dataDir }).readPrd(run11.spec.repo, run11.spec.spec_id);
+  const run10 = await deps.state.read(runId);
+  const prd = await new SpecStore({ dataDir: deps.dataDir }).readPrd(run10.spec.repo, run10.spec.spec_id);
   const requirements = extractPrdRequirements(prd.body);
   if (requirements.length === 0) {
     throw new Error(
@@ -14790,8 +14791,8 @@ async function readRequirements(deps, runId) {
   return requirements;
 }
 async function runTraceabilityEmit(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const base = deps.config.git.baseBranch;
   const worktree = traceWorktreePath(deps.dataDir, runId);
   const baseRef = `origin/${base}`;
@@ -14800,7 +14801,7 @@ async function runTraceabilityEmit(deps, runId) {
   await deps.git.fetch("origin", base);
   if (!await deps.git.worktreeExists(worktree)) {
     await deps.git.worktreeAdd(["--detach", worktree, `origin/${staging}`]);
-  } else if ((run11.traceability?.attempts ?? 0) >= 1) {
+  } else if ((run10.traceability?.attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   return {
@@ -14825,7 +14826,7 @@ var TraceabilityResultsSchema = external_exports.object({
   )
 }).strict();
 async function runTraceabilityRecord(deps, runId, results) {
-  const run11 = await deps.state.read(runId);
+  const run10 = await deps.state.read(runId);
   const worktree = traceWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
@@ -14858,7 +14859,7 @@ async function runTraceabilityRecord(deps, runId, results) {
     return { kind: "failed", run_id: runId, reason: reason2 };
   }
   const reason = "reason" in outcome ? outcome.reason : "traceability phase failed";
-  const attempts = (run11.traceability?.attempts ?? 0) + 1;
+  const attempts = (run10.traceability?.attempts ?? 0) + 1;
   const marker = {
     status: "failed",
     reason,
@@ -14881,115 +14882,115 @@ async function runTraceabilityRecord(deps, runId, results) {
 
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  const capabilityFailures = Object.values(run11.tasks).filter(
+  const run10 = await deps.state.read(runId);
+  const capabilityFailures = Object.values(run10.tasks).filter(
     (t) => t.status === "failed" && t.failure_class === "capability-budget"
   ).length;
   const verdict = evaluate2(
-    { cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run11.tasks).length },
+    { cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run10.tasks).length },
     deps.config
   );
   return verdict.tripped ? verdict : null;
 }
 
 // src/orchestrator/next.ts
-function depsSatisfied2(run11, task) {
-  return task.depends_on.every((d) => run11.tasks[d]?.status === "done");
+function depsSatisfied2(run10, task) {
+  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
 }
-function isUnsatisfiableDep(run11, depId) {
-  const dep = run11.tasks[depId];
+function isUnsatisfiableDep(run10, depId) {
+  const dep = run10.tasks[depId];
   return dep === void 0 || dep.status === "failed";
 }
-async function wantsDocs(deps, run11) {
-  if (run11.docs?.status === "done") {
+async function wantsDocs(deps, run10) {
+  if (run10.docs?.status === "done") {
     return false;
   }
-  if ((run11.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) {
+  if ((run10.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) {
     return false;
   }
-  if (run11.e2e_phase?.status === "failed") {
+  if (run10.e2e_phase?.status === "failed") {
     return false;
   }
-  if (run11.e2e_assessment?.status === "failed") {
+  if (run10.e2e_assessment?.status === "failed") {
     return false;
   }
-  if (run11.traceability?.status === "failed") {
+  if (run10.traceability?.status === "failed") {
     return false;
   }
-  if (decideFinalize(run11).run_status !== "completed") {
+  if (decideFinalize(run10).run_status !== "completed") {
     return false;
   }
   return deps.docsApplicable();
 }
-function wantsTraceability(run11) {
-  if (run11.debug) {
+function wantsTraceability(run10) {
+  if (run10.debug) {
     return false;
   }
-  if (run11.traceability?.status === "done") {
+  if (run10.traceability?.status === "done") {
     return false;
   }
-  if (run11.traceability?.status === "failed") {
-    if (run11.traceability.verdicts.length > 0) {
+  if (run10.traceability?.status === "failed") {
+    if (run10.traceability.verdicts.length > 0) {
       return false;
     }
-    if ((run11.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) {
+    if ((run10.traceability.attempts ?? 0) >= MAX_TRACE_ATTEMPTS) {
       return false;
     }
   }
-  if (run11.e2e_phase?.status === "failed") {
+  if (run10.e2e_phase?.status === "failed") {
     return false;
   }
-  if (run11.e2e_assessment?.status === "failed") {
+  if (run10.e2e_assessment?.status === "failed") {
     return false;
   }
-  return decideFinalize(run11).run_status === "completed";
+  return decideFinalize(run10).run_status === "completed";
 }
-function wantsE2e(run11) {
-  if (!run11.e2e) {
+function wantsE2e(run10) {
+  if (!run10.e2e) {
     return false;
   }
-  if (run11.e2e_phase?.status !== void 0) {
+  if (run10.e2e_phase?.status !== void 0) {
     return false;
   }
-  if (run11.e2e_assessment?.status === "failed") {
+  if (run10.e2e_assessment?.status === "failed") {
     return false;
   }
-  return decideFinalize(run11).run_status === "completed";
+  return decideFinalize(run10).run_status === "completed";
 }
-function wantsE2eAssessment(run11, allTerminal, needsE2e) {
-  if (!run11.e2e) {
+function wantsE2eAssessment(run10, allTerminal, needsE2e) {
+  if (!run10.e2e) {
     return false;
   }
-  if (run11.e2e_assessment?.status !== void 0) {
+  if (run10.e2e_assessment?.status !== void 0) {
     return false;
   }
   return !allTerminal || needsE2e;
 }
 async function nextTask(deps, runId) {
-  let run11 = await deps.state.read(runId);
-  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run11.ship_mode });
-  if (isTerminalRunStatus(run11.status)) {
-    return { ...ctx(), kind: "done", run_status: run11.status };
+  let run10 = await deps.state.read(runId);
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run10.ship_mode });
+  if (isTerminalRunStatus(run10.status)) {
+    return { ...ctx(), kind: "done", run_status: run10.status };
   }
-  const allTerminal = Object.values(run11.tasks).every((t) => isTerminalTaskStatus(t.status));
-  const needsE2e = allTerminal && wantsE2e(run11);
-  const needsAssessment = wantsE2eAssessment(run11, allTerminal, needsE2e);
-  const needsTrace = allTerminal && !needsE2e && wantsTraceability(run11);
-  const needsDocs = allTerminal && !needsE2e && !needsTrace && await wantsDocs(deps, run11);
+  const allTerminal = Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status));
+  const needsE2e = allTerminal && wantsE2e(run10);
+  const needsAssessment = wantsE2eAssessment(run10, allTerminal, needsE2e);
+  const needsTrace = allTerminal && !needsE2e && wantsTraceability(run10);
+  const needsDocs = allTerminal && !needsE2e && !needsTrace && await wantsDocs(deps, run10);
   if (allTerminal && !needsE2e && !needsTrace && !needsDocs) {
-    if (run11.status === "paused" || run11.status === "suspended") {
+    if (run10.status === "paused" || run10.status === "suspended") {
       const patch = clearCheckpoint();
       await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
     }
     return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run11.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.ignore_quota);
   if (stop !== null) {
     return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
-  if (run11.status === "paused" || run11.status === "suspended") {
+  if (run10.status === "paused" || run10.status === "suspended") {
     const patch = clearCheckpoint();
-    run11 = await deps.state.update(runId, (s) => ({
+    run10 = await deps.state.update(runId, (s) => ({
       ...s,
       status: patch.status,
       quota: patch.quota
@@ -15009,15 +15010,15 @@ async function nextTask(deps, runId) {
   }
   const cascadeFailed = [];
   for (; ; ) {
-    run11 = await deps.state.read(runId);
-    const blocked = Object.values(run11.tasks).filter(
-      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run11, d))
+    run10 = await deps.state.read(runId);
+    const blocked = Object.values(run10.tasks).filter(
+      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run10, d))
     );
     if (blocked.length === 0) {
       break;
     }
     for (const t of blocked) {
-      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run11, d));
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run10, d));
       if (unsatisfied === void 0) {
         throw new Error(
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
@@ -15033,7 +15034,7 @@ async function nextTask(deps, runId) {
       cascadeFailed.push(t.task_id);
     }
   }
-  const tasks = Object.values(run11.tasks);
+  const tasks = Object.values(run10.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
@@ -15043,10 +15044,10 @@ async function nextTask(deps, runId) {
       await failTask(deps, runId, t.task_id, "capability-budget", `circuit breaker tripped: ${breaker.reason}`);
       cascadeFailed.push(t.task_id);
     }
-    run11 = await deps.state.read(runId);
+    run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run11, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run10, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -15063,7 +15064,7 @@ async function nextTask(deps, runId) {
       );
       cascadeFailed.push(t.task_id);
     }
-    run11 = await deps.state.read(runId);
+    run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   return {
@@ -15136,9 +15137,9 @@ function e2eBranchName(runId) {
 function adjudicateBranchName(runId) {
   return `e2e-adjudicate-${runId}`;
 }
-function resolveBootConfig(cfg, run11) {
-  const startCommand = cfg.startCommand ?? run11.e2e_assessment?.resolved?.start_command;
-  const baseURL = cfg.baseURL ?? run11.e2e_assessment?.resolved?.base_url;
+function resolveBootConfig(cfg, run10) {
+  const startCommand = cfg.startCommand ?? run10.e2e_assessment?.resolved?.start_command;
+  const baseURL = cfg.baseURL ?? run10.e2e_assessment?.resolved?.base_url;
   return startCommand !== void 0 && baseURL !== void 0 ? { startCommand, baseURL } : null;
 }
 function e2eEnv(cfg, boot) {
@@ -15191,28 +15192,28 @@ function buildAuthorPrompt(args) {
   ].join("\n");
 }
 async function runE2eEmit(deps, runId) {
-  const run11 = await deps.state.read(runId);
+  const run10 = await deps.state.read(runId);
   const cfg = deps.config.e2e;
-  const boot = resolveBootConfig(cfg, run11);
+  const boot = resolveBootConfig(cfg, run10);
   if (boot === null) {
     const reason = "e2e phase has no boot config \u2014 the run-start assessment resolved none and no override is set; run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` then resume";
     await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
     log27.warn(`run '${runId}': ${reason}`);
     return { kind: "suspend", run_id: runId, reason };
   }
-  if (run11.e2e_phase === void 0) {
-    return prepareAuthorSpawn(deps, run11, runId, boot, cfg.testDir);
+  if (run10.e2e_phase === void 0) {
+    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
   }
-  if (run11.e2e_phase.status === void 0 && run11.e2e_phase.manifest.length === 0 && (run11.e2e_phase.author_attempts ?? 0) >= 1) {
-    return prepareAuthorSpawn(deps, run11, runId, boot, cfg.testDir);
+  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.manifest.length === 0 && (run10.e2e_phase.author_attempts ?? 0) >= 1) {
+    return prepareAuthorSpawn(deps, run10, runId, boot, cfg.testDir);
   }
-  if (run11.e2e_phase.status === void 0 && run11.e2e_phase.adjudication !== void 0) {
-    return prepareAdjudicatorSpawn(deps, run11, runId, boot);
+  if (run10.e2e_phase.status === void 0 && run10.e2e_phase.adjudication !== void 0) {
+    return prepareAdjudicatorSpawn(deps, run10, runId, boot);
   }
   return runSuiteAndDecide(deps, runId);
 }
-async function prepareAuthorSpawn(deps, run11, runId, boot, testDir) {
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const base = deps.config.git.baseBranch;
   const branch = e2eBranchName(runId);
   const worktree = e2eWorktreePath(deps.dataDir, runId);
@@ -15224,7 +15225,7 @@ async function prepareAuthorSpawn(deps, run11, runId, boot, testDir) {
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
     });
-  } else if ((run11.e2e_phase?.author_attempts ?? 0) >= 1) {
+  } else if ((run10.e2e_phase?.author_attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
@@ -15286,12 +15287,12 @@ function buildAdjudicationPrompt(args) {
   );
   return lines.join("\n");
 }
-async function prepareAdjudicatorSpawn(deps, run11, runId, boot) {
-  const cursor = run11.e2e_phase?.adjudication;
+async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
+  const cursor = run10.e2e_phase?.adjudication;
   if (cursor === void 0) {
     throw new Error(`run '${runId}': prepareAdjudicatorSpawn called with no adjudication cursor`);
   }
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const branch = adjudicateBranchName(runId);
   const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
@@ -15333,8 +15334,8 @@ function errText(err) {
   return err instanceof Error ? err.message : String(err);
 }
 async function retryAuthorOrFail(deps, runId, worktree, reason) {
-  const run11 = await deps.state.read(runId);
-  const attempts = (run11.e2e_phase?.author_attempts ?? 0) + 1;
+  const run10 = await deps.state.read(runId);
+  const attempts = (run10.e2e_phase?.author_attempts ?? 0) + 1;
   if (attempts >= MAX_AUTHOR_ATTEMPTS) {
     return failWithCleanup(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
   }
@@ -15374,10 +15375,10 @@ async function runE2eRecord(deps, runId, results) {
     }
   }
   const cfg = deps.config.e2e;
-  const run11 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const critical = results.manifest.filter((e) => e.kind === "critical");
-  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run11.tasks));
+  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter((id) => !(id in run10.tasks));
   if (unknownTaskIds.length > 0) {
     const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
     return failWithCleanup(deps, runId, worktree, reason);
@@ -15404,7 +15405,7 @@ async function runE2eRecord(deps, runId, results) {
       const reason = `e2e-author: committed file(s) under '${testDirPrefix}' missing from the manifest \u2014 an undeclared spec can never be joined back to a task, refusing to merge: ` + undeclared.join(", ");
       return failWithCleanup(deps, runId, worktree, reason);
     }
-    const boot = resolveBootConfig(cfg, run11);
+    const boot = resolveBootConfig(cfg, run10);
     if (boot === null) {
       return failWithCleanup(
         deps,
@@ -15440,8 +15441,8 @@ async function failAdjudication(deps, runId, worktree, reason) {
   return { kind: "failed", run_id: runId, reason };
 }
 async function retryAdjudicatorOrFail(deps, runId, worktree, reason) {
-  const run11 = await deps.state.read(runId);
-  const cursor = run11.e2e_phase?.adjudication;
+  const run10 = await deps.state.read(runId);
+  const cursor = run10.e2e_phase?.adjudication;
   const attempts = (cursor?.attempts ?? 0) + 1;
   if (attempts >= MAX_AUTHOR_ATTEMPTS) {
     return failAdjudication(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
@@ -15461,9 +15462,9 @@ async function retryAdjudicatorOrFail(deps, runId, worktree, reason) {
   );
   return runE2eEmit(deps, runId);
 }
-async function recordAdjudication(deps, runId, run11, results) {
+async function recordAdjudication(deps, runId, run10, results) {
   const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
-  const phase = nonNull(run11.e2e_phase);
+  const phase = nonNull(run10.e2e_phase);
   const cursor = nonNull(phase.adjudication);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "error") {
@@ -15496,7 +15497,7 @@ async function recordAdjudication(deps, runId, run11, results) {
     const reason = "e2e adjudication: regression verdict \u2014 " + regressions2.map((v) => `${v.spec_path}: ${v.reason}`).join("; ");
     return failAdjudication(deps, runId, worktree, reason);
   }
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const changed = await deps.git.diffNames(staging, adjudicateBranchName(runId), {
     cwd: worktree
   });
@@ -15514,7 +15515,7 @@ async function recordAdjudication(deps, runId, run11, results) {
       `e2e-adjudicator: spec(s) not rewritten: ${unrewritten.map((s) => s.spec_path).join(", ")}`
     );
   }
-  const boot = resolveBootConfig(deps.config.e2e, run11);
+  const boot = resolveBootConfig(deps.config.e2e, run10);
   if (boot === null) {
     return failAdjudication(
       deps,
@@ -15702,22 +15703,22 @@ function unattributableToolingFailure(r) {
   return !r.ok && r.specs.every((s) => s.status !== "failed");
 }
 async function runSuiteAndDecide(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  const manifest = run11.e2e_phase?.manifest ?? [];
-  const attempts = (run11.e2e_phase?.attempts ?? 0) + 1;
+  const run10 = await deps.state.read(runId);
+  const manifest = run10.e2e_phase?.manifest ?? [];
+  const attempts = (run10.e2e_phase?.attempts ?? 0) + 1;
   const firstPass = attempts === 1;
   const cfg = deps.config.e2e;
   if (manifest.length === 0) {
     await markDone(deps, runId, { attempts });
     return { kind: "done", run_id: runId };
   }
-  const boot = resolveBootConfig(cfg, run11);
+  const boot = resolveBootConfig(cfg, run10);
   if (boot === null) {
     const reason = "e2e suite has no boot config \u2014 the run-start assessment resolved none and no override is set";
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
@@ -15780,8 +15781,8 @@ async function runSuiteAndDecide(deps, runId) {
   const unmappableCritical = criticalSpecFailures.filter((s) => findEntry(manifest, s) === void 0);
   const stillPass = [];
   if (unmappableCritical.length > 0) {
-    const affected = run11.e2e_assessment?.affected_specs ?? [];
-    const counts = run11.e2e_phase?.adjudication_counts ?? {};
+    const affected = run10.e2e_assessment?.affected_specs ?? [];
+    const counts = run10.e2e_phase?.adjudication_counts ?? {};
     const readjudicated = [];
     const cursorSpecs = [];
     for (const s of unmappableCritical) {
@@ -15833,7 +15834,7 @@ async function runSuiteAndDecide(deps, runId) {
     return { kind: "done", run_id: runId };
   }
   const taskIds = [...new Set(mappable.flatMap((m) => m.entry.task_ids))];
-  const reopenCounts = { ...run11.e2e_phase?.reopen_counts ?? {} };
+  const reopenCounts = { ...run10.e2e_phase?.reopen_counts ?? {} };
   const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap);
   if (capExhausted.length > 0) {
     const reason = `e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(", ")}`;
@@ -15923,19 +15924,19 @@ function buildAssessorPrompt(args) {
   ].join("\n");
 }
 async function runAssessmentEmit(deps, runId) {
-  const run11 = await deps.state.read(runId);
-  if (run11.e2e_assessment?.status === "done") {
-    const warning = run11.e2e_assessment.warning;
+  const run10 = await deps.state.read(runId);
+  if (run10.e2e_assessment?.status === "done") {
+    const warning = run10.e2e_assessment.warning;
     return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
   }
-  if (run11.e2e_assessment?.status === "failed") {
+  if (run10.e2e_assessment?.status === "failed") {
     return {
       kind: "failed",
       run_id: runId,
-      reason: run11.e2e_assessment.reason ?? "e2e assessment failed"
+      reason: run10.e2e_assessment.reason ?? "e2e assessment failed"
     };
   }
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const branch = assessBranchName(runId);
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
@@ -15945,7 +15946,7 @@ async function runAssessmentEmit(deps, runId) {
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
     });
-  } else if ((run11.e2e_assessment?.attempts ?? 0) >= 1) {
+  } else if ((run10.e2e_assessment?.attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   return {
@@ -15970,8 +15971,8 @@ function defaultAssessment() {
 async function failAssessment(deps, runId, reason, attempts) {
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
   await deps.git.worktreeRemove([worktree, "--force"]);
-  const run11 = await deps.state.read(runId);
-  const open2 = Object.values(run11.tasks).filter((t) => !isTerminalTaskStatus(t.status));
+  const run10 = await deps.state.read(runId);
+  const open2 = Object.values(run10.tasks).filter((t) => !isTerminalTaskStatus(t.status));
   for (const t of open2) {
     await failTask(
       { state: deps.state },
@@ -16008,8 +16009,8 @@ async function retryOrFail(deps, runId, reason, attempts) {
 }
 async function runAssessmentRecord(deps, runId, results) {
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
-  const run11 = await deps.state.read(runId);
-  const attempts = (run11.e2e_assessment?.attempts ?? 0) + 1;
+  const run10 = await deps.state.read(runId);
+  const attempts = (run10.e2e_assessment?.attempts ?? 0) + 1;
   if (results.status === "boot-impossible" || results.status === "machinery-impossible") {
     const reason = results.reason ?? (results.status === "boot-impossible" ? "the app cannot be booted for e2e testing (assessor gave no detail)" : "no meaningful e2e coverage is achievable in this repo (assessor gave no detail)");
     return failAssessment(deps, runId, reason, attempts);
@@ -16018,7 +16019,7 @@ async function runAssessmentRecord(deps, runId, results) {
     return retryOrFail(deps, runId, results.reason ?? "assessor crashed or was skipped", attempts);
   }
   const unknownTaskIds = [...new Set(results.affected_specs.flatMap((e) => e.task_ids))].filter(
-    (id) => !(id in run11.tasks)
+    (id) => !(id in run10.tasks)
   );
   if (unknownTaskIds.length > 0) {
     return retryOrFail(
@@ -16028,7 +16029,7 @@ async function runAssessmentRecord(deps, runId, results) {
       attempts
     );
   }
-  const staging = resolveStagingBranch(runId, run11.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const testDirPrefix = `${deps.config.e2e.testDir}/`;
   const changed = await deps.git.diffNames(staging, assessBranchName(runId), { cwd: worktree });
   const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && f !== "playwright.config.ts");
@@ -16089,9 +16090,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run11 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run11.spec.repo, run11.spec.spec_id);
-  const { owner, repo } = splitRepo(run11.spec.repo);
+  const run10 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
+  const { owner, repo } = splitRepo(run10.spec.repo);
   return {
     config,
     spec,
@@ -16106,9 +16107,9 @@ async function loadCliDeps(opts) {
     // The explicit `--ship-mode` flag overrides; otherwise honor the value
     // persisted on the run at create (manual/resume `drive`/`finalize` omit the
     // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
-    shipMode: opts.shipMode ?? run11.ship_mode,
+    shipMode: opts.shipMode ?? run10.ship_mode,
     state,
-    run: run11
+    run: run10
   };
 }
 
@@ -16166,14 +16167,14 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     ...opts.e2e === true ? { e2e: true } : {},
     ...opts.debug === true ? { debug: true } : {}
   });
-  const run11 = await state.update(opts.runId, (s) => ({
+  const run10 = await state.update(opts.runId, (s) => ({
     ...s,
     tasks: seeded,
     // S11: the launch touch — every run costs at least one human action, so a
     // clean lights-out run scores exactly 1.0 on the derived touch metric.
     human_touches: [{ kind: "launch", at: s.started_at }]
   }));
-  return run11;
+  return run10;
 }
 async function createRun(state, specStore, opts) {
   return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
@@ -16207,11 +16208,11 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         const supersededId = existing.run_id;
         await supersedeRun(state, existing, stagingDeps);
         const created = await createRunFromManifest(state, specStore, request, opts, stagingDeps);
-        const run11 = await state.update(created.run_id, (s) => ({
+        const run10 = await state.update(created.run_id, (s) => ({
           ...s,
           human_touches: [...s.human_touches ?? [], { kind: "conflict", at: s.started_at }]
         }));
-        return { kind: "superseded", run: run11, supersededId };
+        return { kind: "superseded", run: run10, supersededId };
       }
       return { kind: "exists", existing };
     }
@@ -16222,17 +16223,17 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}) {
-  const run11 = await state.read(runId);
-  if (isTerminalRunStatus(run11.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
+  const run10 = await state.read(runId);
+  if (isTerminalRunStatus(run10.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run10.status}); nothing to resume`);
   }
-  if (run11.debug) {
-    return { kind: "debug-resume", run_id: runId, run: run11 };
+  if (run10.debug) {
+    return { kind: "debug-resume", run_id: runId, run: run10 };
   }
-  const plan = planResume(run11, reading, config, nowEpochSec);
+  const plan = planResume(run10, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run11 };
+      return { kind: "resumed", run: run10 };
     case "resume": {
       const at2 = new Date(nowEpochSec * 1e3).toISOString();
       const updated = await state.update(runId, (s) => ({
@@ -16246,12 +16247,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
     case "pause": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run11 };
+        return { kind: "resumed", run: run10 };
       }
       const base = {
         kind: "pause",
         run_id: runId,
-        status: run11.status,
+        status: run10.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -16621,15 +16622,15 @@ async function runCreate(argv, overrides = {}) {
     );
     return EXIT.CONFLICT;
   }
-  const park = async (run11) => {
-    const parked = await state.update(run11.run_id, (s) => ({
+  const park = async (run10) => {
+    const parked = await state.update(run10.run_id, (s) => ({
       ...s,
       status: "suspended"
     }));
     return {
       run: parked,
       spec_approval: {
-        spec_path: join23(specDir(dataDir, repoSlug, run11.spec.spec_id), "spec.md"),
+        spec_path: join23(specDir(dataDir, repoSlug, run10.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -16697,10 +16698,10 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run11, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
+  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run11,
+    run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     failure_comment_posted: failureCommentPosted
@@ -16815,14 +16816,14 @@ async function runCancel(argv, overrides = {}) {
     ...overrides.cwd !== void 0 ? { cwd: overrides.cwd } : {}
   };
   const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
-  const run11 = await state.finalize(runId, "failed");
+  const run10 = await state.finalize(runId, "failed");
   const cleanup = args.flag("cleanup") === true;
-  const branch = resolveStagingBranch(run11.run_id, run11.staging_branch);
+  const branch = resolveStagingBranch(run10.run_id, run10.staging_branch);
   let cleanedUp = false;
   let cleanupError;
   if (cleanup) {
     const ghClient = overrides.ghClient ?? new DefaultGhClient();
-    const { owner, repo } = splitRepoSlug(run11.spec.repo);
+    const { owner, repo } = splitRepoSlug(run10.spec.repo);
     try {
       await ghClient.deleteProtection(owner, repo, branch);
       await ghClient.deleteRemoteBranch(owner, repo, branch);
@@ -16833,17 +16834,17 @@ async function runCancel(argv, overrides = {}) {
   }
   emitJson({
     kind: "cancelled",
-    run: run11,
+    run: run10,
     cleaned_up: cleanedUp,
     ...cleanupError !== void 0 ? { cleanup_error: cleanupError } : {}
   });
   if (cleanupError !== void 0) {
     emitError(
-      `run ${run11.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging branch '${branch}': ${cleanupError}. The branch may still exist \u2014 re-run \`factory run cancel --run ${run11.run_id} --cleanup\` to retry the teardown.`
+      `run ${run10.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging branch '${branch}': ${cleanupError}. The branch may still exist \u2014 re-run \`factory run cancel --run ${run10.run_id} --cleanup\` to retry the teardown.`
     );
   } else {
     emitError(
-      `run ${run11.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
+      `run ${run10.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
     );
   }
   return EXIT.OK;
@@ -17419,9 +17420,9 @@ async function debugSeed(deps, runId) {
       ...session.sessionId !== void 0 ? { ownerSession: session.sessionId } : {}
     });
   } else {
-    const run11 = await deps.state.read(runId);
+    const run10 = await deps.state.read(runId);
     const request = await deps.specStore.read(repo, session.specId);
-    const merged = appendTasksFromSpec(run11.tasks, request, session.pass);
+    const merged = appendTasksFromSpec(run10.tasks, request, session.pass);
     await deps.state.update(runId, (s) => ({ ...s, tasks: merged }));
   }
   await writeSession(deps.dataDir, { ...session, pass: session.pass + 1 });
@@ -17436,10 +17437,10 @@ async function debugFinalize(deps, runId, shipMode) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run11, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(cliDeps, runId);
+  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(cliDeps, runId);
   return {
     kind: "finalized",
-    run: run11,
+    run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     failure_comment_posted: failureCommentPosted
@@ -17590,13 +17591,13 @@ Usage:
   factory state --summary       Print a compact human summary instead
 
 Exit OK with {"current": null} when there is no current run.`;
-function summarize2(run11) {
+function summarize2(run10) {
   const lines = [
-    `run ${run11.run_id}  status=${run11.status}  execution_mode=`,
-    `spec ${run11.spec.repo}#${run11.spec.issue_number} (${run11.spec.spec_id})`,
-    `tasks (${Object.keys(run11.tasks).length}):`
+    `run ${run10.run_id}  status=${run10.status}  execution_mode=`,
+    `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
+    `tasks (${Object.keys(run10.tasks).length}):`
   ];
-  for (const t of Object.values(run11.tasks)) {
+  for (const t of Object.values(run10.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
     if (t.escalation_rung > 0) {
       bits.push(`rung=${t.escalation_rung}`);
@@ -18168,224 +18169,18 @@ var scaffoldCommand = {
   run: withUsageGuard("scaffold", run5)
 };
 
-// src/cli/subcommands/recover.ts
-var RECOVER_HELP = `factory recover \u2014 one self-routing repair verb for a stalled run
-
-Usage:
-  factory recover [--run <id>] [--dry-run]
-  factory recover --auto [--run <id>]
-
-Routes (resolved in order from the run's state + scan):
-  1. no run                     \u2192 {kind:"nothing"}
-  2. completed/superseded       \u2192 {kind:"nothing"} (+ recheck-rollup hint when armed)
-  3. paused/suspended, clean    \u2192 resume (clears the park; envelope names what the
-                                  run was awaiting: quota|e2e|traceability|docs|
-                                  spec-approval)
-  4. resettable work            \u2192 rescue apply + resume; reconcile:true flags git
-                                  drift (recorded branch missing / staging base gone)
-  5. dead-ends / e2e only       \u2192 {kind:"page"} with per-task rescue-apply hints
-
-  --run      The run to recover (defaults to runs/current).
-  --dry-run  Emit the scan + the chosen route; write nothing.
-  --auto     The runner's bounded self-heal (ONE cycle per run, after a failed
-             finalize): reset the auto-safe set (stuck + recoverable tasks whose
-             deps are clean post-reset) \u2192 {kind:"recovered"}, or page + post one
-             deduped PRD comment \u2192 {kind:"page"}. Never touches dead-ends, e2e
-             verdicts, or rollups. Both envelopes exit 0.`;
-function deriveAwaiting(run11) {
-  if (run11.quota !== void 0) {
-    return "quota";
-  }
-  if (run11.e2e_assessment?.status === "failed" || run11.e2e_phase?.status === "failed") {
-    return "e2e";
-  }
-  if (run11.traceability?.status === "failed") {
-    return "traceability";
-  }
-  if (run11.docs?.status === "failed") {
-    return "docs";
-  }
-  const untouched = Object.values(run11.tasks).every((t) => t.status === "pending" && t.started_at === void 0);
-  return untouched ? "spec-approval" : "unknown";
-}
-function chooseRoute(run11, scan) {
-  if (run11.status === "completed" || run11.status === "superseded") {
-    return "nothing";
-  }
-  if ((run11.status === "paused" || run11.status === "suspended") && !scan.needs_rescue) {
-    return "resume";
-  }
-  if (scan.resettable.length > 0) {
-    return "rescue";
-  }
-  if (!scan.needs_rescue && scan.dead_ends.length === 0) {
-    return "nothing";
-  }
-  return "page";
-}
-function pageHints(runId, scan) {
-  const hints = scan.dead_ends.map((id) => `factory rescue apply --run ${runId} --task ${id} --include-dead-ends`);
-  if (scan.e2e_failed || scan.e2e_assessment_failed) {
-    hints.push(`factory rescue apply --run ${runId} --reset-e2e`);
-  }
-  if (scan.traceability_failed) {
-    hints.push(`factory rescue apply --run ${runId} --reset-traceability`);
-  }
-  return hints;
-}
-async function resumeRun(state, runId, dataDir, opts = {}) {
-  const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch(), opts);
-}
-async function run6(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["auto", "dry-run"] });
-  if (args.flag("help") === true) {
-    emitLine(RECOVER_HELP);
-    return EXIT.OK;
-  }
-  const auto = args.flag("auto") === true;
-  const dryRun = args.flag("dry-run") === true;
-  if (auto && dryRun) {
-    throw new UsageError("recover: --auto and --dry-run are mutually exclusive");
-  }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const explicit = args.flag("run");
-  const current = typeof explicit === "string" && explicit.length > 0 ? await state.read(explicit) : await readCurrentForCwd(state, overrides);
-  if (current === null) {
-    emitJson({ kind: "nothing", reason: "no-run" });
-    return EXIT.OK;
-  }
-  const runId = current.run_id;
-  const scan = scanRun(current);
-  if (auto) {
-    return runAuto(state, current, scan, overrides);
-  }
-  const route = chooseRoute(current, scan);
-  if (dryRun) {
-    const work = await assessWork(current, probeFrom(overrides));
-    emitJson({ ...scan, work, route });
-    return EXIT.OK;
-  }
-  switch (route) {
-    case "nothing": {
-      const hint = scan.rollup_pending ? {
-        hint: `rollup armed but not landed \u2014 factory rescue apply --run ${runId} --recheck-rollup once merged`
-      } : {};
-      emitJson({ kind: "nothing", run_id: runId, run_status: current.status, ...hint });
-      return EXIT.OK;
-    }
-    case "resume": {
-      requireAutonomousMode();
-      const awaiting = deriveAwaiting(current);
-      const envelope = await resumeRun(state, runId, dataDir);
-      if (envelope.kind === "resumed" && envelope.cleared === true) {
-        await emitMetric(dataDir, runId, "human_touch", { kind: "resume" });
-      }
-      emitJson({ ...envelope, awaiting });
-      return EXIT.OK;
-    }
-    case "rescue": {
-      requireAutonomousMode();
-      const applied = await applyRescue(state, runId, { at: overrides.now?.() ?? nowIso() });
-      if (applied.touched) {
-        await emitMetric(dataDir, runId, "human_touch", { kind: "recover" });
-      }
-      const after = await state.read(runId);
-      const resume = after.status === "paused" || after.status === "suspended" ? await resumeRun(state, runId, dataDir, { touch: false }) : void 0;
-      const work = await assessWork(current, probeFrom(overrides));
-      const reconcile = !work.base_resolved || work.tasks.some((t) => !t.branch_exists);
-      emitJson({
-        kind: "rescued",
-        ...applied,
-        ...resume?.kind === "resumed" ? { run_status: resume.run.status } : {},
-        reconcile,
-        ...resume !== void 0 ? { resume } : {}
-      });
-      return EXIT.OK;
-    }
-    case "page": {
-      emitJson({
-        kind: "page",
-        run_id: runId,
-        run_status: current.status,
-        reason: scan.summary,
-        dead_ends: scan.dead_ends,
-        hints: pageHints(runId, scan)
-      });
-      return EXIT.OK;
-    }
-  }
-}
-async function runAuto(state, current, scan, overrides) {
-  requireAutonomousMode();
-  const at2 = overrides.now?.() ?? nowIso();
-  const applied = await applyRescue(state, current.run_id, { auto: { at: at2 } });
-  if (applied.auto_blocked === void 0) {
-    emitJson({
-      kind: "recovered",
-      run_id: current.run_id,
-      run_status: applied.run_status,
-      reset: applied.reset,
-      reopened: applied.reopened,
-      attempts: applied.self_heal_attempts
-    });
-    return EXIT.OK;
-  }
-  const reason = applied.auto_blocked === "attempts" ? "self-heal already ran once for this run \u2014 human triage required" : "nothing auto-recoverable (dead-ends, blocked dependencies, or no resettable work) \u2014 human triage required";
-  const gh = overrides.ghClient ?? new DefaultGhClient();
-  const marker = selfHealCommentMarker(current.run_id);
-  const target = { repo: current.spec.repo, number: current.spec.issue_number };
-  const existing = await gh.listIssueComments(target);
-  let commented = false;
-  if (!existing.some((body) => body.includes(marker))) {
-    const lines = [marker, `Factory self-heal for run \`${current.run_id}\` did not proceed \u2014 ${reason}.`];
-    if (scan.dead_ends.length > 0) {
-      lines.push("", "Dead-end task(s) needing a human fix:");
-      for (const id of scan.dead_ends) {
-        lines.push(`- \`${id}\``);
-      }
-    }
-    lines.push("", `Triage with \`factory recover --run ${current.run_id} --dry-run\`.`);
-    await gh.issueComment({ ...target, body: lines.join("\n") });
-    commented = true;
-  }
-  emitJson({
-    kind: "page",
-    run_id: current.run_id,
-    run_status: current.status,
-    reason,
-    dead_ends: scan.dead_ends,
-    hints: pageHints(current.run_id, scan),
-    commented
-  });
-  return EXIT.OK;
-}
-function probeFrom(overrides) {
-  const git = overrides.gitClient ?? new DefaultGitClient();
-  return {
-    refExists: (ref) => git.refExists(ref),
-    commitsAhead: (base, branch) => git.commitsAhead(base, branch)
-  };
-}
-async function runRecover(argv, overrides = {}) {
-  return run6(argv, overrides);
-}
-var recoverCommand = {
-  describe: "Self-routing repair: resume, rescue, or page \u2014 whatever the run needs",
-  run: withUsageGuard("recover", (argv) => run6(argv))
-};
-
 // src/cli/subcommands/rescue.ts
-var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
+var RESCUE_HELP = `factory rescue \u2014 repair plumbing behind /factory:resume
 
 Usage:
   factory rescue scan  [--run <id>]
   factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
+  factory rescue auto  [--run <id>]
 
 Actions:
-  scan    Classify every task (read-only); report what a re-drive would do.
-  apply   Reset the resettable tasks to pending; reopen a terminal run.`;
+  scan    Classify every task (read-only); report the route + the proposed repair plan.
+  apply   Reset the resettable tasks to pending; reopen a terminal run.
+  auto    The runner's bounded self-heal (ONE cycle per run, after a failed finalize).`;
 var SCAN_HELP = `factory rescue scan \u2014 classify a stalled run (read-only)
 
 Usage:
@@ -18393,10 +18188,15 @@ Usage:
 
   --run   The run to scan (defaults to runs/current).
 
-Alias of \`factory recover --dry-run\` (S10). Emits ONE JSON document: the
-RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
-traceability_failed, rollup_pending, would_deadlock, summary, per-task lines) + the recoverable-work
-survey (\`work\`) + the recover \`route\`. Writes nothing.`;
+Emits ONE JSON document \u2014 the proposed repair plan /factory:resume renders:
+the RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
+traceability_failed, rollup_pending, would_deadlock, summary, per-task lines)
++ the recoverable-work survey (\`work\`) + the chosen \`route\`
+(nothing | resume | repair) + \`reconcile\` (git drift: recorded branch missing /
+staging base gone \u2192 spawn rescue-reconciler) + \`hints\` (one exact
+\`rescue apply\` command per proposable repair) + \`awaiting\` (what a parked run
+waits on: quota|e2e|traceability|docs|spec-approval). Writes nothing. A missing
+run is a routed {kind:"nothing"} answer, not a usage error \u2014 safe to fire blind.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
@@ -18433,6 +18233,72 @@ armed-not-landed rollup). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
+var AUTO_HELP = `factory rescue auto \u2014 the runner's bounded self-heal (ONE cycle per run)
+
+Usage:
+  factory rescue auto [--run <id>]
+
+  --run   The run to self-heal (defaults to runs/current).
+
+Fired by the runner ONCE after a failed finalize: resets the auto-safe set
+(stuck + recoverable tasks whose deps are clean post-reset) \u2192 {kind:"recovered"},
+or pages + posts one deduped comment on the originating PRD \u2192 {kind:"page"}.
+Never touches dead-ends, e2e verdicts, or rollups (each needs a human assertion
+the cause is fixed). Both envelopes exit 0.`;
+function deriveAwaiting(run10) {
+  if (run10.quota !== void 0) {
+    return "quota";
+  }
+  if (run10.e2e_assessment?.status === "failed" || run10.e2e_phase?.status === "failed") {
+    return "e2e";
+  }
+  if (run10.traceability?.status === "failed") {
+    return "traceability";
+  }
+  if (run10.docs?.status === "failed") {
+    return "docs";
+  }
+  const untouched = Object.values(run10.tasks).every((t) => t.status === "pending" && t.started_at === void 0);
+  return untouched ? "spec-approval" : "unknown";
+}
+function chooseRoute(run10, scan) {
+  if (run10.status === "completed" || run10.status === "superseded") {
+    return "nothing";
+  }
+  if (scan.needs_rescue || scan.dead_ends.length > 0) {
+    return "repair";
+  }
+  if (run10.status === "failed") {
+    return "nothing";
+  }
+  return "resume";
+}
+function repairHints(runId, scan) {
+  const hints = [];
+  if (scan.resettable.length > 0) {
+    hints.push(`factory rescue apply --run ${runId}`);
+  }
+  for (const id of scan.dead_ends) {
+    hints.push(`factory rescue apply --run ${runId} --task ${id} --include-dead-ends`);
+  }
+  if (scan.e2e_failed || scan.e2e_assessment_failed) {
+    hints.push(`factory rescue apply --run ${runId} --reset-e2e`);
+  }
+  if (scan.traceability_failed) {
+    hints.push(`factory rescue apply --run ${runId} --reset-traceability`);
+  }
+  if (scan.rollup_pending) {
+    hints.push(`factory rescue apply --run ${runId} --recheck-rollup`);
+  }
+  return hints;
+}
+function probeFrom(overrides) {
+  const git = overrides.gitClient ?? new DefaultGitClient();
+  return {
+    refExists: (ref) => git.refExists(ref),
+    commitsAhead: (base, branch) => git.commitsAhead(base, branch)
+  };
+}
 async function resolveRunId2(state, args, action, overrides) {
   const explicit = args.flag("run");
   if (typeof explicit === "string" && explicit.length > 0) {
@@ -18450,7 +18316,28 @@ async function runScan(argv, overrides = {}) {
     emitLine(SCAN_HELP);
     return EXIT.OK;
   }
-  return runRecover([...argv, "--dry-run"], overrides);
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const explicit = args.flag("run");
+  const current = typeof explicit === "string" && explicit.length > 0 ? await state.read(explicit) : await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    emitJson({ kind: "nothing", reason: "no-run", route: "nothing" });
+    return EXIT.OK;
+  }
+  const scan = scanRun(current);
+  const route = chooseRoute(current, scan);
+  const work = await assessWork(current, probeFrom(overrides));
+  const reconcile = !work.base_resolved || work.tasks.some((t) => !t.branch_exists);
+  const parked = current.status === "paused" || current.status === "suspended";
+  emitJson({
+    ...scan,
+    work,
+    route,
+    reconcile,
+    hints: repairHints(current.run_id, scan),
+    ...parked ? { awaiting: deriveAwaiting(current) } : {}
+  });
+  return EXIT.OK;
 }
 async function runApply(argv, overrides = {}) {
   const args = parseArgs(argv, {
@@ -18478,10 +18365,74 @@ async function runApply(argv, overrides = {}) {
   if (result.touched) {
     await emitMetric(dataDir, runId, "human_touch", { kind: "recover" });
   }
-  emitJson(result);
+  const after = await state.read(runId);
+  const resume = result.touched && (after.status === "paused" || after.status === "suspended") ? await resumeRun(state, runId, dataDir, { touch: false }) : void 0;
+  emitJson({
+    ...result,
+    ...resume?.kind === "resumed" ? { run_status: resume.run.status } : {},
+    ...resume !== void 0 ? { resume } : {}
+  });
   return EXIT.OK;
 }
-async function run7(argv) {
+async function resumeRun(state, runId, dataDir, opts = {}) {
+  const reading = await new StatuslineUsageSignal({ dataDir }).read();
+  return applyResume(state, runId, reading, loadConfig({ dataDir }), nowEpoch(), opts);
+}
+async function runAuto(argv, overrides = {}) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(AUTO_HELP);
+    return EXIT.OK;
+  }
+  requireAutonomousMode();
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId2(state, args, "auto", overrides);
+  const current = await state.read(runId);
+  const scan = scanRun(current);
+  const at2 = overrides.now?.() ?? nowIso();
+  const applied = await applyRescue(state, current.run_id, { auto: { at: at2 } });
+  if (applied.auto_blocked === void 0) {
+    emitJson({
+      kind: "recovered",
+      run_id: current.run_id,
+      run_status: applied.run_status,
+      reset: applied.reset,
+      reopened: applied.reopened,
+      attempts: applied.self_heal_attempts
+    });
+    return EXIT.OK;
+  }
+  const reason = applied.auto_blocked === "attempts" ? "self-heal already ran once for this run \u2014 human triage required" : "nothing auto-recoverable (dead-ends, blocked dependencies, or no resettable work) \u2014 human triage required";
+  const gh = overrides.ghClient ?? new DefaultGhClient();
+  const marker = selfHealCommentMarker(current.run_id);
+  const target = { repo: current.spec.repo, number: current.spec.issue_number };
+  const existing = await gh.listIssueComments(target);
+  let commented = false;
+  if (!existing.some((body) => body.includes(marker))) {
+    const lines = [marker, `Factory self-heal for run \`${current.run_id}\` did not proceed \u2014 ${reason}.`];
+    if (scan.dead_ends.length > 0) {
+      lines.push("", "Dead-end task(s) needing a human fix:");
+      for (const id of scan.dead_ends) {
+        lines.push(`- \`${id}\``);
+      }
+    }
+    lines.push("", `Triage with \`factory rescue scan --run ${current.run_id}\`.`);
+    await gh.issueComment({ ...target, body: lines.join("\n") });
+    commented = true;
+  }
+  emitJson({
+    kind: "page",
+    run_id: current.run_id,
+    run_status: current.status,
+    reason,
+    dead_ends: scan.dead_ends,
+    hints: repairHints(current.run_id, scan),
+    commented
+  });
+  return EXIT.OK;
+}
+async function run6(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RESCUE_HELP);
@@ -18493,13 +18444,15 @@ async function run7(argv) {
       return runScan(rest);
     case "apply":
       return runApply(rest);
+    case "auto":
+      return runAuto(rest);
     default:
-      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`);
+      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply | auto)`);
   }
 }
 var rescueCommand = {
-  describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
-  run: withUsageGuard("rescue", run7)
+  describe: "Repair plumbing behind /factory:resume: scan (propose), apply (execute approved), auto (self-heal)",
+  run: withUsageGuard("rescue", run6)
 };
 
 // src/cli/subcommands/score.ts
@@ -18516,12 +18469,12 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
-function touchMetricOf(run11) {
-  const touches = run11.human_touches?.length;
+function touchMetricOf(run10) {
+  const touches = run10.human_touches?.length;
   if (touches === void 0 || touches === 0) {
     return null;
   }
-  return (run11.status === "completed" ? 1 : 0) / touches;
+  return (run10.status === "completed" ? 1 : 0) / touches;
 }
 async function runFleet(state) {
   const all = await state.listRuns();
@@ -18587,7 +18540,7 @@ envelope's result_key verbatim; a stale/duplicate key rejects LOUD (re-invoke wi
   expects=reviews         \u2192 { "result_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
-async function run8(argv) {
+async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP5);
@@ -18607,7 +18560,7 @@ async function run8(argv) {
 }
 var driveCommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
-  run: withUsageGuard("next-action", run8)
+  run: withUsageGuard("next-action", run7)
 };
 
 // src/cli/subcommands/next.ts
@@ -18643,7 +18596,7 @@ function assertCurrentOwner(current, assertOwner) {
     );
   }
 }
-async function run9(argv) {
+async function run8(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP6);
@@ -18668,7 +18621,7 @@ async function run9(argv) {
 }
 var nextCommand = {
   describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
-  run: withUsageGuard("next-task", run9)
+  run: withUsageGuard("next-task", run8)
 };
 
 // src/cli/subcommands/statusline.ts
@@ -18710,24 +18663,24 @@ async function renderProgress(deps) {
     }
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const raw = await readFile18(join28(currentLinkPath(dataDir), STATE_FILE), "utf8");
-    const run11 = JSON.parse(raw);
-    if (typeof run11.run_id !== "string" || typeof run11.status !== "string") {
+    const run10 = JSON.parse(raw);
+    if (typeof run10.run_id !== "string" || typeof run10.status !== "string") {
       return "";
     }
-    if (run11.status === "completed" || run11.status === "failed" || run11.status === "superseded") {
-      const endedMs = typeof run11.ended_at === "string" ? Date.parse(run11.ended_at) : NaN;
+    if (run10.status === "completed" || run10.status === "failed" || run10.status === "superseded") {
+      const endedMs = typeof run10.ended_at === "string" ? Date.parse(run10.ended_at) : NaN;
       const nowSec = (deps.now ?? nowEpoch)();
       if (!Number.isFinite(endedMs) || nowSec - endedMs / 1e3 > TERMINAL_LINGER_SEC) {
         return "";
       }
     }
-    const tasks = Object.values(run11.tasks ?? {});
+    const tasks = Object.values(run10.tasks ?? {});
     const done = tasks.filter((t) => t?.status === "done").length;
     const inFlight = tasks.find(
       (t) => t?.status === "executing" || t?.status === "reviewing" || t?.status === "shipping"
     );
     const phase = typeof inFlight?.phase === "string" ? `${inFlight.phase} ` : "";
-    return ` [factory ${done}/${tasks.length} ${phase}${run11.run_id} ${run11.status}]`;
+    return ` [factory ${done}/${tasks.length} ${phase}${run10.run_id} ${run10.status}]`;
   } catch {
     return "";
   }
@@ -18766,8 +18719,8 @@ async function passthrough(payload, deps) {
     return "";
   }
   try {
-    const run11 = deps.exec ?? exec;
-    const result = await run11(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
+    const run10 = deps.exec ?? exec;
+    const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
       log31.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
@@ -19102,7 +19055,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 `);
   return EXIT.OK;
 }
-async function run10(argv) {
+async function run9(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
     emitLine(HELP8);
@@ -19129,7 +19082,7 @@ async function run10(argv) {
 }
 var autonomyCommand = {
   describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
-  run: withUsageGuard("autonomy", run10)
+  run: withUsageGuard("autonomy", run9)
 };
 
 // src/cli/main.ts
@@ -19147,7 +19100,6 @@ var cliRegistry = {
   resume: resumeCommand,
   run: runCommand,
   spec: specCommand,
-  recover: recoverCommand,
   rescue: rescueCommand,
   score: scoreCommand,
   state: stateCommand,

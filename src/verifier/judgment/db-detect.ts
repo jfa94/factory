@@ -1,5 +1,5 @@
 /**
- * Decision 50 — content-conditional DB-design review trigger.
+ * Decision 51 — content-conditional DB-design review trigger.
  *
  * `touchesDatabase` answers ONE question from ground truth: does the task diff
  * touch relational-schema files (migrations, SQL, ORM schema)? The answer decides

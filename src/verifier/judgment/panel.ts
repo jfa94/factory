@@ -9,7 +9,7 @@
  * RiskTier parameter at all: there is nowhere to branch on the tier, so two tasks
  * of different tiers necessarily get a deep-equal request.
  *
- * CONTENT-CONDITIONAL EXCEPTION (Decision 50): `dbApplicable` appends the
+ * CONTENT-CONDITIONAL EXCEPTION (Decision 51): `dbApplicable` appends the
  * `database-design-reviewer` specialist when the task diff touches migration/schema
  * files (db-detect.ts). This does NOT weaken risk-invariance: the trigger is a
  * deterministic fact about diff CONTENT (re-derivable from the worktree tip), not a
@@ -42,7 +42,7 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
     'systemic-failure-reviewer',
 ] as const
 
-/** The content-conditional schema specialist (Decision 50). */
+/** The content-conditional schema specialist (Decision 51). */
 export const DB_DESIGN_ROLE: SpawnRole = 'database-design-reviewer'
 
 /**
@@ -88,7 +88,7 @@ function promptRefFor(role: SpawnRole): string {
  *   quality-reviewer via `codex exec` (present) or report the absence verbatim.
  *   Omitted ⇒ no stamp (callers that predate the honesty wiring).
  * @param dbApplicable whether the task diff touches DB files (`touchesDatabase`) —
- *   true appends the `database-design-reviewer` specialist (Decision 50). Defaults
+ *   true appends the `database-design-reviewer` specialist (Decision 51). Defaults
  *   to false so pre-existing callers keep the exact four-lens floor.
  *
  * The output is validated through {@link parseSpawnRequest}; an empty/blank

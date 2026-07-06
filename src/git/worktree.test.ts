@@ -93,6 +93,16 @@ describe('D12 — idempotent checkout -B fallback (ported independently of the s
         await ensureOnStaging({gitClient: git, path: '/tmp/wt-5', branch: 'factory/run-1/t1'})
         expect(git.localBranches.get('factory/run-1/t1')).toBe('sha-staging-1')
     })
+
+    it('D8: cleans (reset --hard + clean) BEFORE checkout -B so a re-drive survives dirty tracked files', async () => {
+        const git = new FakeGitClient({remoteHeads: {staging: 'sha-staging-1'}})
+        await ensureOnStaging({gitClient: git, path: '/tmp/wt-6', branch: 'factory/run-1/t1'})
+        const resetIdx = git.calls.indexOf('reset --hard origin/staging')
+        const checkoutIdx = git.calls.indexOf('checkout -B factory/run-1/t1 origin/staging')
+        expect(resetIdx).toBeGreaterThanOrEqual(0)
+        expect(git.calls).toContain('clean -fd')
+        expect(resetIdx).toBeLessThan(checkoutIdx) // clean happens BEFORE the checkout
+    })
 })
 
 describe('resyncTaskBranchOntoStaging (Bug #1 — forward-merge staging into a BEHIND task branch)', () => {

@@ -570,7 +570,7 @@ describe('applyRescue', () => {
         expect(nonNull(run.tasks.d).e2e_feedback).toBe('checkout: expected order confirmation, got 500')
     })
 
-    describe('auto (the bounded self-heal path — `factory recover --auto`, S10 / Decision 48)', () => {
+    describe('auto (the bounded self-heal path — `factory rescue auto`, S10 / Decision 48)', () => {
         const AT = '2026-07-04T00:00:00.000Z'
 
         it('resets the EFFECTIVE set only, stamps self_heal in the same write, and reopens', async () => {

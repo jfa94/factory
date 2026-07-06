@@ -396,7 +396,7 @@ describe('applyRecordReviews record', () => {
         expect(stderr).toMatch(/unknown reviewer 'quality'/)
     })
 
-    // Decision 50 — the content-conditional roster: a probe whose diff touches a
+    // Decision 51 — the content-conditional roster: a probe whose diff touches a
     // migration file makes the database-design-reviewer an EXPECTED roster member.
     function dbProbe(): FakeGitProbe {
         return new FakeGitProbe({
@@ -409,7 +409,7 @@ describe('applyRecordReviews record', () => {
         })
     }
 
-    it('D50: a DB-touching diff makes the floor-only panel a SUBSET — specialist synthesized as error', async () => {
+    it('D51: a DB-touching diff makes the floor-only panel a SUBSET — specialist synthesized as error', async () => {
         const deps = makeDeps(dbProbe())
         const input: RecordReviewsInput = {reviews: fullPanel(), verifications: []}
 
@@ -422,7 +422,7 @@ describe('applyRecordReviews record', () => {
         expect(stderr).toMatch(/reviewer 'database-design-reviewer' missing/)
     })
 
-    it('D50: a DB-touching diff with the FULL floor+specialist all-approve panel passes the gate', async () => {
+    it('D51: a DB-touching diff with the FULL floor+specialist all-approve panel passes the gate', async () => {
         const deps = makeDeps(dbProbe())
         const input: RecordReviewsInput = {
             reviews: [...fullPanel(), approve('database-design-reviewer')],
@@ -435,7 +435,7 @@ describe('applyRecordReviews record', () => {
         expect(env.step).toEqual({done: false, phase: 'ship'})
     })
 
-    it('D50: an UNEXPECTED specialist on a non-DB diff is demoted to error (fail-closed)', async () => {
+    it('D51: an UNEXPECTED specialist on a non-DB diff is demoted to error (fail-closed)', async () => {
         const deps = makeDeps() // greenProbe: no DB files in the diff
         const input: RecordReviewsInput = {
             reviews: [...fullPanel(), approve('database-design-reviewer')],
