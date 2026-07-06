@@ -263,13 +263,13 @@ describe('applyRecordReviews record', () => {
     })
 
     /** Build a RecordDeps over the seeded run with a GREEN gate sweep. */
-    function makeDeps(): RecordDeps {
+    function makeDeps(probe: FakeGitProbe = greenProbe()): RecordDeps {
         return {
             config: defaultConfig(),
             spec: reviewsSpec(),
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
-            tools: makeFakeTools({git: greenProbe()}),
+            tools: makeFakeTools({git: probe}),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -394,6 +394,61 @@ describe('applyRecordReviews record', () => {
         expect(env.mergeGate.passed).toBe(false)
         expect(nonNull(env.reviewers.find((r) => r.reviewer === 'quality')).verdict).toBe('error')
         expect(stderr).toMatch(/unknown reviewer 'quality'/)
+    })
+
+    // Decision 51 — the content-conditional roster: a probe whose diff touches a
+    // migration file makes the database-design-reviewer an EXPECTED roster member.
+    function dbProbe(): FakeGitProbe {
+        return new FakeGitProbe({
+            refs: {'origin/staging-run-1': 'sha-base', HEAD: 'sha-head'},
+            changedFiles: ['supabase/migrations/0001_orders.sql'],
+            commits: [
+                commit({sha: 'c1', files: ['src/x.test.ts'], tagged: true}),
+                commit({sha: 'c2', files: ['src/x.ts'], tagged: true}),
+            ],
+        })
+    }
+
+    it('D51: a DB-touching diff makes the floor-only panel a SUBSET — specialist synthesized as error', async () => {
+        const deps = makeDeps(dbProbe())
+        const input: RecordReviewsInput = {reviews: fullPanel(), verifications: []}
+
+        const {result: env, stderr} = await captureWarnings(() =>
+            applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)
+        )
+
+        expect(env.mergeGate.passed).toBe(false)
+        expect(nonNull(env.reviewers.find((r) => r.reviewer === 'database-design-reviewer')).verdict).toBe('error')
+        expect(stderr).toMatch(/reviewer 'database-design-reviewer' missing/)
+    })
+
+    it('D51: a DB-touching diff with the FULL floor+specialist all-approve panel passes the gate', async () => {
+        const deps = makeDeps(dbProbe())
+        const input: RecordReviewsInput = {
+            reviews: [...fullPanel(), approve('database-design-reviewer')],
+            verifications: [],
+        }
+
+        const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)
+
+        expect(env.mergeGate.passed).toBe(true)
+        expect(env.step).toEqual({done: false, phase: 'ship'})
+    })
+
+    it('D51: an UNEXPECTED specialist on a non-DB diff is demoted to error (fail-closed)', async () => {
+        const deps = makeDeps() // greenProbe: no DB files in the diff
+        const input: RecordReviewsInput = {
+            reviews: [...fullPanel(), approve('database-design-reviewer')],
+            verifications: [],
+        }
+
+        const {result: env, stderr} = await captureWarnings(() =>
+            applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)
+        )
+
+        expect(env.mergeGate.passed).toBe(false)
+        expect(nonNull(env.reviewers.find((r) => r.reviewer === 'database-design-reviewer')).verdict).toBe('error')
+        expect(stderr).toMatch(/unknown reviewer 'database-design-reviewer'/)
     })
 
     it('advancing past a prior blocked rung clears the stale fix_findings record (D5)', async () => {

@@ -37,7 +37,8 @@ import {
     GateRunner,
     FsCoverageStore,
     buildPanelManifest,
-    PANEL_ROLES,
+    panelRolesFor,
+    touchesDatabase,
     resolveReviewModel,
     dialForRung,
     buildProducerContext,
@@ -339,9 +340,14 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             }
             const gate = await new GateRunner().run(gateCtx)
 
+            // Decision 51 — content-conditional DB specialist: derived from the diff
+            // (never stored); record.ts re-derives from the same worktree tip.
+            const dbApplicable = await touchesDatabase(deps.tools.git, gateCtx.baseRef, {cwd: worktree})
+            const expectedRoster = panelRolesFor(dbApplicable)
+
             // S5/C — resolve the cross-vendor slot ONCE per spawn decision. In block
             // mode an absent second vendor cannot pass the merge gate, so fail fast
-            // with an honest wait-retry INSTEAD of burning a 4-reviewer panel run.
+            // with an honest wait-retry INSTEAD of burning a full panel run.
             const panelSpawn = async (): Promise<PhaseResult> => {
                 const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
                 if (deps.config.review.requireCrossVendor === 'block' && crossVendor.status === 'absent') {
@@ -357,21 +363,25 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                         'verify',
                         resolveReviewModel(deps.config),
                         deps.config.review.maxTurnsDeep,
-                        crossVendor
+                        crossVendor,
+                        dbApplicable
                     )
                 )
             }
 
             // Fail-closed: re-spawn unless a FULL panel is on record. Guarding only the empty
-            // roster let a persisted all-approve SUBSET (<4 reviewers, e.g. from an unsanctioned
-            // write) derive a passing merge gate. Cardinality, NOT identity: `reviewer` is a bare
-            // string whose format isn't proven equal to the PANEL_ROLES values, so an identity
-            // predicate risks a permanent re-spawn loop — a count check catches the subset case
-            // (a subset has <4 entries) and is footgun-free. The sanctioned record path already
-            // runs enforcePanelRoster, so there's no known live trigger; this is defense-in-depth.
+            // roster let a persisted all-approve SUBSET (fewer reviewers than the expected
+            // roster, e.g. from an unsanctioned write) derive a passing merge gate. Cardinality,
+            // NOT identity: `reviewer` is a bare string whose format isn't proven equal to the
+            // roster values, so an identity predicate risks a permanent re-spawn loop — a count
+            // check catches the subset case and is footgun-free. The expected roster is the
+            // Decision 51 content-conditional one (floor + DB specialist when applicable),
+            // re-derived above from the same worktree tip record.ts derives from. The sanctioned
+            // record path already runs enforcePanelRoster, so there's no known live trigger;
+            // this is defense-in-depth.
             // ponytail: validates cardinality only; identity-validation needs the SpawnRole enum in
             // the state layer, which the frozen-seam rule forbids — deferred.
-            if (task.reviewers.length < PANEL_ROLES.length) {
+            if (task.reviewers.length < expectedRoster.length) {
                 return panelSpawn()
             }
 

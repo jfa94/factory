@@ -9,10 +9,17 @@
  * RiskTier parameter at all: there is nowhere to branch on the tier, so two tasks
  * of different tiers necessarily get a deep-equal request.
  *
- * The panel is the consolidated four-lens set (Decision 43): implementation-reviewer
+ * CONTENT-CONDITIONAL EXCEPTION (Decision 51): `dbApplicable` appends the
+ * `database-design-reviewer` specialist when the task diff touches migration/schema
+ * files (db-detect.ts). This does NOT weaken risk-invariance: the trigger is a
+ * deterministic fact about diff CONTENT (re-derivable from the worktree tip), not a
+ * risk-tier judgment, and it is strictly ADDITIVE — the four-lens floor always runs;
+ * a DB-touching task gets floor + specialist. Review only ever gets stricter.
+ *
+ * The floor panel is the consolidated four-lens set (Decision 43): implementation-reviewer
  * (spec alignment), quality-reviewer (the merged adversarial quality + security +
  * architecture + type-design lens), silent-failure-hunter, and
- * systemic-failure-reviewer. All four roles already exist in the frozen
+ * systemic-failure-reviewer. All roles already exist in the frozen
  * {@link SpawnRoleEnum} — no new role is invented here.
  *
  * Every reviewer runs on the SAME fixed model (Δ T) and the SAME turn budget
@@ -24,8 +31,9 @@ import type {CrossVendorResolution} from './vendor.js'
 
 /**
  * The four fixed panel roles, in a stable order. CLOSED: this list IS the panel
- * membership invariant. Each entry is a {@link SpawnRole} from the frozen enum.
- * Exported so the acceptance test asserts the exact set.
+ * membership FLOOR invariant — it never shrinks and never branches on tier. Each
+ * entry is a {@link SpawnRole} from the frozen enum. Exported so the acceptance
+ * test asserts the exact set.
  */
 export const PANEL_ROLES: readonly SpawnRole[] = [
     'implementation-reviewer',
@@ -33,6 +41,20 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
     'silent-failure-hunter',
     'systemic-failure-reviewer',
 ] as const
+
+/** The content-conditional schema specialist (Decision 51). */
+export const DB_DESIGN_ROLE: SpawnRole = 'database-design-reviewer'
+
+/**
+ * The expected panel roster for one task: the fixed floor, plus the
+ * `database-design-reviewer` specialist iff the task diff touches DB files
+ * (`touchesDatabase`, db-detect.ts). The ONLY sanctioned way to size the panel —
+ * both the spawn site and the roster-enforcement site derive through here so
+ * they cannot disagree.
+ */
+export function panelRolesFor(dbApplicable: boolean): readonly SpawnRole[] {
+    return dbApplicable ? [...PANEL_ROLES, DB_DESIGN_ROLE] : PANEL_ROLES
+}
 
 /**
  * The `prompt_ref` placeholder for a panel reviewer. The WS2 AgentSpecSchema
@@ -65,6 +87,9 @@ function promptRefFor(role: SpawnRole): string {
  *   — stamped onto the manifest so the runner knows whether to run the
  *   quality-reviewer via `codex exec` (present) or report the absence verbatim.
  *   Omitted ⇒ no stamp (callers that predate the honesty wiring).
+ * @param dbApplicable whether the task diff touches DB files (`touchesDatabase`) —
+ *   true appends the `database-design-reviewer` specialist (Decision 51). Defaults
+ *   to false so pre-existing callers keep the exact four-lens floor.
  *
  * The output is validated through {@link parseSpawnRequest}; an empty/blank
  * model or non-positive `maxTurns` therefore fails LOUDLY at the seam rather than
@@ -75,9 +100,10 @@ export function buildPanelManifest(
     resumePhase: SpawnRequest['resume_phase'],
     model: string,
     maxTurns: number,
-    crossVendor?: CrossVendorResolution
+    crossVendor?: CrossVendorResolution,
+    dbApplicable = false
 ): SpawnRequest {
-    const agents = PANEL_ROLES.map((role) => ({
+    const agents = panelRolesFor(dbApplicable).map((role) => ({
         role,
         isolation: 'worktree' as const,
         model,

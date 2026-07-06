@@ -1,19 +1,20 @@
 # How to Rescue a Stalled Run
 
-**Start with `factory recover`** (S10, Decision 48) — the self-routing repair
-verb. It scans the run and does whatever it needs: resumes a clean park, resets
-stuck/recoverable work + reopens a terminal run, or pages you when only
-dead-ends remain. `recover --dry-run` shows the scan + chosen route without
-writing. Everything below is the **manual escape hatch** underneath it — reach
-for `rescue scan`/`apply` when you need to name exact tasks, include dead-ends,
-reset e2e, or recheck a rollup. See
-[reference/cli.md § recover](../reference/cli.md#recover).
+**Start with `/factory:resume`** (Decision 50) — the ONE consent-gated repair
+verb. It scans the run and routes: a clean park just resumes (no prompt); anything
+needing repair — stuck/recoverable resets, dead-ends, a failed e2e/traceability
+verdict, a pending rollup, git drift — is PROPOSED to you first (one interactive
+prompt, approve any subset), applied, then resumed. `--dry-run` shows the scan +
+route + proposed plan without writing. Everything below is the **manual CLI
+plumbing** underneath it — reach for `rescue scan`/`apply` by hand when you
+declined the prompt and want to run a specific `hints` command yourself. See
+[reference/cli.md § rescue](../reference/cli.md#rescue-scanapplyauto).
 
-Use rescue when `factory resume` cannot recover a run. Resume only re-checks the
-quota gate — it never touches task state. When a crashed or suspended session left
-tasks **stuck mid-phase** (so a re-drive would deadlock), or a terminal `failed`
-run has **recoverable** fails worth retrying, rescue resets the resettable tasks,
-reopens a terminal run, reconciles git/GitHub drift, then hands off to resume.
+Bare `factory resume` only re-checks the quota gate — it never touches task
+state. When a crashed or suspended session left tasks **stuck mid-phase** (so a
+re-drive would deadlock), or a terminal `failed` run has **recoverable** fails
+worth retrying, rescue resets the resettable tasks, reopens a terminal run,
+reconciles git/GitHub drift, then hands off to resume.
 
 **Rescue repairs run state, then git/GitHub drift.** `rescue scan`/`apply` repair
 RUN STATE (stuck/recoverable tasks, reopen a terminal run). The `rescue-reconciler`
@@ -59,18 +60,20 @@ Run-level flags also fold into `needs_rescue` even when every task is `done`:
 - `e2e_assessment_failed` — the **run-start** e2e-assessment concluded boot- or
   machinery-impossible (Decision 40 D3). Also cleared by `apply --reset-e2e`, which drops the
   failed `e2e_assessment` so the assessment re-runs.
+- `traceability_failed` — the PRD-traceability audit concluded `failed` (S9, Decision 47).
+  Cleared only by `apply --reset-traceability`, once the unmet PRD intent is addressed.
 - `rollup_pending` — a `completed` run whose staging→develop rollup was **armed but never
   landed** (e.g. GitHub's branch policy blocked the queued `--auto` merge, D3), persisted as
   `run.rollup {number, merged:false, reason?}`. Cleared only by `apply --recheck-rollup`
-  (step 4b), and only once you've confirmed the queued merge actually landed. Neither is ever
-  auto-recovered — the scan surfaces them; a human asserts the cause cleared.
+  (step 4b), and only once you've confirmed the queued merge actually landed. None of these is
+  ever auto-recovered — the scan surfaces them; a human asserts the cause cleared.
 
 The scan also carries a read-only `work` field — a git-grounded survey of how much
 committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
 run's staging base (`commits_ahead`, measured against `origin/staging-<run-id>`). Use it
 to see whether a failed task got far before failing vs carried nothing. It is **diagnostic
 only**: it changes nothing, and resume still re-cuts a reset task's branch from staging and
-redoes the work. The `/factory:rescue` command passes each dead-end's `work` line through to
+redoes the work. `/factory:resume` passes each dead-end's `work` line through to
 the `rescue-diagnostic` agent as corroborating evidence (never a `reset` trigger on its own).
 See [reference/cli.md](../reference/cli.md#rescue-scan).
 
@@ -124,7 +127,7 @@ retained until the merge is confirmed.
 
 Before resuming, reconcile any **remote** drift run state cannot see (a run branch
 missing or behind `develop`, a PR/state mismatch, an orphan branch). This is the
-`rescue-reconciler` agent's job — driven by the `/factory:rescue` command, not a
+`rescue-reconciler` agent's job — driven by `/factory:resume`, not a
 standalone CLI subcommand. It acts only on **forward-only, non-destructive** repairs
 autonomously and surfaces anything destructive for a confirmation prompt. Run it via
 the command (below) rather than by hand.
@@ -146,15 +149,19 @@ never swallowed — it rethrows.
 
 ## Via the command
 
-The `/factory:rescue` command wraps this whole flow (scan → short-circuit if clean
-→ apply the safe set → for ambiguous dead-ends, consult the read-only
-`rescue-diagnostic` agent → spawn `rescue-reconciler` to clear git/GitHub drift,
-prompting before anything destructive → hand off to resume):
+`/factory:resume` wraps this whole flow (scan → resume directly if clean → for
+ambiguous dead-ends, consult the read-only `rescue-diagnostic` agents → present
+the proposed plan for approval (one multiSelect prompt, any subset) → apply the
+approved subset in ONE `rescue apply` → spawn `rescue-reconciler` to clear
+git/GitHub drift, prompting before anything destructive → hand off to resume):
 
 ```
-/factory:rescue [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--dry-run]
+/factory:resume [--run <id>] [--ignore-quota] [--dry-run]
 ```
 
-`--dry-run` stops after the scan (report only). The orchestration lives entirely
-in `skills/rescue-protocol/SKILL.md`.
+There are no repair flags — the old `--task`/`--include-dead-ends`/`--reset-e2e`/
+`--recheck-rollup` assertions became plan items you approve interactively.
+`--dry-run` stops after the scan (route + proposed plan, report only). Declining
+the whole plan writes nothing and prints each item's manual `hints` command. The
+orchestration lives entirely in `skills/rescue-protocol/SKILL.md`.
 </content>

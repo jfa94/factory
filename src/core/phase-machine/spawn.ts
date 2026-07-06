@@ -24,7 +24,9 @@ import {EffortEnum} from '../../config/schema.js'
  * a role outside it is a loud parse error. Producers (`test-writer`/`implementer`)
  * plus the four-lens verifier panel (Decision 26/27/43: implementation-reviewer,
  * quality-reviewer — the merged adversarial quality+security+architecture+type-design
- * lens — silent-failure-hunter, systemic-failure-reviewer) plus the run-level `scribe`.
+ * lens — silent-failure-hunter, systemic-failure-reviewer), the content-conditional
+ * `database-design-reviewer` specialist (Decision 51: appended to the panel only when
+ * the task diff touches migration/schema files), plus the run-level `scribe`.
  */
 export const SpawnRoleEnum = z.enum([
     'test-writer',
@@ -33,6 +35,7 @@ export const SpawnRoleEnum = z.enum([
     'quality-reviewer',
     'silent-failure-hunter',
     'systemic-failure-reviewer',
+    'database-design-reviewer',
     'scribe',
 ])
 export type SpawnRole = z.infer<typeof SpawnRoleEnum>

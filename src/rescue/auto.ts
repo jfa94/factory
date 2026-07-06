@@ -1,6 +1,6 @@
 /**
  * S10 — effectiveAutoResets (Decision 48): the auto-safe filter behind
- * `factory recover --auto`, the ONE bounded self-heal cycle the runner fires
+ * `factory rescue auto`, the ONE bounded self-heal cycle the runner fires
  * after a failed finalize.
  *
  * The auto-safe candidate set is `scan.resettable` (stuck ∪ recoverable) — the

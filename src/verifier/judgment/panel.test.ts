@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {RiskTierEnum, parseSpawnRequest, type RiskTier} from '../../types/index.js'
-import {PANEL_ROLES, buildPanelManifest} from './panel.js'
+import {DB_DESIGN_ROLE, PANEL_ROLES, buildPanelManifest, panelRolesFor} from './panel.js'
 import {at} from '../../shared/index.js'
 
 const ALL_TIERS: readonly RiskTier[] = RiskTierEnum.options
@@ -86,6 +86,40 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
             })
             const bare = buildPanelManifest('verify', 'opus', 40)
             expect(stamped.agents).toEqual(bare.agents)
+        })
+    })
+
+    describe('Decision 51 content-conditional DB specialist', () => {
+        it('panelRolesFor(false) is EXACTLY the four-lens floor', () => {
+            expect(panelRolesFor(false)).toEqual(PANEL_ROLES)
+        })
+
+        it('panelRolesFor(true) appends database-design-reviewer AFTER the unchanged floor', () => {
+            const roles = panelRolesFor(true)
+            expect(roles.slice(0, PANEL_ROLES.length)).toEqual(PANEL_ROLES)
+            expect(roles).toHaveLength(PANEL_ROLES.length + 1)
+            expect(at(roles, roles.length - 1)).toBe(DB_DESIGN_ROLE)
+        })
+
+        it('dbApplicable=true builds a 5-agent manifest with the SAME model + turns for the specialist', () => {
+            const m = buildPanelManifest('verify', 'opus', 40, undefined, true)
+            expect(m.agents).toHaveLength(PANEL_ROLES.length + 1)
+            const db = m.agents.find((a) => a.role === DB_DESIGN_ROLE)
+            expect(db).toBeDefined()
+            expect(db?.model).toBe('opus')
+            expect(db?.max_turns).toBe(40)
+            expect(db?.isolation).toBe('worktree')
+            expect(() => parseSpawnRequest(m)).not.toThrow()
+        })
+
+        it('dbApplicable defaults to false — pre-existing callers keep the exact floor', () => {
+            expect(buildPanelManifest('verify', 'opus', 40).agents.map((a) => a.role)).toEqual([...PANEL_ROLES])
+        })
+
+        it('additive-only: the floor agents are byte-identical with and without the specialist', () => {
+            const withDb = buildPanelManifest('verify', 'opus', 40, undefined, true)
+            const bare = buildPanelManifest('verify', 'opus', 40)
+            expect(withDb.agents.slice(0, PANEL_ROLES.length)).toEqual(bare.agents)
         })
     })
 })

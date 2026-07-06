@@ -12,7 +12,7 @@ risk-invariant panel and verify-then-fix.
 graph TD
   W[Task worktree] --> Gates[Deterministic gates<br/>test·tdd·coverage·mutation·sast·type·lint·build]
   W --> Holdout[Holdout validation<br/>withheld answer-key]
-  W --> Panel[Judgment panel<br/>4 reviewers]
+  W --> Panel[Judgment panel<br/>4-lens floor + conditional DB specialist]
   Gates --> MergeGate{Merge-gate verdict<br/>conjunctive}
   Holdout --> MergeGate
   Panel --> VtF[Verify-then-fix<br/>confirm each blocker]
@@ -55,6 +55,19 @@ does **not** do this for the merge gate. Every reviewer runs on every task:
   defects that span multiple files or pipeline stages that no line-level reviewer
   sees.
 
+A fifth reviewer, `database-design-reviewer`, is a **content-conditional specialist**
+appended to the panel only when the task diff touches relational-schema files
+(Decision 51). This does not weaken risk-invariance: the trigger is a deterministic
+fact about diff _content_ — `touchesDatabase` (`src/verifier/judgment/db-detect.ts`)
+matches the changed paths against built-in globs (`migrations/`, `db/migrate/`,
+`alembic/versions/`, `drizzle/`, `schema.prisma`, `*.sql`) — not a risk-tier judgment,
+and it is strictly **additive**: the four-lens floor always runs, and a DB-touching
+task gets floor + specialist. Review only ever gets stricter. `panelRolesFor`
+(`src/verifier/judgment/panel.ts`) is the single sanctioned sizing seam — both the
+spawn site and the roster-enforcement site derive the expected roster through it, so
+they cannot disagree (derive-don't-store: the DB fact is re-derived from the same
+worktree tip at both, never persisted).
+
 Risk does not change _who_ reviews; it changes _the producer's starting model and
 escalation budget_ (see [producer-ladder.md](./producer-ladder.md)). The single
 `risk_tier` dial sizes the producer, not the verifier.
@@ -69,10 +82,13 @@ pressure.
 
 "The panel is the panel" is enforced structurally, not just intended. The merge-gate
 verdict is unanimity over whatever reviews arrive, so a partial all-approve **subset**
-of the four roles would otherwise clear it. At the record seam (`enforcePanelRoster`,
+of the expected roster would otherwise clear it. At the record seam (`enforcePanelRoster`,
 `src/orchestrator/record.ts`) any missing role is synthesized as a `verdict:"error"`
 review and any unknown reviewer name is demoted to `error` — both fail the gate loudly,
-so an incomplete panel can never pass. The cross-vendor reviewer is an executor of a
+so an incomplete panel can never pass. The expected roster is not hard-coded four names:
+`enforcePanelRoster` takes the re-derived roster (`panelRolesFor`, floor plus the
+conditional `database-design-reviewer`), so on a DB-touching task a missing specialist
+review fails the gate exactly as a missing floor role does. The cross-vendor reviewer is an executor of a
 roster role (quality-reviewer via Codex), never an extra name, so it stays additive and
 optional; supplying it does not change the required roster.
 

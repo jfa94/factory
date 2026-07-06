@@ -151,7 +151,8 @@ preflight → tests → exec → verify → ship
 - **tests** — producer phase: the `test-writer` commits failing tests first (TDD).
 - **exec** — producer phase: the `implementer` commits the minimal implementation.
 - **verify** — the merge gate: deterministic gates + holdout validation + the
-  four-reviewer panel + verify-then-fix. Derives the merge gate verdict.
+  four-reviewer panel (plus a conditional `database-design-reviewer` when the diff
+  touches schema files) + verify-then-fix. Derives the merge gate verdict.
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
   run's `staging-<run-id>` branch. The one phase that writes the terminal task status.
   It probes for a native GitHub merge queue and, when present, enqueues via

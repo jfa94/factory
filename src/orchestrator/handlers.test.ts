@@ -590,6 +590,44 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
     })
 
+    // Decision 51 — a probe whose diff touches a migration file (otherwise identical
+    // to greenProbe) triggers the content-conditional database-design-reviewer.
+    function dbProbe(): FakeGitProbe {
+        return new FakeGitProbe({
+            refs: {'origin/staging-run-1': 'sha-base', HEAD: 'sha-head'},
+            changedFiles: ['db/migrate/20260706_create_orders.rb'],
+            commits: [
+                commit({sha: 'c1', files: ['src/x.test.ts'], tagged: true}),
+                commit({sha: 'c2', files: ['src/x.ts'], tagged: true}),
+            ],
+        })
+    }
+
+    it('D51: verify spawns floor + database-design-reviewer when the diff touches DB files', async () => {
+        const handlers = makePhaseHandlers(makeDeps({tools: makeFakeTools({git: dbProbe()})}))
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: []})
+        const result = await handlers.verify(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(result.request.agents).toHaveLength(PANEL_ROLES.length + 1)
+        expect(result.request.agents.map((a) => a.role)).toContain('database-design-reviewer')
+    })
+
+    it('D51: on a DB-touching diff a persisted floor-only roster is a SUBSET — verify re-spawns', async () => {
+        const handlers = makePhaseHandlers(makeDeps({tools: makeFakeTools({git: dbProbe()})}))
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()}) // 4 approvals, no specialist
+        const result = await handlers.verify(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(result.request.agents).toHaveLength(PANEL_ROLES.length + 1)
+    })
+
     it('S5/C: default config stamps a deterministic absent cross_vendor WITHOUT probing (hermetic)', async () => {
         const handlers = makePhaseHandlers(makeDeps())
         const ctx = await ctxFor({task_id: 't-multi', reviewers: []})

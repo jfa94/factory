@@ -423,8 +423,9 @@ export async function applyResume(
     reading: UsageReading,
     config: Config,
     nowEpochSec: number,
-    // S11: `touch:false` suppresses the human_touches "resume" append — recover's
-    // route-4 tail (rescue already appended "recover" for the SAME human action).
+    // S11: `touch:false` suppresses the human_touches "resume" append — the
+    // rescue-apply park-clear tail (apply already appended "recover" for the SAME
+    // human action).
     opts: {touch?: boolean} = {}
 ): Promise<ResumeResult> {
     const run = await state.read(runId)

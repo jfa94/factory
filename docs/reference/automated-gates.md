@@ -210,18 +210,27 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 
 The deterministic gates are only the first layer of the merge gate. The merge gate
 also records in **holdout validation** (a withheld answer-key, validated
-independently) and the **risk-invariant review panel** (four reviewers, unanimous
-approval required, with verify-then-fix confirmation of each blocking finding). The
-overall merge gate is the subject of
+independently) and the **risk-invariant review panel** (a four-reviewer floor,
+unanimous approval required, with verify-then-fix confirmation of each blocking
+finding). The overall merge gate is the subject of
 [../explanation/verifier.md](../explanation/verifier.md).
 
-The full four-role panel is enforced at the record seam: an all-approve **subset** of
-the panel can no longer clear the gate. `enforcePanelRoster` (`src/orchestrator/record.ts`)
-synthesizes a `verdict:"error"` review for every `PANEL_ROLES` entry missing from the
-supplied `--results`, and demotes any unknown reviewer name to `error` — either failing
-the unanimity conjunction loudly. The cross-vendor reviewer is an **executor of a roster
-role** (e.g. quality-reviewer via Codex), never an extra reviewer name, so it stays
-additive to the roster — supplying it never changes the required four roles. Its
+A fifth **content-conditional** reviewer, `database-design-reviewer`, is appended to
+the panel only when the task diff touches relational-schema files — migrations,
+`*.sql`, or ORM schema (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`;
+[Decision 51](../explanation/decisions.md)). It is strictly additive: the four-lens
+floor always runs, and a DB-touching task gets floor + specialist. The trigger is diff
+_content_, not risk tier, so it does not weaken risk-invariance.
+
+The expected panel roster is enforced at the record seam: an all-approve **subset** of
+it can no longer clear the gate. `enforcePanelRoster` (`src/orchestrator/record.ts`)
+takes the re-derived roster (`panelRolesFor` — the `PANEL_ROLES` floor plus the
+conditional specialist), synthesizes a `verdict:"error"` review for every roster entry
+missing from the supplied `--results`, and demotes any unknown reviewer name to `error`
+— either failing the unanimity conjunction loudly. The cross-vendor reviewer is an
+**executor of a roster role** (e.g. quality-reviewer via Codex), never an extra reviewer
+name, so it stays additive to the roster — supplying it never changes the required
+roles. Its
 _availability_ is policy-gated separately: `review.requireCrossVendor: "block"` (default
 `warn`) fails the gate when no cross-vendor reviewer ran, by demoting the quality-reviewer
 to `verdict:"error"` ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)).

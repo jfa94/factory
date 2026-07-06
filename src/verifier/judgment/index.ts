@@ -9,8 +9,9 @@
 // config resolution
 export {FALLBACK_REVIEW_MODEL, resolveReviewModel, resolveJudgmentConfig, type JudgmentConfig} from './config.js'
 
-// risk-invariant panel
-export {PANEL_ROLES, buildPanelManifest} from './panel.js'
+// risk-invariant panel (+ Decision 51 content-conditional specialist)
+export {PANEL_ROLES, DB_DESIGN_ROLE, panelRolesFor, buildPanelManifest} from './panel.js'
+export {DB_PATH_PATTERNS, isDbPath, touchesDatabase} from './db-detect.js'
 
 // cross-vendor slot (loud-when-absent)
 export {resolveCrossVendor, type VendorProbe, type CrossVendorSlot, type CrossVendorResolution} from './vendor.js'

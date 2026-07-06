@@ -1,4 +1,4 @@
-<!-- last-documented: f1fb7eb10ccfe4f09f5bc783baade5e377d878ac -->
+<!-- last-documented: 1dc406f8cdaa755b19c0b5c1f2e84aab06ea1b23 -->
 
 # Dark Factory Plugin
 
@@ -47,7 +47,8 @@ hands.
 commits failing tests, then a `implementer` commits the minimal
 implementation — enforced by the TDD gate), passes a stack of deterministic
 automated gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
-gate itself), and clears a unanimous four-reviewer adversarial panel before it can
+gate itself), and clears a unanimous four-reviewer adversarial panel — plus a
+conditional schema specialist when the diff touches the database — before it can
 ship. Reviewer findings are independently confirmed before they act
 (verify-then-fix).
 
@@ -100,7 +101,7 @@ contract.
 - [Run with end-to-end tests](./guides/run-with-e2e.md) — add the autonomous Playwright e2e phase with `--e2e`.
 - [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, `develop` branch protection).
 - [Configure the factory](./guides/configure-the-factory.md) — inspect and edit the config overlay.
-- [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — `factory recover` routes the repair for you; the rescue scan/apply escape hatch underneath.
+- [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — `/factory:resume` routes and consent-gates the repair for you; the rescue scan/apply plumbing underneath.
 - [Build and verify the engine](./guides/build-and-verify.md) — the contributor build/test/bundle workflow.
 
 ### Reference
@@ -120,7 +121,7 @@ contract.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
 - [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
-- [Design Decisions (D1–D49)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
+- [Design Decisions (D1–D50)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
 
 ### Domain
 

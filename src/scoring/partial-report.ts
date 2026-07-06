@@ -290,7 +290,7 @@ export function failureCommentMarker(runId: string): string {
 }
 
 /**
- * Marker for the self-heal page comment (`factory recover --auto`, S10 /
+ * Marker for the self-heal page comment (`factory rescue auto`, S10 /
  * Decision 48). Same dedup contract as {@link failureCommentMarker}: the recover
  * CLI scans the PRD's existing comments for it, so a re-fired blocked
  * auto-recover never double-posts.
@@ -320,7 +320,7 @@ export function renderFailureComment(report: PartialRunReport, selfHealEligible 
         lines.push(
             '',
             '_Self-heal: the runner retries the recoverable failure(s) once via ' +
-                '`factory recover --auto` before paging a human._'
+                '`factory rescue auto` before paging a human._'
         )
     }
     if (report.e2e_failure !== undefined) {
