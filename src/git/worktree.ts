@@ -125,12 +125,20 @@ export interface EnsureOnStagingArgs {
  * tip leaves HEAD where it is), and the safety net when it does NOT — ported
  * INDEPENDENTLY of the settings.json knob (both ported, not relying on the
  * setting alone).
+ *
+ * D8: an interrupted drive (crash / abandoned producer) can leave uncommitted
+ * TRACKED changes in the reused worktree; a bare `checkout -B` refuses to
+ * clobber them and hard-fails every re-drive. Clean to the target tip FIRST via
+ * the engine's own trusted git client (a manual reset/clean is deny-blocked for
+ * the user), then re-point. Lands HEAD on origin/<base>, so the caller's
+ * base-is-staging-tip assertion still passes.
  */
 export async function ensureOnStaging(args: EnsureOnStagingArgs): Promise<void> {
     const remote = args.remote ?? 'origin'
     const base = args.base ?? GIT_DEFAULTS.stagingBranch
     const opts: GitOpts = {cwd: args.path}
-    log.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`)
+    log.debug(`ensureOnStaging: reset --hard + checkout -B ${args.branch} ${remote}/${base}`)
+    await args.gitClient.resetHardClean(`${remote}/${base}`, opts)
     await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts)
 }
 

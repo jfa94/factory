@@ -8918,7 +8918,8 @@ async function ensureOnStaging(args) {
   const remote = args.remote ?? "origin";
   const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
   const opts = { cwd: args.path };
-  log8.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`);
+  log8.debug(`ensureOnStaging: reset --hard + checkout -B ${args.branch} ${remote}/${base}`);
+  await args.gitClient.resetHardClean(`${remote}/${base}`, opts);
   await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts);
 }
 async function resyncTaskBranchOntoStaging(args) {
