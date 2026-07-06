@@ -14,7 +14,7 @@ import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {runCommand, runCreate, runCancel, resolveOwnerSession, type RunCancelOverrides} from './run.js'
+import {runCommand, resumeCommand, runCreate, runCancel, resolveOwnerSession, type RunCancelOverrides} from './run.js'
 import {
     seedTasksFromSpec,
     createRun,
@@ -192,8 +192,8 @@ describe('mandatory autonomous-mode gate', () => {
 
     it('runResume refuses to resume a run outside autonomous mode', async () => {
         // The gate fires before any run resolution, so no --run / fixtures are needed;
-        // NotAutonomousError bubbles uncaught through runCommand (not a UsageError).
-        await expect(runCommand.run(['resume'])).rejects.toBeInstanceOf(NotAutonomousError)
+        // NotAutonomousError bubbles uncaught through resumeCommand (not a UsageError).
+        await expect(resumeCommand.run([])).rejects.toBeInstanceOf(NotAutonomousError)
     })
 
     it("the gate is exactly FACTORY_AUTONOMOUS_MODE === '1' (no bypass value)", async () => {
@@ -238,10 +238,13 @@ describe('run arg/usage edges', () => {
         )
     })
     it('resume: --no-ship is a usage error (ship_mode is persisted, never re-passed)', async () => {
-        expect(await runCommand.run(['resume', '--no-ship'])).toBe(EXIT.USAGE)
+        expect(await resumeCommand.run(['--no-ship'])).toBe(EXIT.USAGE)
     })
     it('resume: --help prints help and exits OK', async () => {
-        expect(await runCommand.run(['resume', '--help'])).toBe(EXIT.OK)
+        expect(await resumeCommand.run(['--help'])).toBe(EXIT.OK)
+    })
+    it("'run resume' is no longer an action — unknown-action usage error", async () => {
+        expect(await runCommand.run(['resume'])).toBe(EXIT.USAGE)
     })
     it('finalize: --help prints help and exits OK', async () => {
         expect(await runCommand.run(['finalize', '--help'])).toBe(EXIT.OK)

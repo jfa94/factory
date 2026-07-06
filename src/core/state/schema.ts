@@ -47,7 +47,7 @@ import {TASK_PHASES, SPAWN_PHASES} from '../../types/phases-vocab.js'
  *                    threshold curve in-session. NON-terminal, self-heals.
  *   - `suspended`  — QUOTA 7d-window breach (Decision 24): state persisted and the
  *                    process exited cleanly. NON-terminal; a (human-relaunched in
- *                    v1) `factory run resume` continues from checkpoint. No work
+ *                    v1) `factory resume` continues from checkpoint. No work
  *                    was failed, nothing failed quality.
  *   - `failed`     — the run could not deliver the whole PRD — couldn't start, or
  *                    gave up after partial work; `develop` is untouched, the PRD

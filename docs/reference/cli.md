@@ -155,7 +155,7 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|resume|finalize|traceability|docs|e2e-assess|e2e|cancel>`
+## `run <create|finalize|traceability|docs|e2e-assess|e2e|cancel>`
 
 ### `run create`
 
@@ -233,15 +233,6 @@ suspend** (no `binding_window`) are never blocked; the **`--resume` intent** fal
 to the ordinary `kind:"exists"` conflict (the `resume` door re-checks the live window); and
 **`--ignore-quota`** overrides the block, letting create/supersede proceed. See
 [Quota pacing — the weekly-quota hard stop](../explanation/quota-pacing.md#the-weekly-quota-hard-stop-on-run-create).
-
-### `run resume`
-
-Thin CLI alias of the top-level [`resume`](#resume) command, kept for one release.
-Prefer `factory resume`.
-
-```
-factory run resume [--run <id>]
-```
 
 ### `run finalize`
 
@@ -492,8 +483,8 @@ from the Stop gate and must work from any session. Emits `{kind:"cancelled", run
 Action (Decision 35 — a top-level verb, distinct from `run`/`rescue`/`debug`).
 Re-checks the live quota window and resumes a paused/suspended run if the binding
 window recovered. Reads nothing else; leaves state untouched when blocked. A terminal
-run is a loud error (nothing to resume). `factory run resume` is a thin alias of this
-command. The documented operator entry is `/factory:resume` (Decision 50) — it runs
+run is a loud error (nothing to resume). The documented operator
+entry is `/factory:resume` (Decision 50) — it runs
 [`rescue scan`](#rescue-scan) first and routes for you; this verb is its clean-park path.
 
 ```

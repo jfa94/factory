@@ -15969,11 +15969,10 @@ async function assertGateContract(cwd, gitClient) {
 }
 
 // src/cli/subcommands/run.ts
-var RUN_HELP = `factory run \u2014 create or resume a run
+var RUN_HELP = `factory run \u2014 create a run and drive its phases
 
 Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-  factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
   factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
@@ -15983,7 +15982,6 @@ Usage:
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
-  resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
@@ -16025,10 +16023,10 @@ On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it \u2
 --resume to continue it or --supersede to replace it; --new (or an explicit --run-id)
 forces a fresh run regardless. Seeds one pending task per spec task and emits the
 RunState JSON (run_id is the top-level field).`;
-var RESUME_HELP = `factory run resume \u2014 re-check quota and resume a paused/suspended run
+var RESUME_HELP = `factory resume \u2014 re-check quota and resume a paused/suspended run
 
 Usage:
-  factory run resume [--run <id>]
+  factory resume [--run <id>]
 
   --run   The run to resume (defaults to runs/current).
 
@@ -16246,7 +16244,7 @@ async function runResume(argv) {
   }
   if (args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
-      "run resume: --no-ship/--e2e are not valid on resume \u2014 a run keeps the ship_mode/e2e it was created with."
+      "resume: --no-ship/--e2e are not valid on resume \u2014 a run keeps the ship_mode/e2e it was created with."
     );
   }
   requireAutonomousMode();
@@ -16452,8 +16450,6 @@ async function run2(argv) {
   switch (action) {
     case "create":
       return runCreate(rest);
-    case "resume":
-      return runResume(rest);
     case "finalize":
       return runFinalize(rest);
     case "traceability":
@@ -16468,12 +16464,12 @@ async function run2(argv) {
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+        `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | cancel)`
       );
   }
 }
 var runCommand = {
-  describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
+  describe: "Create a run (resolve+seed a spec) and drive its phases",
   run: withUsageGuard("run", run2)
 };
 var resumeCommand = {

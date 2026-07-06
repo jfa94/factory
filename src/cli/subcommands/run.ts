@@ -1,5 +1,5 @@
 /**
- * `factory run <create|resume|finalize|docs|cancel>` — the run-lifecycle entrypoint (C6).
+ * `factory run <create|finalize|docs|cancel>` — the run-lifecycle entrypoint (C6).
  *
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
@@ -7,7 +7,7 @@
  * reads `run_id` and drives the run through the orchestrator seam (`factory next-task` +
  * `factory next-action`).
  *
- * `run resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
+ * `factory resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
  * HUMAN relaunch only; the v2 scheduler would fire this same path). It re-reads the
  * LIVE quota window through the pure {@link planResume} seam and, when the binding
  * window has recovered, clears the checkpoint and returns the run to `running`;
@@ -72,11 +72,10 @@ import {
 } from '../../orchestrator/lifecycle.js'
 import {assertE2ePrereqs, assertGateContract} from '../../orchestrator/preflight.js'
 
-const RUN_HELP = `factory run — create or resume a run
+const RUN_HELP = `factory run — create a run and drive its phases
 
 Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-  factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
   factory run traceability [--run <id>] [--results <path>]
   factory run docs [--run <id>] [--results <path>]
@@ -86,7 +85,6 @@ Usage:
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
-  resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   traceability  Emit the PRD-traceability audit spawn request, or (with --results) record the auditor's verdicts.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
@@ -130,10 +128,10 @@ On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it —
 forces a fresh run regardless. Seeds one pending task per spec task and emits the
 RunState JSON (run_id is the top-level field).`
 
-const RESUME_HELP = `factory run resume — re-check quota and resume a paused/suspended run
+const RESUME_HELP = `factory resume — re-check quota and resume a paused/suspended run
 
 Usage:
-  factory run resume [--run <id>]
+  factory resume [--run <id>]
 
   --run   The run to resume (defaults to runs/current).
 
@@ -431,12 +429,11 @@ async function runResume(argv: string[]): Promise<ExitCode> {
     // create-side footgun — reject loud so neither path can ever imply them on resume.
     if (args.flag('no-ship') === true || args.flag('e2e') === true) {
         throw new UsageError(
-            'run resume: --no-ship/--e2e are not valid on resume — a run keeps the ' +
-                'ship_mode/e2e it was created with.'
+            'resume: --no-ship/--e2e are not valid on resume — a run keeps the ' + 'ship_mode/e2e it was created with.'
         )
     }
     // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
-    // runs in the foreground `/factory:run resume` session, which has the env.
+    // runs in the foreground `/factory:resume` session, which has the env.
     requireAutonomousMode()
 
     const dataDir = resolveDataDir({})
@@ -753,8 +750,6 @@ async function run(argv: string[]): Promise<ExitCode> {
     switch (action) {
         case 'create':
             return runCreate(rest)
-        case 'resume':
-            return runResume(rest)
         case 'finalize':
             return runFinalize(rest)
         case 'traceability':
@@ -769,17 +764,17 @@ async function run(argv: string[]): Promise<ExitCode> {
             return runCancel(rest)
         default:
             throw new UsageError(
-                `unknown run action '${action}' (expected create | resume | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+                `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | cancel)`
             )
     }
 }
 
 export const runCommand: Subcommand = {
-    describe: 'Create or resume a run (create resolves+seeds a spec; resume re-checks quota)',
+    describe: 'Create a run (resolve+seed a spec) and drive its phases',
     run: withUsageGuard('run', run),
 }
 
-/** Top-level `factory resume` — alias-equivalent of `run resume` (Decision 35). */
+/** Top-level `factory resume` — THE resume entrypoint (Decision 35). */
 export const resumeCommand: Subcommand = {
     describe: 'Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)',
     run: withUsageGuard('resume', runResume),
