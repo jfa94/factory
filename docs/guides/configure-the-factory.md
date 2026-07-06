@@ -30,7 +30,7 @@ otherwise as a bare string.
 factory configure --set quality.holdoutPercent=25
 factory configure --set git.stagingBranch=integration
 factory configure --set git.provision=true
-factory configure --set 'git.requiredStatusChecks=["quality-gate","lint"]'
+factory configure --set 'git.developRequiredStatusChecks=["Quality","Mutation Testing","Security Scan"]'
 ```
 
 Set several at once:

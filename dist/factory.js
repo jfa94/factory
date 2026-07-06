@@ -6209,12 +6209,21 @@ var GitSchema = external_exports.object({
   /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
   stagingBranch: external_exports.string().min(1).default("staging"),
   /**
-   * Required status-check contexts that branch protection MUST enforce on the
-   * staging branch before a run may start. Empty means "no specific checks
-   * required" — but protection itself (incl. strict-up-to-date) is still
-   * mandatory; see `requireProtectionOrRefuse`.
+   * Required status-check contexts branch protection MUST enforce on DEVELOP
+   * (asserted at scaffold; provisioned with `--provision`). Defaults to the
+   * three contexts the rendered quality-gate workflow always reports
+   * (Decision 53) — the rollup PR cannot merge red. Protection itself
+   * (incl. strict-up-to-date) is mandatory regardless; see
+   * `requireProtectionOrRefuse`.
    */
-  requiredStatusChecks: external_exports.array(external_exports.string()).default([]),
+  developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
+  /**
+   * Required status-check contexts provisioned onto each per-run
+   * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
+   * local GateRunner is the primary task-level enforcement, and a required
+   * check here would make every task-PR merge wait on CI wall-clock.
+   */
+  stagingRequiredStatusChecks: external_exports.array(external_exports.string()).default([]),
   /**
    * Opt-in protection provisioning. OFF by default — the run VERIFIES and
    * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips
@@ -15792,7 +15801,7 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
       owner: stagingDeps.owner,
       repo: stagingDeps.repo,
       branch,
-      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      requiredChecks: stagingDeps.config.git.stagingRequiredStatusChecks,
       provision: true
     });
   }
@@ -17313,6 +17322,178 @@ function injectGateEnvIntoWorkflow(text, gateEnv) {
   return lines.join("\n");
 }
 
+// src/ci/render-quality-gate.ts
+var SETUP_NODE = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0";
+var PNPM_SETUP = "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8";
+var NPM_TEST_STUB = "Error: no test specified";
+function replaceMarker(lines, marker, block) {
+  const idx = lines.findIndex((l) => l.trim() === marker);
+  if (idx === -1) {
+    throw new Error(`renderQualityGate: template is missing the '${marker}' marker`);
+  }
+  const indentMatch = /^[ \t]*/.exec(lines[idx] ?? "");
+  const indent = indentMatch ? indentMatch[0] : "";
+  return [...lines.slice(0, idx), ...block.map((b) => b === "" ? "" : indent + b), ...lines.slice(idx + 1)];
+}
+function gateCommand(entry, opts, script, builtin) {
+  if (entry.contracted && entry.command !== void 0) {
+    return entry.command;
+  }
+  const pm = opts.packageManager;
+  const scriptBody = opts.scripts[script];
+  const hasScript = scriptBody !== void 0 && !(script === "test" && scriptBody.includes(NPM_TEST_STUB));
+  if (hasScript) {
+    if (pm === "pnpm") {
+      return `pnpm ${script}`;
+    }
+    return script === "test" ? "npm test" : `npm run ${script}`;
+  }
+  return pm === "pnpm" ? `pnpm exec ${builtin}` : `npx ${builtin}`;
+}
+function gateStep(id, opts, script, builtin) {
+  const entry = opts.contract.gates[id];
+  if (!entry.contracted) {
+    return [`# ${id} gate uncontracted: ${entry.reason}`];
+  }
+  return [`- run: ${gateCommand(entry, opts, script, builtin)}`];
+}
+function setupBlock(opts) {
+  if (opts.packageManager === "pnpm") {
+    return [
+      `- uses: ${PNPM_SETUP}`,
+      `- uses: ${SETUP_NODE}`,
+      "  with:",
+      "      node-version: 20",
+      "      cache: pnpm",
+      "- run: pnpm install --frozen-lockfile"
+    ];
+  }
+  if (opts.hasLockfile) {
+    return [`- uses: ${SETUP_NODE}`, "  with:", "      node-version: 20", "      cache: npm", "- run: npm ci"];
+  }
+  return [`- uses: ${SETUP_NODE}`, "  with:", "      node-version: 20", "- run: npm install --no-audit --no-fund"];
+}
+function gatesBlock(opts) {
+  const pm = opts.packageManager;
+  const lines = [];
+  if (opts.hasNextDep) {
+    lines.push(
+      "- name: Generate Next.js type declarations",
+      `  run: ${pm === "pnpm" ? "pnpm next typegen" : "npx next typegen"}`
+    );
+  }
+  lines.push(...gateStep("type", opts, "typecheck", "tsc --noEmit"));
+  lines.push(...gateStep("lint", opts, "lint", "eslint ."));
+  lines.push(...gateStep("test", opts, "test", "vitest run"));
+  lines.push(...gateStep("build", opts, "build", "npm run build"));
+  lines.push(
+    "  # Build-time env for CI parity with the factory's local merge gate. Managed by",
+    "  # the factory: `factory scaffold` replaces the marker below with a real `env:`",
+    "  # block rendered from quality.gateEnv (set via `factory configure`). Placeholders",
+    "  # only \u2014 real secrets stay in ${{ secrets.* }}. An empty gateEnv leaves the marker.",
+    "  # factory:gate-env"
+  );
+  if (opts.scripts["deps:validate"] !== void 0) {
+    lines.push(`- run: ${pm === "pnpm" ? "pnpm deps:validate" : "npm run deps:validate"}`);
+  }
+  if (pm === "pnpm") {
+    lines.push(
+      "- name: pnpm audit (non-blocking; pnpm legacy endpoint 410, Snyk covers vulns)",
+      "  run: pnpm audit --audit-level=high",
+      "  continue-on-error: true"
+    );
+  } else {
+    lines.push(
+      "- name: npm audit (non-blocking)",
+      "  run: npm audit --audit-level=high",
+      "  continue-on-error: true"
+    );
+  }
+  return lines;
+}
+function mutationSetupBlock(opts) {
+  const cond = "if: steps.slice.outputs.slice != ''";
+  if (opts.packageManager === "pnpm") {
+    return [
+      `- uses: ${PNPM_SETUP}`,
+      `  ${cond}`,
+      `- uses: ${SETUP_NODE}`,
+      `  ${cond}`,
+      "  with:",
+      "      node-version: 20",
+      "      cache: pnpm",
+      `- ${cond}`,
+      "  run: pnpm install --frozen-lockfile"
+    ];
+  }
+  if (opts.hasLockfile) {
+    return [
+      `- uses: ${SETUP_NODE}`,
+      `  ${cond}`,
+      "  with:",
+      "      node-version: 20",
+      "      cache: npm",
+      `- ${cond}`,
+      "  run: npm ci"
+    ];
+  }
+  return [
+    `- uses: ${SETUP_NODE}`,
+    `  ${cond}`,
+    "  with:",
+    "      node-version: 20",
+    `- ${cond}`,
+    "  run: npm install --no-audit --no-fund"
+  ];
+}
+function waivedMutationBlock(reason) {
+  const quoted = reason.replace(/'/g, "''");
+  return [
+    `# Mutation testing is waived in this repo's gate contract: ${reason}.`,
+    '# The aggregator job is kept so the required status check "Mutation Testing"',
+    "# stays a universal context across factory repos; it reports green without",
+    "# running any mutants.",
+    "mutation-testing:",
+    "  name: Mutation Testing",
+    "  runs-on: ubuntu-latest",
+    "  needs: quality",
+    "  steps:",
+    `    - run: echo 'Mutation testing waived (gate contract): ${quoted}'`
+  ];
+}
+function renderMutationRegion(lines, opts) {
+  const begin = lines.findIndex((l) => l.trim() === "# factory:mutation-begin");
+  const end = lines.findIndex((l) => l.trim() === "# factory:mutation-end");
+  if (begin === -1 || end === -1 || end < begin) {
+    throw new Error("renderQualityGate: template is missing the '# factory:mutation-begin/end' region");
+  }
+  const mutation = opts.contract.gates.mutation;
+  if (!mutation.contracted) {
+    const indentMatch = /^[ \t]*/.exec(lines[begin] ?? "");
+    const indent = indentMatch ? indentMatch[0] : "";
+    const block = waivedMutationBlock(mutation.reason).map((b) => b === "" ? "" : indent + b);
+    return [...lines.slice(0, begin), ...block, ...lines.slice(end + 1)];
+  }
+  let kept = [...lines.slice(0, begin), ...lines.slice(begin + 1, end), ...lines.slice(end + 1)];
+  kept = replaceMarker(kept, "# factory:mutation-setup", mutationSetupBlock(opts));
+  if (opts.packageManager === "npm") {
+    kept = kept.map((l) => l.replace("pnpm exec stryker run \\", "npx stryker run \\"));
+  }
+  return kept;
+}
+function renderQualityGate(template, opts) {
+  if (opts.contract.stack !== "npm") {
+    throw new Error(
+      `renderQualityGate: stack '${opts.contract.stack}' is not supported \u2014 the CI quality gate renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)`
+    );
+  }
+  let lines = template.split("\n");
+  lines = replaceMarker(lines, "# factory:setup", setupBlock(opts));
+  lines = replaceMarker(lines, "# factory:gates", gatesBlock(opts));
+  lines = renderMutationRegion(lines, opts);
+  return lines.join("\n");
+}
+
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
@@ -17544,13 +17725,13 @@ async function ensureGateContract(opts) {
     );
   }
   if (load.state === "ok") {
-    return { status: "present", stack: load.contract.stack };
+    return { status: "present", stack: load.contract.stack, contract: load.contract };
   }
   const contract = await resolveGateContract(opts);
   const dest = join26(opts.targetRoot, GATE_CONTRACT_REL);
   await mkdir12(dirname9(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
-  return { status: "created", stack: contract.stack };
+  return { status: "created", stack: contract.stack, contract };
 }
 
 // src/cli/subcommands/scaffold.ts
@@ -17625,6 +17806,7 @@ function resolveTemplatesDir() {
   throw new Error("scaffold: could not locate the plugin templates/ directory");
 }
 var QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
+var CI_NET_RELS = [QUALITY_GATE_REL, ".github/scripts/shard-mutation-scope.mjs"];
 var TEMPLATE_MANIFEST = [
   { rel: QUALITY_GATE_REL, policy: "managed" },
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
@@ -17667,6 +17849,22 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   await writeFile4(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
+async function readWorkflowFacts(targetRoot) {
+  const pnpm = existsSync9(join27(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile17(join27(targetRoot, "package.json"), "utf8");
+  let pkg;
+  try {
+    pkg = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`scaffold: package.json is not valid JSON: ${err.message}`);
+  }
+  return {
+    packageManager: pnpm ? "pnpm" : "npm",
+    hasLockfile: pnpm || existsSync9(join27(targetRoot, "package-lock.json")),
+    scripts: pkg.scripts ?? {},
+    hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
+  };
+}
 async function ensureGitignore(root, lists) {
   const path6 = join27(root, ".gitignore");
   const rel = relative(root, path6);
@@ -17689,14 +17887,13 @@ async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
   const isNodePackage = existsSync9(join27(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
+    if (CI_NET_RELS.includes(entry.rel)) {
+      continue;
+    }
     if (entry.nodeOnly === true && !isNodePackage) {
       continue;
     }
-    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, opts.config.quality.gateEnv) : void 0;
-    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
-  }
-  if (lists.updated.length > 0) {
-    log33.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -17711,6 +17908,26 @@ async function runScaffold(opts) {
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
+  }
+  if (gates.contract.stack === "npm") {
+    const facts = await readWorkflowFacts(opts.targetRoot);
+    for (const entry of TEMPLATE_MANIFEST) {
+      if (!CI_NET_RELS.includes(entry.rel)) {
+        continue;
+      }
+      const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(
+        renderQualityGate(text, { contract: gates.contract, ...facts }),
+        opts.config.quality.gateEnv
+      ) : void 0;
+      await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
+    }
+  } else {
+    log33.info(
+      `skipping the CI net (${CI_NET_RELS.join(", ")}) \u2014 the quality-gate workflow renders for npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`
+    );
+  }
+  if (lists.updated.length > 0) {
+    log33.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
   }
   if (await recommendFastCheck(opts.targetRoot)) {
     log33.info(
@@ -17729,7 +17946,7 @@ async function runScaffold(opts) {
     lists.present.push(settingsRel);
   }
   const branch = opts.config.git.baseBranch;
-  const required = opts.config.git.requiredStatusChecks;
+  const required = opts.config.git.developRequiredStatusChecks;
   let state = await probeProtection({
     ghClient: opts.ghClient,
     owner: opts.owner,

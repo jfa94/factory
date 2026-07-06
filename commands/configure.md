@@ -132,13 +132,14 @@ producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by ri
 
 ### Git / serial-writer (`git.*`)
 
-| Key                    | Default | Meaning                                                   |
-| ---------------------- | ------- | --------------------------------------------------------- |
-| `baseBranch`           | develop | Branch staging forks from / rolls up into (never main)    |
-| `stagingBranch`        | staging | Integration branch task PRs serial-merge into             |
-| `requiredStatusChecks` | []      | Status checks protection must enforce before a run starts |
-| `provision`            | false   | Write branch protection when missing (else refuse)        |
-| `branchPrefix`         | factory | Prefix for run-scoped task branches                       |
+| Key                           | Default                                  | Meaning                                                |
+| ----------------------------- | ---------------------------------------- | ------------------------------------------------------ |
+| `baseBranch`                  | develop                                  | Branch staging forks from / rolls up into (never main) |
+| `stagingBranch`               | staging                                  | Integration branch task PRs serial-merge into          |
+| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks protection enforces on develop (rollup PR gate) |
+| `stagingRequiredStatusChecks` | []                                       | Checks provisioned onto each per-run staging branch    |
+| `provision`                   | false                                    | Write branch protection when missing (else refuse)     |
+| `branchPrefix`                | factory                                  | Prefix for run-scoped task branches                    |
 
 ### Other roots
 

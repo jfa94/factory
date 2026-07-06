@@ -199,7 +199,7 @@ async function createRunFromManifest(
             owner: stagingDeps.owner,
             repo: stagingDeps.repo,
             branch,
-            requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+            requiredChecks: stagingDeps.config.git.stagingRequiredStatusChecks,
             provision: true,
         })
     }

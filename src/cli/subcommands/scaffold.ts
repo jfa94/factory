@@ -42,7 +42,7 @@ import {
     type GhClient,
 } from '../../git/index.js'
 import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
-import {injectGateEnvIntoWorkflow} from '../../ci/index.js'
+import {injectGateEnvIntoWorkflow, renderQualityGate} from '../../ci/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {GATE_CONTRACT_REL} from '../../verifier/deterministic/gate-contract.js'
@@ -230,8 +230,11 @@ interface TemplateEntry {
  * cost-aware shard helper are MANAGED (plugin-authored, auto-updated); the gate
  * configs are SEED (a starting point the project then owns + tunes).
  */
-/** The managed CI workflow — also the gateEnv injection target (the only transformed file). */
+/** The managed CI workflow — also the render/injection target (the only transformed file). */
 const QUALITY_GATE_REL = '.github/workflows/quality-gate.yml'
+
+/** The managed CI net: rendered from the gate contract in pass 2 (npm stack only). */
+const CI_NET_RELS: readonly string[] = [QUALITY_GATE_REL, '.github/scripts/shard-mutation-scope.mjs']
 
 const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
     {rel: QUALITY_GATE_REL, policy: 'managed'},
@@ -315,6 +318,36 @@ async function applyTemplate(
     lists.updated.push(entry.rel)
 }
 
+/** The repo facts (beyond the contract) the workflow render needs (Decision 53). */
+interface WorkflowFacts {
+    readonly packageManager: 'pnpm' | 'npm'
+    readonly hasLockfile: boolean
+    readonly scripts: Readonly<Record<string, string>>
+    readonly hasNextDep: boolean
+}
+
+/** Lockfile-detect the package manager + read the scripts/next facts from package.json. */
+async function readWorkflowFacts(targetRoot: string): Promise<WorkflowFacts> {
+    const pnpm = existsSync(join(targetRoot, 'pnpm-lock.yaml'))
+    const raw = await readFile(join(targetRoot, 'package.json'), 'utf8')
+    let pkg: {
+        scripts?: Record<string, string>
+        dependencies?: Record<string, string>
+        devDependencies?: Record<string, string>
+    }
+    try {
+        pkg = JSON.parse(raw) as typeof pkg
+    } catch (err) {
+        throw new Error(`scaffold: package.json is not valid JSON: ${(err as Error).message}`)
+    }
+    return {
+        packageManager: pnpm ? 'pnpm' : 'npm',
+        hasLockfile: pnpm || existsSync(join(targetRoot, 'package-lock.json')),
+        scripts: pkg.scripts ?? {},
+        hasNextDep: pkg.dependencies?.next !== undefined || pkg.devDependencies?.next !== undefined,
+    }
+}
+
 /** Append any missing {@link GITIGNORE_ENTRIES} to the target `.gitignore`. */
 async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
     const path = join(root, '.gitignore')
@@ -347,34 +380,24 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
     const lists: FileLists = {created: [], present: [], updated: []}
 
-    // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
-    //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
-    //       The `nodeOnly` SEED configs apply only to a Node-package target. The managed
-    //       quality-gate.yml is rendered with the CONFIGURED quality.gateEnv injected
-    //       into its build step (manual-only: `factory configure --set quality.gateEnv.*`;
-    //       single source of truth for the local gate AND this repo's CI).
+    // 1. SEED template artifacts (Δ Z): copy-once + user-owned; `nodeOnly` configs
+    //    apply only to a Node-package target. Seeds go FIRST so the freshly seeded
+    //    eslint config participates in the npm lint resolution below.
     const isNodePackage = existsSync(join(opts.targetRoot, 'package.json'))
     for (const entry of TEMPLATE_MANIFEST) {
+        if (CI_NET_RELS.includes(entry.rel)) {
+            continue // the managed CI net renders AFTER the contract (pass 2)
+        }
         if (entry.nodeOnly === true && !isNodePackage) {
             continue
         }
-        const transform =
-            entry.rel === QUALITY_GATE_REL
-                ? (text: string) => injectGateEnvIntoWorkflow(text, opts.config.quality.gateEnv)
-                : undefined
-        await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform)
-    }
-    // Surface auto-updated plugin-managed files (e.g. the CI workflow refreshed in a
-    // previously-scaffolded repo) — these are the propagation path, worth a loud line.
-    if (lists.updated.length > 0) {
-        log.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(', ')}`)
+        await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists)
     }
 
-    // 2b. The GATE CONTRACT (S7, Decision 46): resolve the stack + write
-    //     `.factory/gates.json` (seed-like — an existing VALID contract is
-    //     project-owned; an invalid one refuses). AFTER templates so the freshly
-    //     seeded eslint config participates in the npm lint resolution. Throws
-    //     loud below the floor (test/type/build equivalents uncontractable).
+    // 2. The GATE CONTRACT (S7, Decision 46): resolve the stack + write
+    //    `.factory/gates.json` (seed-like — an existing VALID contract is
+    //    project-owned; an invalid one refuses). Throws loud below the floor
+    //    (test/type/build equivalents uncontractable).
     const gates = await ensureGateContract({
         targetRoot: opts.targetRoot,
         securityCommand: opts.config.quality.securityCommand,
@@ -388,6 +411,39 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         )
     } else {
         lists.present.push(GATE_CONTRACT_REL)
+    }
+
+    // 2b. The managed CI net, RENDERED from the contract (Decision 53): one source
+    //     of truth for the local GateRunner and CI. quality-gate.yml gets the
+    //     per-stack setup + gate steps plus the configured quality.gateEnv. Non-npm
+    //     stacks get no CI net — the render supports npm-stack repos only, and a
+    //     hardcoded workflow would fail at its install step (fail loud, not broken).
+    if (gates.contract.stack === 'npm') {
+        const facts = await readWorkflowFacts(opts.targetRoot)
+        for (const entry of TEMPLATE_MANIFEST) {
+            if (!CI_NET_RELS.includes(entry.rel)) {
+                continue
+            }
+            const transform =
+                entry.rel === QUALITY_GATE_REL
+                    ? (text: string) =>
+                          injectGateEnvIntoWorkflow(
+                              renderQualityGate(text, {contract: gates.contract, ...facts}),
+                              opts.config.quality.gateEnv
+                          )
+                    : undefined
+            await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform)
+        }
+    } else {
+        log.info(
+            `skipping the CI net (${CI_NET_RELS.join(', ')}) — the quality-gate workflow renders for ` +
+                `npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`
+        )
+    }
+    // Surface auto-updated plugin-managed files (e.g. the CI workflow refreshed in a
+    // previously-scaffolded repo) — these are the propagation path, worth a loud line.
+    if (lists.updated.length > 0) {
+        log.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(', ')}`)
     }
     // S8 PBT advisory (never blocks, never installs): fast-check unlocks the
     // test-writer's property-based tests.
@@ -423,7 +479,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     //    develop is a PRECONDITION — scaffold does not create it (a missing develop
     //    makes the probe fail loud, which is acceptable).
     const branch = opts.config.git.baseBranch
-    const required = opts.config.git.requiredStatusChecks
+    const required = opts.config.git.developRequiredStatusChecks
     let state = await probeProtection({
         ghClient: opts.ghClient,
         owner: opts.owner,

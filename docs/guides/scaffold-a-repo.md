@@ -24,15 +24,20 @@ fails loud.
 
 This is idempotent. It:
 
-- writes the plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
-  `.github/scripts/shard-mutation-scope.mjs` helper), and — when the target is a
-  Node package — the seed gate configs `.stryker.config.json`,
-  `.dependency-cruiser.cjs`, and `eslint.config.mjs`. The managed `quality-gate.yml`
-  is **rendered with the configured `quality.gateEnv` injected** into its `pnpm build`
-  step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`), so that one
-  config drives both the factory's local merge gate and this repo's GitHub CI. An
-  empty `gateEnv` leaves the build step's marker untouched, and a re-scaffold is
-  byte-identical (drift is measured against the rendered template);
+- seeds the project-owned gate configs (`.stryker.config.json`,
+  `.dependency-cruiser.cjs`, `eslint.config.mjs`) when the target is a Node package,
+  resolves the repo's gate contract (`.factory/gates.json`), then writes the
+  plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
+  `.github/scripts/shard-mutation-scope.mjs` helper). The `quality-gate.yml` is
+  **rendered per-repo from the gate contract** (Decision 53): the package-manager
+  setup (lockfile-detected pnpm vs npm) and each gate step come from the contract, so
+  CI runs the same checks the local merge gate enforces. This render is **npm-stack
+  only** — a `deno`/`custom` repo skips the CI net with a loud log and relies on the
+  local `GateRunner`. The configured `quality.gateEnv` is **injected** into the
+  rendered build step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`),
+  so one config drives both the factory's local merge gate and this repo's GitHub CI.
+  An empty `gateEnv` leaves the build step's marker untouched, and a re-scaffold is
+  byte-identical (drift is measured against the rendered file);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits / idempotently merges the target `.claude/settings.json` (factory allow-list
     - `permissions.additionalDirectories` plus `Read|Write|Edit(<data-dir>/**)` allow
@@ -85,7 +90,7 @@ scaffolding:
 ```bash
 factory configure --set git.baseBranch=develop
 factory configure --set git.stagingBranch=staging
-factory configure --set 'git.requiredStatusChecks=["quality-gate"]'
+factory configure --set 'git.developRequiredStatusChecks=["Quality","Mutation Testing","Security Scan"]'
 ```
 
 See [Configure the factory](./configure-the-factory.md) and the

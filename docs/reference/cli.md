@@ -57,20 +57,41 @@ string. `--get` cannot be combined with `--set`/`--unset`. Example:
 
 ## `scaffold`
 
-Action. Prepares a target repo for the pipeline: idempotently copies the CI net
-(`.github/workflows/quality-gate.yml`) and, for Node packages, the gate configs
-(`.stryker.config.json`, `.dependency-cruiser.cjs`, `eslint.config.mjs`); ensures
-the `.gitignore` guard; and probes branch protection on `develop` (the integration
-base) — **refusing loudly** when `develop` is not protected, unless `--provision` is
-set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
+Action. Prepares a target repo for the pipeline in a **two-pass** template loop
+(Decision 53): pass 1 seeds the project-owned gate configs (`.stryker.config.json`,
+`.dependency-cruiser.cjs`, `eslint.config.mjs`) for Node packages; then it resolves
+the repo's gate contract (`.factory/gates.json`); then pass 2 writes the managed CI
+net (`.github/workflows/quality-gate.yml` and its shard helper). It also ensures the
+`.gitignore` guard and probes branch protection on `develop` (the integration base)
+— **refusing loudly** when `develop` is not protected, unless `--provision` is set.
+Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
+The CI net is **rendered per-repo from the resolved gate contract**, not copied
+verbatim — `renderQualityGate` (`src/ci/render-quality-gate.ts`) fills the template's
+`# factory:*` markers with the target's package-manager setup (lockfile-detected pnpm
+vs npm) and per-gate steps, so CI runs the same checks the local `GateRunner` enforces.
+Each gate step resolves in precedence order: contracted `command` override → matching
+`package.json` script → GateRunner built-in (`npx tsc --noEmit`, `npx eslint .`,
+`npx vitest run`, `npm run build`); an uncontracted gate is omitted with an audit
+comment, and a waived `mutation` gate collapses to a vacuous-green aggregator job kept
+named exactly `Mutation Testing` (so the required-check context stays universal).
+The render is **npm-stack only** — a `deno`/`custom` contract skips the CI net with a
+loud log and relies on the local GateRunner (a hardcoded workflow would fail at its
+install step).
+
 The configured `quality.gateEnv` (set via `factory configure --set quality.gateEnv.<KEY>=<value>`)
-is **rendered into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
-(`src/ci/inject-gate-env.ts`) replaces the template's `# factory:gate-env` marker with a real
-`env:` block — so one config drives both the local merge gate and this repo's GitHub CI. Drift
-is measured against the _rendered_ template, so an injected managed file stays byte-identical
-across re-runs; an empty `gateEnv` leaves the marker untouched.
+is **injected into the rendered `quality-gate.yml`** — `injectGateEnvIntoWorkflow`
+(`src/ci/inject-gate-env.ts`) composes over the render, replacing the template's
+`# factory:gate-env` marker with a real `env:` block — so one config drives both the
+local merge gate and this repo's GitHub CI. Drift is measured against the _rendered_
+managed file, so it stays byte-identical across re-runs; an empty `gateEnv` leaves the
+marker untouched.
+
+The develop-protection probe asserts the contexts in `git.developRequiredStatusChecks`
+(default `["Quality", "Mutation Testing", "Security Scan"]`); the per-run staging
+branch's checks come from `git.stagingRequiredStatusChecks` (default empty) at
+[`run create`](#run-create).
 
 ```
 factory scaffold [--repo <owner/name>] [--provision]

@@ -229,6 +229,8 @@ export async function recommendFastCheck(targetRoot: string): Promise<boolean> {
 export interface GateContractResult {
     readonly status: 'created' | 'present'
     readonly stack: GateContractStack
+    /** The effective contract (loaded or freshly resolved) — drives the CI render (Decision 53). */
+    readonly contract: GateContract
 }
 
 /**
@@ -244,11 +246,11 @@ export async function ensureGateContract(opts: ResolveGatesOptions): Promise<Gat
         )
     }
     if (load.state === 'ok') {
-        return {status: 'present', stack: load.contract.stack}
+        return {status: 'present', stack: load.contract.stack, contract: load.contract}
     }
     const contract = await resolveGateContract(opts)
     const dest = join(opts.targetRoot, GATE_CONTRACT_REL)
     await mkdir(dirname(dest), {recursive: true})
     await writeFile(dest, JSON.stringify(contract, null, 2) + '\n', 'utf8')
-    return {status: 'created', stack: contract.stack}
+    return {status: 'created', stack: contract.stack, contract}
 }

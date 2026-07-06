@@ -27,10 +27,10 @@ const DATA_DIR_RULES = buildTargetDataDirRules({
     home: '/Users/jo',
 })
 
-/** Protection state that satisfies requireProtectionOrRefuse (no required checks). */
+/** Protection state that satisfies requireProtectionOrRefuse (the default develop contexts, Decision 53). */
 const PROTECTED: ProtectionApiResult = {
     enabled: true,
-    requiredStatusChecks: [],
+    requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'],
     strictUpToDate: true,
     hasMergeQueue: false,
 }
@@ -113,11 +113,13 @@ describe('runScaffold', () => {
         const gitignore = await readFile(join(root, '.gitignore'), 'utf8')
         expect(gitignore).toMatch(/\.claude-plugin-data\//)
 
-        // Decision 40 D11: no e2e job in CI — it would gate auto-merge on infra CI
+        // Decision 40 D11: no e2e job in CI — it would gate CI merges on infra CI
         // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
+        // Decision 53: no auto-merge job either — the engine owns both merge points.
         const gate = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
         expect(gate).not.toContain('E2E Tests')
-        expect(gate).toContain('needs: [quality, mutation-testing, security]')
+        expect(gate).not.toContain('auto-merge')
+        expect(gate).toContain('name: Mutation Testing')
 
         // E1: a target-repo .claude/settings.json is emitted with the factory
         // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
@@ -248,9 +250,12 @@ describe('runScaffold', () => {
 
         expect(report.files_updated).toContain('.github/workflows/quality-gate.yml')
         expect(report.files_created).not.toContain('.github/workflows/quality-gate.yml')
-        // Content was refreshed to the shipped template (the fix reaches the repo).
-        const template = await readFile(join(templatesDir, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
-        expect(await readFile(wf, 'utf8')).toBe(template)
+        // Content was refreshed to the RENDERED template (Decision 53) — the fix
+        // reaches the repo in its stack-adaptive form, not the raw pnpm skeleton.
+        const refreshed = await readFile(wf, 'utf8')
+        expect(refreshed).toContain('name: Quality Gate')
+        expect(refreshed).not.toContain('# factory:setup')
+        expect(refreshed).toContain('npm')
     })
 
     it('treats an existing SEED config as project-owned: present, never overwritten, never re-flagged', async () => {
@@ -395,6 +400,60 @@ describe('runScaffold', () => {
         const second = await runScaffold(baseArgs(GATEENV_CFG))
         expect(await readFile(wf, 'utf8')).toBe(first)
         expect(second.files_updated).not.toContain('.github/workflows/quality-gate.yml')
+    })
+
+    describe('stack-adaptive CI render (Decision 53)', () => {
+        const wfPath = () => join(root, '.github', 'workflows', 'quality-gate.yml')
+
+        it('renders the npm-fixture workflow with npm steps (no pnpm, no auto-merge, staging-* triggers)', async () => {
+            await runScaffold(baseArgs())
+            const wf = await readFile(wfPath(), 'utf8')
+            // The fixture has no lockfile → plain npm install; no scripts beyond build.
+            expect(wf).toContain('- run: npm install --no-audit --no-fund')
+            expect(wf).toContain('- run: npx tsc --noEmit')
+            expect(wf).toContain('- run: npx vitest run')
+            expect(wf).toContain('- run: npm run build')
+            expect(wf).not.toContain('pnpm')
+            expect(wf).not.toContain('next typegen')
+            // eslint is not installed in the fixture → lint gate uncontracted → audit comment.
+            expect(wf).toContain('# lint gate uncontracted:')
+            // Engine owns merges; per-run staging branches match the trigger glob.
+            expect(wf).not.toContain('gh pr merge')
+            expect(wf).toMatch(/branches: \[["']staging-\*["'], develop\]/)
+            // Mutation contracted (stryker devDep) → real mutation jobs, npm-ified.
+            expect(wf).toContain('npx stryker run \\')
+        })
+
+        it('renders the vacuous-green Mutation Testing aggregator when mutation is waived', async () => {
+            await writeFile(
+                join(root, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    scripts: {build: 'b'},
+                    devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
+                }),
+                'utf8'
+            )
+            await runScaffold({...baseArgs(), waiveMutation: true})
+            const wf = await readFile(wfPath(), 'utf8')
+            expect(wf).toContain('name: Mutation Testing') // context survives for protection
+            expect(wf).toContain('waived via --waive mutation')
+            expect(wf).not.toContain('stryker')
+            expect(wf).not.toContain('mutation-scope:')
+        })
+
+        it('skips the CI net for a deno target (npm-stack render only), loud in the log', async () => {
+            const deno = await mkdtemp(join(tmpdir(), 'factory-scaffold-deno-ci-'))
+            try {
+                await writeFile(join(deno, 'deno.json'), JSON.stringify({tasks: {}}) + '\n', 'utf8')
+                const report = await runScaffold({...baseArgs(), targetRoot: deno})
+                expect(existsSync(join(deno, '.github', 'workflows', 'quality-gate.yml'))).toBe(false)
+                expect(existsSync(join(deno, '.github', 'scripts', 'shard-mutation-scope.mjs'))).toBe(false)
+                expect(report.files_created).not.toContain('.github/workflows/quality-gate.yml')
+            } finally {
+                await rm(deno, {recursive: true, force: true})
+            }
+        })
     })
 
     describe('gate contract (S7, Decision 46)', () => {

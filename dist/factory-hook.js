@@ -6606,12 +6606,21 @@ var GitSchema = external_exports.object({
   /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
   stagingBranch: external_exports.string().min(1).default("staging"),
   /**
-   * Required status-check contexts that branch protection MUST enforce on the
-   * staging branch before a run may start. Empty means "no specific checks
-   * required" — but protection itself (incl. strict-up-to-date) is still
-   * mandatory; see `requireProtectionOrRefuse`.
+   * Required status-check contexts branch protection MUST enforce on DEVELOP
+   * (asserted at scaffold; provisioned with `--provision`). Defaults to the
+   * three contexts the rendered quality-gate workflow always reports
+   * (Decision 53) — the rollup PR cannot merge red. Protection itself
+   * (incl. strict-up-to-date) is mandatory regardless; see
+   * `requireProtectionOrRefuse`.
    */
-  requiredStatusChecks: external_exports.array(external_exports.string()).default([]),
+  developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
+  /**
+   * Required status-check contexts provisioned onto each per-run
+   * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
+   * local GateRunner is the primary task-level enforcement, and a required
+   * check here would make every task-PR merge wait on CI wall-clock.
+   */
+  stagingRequiredStatusChecks: external_exports.array(external_exports.string()).default([]),
   /**
    * Opt-in protection provisioning. OFF by default — the run VERIFIES and
    * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips

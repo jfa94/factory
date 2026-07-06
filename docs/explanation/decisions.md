@@ -1861,6 +1861,68 @@ The runner (main session) emits multiple `Agent()` calls in one message. Claude 
 
 ---
 
+## Decision 53 — Stack-Adaptive Quality-Gate CI, Rendered From the Gate Contract
+
+**Date:** 2026-07-06
+
+**Context:** The scaffolded `.github/workflows/quality-gate.yml` mirrored one
+project's stack byte-for-byte: `pnpm install --frozen-lockfile`, `pnpm next
+typegen`, `pnpm typecheck/lint/test/build`, `pnpm deps:validate`, Stryker. On any
+npm/vitest repo it failed at the install step, so the CI checks could never be
+made **required** — the opinionated end state the factory wants (a red run must
+not reach `develop`). Meanwhile the engine already resolves a per-repo **gate
+contract** (`.factory/gates.json`, Decision 46) that names exactly which gates
+apply and with which commands — the same contract the local GateRunner enforces.
+The CI workflow was a second, hardcoded source of truth for the same facts.
+
+**Decision (four changes):**
+
+1. **Render the workflow from the gate contract.** `renderQualityGate`
+   (`src/ci/render-quality-gate.ts`) is a pure text render over a marker-annotated
+   template (`# factory:setup` / `# factory:gates` / `# factory:mutation-*`).
+   Scaffold resolves the contract **before** the CI net renders (a two-pass
+   template loop: seeds → contract → managed CI net), then threads it plus
+   lockfile-detected package manager, `package.json` scripts, and a `next`-dep
+   flag into the render. Each quality-job gate step is **override > script >
+   GateRunner built-in** (`npx tsc --noEmit`, `npx eslint .`, `npx vitest run`,
+   `npm run build`), so CI and the local gate run the same command. An
+   uncontracted gate is omitted with an audit comment. Drift is still measured
+   against the **rendered** output, so per-repo rendering stays idempotent.
+   Composes with the existing `injectGateEnvIntoWorkflow` (gate-env still a
+   downstream marker). **npm-stack only** this pass: a deno/custom contract makes
+   the render throw, and scaffold skips the CI net for those repos with a loud log
+   (they rely on the local GateRunner) rather than writing a broken workflow.
+
+2. **The engine owns merges — the CI `auto-merge` job is deleted.** The factory
+   already merges at both points (task PRs via `MergeSerializer`, the rollup PR
+   via finalize's `gh pr checks` poll), so a CI-side `gh pr merge --auto` only
+   raced it. Removing the job also drops the stale `github.base_ref == 'staging'`
+   literal that never matched per-run `staging-<run-id>` branches.
+
+3. **Vacuous-green `Mutation Testing` when mutation is waived.** A mutation-waived
+   repo renders no `mutation-scope`/shard jobs, but keeps an aggregator job named
+   exactly **`Mutation Testing`** that reports green with the waive reason. The
+   required-check **context stays universal** across factory repos, so one
+   develop required-check list works everywhere — no per-repo protection drift
+   that could deadlock the rollup.
+
+4. **Split the single `requiredStatusChecks` knob into develop vs staging.**
+   `developRequiredStatusChecks` defaults to `["Quality", "Mutation Testing",
+"Security Scan"]` (asserted at scaffold, provisioned with `--provision`) — the
+   opinionated gate on the rollup into `develop`. `stagingRequiredStatusChecks`
+   defaults to `[]` on each per-run `staging-<run-id>` branch: the local
+   GateRunner is the primary task-level gate, and a required check there would
+   stall every task-PR merge on CI wall-clock. The workflow triggers on
+   `['staging-*', develop]` so per-run branches actually report. (The GitHub REST
+   API accepts contexts that have never reported — the "run once first" limitation
+   is UI-only — so provisioning works on a fresh scaffold.)
+
+**Consequence:** Scaffolding a repo whose `develop` protection lacks the three
+default contexts now refuses unless `--provision` is passed (the default list is
+no longer empty). This is intentional: required-by-default is the point.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability
