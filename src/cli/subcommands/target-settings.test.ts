@@ -5,7 +5,8 @@
  * `.claude/settings.json` so an interactive `/factory:run` stops prompting per
  * call. The invariants under test:
  *   - emit: a fresh repo gets the base allow-list + the BAKED data-dir rules
- *     (CLI-resolved canonical dir, tilde form) + worktree.baseRef:"head".
+ *     (CLI-resolved canonical dir; tilde form for the allow globs, ABSOLUTE for
+ *     additionalDirectories — `~/` does not expand there) + worktree.baseRef:"head".
  *   - NO literal `${CLAUDE_PLUGIN_DATA}` placeholder is ever emitted (it does not
  *     resolve — env-var interpolation is undocumented and the var is hijackable).
  *   - NO statusLine (would clobber the user's own statusline — E2 territory).
@@ -99,15 +100,23 @@ describe('FACTORY_TARGET_BASE_ALLOWLIST', () => {
 })
 
 describe('buildTargetDataDirRules', () => {
-    it('uses the git-safe tilde form when the data dir is under $HOME', () => {
+    it('uses the git-safe tilde form for the allow globs when the data dir is under $HOME', () => {
         expect(RULES.allowGlobBase).toBe(TILDE_BASE)
-        expect(RULES.additionalDir).toBe(TILDE_BASE)
+    })
+
+    it('ALWAYS bakes additionalDir absolute — ~/ does not expand in additionalDirectories', () => {
+        // Verified live: the tilde form left the working-directory-boundary prompt
+        // firing on out-of-tree task-worktree writes (run-20260630-095544).
+        expect(RULES.additionalDir).toBe(DATA_DIR)
+        // The old tilde entry is surfaced as stale so the merge migrates it away.
+        expect(RULES.staleAdditionalDirs).toEqual([TILDE_BASE])
     })
 
     it('falls back to the absolute path when the data dir is OUTSIDE $HOME', () => {
         const abs = buildTargetDataDirRules({dataDir: '/var/lib/factory-x', home: HOME})
         expect(abs.allowGlobBase).toBe('/var/lib/factory-x')
         expect(abs.additionalDir).toBe('/var/lib/factory-x')
+        expect(abs.staleAdditionalDirs).toEqual([]) // tilde form never existed → nothing stale
     })
 })
 
@@ -166,12 +175,14 @@ describe('mergeTargetSettings', () => {
         expect(new Set(dirs).size).toBe(dirs.length) // no duplicate dirs on re-merge
     })
 
-    it('from empty: declares the baked data dir in permissions.additionalDirectories', () => {
+    it('from empty: declares the ABSOLUTE baked data dir in permissions.additionalDirectories', () => {
         // The allow-list grants the tool; additionalDirectories grants the
         // working-directory boundary for out-of-tree writes (results/, worktrees/).
+        // Absolute form only — `~/` does not expand in additionalDirectories.
         const {settings} = mergeTargetSettings({}, RULES)
         const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(TILDE_BASE)
+        expect(dirs).toContain(DATA_DIR)
+        expect(dirs).not.toContain(TILDE_BASE)
         expect(dirs).not.toContain(STALE_ADDITIONAL)
     })
 
@@ -183,7 +194,7 @@ describe('mergeTargetSettings', () => {
         expect(changed).toBe(true)
         const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
         expect(dirs).toContain('/my/extra/dir') // user entry kept
-        expect(dirs).toContain(TILDE_BASE) // baked entry added
+        expect(dirs).toContain(DATA_DIR) // baked entry added
     })
 
     it('reports changed when additionalDirectories is missing even if allow-list is complete', () => {
@@ -194,7 +205,19 @@ describe('mergeTargetSettings', () => {
         const {changed, settings} = mergeTargetSettings(base, RULES)
         expect(changed).toBe(true)
         const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(TILDE_BASE)
+        expect(dirs).toContain(DATA_DIR)
+    })
+
+    it('migrates the stale TILDE additionalDirectories entry a previous emitter wrote', () => {
+        // Repos scaffolded between the placeholder era and this fix carry the tilde
+        // form, which Claude Code never matched (the observed prompt regression).
+        const stale = {permissions: {additionalDirectories: [TILDE_BASE, '/my/extra/dir']}}
+        const {settings, changed} = mergeTargetSettings(stale, RULES)
+        expect(changed).toBe(true)
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).not.toContain(TILDE_BASE) // stale tilde gone
+        expect(dirs).toContain(DATA_DIR) // absolute baked in
+        expect(dirs).toContain('/my/extra/dir') // user entry preserved
     })
 
     it('reports changed when baseRef was not yet head even if allow-list is complete', () => {
@@ -239,7 +262,7 @@ describe('mergeTargetSettings', () => {
 
             const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
             expect(dirs).not.toContain(STALE_ADDITIONAL)
-            expect(dirs).toContain(TILDE_BASE)
+            expect(dirs).toContain(DATA_DIR)
         })
 
         it('re-merge after migration is a stable no-op with zero placeholders left', () => {

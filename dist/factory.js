@@ -17642,7 +17642,11 @@ var STALE_DATA_DIR_ALLOW = [
 var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
 function buildTargetDataDirRules(opts) {
   const baked = tildeShorten(opts.dataDir, opts.home);
-  return { allowGlobBase: baked, additionalDir: baked };
+  return {
+    allowGlobBase: baked,
+    additionalDir: opts.dataDir,
+    staleAdditionalDirs: baked === opts.dataDir ? [] : [baked]
+  };
 }
 function dataDirAllowRules(allowGlobBase) {
   return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
@@ -17666,7 +17670,8 @@ function mergeTargetSettings(existing, dataDirRules) {
     changed = true;
   }
   const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
+  const staleDirs = /* @__PURE__ */ new Set([STALE_DATA_DIR_ADDITIONAL, ...dataDirRules.staleAdditionalDirs]);
+  const strippedDirs = currentDirs.filter((e) => !staleDirs.has(e));
   const removedStaleDir = strippedDirs.length !== currentDirs.length;
   const haveDirs = new Set(strippedDirs);
   const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));

@@ -107,20 +107,25 @@ export interface TargetDataDirRules {
      * Read/Write/Edit globs), else the absolute path.
      */
     readonly allowGlobBase: string
-    /** The `permissions.additionalDirectories` value (same tilde-or-absolute form). */
+    /**
+     * The `permissions.additionalDirectories` value — ALWAYS the absolute path.
+     * Claude Code does not expand `~/` in `additionalDirectories` (verified live:
+     * the tilde form left the working-directory-boundary prompt firing on task
+     * worktree writes, run-20260630-095544), so this entry trades the `$HOME`
+     * leak for a rule that actually matches.
+     */
     readonly additionalDir: string
+    /** Stale `additionalDirectories` entries a PREVIOUS emitter wrote (the tilde form); stripped on re-merge. */
+    readonly staleAdditionalDirs: readonly string[]
 }
 
 /**
- * Build the {@link TargetDataDirRules} for a CLI-resolved data dir. Prefers the
- * `~`-tilde form so a committed target `.claude/settings.json` stays portable and
- * leaks no `$HOME`; falls back to the absolute path when the data dir is outside
- * `$HOME` (e.g. a custom `CLAUDE_PLUGIN_DATA`).
- *
- * NOTE: `~/` in `additionalDirectories` is undocumented in Claude Code (it IS
- * documented for Read/Write/Edit globs). This is the single switch point — if the
- * working-directory-boundary prompt persists for the additional dir, change ONLY
- * `additionalDir` to the absolute form (`opts.dataDir`).
+ * Build the {@link TargetDataDirRules} for a CLI-resolved data dir. The allow
+ * globs prefer the `~`-tilde form (documented to expand; keeps a committed target
+ * `.claude/settings.json` free of `$HOME`), falling back to the absolute path when
+ * the data dir is outside `$HOME` (e.g. a custom `CLAUDE_PLUGIN_DATA`).
+ * `additionalDir` is ALWAYS absolute — see {@link TargetDataDirRules.additionalDir};
+ * the old tilde entry is returned as stale so the merge migrates it away.
  */
 export function buildTargetDataDirRules(opts: {
     /** The absolute, canonical data dir (from `resolveDataDir()`). */
@@ -129,7 +134,11 @@ export function buildTargetDataDirRules(opts: {
     readonly home: string
 }): TargetDataDirRules {
     const baked = tildeShorten(opts.dataDir, opts.home)
-    return {allowGlobBase: baked, additionalDir: baked}
+    return {
+        allowGlobBase: baked,
+        additionalDir: opts.dataDir,
+        staleAdditionalDirs: baked === opts.dataDir ? [] : [baked],
+    }
 }
 
 /** The three baked `Read|Write|Edit(<base>/**)` allow rules for a resolved dir. */
@@ -163,8 +172,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * and never mutates it.
  *
  * For both `permissions.allow` and `permissions.additionalDirectories` the merge:
- *   1. STRIPS the stale literal-`${CLAUDE_PLUGIN_DATA}` entries the old emitter
- *      wrote (exact-string match — see {@link STALE_DATA_DIR_ALLOW}), and
+ *   1. STRIPS the stale entries older emitters wrote (exact-string match): the
+ *      literal `${CLAUDE_PLUGIN_DATA}` placeholders ({@link STALE_DATA_DIR_ALLOW})
+ *      and, for `additionalDirectories`, the `~`-tilde dir form
+ *      ({@link TargetDataDirRules.staleAdditionalDirs}), and
  *   2. UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST} + the
  *      baked data-dir rules from `dataDirRules`), order-preserving, deduped.
  *
@@ -203,7 +214,8 @@ export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRu
     const currentDirs = Array.isArray(permissions.additionalDirectories)
         ? permissions.additionalDirectories.filter((e): e is string => typeof e === 'string')
         : []
-    const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL)
+    const staleDirs = new Set([STALE_DATA_DIR_ADDITIONAL, ...dataDirRules.staleAdditionalDirs])
+    const strippedDirs = currentDirs.filter((e) => !staleDirs.has(e))
     const removedStaleDir = strippedDirs.length !== currentDirs.length
     const haveDirs = new Set(strippedDirs)
     const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e))
