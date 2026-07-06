@@ -34,6 +34,8 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {copyFile, mkdir, writeFile} from 'node:fs/promises'
+import {ensureStageWorktree, publishToStaging, specTaskLines} from './stage-helpers.js'
+import type {StageDone, StageFailed, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {dirname, isAbsolute, join} from 'node:path'
 import {
     resetTaskRow,
@@ -112,40 +114,28 @@ export interface E2eRunDeps {
 }
 
 export type E2eAction =
-    | {
+    | (StageSpawnBase & {
           readonly kind: 'spawn'
           /** Which results shape the runner records back (D7) — author manifest vs adjudication verdicts. */
           readonly expects: 'author-results'
-          readonly run_id: string
-          readonly worktree: string
           readonly base_ref: string
-          readonly staging_branch: string
           readonly e2e_branch: string
           readonly throwaway_dir: string
-          readonly model: string
-          readonly max_turns: number
-          readonly prompt: string
-      }
-    | {
+      })
+    | (StageSpawnBase & {
           readonly kind: 'spawn'
           readonly expects: 'adjudication-results'
-          readonly run_id: string
-          readonly worktree: string
-          readonly staging_branch: string
           readonly adjudicate_branch: string
-          readonly model: string
-          readonly max_turns: number
-          readonly prompt: string
-      }
-    | {readonly kind: 'done'; readonly run_id: string}
-    | {readonly kind: 'failed'; readonly run_id: string; readonly reason: string}
+      })
+    | StageDone
+    | StageFailed
     | {
           readonly kind: 'reopen'
           readonly run_id: string
           readonly task_ids: readonly string[]
           readonly reason: string
       }
-    | {readonly kind: 'suspend'; readonly run_id: string; readonly reason: string}
+    | StageSuspend
 
 // Apex-pinned (Decision 40): the author runs once per run, no human reviews its
 // assertions, and they gate the run — same rationale as the spec-generator pin (Decision 21).
@@ -168,9 +158,7 @@ function buildAuthorPrompt(args: {
     baseURL: string
     spec: SpecManifest
 }): string {
-    const taskLines = args.spec.tasks
-        .map((t) => `  - ${t.task_id} — ${t.title}: ${t.acceptance_criteria.join('; ')}`)
-        .join('\n')
+    const taskLines = specTaskLines(args.spec)
     return [
         "You are the factory e2e-author running the pipeline's end-to-end test-authoring phase.",
         `1. cd into your worktree: ${args.worktree} (checked out on the e2e branch off the staging tip).`,
@@ -256,21 +244,19 @@ async function prepareAuthorSpawn(
     const baseRef = `origin/${base}`
 
     await deps.git.fetch('origin', staging)
-    if (!(await deps.git.worktreeExists(worktree))) {
-        // `-B` (not `-b`): a crash between this worktree's removal and the state
-        // update that concludes this phase can leave the branch behind after the
-        // worktree path is gone — a bare `-b` would fatal on re-entry. `-B`
-        // force-creates/resets it, matching a fresh run's behavior either way.
-        await deps.git.worktreeAdd(['-B', branch, worktree, `origin/${staging}`])
-        await (deps.provision ?? provisionWorktree)({
-            path: worktree,
-            setupCommand: deps.config.quality.setupCommand,
-        })
-    } else if ((run.e2e_phase?.author_attempts ?? 0) >= 1) {
-        // Re-spawn after a crashed author (D5): discard its partial, unmerged work so
-        // attempt 2 starts from a clean staging tip, not a half-written suite.
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // Retry-reset (D5): a crashed author's partial, unmerged work is discarded so
+    // attempt 2 starts from a clean staging tip, not a half-written suite.
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        branch,
+        resetIfExists: (run.e2e_phase?.author_attempts ?? 0) >= 1,
+        provision: () =>
+            (deps.provision ?? provisionWorktree)({
+                path: worktree,
+                setupCommand: deps.config.quality.setupCommand,
+            }),
+    })
 
     const throwawayDir = e2eThrowawayDir(deps.dataDir, runId)
     return {
@@ -304,9 +290,7 @@ function buildAdjudicationPrompt(args: {
     cursor: E2eAdjudication
     spec: SpecManifest
 }): string {
-    const taskLines = args.spec.tasks
-        .map((t) => `  - ${t.task_id} — ${t.title}: ${t.acceptance_criteria.join('; ')}`)
-        .join('\n')
+    const taskLines = specTaskLines(args.spec)
     const specLines = (rows: readonly E2eAdjudicationSpec[]): string =>
         rows
             .map((s) => {
@@ -370,17 +354,18 @@ async function prepareAdjudicatorSpawn(
     const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId)
 
     await deps.git.fetch('origin', staging)
-    if (!(await deps.git.worktreeExists(worktree))) {
-        // `-B`: same crash-safety rationale as prepareAuthorSpawn.
-        await deps.git.worktreeAdd(['-B', branch, worktree, `origin/${staging}`])
-        await (deps.provision ?? provisionWorktree)({
-            path: worktree,
-            setupCommand: deps.config.quality.setupCommand,
-        })
-    } else if (cursor.attempts >= 1) {
-        // Re-spawn after a crashed adjudicator: discard its partial work (mirrors D5).
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // Retry-reset: a crashed adjudicator's partial work is discarded (mirrors D5).
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        branch,
+        resetIfExists: cursor.attempts >= 1,
+        provision: () =>
+            (deps.provision ?? provisionWorktree)({
+                path: worktree,
+                setupCommand: deps.config.quality.setupCommand,
+            }),
+    })
 
     return {
         kind: 'spawn',
@@ -582,8 +567,7 @@ export async function runE2eRecord(deps: E2eRunDeps, runId: string, results: E2e
         }
 
         // Proven — merge the critical specs into staging (mirrors docs' ff-merge).
-        await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId))
-        await deps.git.push('origin', staging)
+        await publishToStaging(deps.git, staging, e2eBranchName(runId))
     }
     await deps.git.worktreeRemove([worktree, '--force'])
 
@@ -749,8 +733,7 @@ async function recordAdjudication(
         return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`)
     }
 
-    await deps.git.mergeFfOrCommit(staging, adjudicateBranchName(runId))
-    await deps.git.push('origin', staging)
+    await publishToStaging(deps.git, staging, adjudicateBranchName(runId))
     await deps.git.worktreeRemove([worktree, '--force'])
 
     await deps.state.update(runId, (s) => {
@@ -813,15 +796,19 @@ async function proveCriticals(
     const tool = deps.playwright ?? new DefaultPlaywrightTool()
     const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId)
     const base = `origin/${deps.config.git.baseBranch}`
-    if (!(await deps.git.worktreeExists(wtPath))) {
-        // `-B`: same crash-safety rationale as prepareAuthorSpawn — a scratch proof
-        // worktree removed by a crashed prior pass can leave its branch behind.
-        await deps.git.worktreeAdd(['-B', `e2e-base-proof-${runId}`, wtPath, base])
-        await (deps.provision ?? provisionWorktree)({
-            path: wtPath,
-            setupCommand: deps.config.quality.setupCommand,
-        })
-    }
+    // No fetch (proves against the already-fetched base) and no retry-reset (specs are
+    // re-copied in fresh each pass).
+    await ensureStageWorktree(deps.git, {
+        worktree: wtPath,
+        ref: base,
+        branch: `e2e-base-proof-${runId}`,
+        resetIfExists: false,
+        provision: () =>
+            (deps.provision ?? provisionWorktree)({
+                path: wtPath,
+                setupCommand: deps.config.quality.setupCommand,
+            }),
+    })
 
     try {
         for (const entry of critical) {
@@ -1018,13 +1005,14 @@ async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promise<E2eAc
     const worktree = e2eRunWorktreePath(deps.dataDir, runId)
     const provision = deps.provision ?? provisionWorktree
     await deps.git.fetch('origin', staging)
-    if (!(await deps.git.worktreeExists(worktree))) {
-        // `-B`: same crash-safety rationale as prepareAuthorSpawn.
-        await deps.git.worktreeAdd(['-B', `e2e-run-${runId}`, worktree, `origin/${staging}`])
-    } else {
-        // Always resync — a reopened task's re-ship advanced staging since the last pass.
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // Always resync on reuse — a reopened task's re-ship advanced staging since the
+    // last pass. Provision stays OUTSIDE (below): it must run on create AND every resync.
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        branch: `e2e-run-${runId}`,
+        resetIfExists: true,
+    })
     // Provisioned on first creation AND every resync — staging may have gained a
     // new dependency between reopen passes.
     await provision({path: worktree, setupCommand: deps.config.quality.setupCommand})

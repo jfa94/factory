@@ -24,6 +24,8 @@
  * ({@link MAX_ASSESS_ATTEMPTS}); the cap converts it to the same loud fail.
  */
 import {join} from 'node:path'
+import {ensureStageWorktree, publishToStaging, specTaskLines} from './stage-helpers.js'
+import type {StageDone, StageFailed, StageSpawnBase} from './stage-helpers.js'
 import {z} from 'zod'
 import {
     provisionWorktree,
@@ -53,18 +55,12 @@ export interface AssessmentRunDeps {
 }
 
 export type AssessmentAction =
-    | {
+    | (StageSpawnBase & {
           readonly kind: 'spawn'
-          readonly run_id: string
-          readonly worktree: string
-          readonly staging_branch: string
           readonly assess_branch: string
-          readonly model: string
-          readonly max_turns: number
-          readonly prompt: string
-      }
-    | {readonly kind: 'done'; readonly run_id: string; readonly warning?: string}
-    | {readonly kind: 'failed'; readonly run_id: string; readonly reason: string}
+      })
+    | (StageDone & {readonly warning?: string})
+    | StageFailed
 
 // Apex-pinned (Decision 40): the assessor's verdict can fail the whole run and its
 // machinery merges unreviewed — same rationale as the author/spec-generator pins.
@@ -117,9 +113,7 @@ function buildAssessorPrompt(args: {
     spec: SpecManifest
     cfg: Config['e2e']
 }): string {
-    const taskLines = args.spec.tasks
-        .map((t) => `  - ${t.task_id} — ${t.title}: ${t.acceptance_criteria.join('; ')}`)
-        .join('\n')
+    const taskLines = specTaskLines(args.spec)
     const hasOverride =
         (args.cfg.startCommand != null && args.cfg.startCommand.length > 0) ||
         (args.cfg.baseURL != null && args.cfg.baseURL.length > 0)
@@ -186,17 +180,18 @@ export async function runAssessmentEmit(deps: AssessmentRunDeps, runId: string):
     const worktree = assessmentWorktreePath(deps.dataDir, runId)
 
     await deps.git.fetch('origin', staging)
-    if (!(await deps.git.worktreeExists(worktree))) {
-        // `-B`: crash-safety, same rationale as the e2e author worktree.
-        await deps.git.worktreeAdd(['-B', branch, worktree, `origin/${staging}`])
-        await (deps.provision ?? provisionWorktree)({
-            path: worktree,
-            setupCommand: deps.config.quality.setupCommand,
-        })
-    } else if ((run.e2e_assessment?.attempts ?? 0) >= 1) {
-        // Retry: reset the dirty worktree so the crashed attempt's edits don't bleed in.
-        await deps.git.resetHardClean(`origin/${staging}`, {cwd: worktree})
-    }
+    // Retry-reset: the crashed attempt's edits must not bleed into the new one.
+    await ensureStageWorktree(deps.git, {
+        worktree,
+        ref: `origin/${staging}`,
+        branch,
+        resetIfExists: (run.e2e_assessment?.attempts ?? 0) >= 1,
+        provision: () =>
+            (deps.provision ?? provisionWorktree)({
+                path: worktree,
+                setupCommand: deps.config.quality.setupCommand,
+            }),
+    })
 
     return {
         kind: 'spawn',
@@ -339,8 +334,7 @@ export async function runAssessmentRecord(
     }
 
     if (changed.length > 0) {
-        await deps.git.mergeFfOrCommit(staging, assessBranchName(runId))
-        await deps.git.push('origin', staging)
+        await publishToStaging(deps.git, staging, assessBranchName(runId))
     }
     await deps.git.worktreeRemove([worktree, '--force'])
 

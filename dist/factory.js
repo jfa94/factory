@@ -14289,6 +14289,28 @@ async function nextAction(deps, runId, taskId, results) {
 
 // src/orchestrator/docs.ts
 import { join as join16 } from "node:path";
+
+// src/orchestrator/stage-helpers.ts
+async function ensureStageWorktree(git, opts) {
+  if (!await git.worktreeExists(opts.worktree)) {
+    const args = opts.branch !== void 0 ? ["-B", opts.branch, opts.worktree, opts.ref] : ["--detach", opts.worktree, opts.ref];
+    await git.worktreeAdd(args);
+    if (opts.provision !== void 0) {
+      await opts.provision();
+    }
+  } else if (opts.resetIfExists) {
+    await git.resetHardClean(opts.ref, { cwd: opts.worktree });
+  }
+}
+async function publishToStaging(git, staging, branch) {
+  await git.mergeFfOrCommit(staging, branch);
+  await git.push("origin", staging);
+}
+function specTaskLines(spec) {
+  return spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+}
+
+// src/orchestrator/docs.ts
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
@@ -14315,11 +14337,12 @@ async function runDocsEmit(deps, runId) {
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", docsBranch, worktree, `origin/${staging}`]);
-  } else if ((run10.docs?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch: docsBranch,
+    resetIfExists: (run10.docs?.attempts ?? 0) >= 1
+  });
   return {
     kind: "spawn",
     run_id: runId,
@@ -14340,8 +14363,7 @@ async function runDocsRecord(deps, runId, results) {
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
-    await deps.git.mergeFfOrCommit(staging, docsBranch);
-    await deps.git.push("origin", staging);
+    await publishToStaging(deps.git, staging, docsBranch);
     await deps.git.worktreeRemove([worktree, "--force"]);
     await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
     return { kind: "done", run_id: runId };
@@ -14412,11 +14434,11 @@ async function runTraceabilityEmit(deps, runId) {
   const requirements = await readRequirements(deps, runId);
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["--detach", worktree, `origin/${staging}`]);
-  } else if ((run10.traceability?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    resetIfExists: (run10.traceability?.attempts ?? 0) >= 1
+  });
   return {
     kind: "spawn",
     run_id: runId,
@@ -14783,7 +14805,7 @@ var E2E_AUTHOR_MODEL = "opus";
 var MAX_AUTHOR_ATTEMPTS = 2;
 var E2E_AUTHOR_MAX_TURNS = 90;
 function buildAuthorPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  const taskLines = specTaskLines(args.spec);
   return [
     "You are the factory e2e-author running the pipeline's end-to-end test-authoring phase.",
     `1. cd into your worktree: ${args.worktree} (checked out on the e2e branch off the staging tip).`,
@@ -14825,15 +14847,16 @@ async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
   const worktree = e2eWorktreePath(deps.dataDir, runId);
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: (run10.e2e_phase?.author_attempts ?? 0) >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
-    });
-  } else if ((run10.e2e_phase?.author_attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+    })
+  });
   const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
   return {
     kind: "spawn",
@@ -14858,7 +14881,7 @@ async function prepareAuthorSpawn(deps, run10, runId, boot, testDir) {
   };
 }
 function buildAdjudicationPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  const taskLines = specTaskLines(args.spec);
   const specLines = (rows) => rows.map((s) => {
     const detail = s.error === void 0 ? "" : `
     ${s.error.replace(/\n/g, "\n    ")}`;
@@ -14902,15 +14925,16 @@ async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
   const branch = adjudicateBranchName(runId);
   const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: cursor.attempts >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
-    });
-  } else if (cursor.attempts >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+    })
+  });
   return {
     kind: "spawn",
     expects: "adjudication-results",
@@ -15024,8 +15048,7 @@ async function runE2eRecord(deps, runId, results) {
     if (!proof.ok) {
       return failWithCleanup(deps, runId, worktree, proof.reason);
     }
-    await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId));
-    await deps.git.push("origin", staging);
+    await publishToStaging(deps.git, staging, e2eBranchName(runId));
   }
   await deps.git.worktreeRemove([worktree, "--force"]);
   await deps.state.update(runId, (s) => ({
@@ -15140,8 +15163,7 @@ async function recordAdjudication(deps, runId, run10, results) {
   if (!proof.ok) {
     return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`);
   }
-  await deps.git.mergeFfOrCommit(staging, adjudicateBranchName(runId));
-  await deps.git.push("origin", staging);
+  await publishToStaging(deps.git, staging, adjudicateBranchName(runId));
   await deps.git.worktreeRemove([worktree, "--force"]);
   await deps.state.update(runId, (s) => {
     if (s.e2e_phase === void 0) {
@@ -15174,13 +15196,16 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
   const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId);
   const base = `origin/${deps.config.git.baseBranch}`;
-  if (!await deps.git.worktreeExists(wtPath)) {
-    await deps.git.worktreeAdd(["-B", `e2e-base-proof-${runId}`, wtPath, base]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree: wtPath,
+    ref: base,
+    branch: `e2e-base-proof-${runId}`,
+    resetIfExists: false,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: wtPath,
       setupCommand: deps.config.quality.setupCommand
-    });
-  }
+    })
+  });
   try {
     for (const entry of critical) {
       await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
@@ -15328,11 +15353,12 @@ async function runSuiteAndDecide(deps, runId) {
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", `e2e-run-${runId}`, worktree, `origin/${staging}`]);
-  } else {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch: `e2e-run-${runId}`,
+    resetIfExists: true
+  });
   await provision({ path: worktree, setupCommand: deps.config.quality.setupCommand });
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
   let criticalResult;
@@ -15504,7 +15530,7 @@ var AssessmentResultsSchema = external_exports.object({
   affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
 }).strict();
 function buildAssessorPrompt(args) {
-  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  const taskLines = specTaskLines(args.spec);
   const hasOverride = args.cfg.startCommand != null && args.cfg.startCommand.length > 0 || args.cfg.baseURL != null && args.cfg.baseURL.length > 0;
   const overrides = hasOverride ? `Operator config overrides exist \u2014 treat them as authoritative: startCommand=${args.cfg.startCommand ?? "(unset)"}, baseURL=${args.cfg.baseURL ?? "(unset)"}.` : "No operator overrides \u2014 resolve the boot config yourself.";
   return [
@@ -15546,15 +15572,16 @@ async function runAssessmentEmit(deps, runId) {
   const branch = assessBranchName(runId);
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
   await deps.git.fetch("origin", staging);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
-    await (deps.provision ?? provisionWorktree)({
+  await ensureStageWorktree(deps.git, {
+    worktree,
+    ref: `origin/${staging}`,
+    branch,
+    resetIfExists: (run10.e2e_assessment?.attempts ?? 0) >= 1,
+    provision: () => (deps.provision ?? provisionWorktree)({
       path: worktree,
       setupCommand: deps.config.quality.setupCommand
-    });
-  } else if ((run10.e2e_assessment?.attempts ?? 0) >= 1) {
-    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
-  }
+    })
+  });
   return {
     kind: "spawn",
     run_id: runId,
@@ -15648,8 +15675,7 @@ async function runAssessmentRecord(deps, runId, results) {
     );
   }
   if (changed.length > 0) {
-    await deps.git.mergeFfOrCommit(staging, assessBranchName(runId));
-    await deps.git.push("origin", staging);
+    await publishToStaging(deps.git, staging, assessBranchName(runId));
   }
   await deps.git.worktreeRemove([worktree, "--force"]);
   const warning = results.status === "degraded" ? results.warning ?? results.reason ?? "e2e assessment degraded (assessor gave no detail)" : void 0;
