@@ -87,10 +87,10 @@ export interface StrategyContext<TTools> {
      */
     readonly exemptReader?: ExemptReader | undefined
     /**
-     * The repo's gate contract (S7, Decision 46), when `.factory/gates.json` is
-     * present in the worktree. Command gates (test/type/build/lint) execute a
-     * contracted `command` override instead of their built-in tool. Absent =
-     * legacy pre-contract repo — built-in behavior.
+     * The repo's gate contract (S7, Decision 46). Command gates (test/type/build/
+     * lint) execute a contracted `command` override instead of their built-in tool.
+     * The GateRunner always supplies it (it throws when `.factory/gates.json` is
+     * absent); optional only for direct-strategy unit tests.
      */
     readonly contract?: GateContract | undefined
     /**

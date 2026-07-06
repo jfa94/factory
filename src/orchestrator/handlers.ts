@@ -335,6 +335,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 config: deps.config,
                 tools: deps.tools,
                 exemptReader: taskExemptReader(deps, worktree),
+                ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
                 coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id)),
             }
             const gate = await new GateRunner().run(gateCtx)

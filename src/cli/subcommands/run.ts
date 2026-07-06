@@ -319,12 +319,10 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     if (e2e) {
         await assertE2ePrereqs(cwd)
     }
-    // Contract precondition applies to run BIRTH only — `--resume` continues an
-    // existing run, and pre-contract in-flight runs must stay resumable (their
-    // sweeps take the GateRunner legacy path + warn instead).
-    if (intent !== 'resume') {
-        await assertGateContract(cwd, gitClient)
-    }
+    // Contract precondition on EVERY intent, resume included — a resumed run's
+    // gate sweeps need the committed contract just like a fresh run's (the
+    // GateRunner throws without one).
+    await assertGateContract(cwd, gitClient)
     const hasDataDirOverride = overrides.dataDir !== undefined
 
     const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})

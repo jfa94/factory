@@ -132,22 +132,23 @@ export class GateRunner {
                 `gate contract: .factory/gates.json is INVALID (${load.error}) — fix or re-run \`factory scaffold\``
             )
         }
-        const contract: GateContract | undefined = load.state === 'ok' ? load.contract : undefined
-        if (contract === undefined) {
-            // TODO(remove after one release): legacy pre-contract fallback — runs created
-            // before S7 have no committed contract in their worktrees; keep today's skip
-            // semantics but never silently (finalize surfaces the same warning in report.md).
-            log.warn(
-                `run ${ctx.runId} task ${ctx.taskId}: no .factory/gates.json in worktree — ` +
-                    'legacy skip semantics (contracted-but-unrunnable enforcement OFF)'
+        if (load.state === 'absent') {
+            // No committed contract is structural: the worktree was cut from a commit
+            // without one (older factory version, or the contract was never committed).
+            // The throw surfaces as a loud failed verify step, never a silent green.
+            throw new Error(
+                'gate contract: no .factory/gates.json in this worktree — the worktree was cut from a ' +
+                    'commit without the contract (older factory version, or the contract was never ' +
+                    'committed). Run `factory scaffold`, commit .factory/gates.json, and start a fresh run.'
             )
         }
+        const contract: GateContract = load.contract
 
         for (const id of gates) {
             // An UNCONTRACTED gate is excluded by committed agreement — the strategy is
             // not even invoked (its tooling probes are moot); the reason is the audit trail.
-            const entry = contract?.gates[id]
-            if (entry !== undefined && !entry.contracted) {
+            const entry = contract.gates[id]
+            if (!entry.contracted) {
                 const reason = `uncontracted: ${entry.reason}`
                 report.push({gate: id, outcome: {kind: 'skip', gate: id, reason}})
                 skipped.push({gate: id, reason})
@@ -171,7 +172,7 @@ export class GateRunner {
             // the repo promised this gate but it cannot run (missing binary/config/data) —
             // that is a loud FAIL, never an exclusion. SCOPE skips (nothing in the diff for
             // this gate) stay excluded — they are task properties, not broken tooling.
-            if (outcome.kind === 'skip' && entry?.contracted === true && classifySkip(outcome.reason) === 'tooling') {
+            if (outcome.kind === 'skip' && classifySkip(outcome.reason) === 'tooling') {
                 outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`)
                 log.warn(`gate ${id} contracted but unrunnable — failing loud`)
             }

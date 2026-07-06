@@ -47,15 +47,15 @@ export const RUNS_DIR = 'runs'
  * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
  */
 export const WORKTREES_DIR = 'worktrees'
-/** Symlink name pointing at the active run (legacy GLOBAL "most-recent" pointer). */
+/** Symlink name pointing at the active run (GLOBAL repo-less pointer for no-cwd consumers). */
 export const CURRENT_LINK = 'current'
 /**
  * Subdir name for the PER-REPO current pointers (run-isolation L2.7). A pointer
  * lives at `<dataDir>/current/<repo-key>` → `../runs/<run-id>`, in a tree SEPARATE
  * from `runs/` so {@link runsRoot} enumeration ({@link runDir} scan) is untouched
  * (a sibling dir, never a child of `runs/`). This is the authoritative pointer the
- * human CLI resolves per checkout; the legacy global `runs/current` stays as the
- * repo-less "most-recent" fallback.
+ * human CLI resolves per checkout; the global repo-less `runs/current` stays for
+ * no-cwd consumers (statusline ticks, hook-context) — never a CLI fallback.
  */
 export const CURRENT_DIR = 'current'
 /** The per-run state file name. */
@@ -134,7 +134,7 @@ export function runCoverageDir(dataDir: string, runId: string): string {
     return join(runDir(dataDir, runId), 'coverage')
 }
 
-/** `<dataDir>/runs/current` symlink path — the legacy GLOBAL "most-recent" pointer. */
+/** `<dataDir>/runs/current` symlink path — the GLOBAL repo-less pointer (no-cwd consumers: statusline ticks, hook-context). */
 export function currentLinkPath(dataDir: string): string {
     return join(runsRoot(dataDir), CURRENT_LINK)
 }

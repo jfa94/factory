@@ -91,7 +91,7 @@ const TERMINAL_LINGER_SEC = 30 * 60
  * in-flight task's phase, run id, run status). Terminal runs show only for
  * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
  *
- * DELIBERATELY raw reads: the legacy GLOBAL `runs/current` symlink dereferenced
+ * DELIBERATELY raw reads: the GLOBAL repo-less `runs/current` symlink dereferenced
  * straight to `state.json` + a plain `JSON.parse` — never `parseRunState`. A
  * torn/partial concurrent write, a schema mismatch, or a missing pointer must
  * degrade to "no suffix", not a Zod throw: the statusline NEVER breaks.

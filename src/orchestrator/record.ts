@@ -460,6 +460,7 @@ export async function applyRecordReviews(
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
+        ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
         coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
     }
     const gate = await new GateRunner().run(gateCtx)

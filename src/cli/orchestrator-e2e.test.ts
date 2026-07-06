@@ -36,7 +36,7 @@ import {defaultConfig} from '../config/schema.js'
 import {SpecStore, type SpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools} from '../verifier/deterministic/fakes.js'
+import {contractedLoader, makeFakeTools} from '../verifier/deterministic/fakes.js'
 import {type HoldoutStore, InMemoryHoldoutStore} from '../verifier/holdout/index.js'
 import {
     InMemoryArtifactStore,
@@ -288,6 +288,10 @@ describe('runner orchestrator seam — golden contract E2E', () => {
             git,
             gh,
             tools: makeFakeTools({git: greenProbe()}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts,
             holdout,
             dataDir,

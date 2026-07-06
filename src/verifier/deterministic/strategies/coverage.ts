@@ -15,13 +15,14 @@
  * (default 0.5). Every non-measured answer (command failed, summary missing or
  * invalid, unresolvable base) is fail-closed and names which side broke.
  *
- * The ONLY skip is `no-gate-contract` (legacy pre-contract worktree — the runner
- * already warns). An UNCONTRACTED coverage gate never reaches this strategy: the
- * runner skips it with the contract's committed reason.
+ * This strategy never skips. An UNCONTRACTED coverage gate never reaches it (the
+ * runner skips it with the contract's committed reason), and the runner throws
+ * before any strategy when the contract is absent — so `ctx.contract` is always
+ * present here.
  */
 import {contractCommand, type GateContract} from '../gate-contract.js'
 import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
-import {ran, skip} from '../strategy.js'
+import {ran} from '../strategy.js'
 import type {CoverageCommand, CoverageMeasurement, CoverageSummary, GateTools} from '../tools.js'
 import {excerpt} from './proc-strategy.js'
 import {resolveBase} from './tdd.js'
@@ -145,9 +146,9 @@ export const coverageStrategy: GateStrategy<GateTools> = {
     async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
         const opts = {cwd: ctx.worktree}
         if (ctx.contract === undefined) {
-            // TODO(remove after one release): legacy pre-contract worktree — the runner
-            // already warned; keep the old skip semantics for runs created before S7.
-            return skip('coverage', 'no-gate-contract')
+            // Structurally unreachable: the runner throws on an absent contract before
+            // invoking any strategy. Reaching this means a caller bypassed the runner.
+            throw new Error('coverage strategy invoked without a gate contract — the runner must load it first')
         }
         const resolution = resolveCoverageCommand(ctx.contract)
         if (!resolution.ok) {

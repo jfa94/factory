@@ -59,12 +59,12 @@ describe("readCurrentForCwd — per-repo current run from the caller's checkout"
         expect(found).toBeNull()
     })
 
-    it("falls back to the GLOBAL pointer when the repo can't be derived (no origin)", async () => {
+    it("returns null when the repo can't be derived (no origin) — never the global pointer", async () => {
         const state = mgr()
         await state.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specWidgets})
-        // No origin remote → resolveRepo throws → degrade to the repo-less most-recent.
+        // No origin remote → resolveRepo throws → no repo, no current run.
         const found = await readCurrentForCwd(state, {gitClient: git(null), cwd: '/scratch'})
-        expect(found?.run_id).toBe('run-A')
+        expect(found).toBeNull()
     })
 
     it('returns null when there is no run at all', async () => {

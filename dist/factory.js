@@ -7381,18 +7381,12 @@ var StateManager = class _StateManager {
   /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
    * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
-   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
-   * run (global-only) still resolves, while another repo's run never leaks in.
-   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
+   * pointers on every create, so a repo with a run always has its per-repo link.
+   * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
    */
   async readCurrentForRepo(repo) {
-    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
-    if (viaRepo !== null) {
-      return viaRepo;
-    }
-    const legacy = await this.readCurrent();
-    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+    return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
   }
   /**
    * Read + validate a run's state THROUGH a `current`-style directory symlink (the
@@ -10977,7 +10971,7 @@ var coverageStrategy = {
   async run(ctx) {
     const opts = { cwd: ctx.worktree };
     if (ctx.contract === void 0) {
-      return skip("coverage", "no-gate-contract");
+      throw new Error("coverage strategy invoked without a gate contract \u2014 the runner must load it first");
     }
     const resolution = resolveCoverageCommand(ctx.contract);
     if (!resolution.ok) {
@@ -11243,15 +11237,15 @@ var GateRunner = class {
         `gate contract: .factory/gates.json is INVALID (${load.error}) \u2014 fix or re-run \`factory scaffold\``
       );
     }
-    const contract = load.state === "ok" ? load.contract : void 0;
-    if (contract === void 0) {
-      log18.warn(
-        `run ${ctx.runId} task ${ctx.taskId}: no .factory/gates.json in worktree \u2014 legacy skip semantics (contracted-but-unrunnable enforcement OFF)`
+    if (load.state === "absent") {
+      throw new Error(
+        "gate contract: no .factory/gates.json in this worktree \u2014 the worktree was cut from a commit without the contract (older factory version, or the contract was never committed). Run `factory scaffold`, commit .factory/gates.json, and start a fresh run."
       );
     }
+    const contract = load.contract;
     for (const id of gates) {
-      const entry = contract?.gates[id];
-      if (entry !== void 0 && !entry.contracted) {
+      const entry = contract.gates[id];
+      if (!entry.contracted) {
         const reason = `uncontracted: ${entry.reason}`;
         report.push({ gate: id, outcome: { kind: "skip", gate: id, reason } });
         skipped.push({ gate: id, reason });
@@ -11271,7 +11265,7 @@ var GateRunner = class {
         coverageStore: ctx.coverageStore
       };
       let outcome = await strategy.run(sctx);
-      if (outcome.kind === "skip" && entry?.contracted === true && classifySkip(outcome.reason) === "tooling") {
+      if (outcome.kind === "skip" && classifySkip(outcome.reason) === "tooling") {
         outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`);
         log18.warn(`gate ${id} contracted but unrunnable \u2014 failing loud`);
       }
@@ -12931,11 +12925,7 @@ async function finalizeRun(deps, runId) {
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
   const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" || run10.traceability?.status === "failed" ? "failed" : taskTerminal;
-  const contract = await loadGateContract(process.cwd());
-  const warnings = contract.state === "absent" ? [
-    "gates ran without a .factory/gates.json contract (legacy pre-contract run) \u2014 run `factory scaffold` and commit the contract"
-  ] : [];
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now, warnings });
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -13302,6 +13292,7 @@ function makePhaseHandlers(deps) {
         config: deps.config,
         tools: deps.tools,
         exemptReader: taskExemptReader(deps, worktree),
+        ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
         coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id))
       };
       const gate = await new GateRunner().run(gateCtx);
@@ -13794,6 +13785,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     config: deps.config,
     tools: deps.tools,
     exemptReader: taskExemptReader(deps, worktree),
+    ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
     coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
   };
   const gate = await new GateRunner().run(gateCtx);
@@ -15866,7 +15858,7 @@ async function readCurrentForCwd(state, overrides = {}) {
   try {
     repo = await resolveRepo({ cwd, gitClient });
   } catch {
-    return state.readCurrent();
+    return null;
   }
   return state.readCurrentForRepo(repo);
 }
@@ -16156,9 +16148,7 @@ async function runCreate(argv, overrides = {}) {
   if (e2e) {
     await assertE2ePrereqs(cwd);
   }
-  if (intent !== "resume") {
-    await assertGateContract(cwd, gitClient);
-  }
+  await assertGateContract(cwd, gitClient);
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});

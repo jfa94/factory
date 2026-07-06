@@ -26,7 +26,7 @@ import {defaultConfig} from '../config/schema.js'
 import {parseSpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
+import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore, InMemoryHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
 import {InMemoryArtifactStore} from './artifacts.js'
 import {ESCALATION_CAP} from '../producer/index.js'
@@ -101,6 +101,10 @@ describe('applyRecordHoldout record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools(),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -272,6 +276,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: probe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -740,6 +748,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {staging: 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: spyProbe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
@@ -877,6 +889,10 @@ describe('applyRecordReviews record', () => {
             git: new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging'}}),
             gh: new FakeGhClient(),
             tools: makeFakeTools({git: perRunProbe}),
+            loadContract: contractedLoader({
+                coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+                sast: {contracted: false, reason: 'fixture: no security command'},
+            }),
             artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,

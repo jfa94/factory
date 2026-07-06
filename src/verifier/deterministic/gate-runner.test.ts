@@ -58,6 +58,12 @@ function loadsCoverageContract(overrides: Partial<GateContract['gates']> = {}): 
     return () => Promise.resolve({state: 'ok', contract})
 }
 
+/** Default baseCtx loader: everything contracted (built-in commands) — a sweep never runs contract-less. */
+function loadsAllContracted(): () => Promise<GateContractLoad> {
+    const gates = Object.fromEntries(GATE_IDS.map((id) => [id, {contracted: true}])) as GateContract['gates']
+    return () => Promise.resolve({state: 'ok', contract: {version: 1, stack: 'npm', gates}})
+}
+
 function baseCtx(tools: GateTools, gates: readonly (typeof GATE_IDS)[number][]): GateContext {
     return {
         runId: 'r1',
@@ -68,6 +74,7 @@ function baseCtx(tools: GateTools, gates: readonly (typeof GATE_IDS)[number][]):
         tools,
         gates,
         exemptReader: {isExempt: () => Promise.resolve(false)},
+        loadContract: loadsAllContracted(),
     }
 }
 
@@ -102,9 +109,15 @@ describe("GateRunner — Δ V derive-don't-store conjunction", () => {
     })
 
     it('empty evidence (all gates skipped) FAILS closed — never default-open', async () => {
-        // sast with no securityCommand skips; run ONLY sast ⇒ zero evidence.
+        // sast waived by contract; run ONLY sast ⇒ zero evidence.
         const tools = makeFakeTools({git: greenGit()})
-        const res = await new GateRunner().run(baseCtx(tools, ['sast']))
+        const waived = Object.fromEntries(
+            GATE_IDS.map((id) => [id, {contracted: false, reason: 'test-waived'}])
+        ) as GateContract['gates']
+        const res = await new GateRunner().run({
+            ...baseCtx(tools, ['sast']),
+            loadContract: () => Promise.resolve({state: 'ok', contract: {version: 1, stack: 'npm', gates: waived}}),
+        })
         expect(res.evidence).toHaveLength(0)
         expect(res.skipped).toHaveLength(1)
         expect(res.verdict.passed).toBe(false) // deriveAllGatesVerdict([]) === false
@@ -183,14 +196,14 @@ describe('GateRunner — gate contract (S7, Decision 46)', () => {
         expect(res.verdict.passed).toBe(false)
     })
 
-    it('ABSENT contract keeps legacy skip semantics (tooling skip stays a skip)', async () => {
+    it('an ABSENT contract THROWS — a sweep never runs contract-less', async () => {
         const tools = makeFakeTools({git: greenGit(), fs: new FakeFs([])})
-        const res = await new GateRunner().run({
-            ...baseCtx(tools, ['lint']),
-            loadContract: () => Promise.resolve({state: 'absent'}),
-        })
-        expect(res.skipped).toEqual([{gate: 'lint', reason: 'no-eslint-binary'}])
-        expect(res.evidence).toHaveLength(0)
+        await expect(
+            new GateRunner().run({
+                ...baseCtx(tools, ['lint']),
+                loadContract: () => Promise.resolve({state: 'absent'}),
+            })
+        ).rejects.toThrow(/no \.factory\/gates\.json in this worktree.*factory scaffold/s)
     })
 
     it('an INVALID contract throws — never degrades to legacy', async () => {
@@ -238,6 +251,7 @@ describe('GateRunner — ONE config drives every gate (Δ V)', () => {
             config: strict,
             tools: mkTools(),
             gates: ['mutation'],
+            loadContract: loadsAllContracted(),
         })
         const runLax = await new GateRunner().run({
             runId: 'r',
@@ -247,6 +261,7 @@ describe('GateRunner — ONE config drives every gate (Δ V)', () => {
             config: lax,
             tools: mkTools(),
             gates: ['mutation'],
+            loadContract: loadsAllContracted(),
         })
 
         expect(runStrict.verdict.passed).toBe(false)
@@ -307,13 +322,14 @@ describe('GateRunner — coverage under the contract (S8)', () => {
         expect(res.evidence).toHaveLength(0)
     })
 
-    it('ABSENT contract → coverage skips no-gate-contract (legacy pre-contract semantics)', async () => {
+    it('an ABSENT contract THROWS before coverage is even invoked', async () => {
         const coverage = new FakeCoverageTool({head: measured(full), base: measured(full)})
-        const res = await new GateRunner().run({
-            ...baseCtx(makeFakeTools({git: covGit(), coverage}), ['coverage']),
-            loadContract: () => Promise.resolve({state: 'absent'}),
-        })
-        expect(res.skipped).toEqual([{gate: 'coverage', reason: 'no-gate-contract'}])
+        await expect(
+            new GateRunner().run({
+                ...baseCtx(makeFakeTools({git: covGit(), coverage}), ['coverage']),
+                loadContract: () => Promise.resolve({state: 'absent'}),
+            })
+        ).rejects.toThrow(/no \.factory\/gates\.json in this worktree/)
         expect(coverage.measureCalls).toHaveLength(0)
     })
 })

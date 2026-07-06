@@ -65,9 +65,9 @@ export async function assertE2ePrereqs(cwd: string): Promise<void> {
  * Create-time gate-contract precondition (S7, Decision 46): a run may only be
  * born in a repo whose `.factory/gates.json` contract is present, valid, AND
  * git-tracked. Tracked matters — an uncommitted contract never reaches the
- * task worktrees, so every gate sweep would run the legacy pre-contract path
- * despite the file existing at the root. Resume paths skip this: in-flight
- * runs created pre-contract are covered by the GateRunner legacy warn.
+ * task worktrees, so every gate sweep would throw (the GateRunner refuses to
+ * sweep without a contract) despite the file existing at the root. Checked on
+ * EVERY intent, resume included — a resumed run's sweeps need the contract too.
  */
 export async function assertGateContract(cwd: string, gitClient: GitClient): Promise<void> {
     const load = await loadGateContract(cwd)

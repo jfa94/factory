@@ -1346,9 +1346,9 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         await expect(create).rejects.toThrow(/not git-tracked.*commit it/s)
     })
 
-    it('runCreate: --resume skips the contract precondition (pre-contract in-flight runs stay resumable)', async () => {
+    it('runCreate: --resume DEMANDS the contract precondition (checked on every intent)', async () => {
         // Born WITH a contract, resumed from a cwd WITHOUT one — the resume path
-        // must not demand the contract (GateRunner's legacy warn covers the sweeps).
+        // fails loud too: a resumed run's sweeps need the contract just the same.
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
         git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
         const gh = new FakeGhClient()
@@ -1360,22 +1360,14 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         })
         const bare = await mkdtemp(join(tmpdir(), 'factory-resume-bare-'))
         contractCwds.push(bare)
-        const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
-        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
-        try {
-            // Resolving (any exit code) proves the contract guard did not fire.
-            await expect(
-                runCreate(['--issue', '42', '--resume'], {
-                    gitClient: git,
-                    ghClient: gh,
-                    cwd: bare,
-                    dataDir,
-                })
-            ).resolves.toBeTypeOf('number')
-        } finally {
-            stdoutSpy.mockRestore()
-            stderrSpy.mockRestore()
-        }
+        const resume = runCreate(['--issue', '42', '--resume'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd: bare,
+            dataDir,
+        })
+        await expect(resume).rejects.toMatchObject({isUsageError: true})
+        await expect(resume).rejects.toThrow(/missing .*gates\.json.*factory scaffold/s)
     })
 
     // -------------------------------------------------------------------------
@@ -1781,19 +1773,25 @@ describe('runCancel (abandon a live run, Decision 35)', () => {
         expect((await state.read('run-m2')).status).toBe('running')
     })
 
-    it('falls through to runs/current when the given session owns nothing (0-owned, not ambiguous)', async () => {
+    /** A FakeGitClient whose origin resolves to REPO, so readCurrentForCwd hits the per-repo pointer. */
+    function gitInRepo(): FakeGitClient {
+        const git = new FakeGitClient()
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        return git
+    }
+
+    it('falls through to the repo current run when the given session owns nothing (0-owned, not ambiguous)', async () => {
         await seed('run-cur0') // no owner stamped
         await setExecuting('run-cur0', 't1')
-        // sess-none owns nothing → owner-scan yields 0 (NOT ambiguous) → current pointer wins.
-        await cancel(['--session-id', 'sess-none'], {dataDir, cwd: dataDir})
+        // sess-none owns nothing → owner-scan yields 0 (NOT ambiguous) → the repo's current pointer wins.
+        await cancel(['--session-id', 'sess-none'], {dataDir, cwd: dataDir, gitClient: gitInRepo()})
         expect((await state.read('run-cur0')).status).toBe('failed')
     })
 
-    it('falls back to runs/current when neither --run nor a session id is given', async () => {
+    it('falls back to the repo current run when neither --run nor a session id is given', async () => {
         await seed('run-cur')
         await setExecuting('run-cur', 't1')
-        // Non-repo cwd → readCurrentForCwd degrades to the global current pointer (run-cur).
-        await cancel([], {dataDir, cwd: dataDir})
+        await cancel([], {dataDir, cwd: dataDir, gitClient: gitInRepo()})
         expect((await state.read('run-cur')).status).toBe('failed')
     })
 

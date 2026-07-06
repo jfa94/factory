@@ -135,10 +135,10 @@ export const GateContractSchema = z
 export type GateContract = z.infer<typeof GateContractSchema>
 
 /**
- * The result of loading a contract from a repo root / worktree. `absent` is the
- * legacy pre-contract state (runner warns + keeps today's skip semantics);
- * `invalid` is structural — a committed-but-broken contract must fail LOUD,
- * never degrade to legacy.
+ * The result of loading a contract from a repo root / worktree. Both non-ok
+ * states are structural for the GateRunner: `absent` (worktree cut from a commit
+ * without the contract) and `invalid` (committed-but-broken) each fail LOUD —
+ * a sweep never runs without a valid contract.
  */
 export type GateContractLoad =
     | {readonly state: 'ok'; readonly contract: GateContract}

@@ -475,12 +475,12 @@ describe('per-repo current pointer + clobber guard (run-isolation L2.6/L2.7)', (
         expect(await m.readCurrentForRepo('acme/unrelated')).toBeNull()
     })
 
-    it('falls through to the legacy global pointer for a pre-upgrade run (same repo only)', async () => {
+    it('a per-repo miss is null — NO fallthrough to the global pointer (older-factory state fails closed)', async () => {
         const m = mgr()
         await m.create({run_id: 'run-A', staging_branch: 'staging-run-A', spec: specA})
-        // Simulate a pre-L2 run: only the global runs/current exists, no per-repo tree.
+        // Only the global runs/current exists (per-repo tree removed) → per-repo read misses.
         await rm(join(dataDir, 'current'), {recursive: true, force: true})
-        expect(await m.readCurrentForRepo('acme/widgets')).toMatchObject({run_id: 'run-A'})
+        expect(await m.readCurrentForRepo('acme/widgets')).toBeNull()
     })
 
     it('CLOBBER: a 2nd same-repo run by a DIFFERENT session is refused loud (run stays addressable)', async () => {

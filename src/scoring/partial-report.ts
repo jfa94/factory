@@ -125,9 +125,8 @@ export interface PartialRunReport {
      */
     cross_vendor_absences?: {task_id: string; reason: string}[] | undefined
     /**
-     * General non-fatal run warnings supplied by the finalize coordinator (S7,
-     * Decision 46) — e.g. gates ran on the legacy pre-contract path because the
-     * repo has no `.factory/gates.json`. Present IFF non-empty.
+     * General non-fatal run warnings supplied by the finalize coordinator —
+     * e.g. a degraded-but-continuing setup condition. Present IFF non-empty.
      */
     warnings?: string[] | undefined
 }

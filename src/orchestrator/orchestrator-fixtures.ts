@@ -16,7 +16,7 @@ import {parseSpecManifest} from '../spec/schema.js'
 import type {Prd, SpecManifest} from '../spec/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
-import {makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
+import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
 import {InMemoryArtifactStore} from './artifacts.js'
 import {fakeUsageSignal, type UsageReading} from '../quota/usage-source.js'
@@ -206,6 +206,10 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
         git,
         gh,
         tools: makeFakeTools({git: greenProbe()}),
+        loadContract: contractedLoader({
+            coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
+            sast: {contracted: false, reason: 'fixture: no security command'},
+        }),
         artifacts: new InMemoryArtifactStore(),
         holdout,
         dataDir,

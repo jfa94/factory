@@ -253,19 +253,12 @@ export class StateManager {
     /**
      * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
      * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-     * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
-     * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
-     * run (global-only) still resolves, while another repo's run never leaks in.
-     * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+     * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
+     * pointers on every create, so a repo with a run always has its per-repo link.
+     * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
      */
     async readCurrentForRepo(repo: string): Promise<RunState | null> {
-        const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo))
-        if (viaRepo !== null) {
-            return viaRepo
-        }
-        // Per-repo miss → legacy read-through, scoped to the SAME repo (never cross-repo).
-        const legacy = await this.readCurrent()
-        return legacy !== null && legacy.spec.repo === repo ? legacy : null
+        return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo))
     }
 
     /**

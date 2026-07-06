@@ -9,7 +9,7 @@ import {defaultConfig, type Config} from '../../../config/schema.js'
 import {GATE_IDS} from '../gate-id.js'
 import {GateContractSchema, type GateContract} from '../gate-contract.js'
 import {FakeCoverageTool, FakeGitProbe, MemoryCoverageStore, makeFakeTools, measured, proc} from '../fakes.js'
-import type {GateRan, GateSkip, StrategyContext} from '../strategy.js'
+import type {GateRan, StrategyContext} from '../strategy.js'
 import type {CoverageMeasurement, CoverageSummary, GateTools} from '../tools.js'
 import {
     COVERAGE_FLAGS,
@@ -249,13 +249,11 @@ describe('coverageStrategy — measure-on-miss over the store', () => {
         expect(ev.detail).toContain('base_ref_not_found')
     })
 
-    it('no gate contract (legacy pre-contract worktree) → skip no-gate-contract', async () => {
+    it('a contract-less invocation THROWS (structural — the runner must load the contract first)', async () => {
         const tool = covTool(measured(full), measured(full))
-        const out = await coverageStrategy.run(
-            ctx(makeFakeTools({git: covGit(), coverage: tool}), {contract: undefined})
-        )
-        expect(out.kind).toBe('skip')
-        expect((out as GateSkip).reason).toBe('no-gate-contract')
+        await expect(
+            coverageStrategy.run(ctx(makeFakeTools({git: covGit(), coverage: tool}), {contract: undefined}))
+        ).rejects.toThrow(/without a gate contract/)
         expect(tool.measureCalls).toHaveLength(0)
     })
 
