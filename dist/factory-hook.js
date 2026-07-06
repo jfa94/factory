@@ -7637,27 +7637,39 @@ var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window"
   external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
   external_exports.object({ binding_window: external_exports.literal("unavailable") })
 ]);
-var DocsPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative attempt count (1-indexed). Written on `failed` markers only; a `done` marker omits it. */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string()
-});
+function concludedPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string()
+  });
+}
+function openPhaseMarker(afterReason, afterAttempts) {
+  return external_exports.object({
+    status: external_exports.enum(["done", "failed"]).optional(),
+    reason: external_exports.string().optional(),
+    ...afterReason,
+    attempts: external_exports.number().int().nonnegative().optional(),
+    ...afterAttempts,
+    ended_at: external_exports.string().optional()
+  });
+}
+var DocsPhaseSchema = concludedPhaseMarker({}, {});
 var TraceabilityVerdictRowSchema = external_exports.object({
   requirement: external_exports.string().min(1),
   verdict: external_exports.enum(["met", "partial", "unmet"]),
   evidence: external_exports.string().min(1)
 });
-var TraceabilityPhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]),
-  reason: external_exports.string().optional(),
-  /** Cumulative CRASH attempts (verdicts are judgment, never retried). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
-  verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([]),
-  ended_at: external_exports.string()
-});
+var TraceabilityPhaseSchema = concludedPhaseMarker(
+  {},
+  {
+    /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
+    verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([])
+  }
+);
 var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
 var E2eManifestEntrySchema = external_exports.object({
   /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
@@ -7687,39 +7699,38 @@ var E2eAdjudicationSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative(),
   requested_at: external_exports.string()
 });
-var E2ePhaseSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  reason: external_exports.string().optional(),
-  /**
-   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-   * didn't block completion (Decision 39: only critical red gates). Distinct from
-   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
-   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
-   */
-  advisory: external_exports.string().optional(),
-  /** Cumulative attempt count across ALL passes (1-indexed). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  /**
-   * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
-   * automatic re-spawn before the phase fails; distinct from `attempts` (suite
-   * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
-   */
-  author_attempts: external_exports.number().int().nonnegative().optional(),
-  /** The author's spec→task manifest, fixed once authored and reused across passes. */
-  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
-  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
-  reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
-  /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
-  adjudication: E2eAdjudicationSchema.optional(),
-  /**
-   * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
-   * A spec failing AGAIN after its one adjudication is a regression — the run
-   * fails rather than adjudicating in a loop. Survives rescue's reset (like
-   * `reopen_counts`): the cap holds across the whole run.
-   */
-  adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2ePhaseSchema = openPhaseMarker(
+  {
+    /**
+     * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+     * didn't block completion (Decision 39: only critical red gates). Distinct from
+     * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+     * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+     */
+    advisory: external_exports.string().optional()
+  },
+  {
+    /**
+     * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+     * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+     * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+     */
+    author_attempts: external_exports.number().int().nonnegative().optional(),
+    /** The author's spec→task manifest, fixed once authored and reused across passes. */
+    manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+    /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+    reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+    /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
+    adjudication: E2eAdjudicationSchema.optional(),
+    /**
+     * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
+     * A spec failing AGAIN after its one adjudication is a regression — the run
+     * fails rather than adjudicating in a loop. Survives rescue's reset (like
+     * `reopen_counts`): the cap holds across the whole run.
+     */
+    adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional()
+  }
+);
 var E2eAffectedSpecSchema = external_exports.object({
   /** Repo-relative path of the existing committed spec. */
   spec_path: external_exports.string().min(1),
@@ -7727,23 +7738,20 @@ var E2eAffectedSpecSchema = external_exports.object({
   task_ids: external_exports.array(external_exports.string().min(1)).min(1),
   expectation: external_exports.enum(["needs-update", "should-still-pass"])
 });
-var E2eAssessmentSchema = external_exports.object({
-  status: external_exports.enum(["done", "failed"]).optional(),
-  /** Plain-language failure verdict (set IFF failed — T3 below). */
-  reason: external_exports.string().optional(),
-  /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
-  warning: external_exports.string().optional(),
-  /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
-  resolved: external_exports.object({
-    start_command: external_exports.string().min(1).optional(),
-    base_url: external_exports.string().min(1).optional()
-  }).optional(),
-  /** Coverage forecast over EXISTING committed specs (empty when none exist). */
-  affected_specs: external_exports.array(E2eAffectedSpecSchema).default([]),
-  /** Assessor spawn attempts so far (crash-retry bookkeeping, cap 2). */
-  attempts: external_exports.number().int().nonnegative().optional(),
-  ended_at: external_exports.string().optional()
-});
+var E2eAssessmentSchema = openPhaseMarker(
+  {
+    /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
+    warning: external_exports.string().optional(),
+    /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
+    resolved: external_exports.object({
+      start_command: external_exports.string().min(1).optional(),
+      base_url: external_exports.string().min(1).optional()
+    }).optional(),
+    /** Coverage forecast over EXISTING committed specs (empty when none exist). */
+    affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
+  },
+  {}
+);
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({

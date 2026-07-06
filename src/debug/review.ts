@@ -34,6 +34,7 @@ import type {CrossVendorResolution} from '../verifier/judgment/vendor.js'
 import {parseRawReview, type Finding} from '../verifier/judgment/finding.js'
 import {runPanel, type AdjudicatedReviewer} from '../verifier/judgment/panel-run.js'
 import {buildWorktreeSource, makeReplayRunnerFactory, type ReviewerVerifications} from '../orchestrator/record.js'
+import {scrubbedE2eEnv} from '../orchestrator/e2e-paths.js'
 import type {SpawnRequest} from '../types/index.js'
 import {runE2e, DefaultPlaywrightTool, type E2eResults, type PlaywrightTool} from '../verifier/e2e/index.js'
 import type {Config} from '../config/index.js'
@@ -166,16 +167,13 @@ export async function adjudicateWholeScope(input: AdjudicateWholeScopeInput): Pr
  * classification — and folds its per-spec failures into synthetic
  * {@link Finding}s.
  *
- * Env-builder note: {@link debugE2eEnv}/{@link scrubbedDebugE2eEnv}
- * REPRODUCE (do not import) the `e2eEnv`/`scrubbedE2eEnv` pattern from
- * `src/orchestrator/e2e.ts:173-197` — those two helpers are module-private
- * there, so this module writes its own small equivalent. The
- * missing-config behavior DIFFERS from that file on purpose:
- * `src/orchestrator/e2e.ts`'s `run` coroutine SUSPENDS the whole run when
- * `e2e.startCommand`/`e2e.baseURL` are unset (`runE2eEmit`, e2e.ts:239-246);
- * debug's rule is softer — {@link runCommittedE2e} returns
- * `{kind: "skipped", ...}` and the caller keeps looping on review findings
- * alone, never suspending.
+ * Env-builder note: the Playwright env comes from `scrubbedE2eEnv`
+ * (`src/orchestrator/e2e-paths.ts`) — the same allowlisted builder the run
+ * coroutine uses. The missing-config behavior DIFFERS from that coroutine
+ * on purpose: the run coroutine SUSPENDS the whole run when
+ * `e2e.startCommand`/`e2e.baseURL` are unset (`runE2eEmit`); debug's rule
+ * is softer — {@link runCommittedE2e} returns `{kind: "skipped", ...}` and
+ * the caller keeps looping on review findings alone, never suspending.
  *
  * Citation-verify note: e2e findings are constructed directly here, not
  * parsed via `parseRawReview` / run through `adjudicateWholeScope`'s
@@ -203,41 +201,6 @@ export type E2eFoldResult =
           readonly results: E2eResults
           readonly findings: readonly Finding[]
       }
-
-/**
- * The env every debug-driven Playwright invocation gets — mirrors
- * `src/orchestrator/e2e.ts`'s `e2eEnv`, read by the scaffolded
- * `templates/playwright.config.ts`'s `webServer` block. Callers only reach
- * this after confirming both `baseURL`/`startCommand` are set (the `!`s
- * below are load-bearing on that precondition, matching e2e.ts's own).
- */
-function debugE2eEnv(cfg: Config['e2e']): Record<string, string> {
-    return {
-        BASE_URL: nonNull(cfg.baseURL),
-        FACTORY_E2E_START_COMMAND: nonNull(cfg.startCommand),
-        FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
-        FACTORY_E2E: '1',
-    }
-}
-
-/**
- * The env the COMMITTED suite actually executes with (Decision 39 W5,
- * mirrors `src/orchestrator/e2e.ts`'s `scrubbedE2eEnv`). Allowlists only
- * PATH/HOME (so node/npm/the Playwright bin's shebang resolve) plus
- * {@link debugE2eEnv}'s vars — never the full parent env. Pass alongside
- * `replaceEnv: true` so `runE2e`'s underlying `exec` does not merge this
- * over `process.env`.
- */
-function scrubbedDebugE2eEnv(cfg: Config['e2e']): Record<string, string> {
-    const env = debugE2eEnv(cfg)
-    for (const key of ['PATH', 'HOME']) {
-        const v = process.env[key]
-        if (v !== undefined) {
-            env[key] = v
-        }
-    }
-    return env
-}
 
 /**
  * Run the repo's COMMITTED Playwright e2e suite (`config.testDir`) against
@@ -285,7 +248,10 @@ export async function runCommittedE2e(
         results = await runE2e(
             {
                 cwd: input.cwd,
-                env: scrubbedDebugE2eEnv(config),
+                env: scrubbedE2eEnv(config, {
+                    startCommand: nonNull(config.startCommand),
+                    baseURL: nonNull(config.baseURL),
+                }),
                 replaceEnv: true,
                 testDir: config.testDir,
             },
