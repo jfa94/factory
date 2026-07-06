@@ -559,8 +559,8 @@ describe('renderFailureComment', () => {
             status: 'failed',
         })
         const report = buildPartialReport(run, spec, {now: NOW})
-        expect(renderFailureComment(report, true)).toContain('factory recover --auto')
-        expect(renderFailureComment(report)).not.toContain('factory recover --auto')
+        expect(renderFailureComment(report, true)).toContain('factory rescue auto')
+        expect(renderFailureComment(report)).not.toContain('factory rescue auto')
     })
 
     it('embeds the self-heal marker with the run id', () => {

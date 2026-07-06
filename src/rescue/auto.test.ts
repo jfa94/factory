@@ -1,5 +1,5 @@
 /**
- * S10 — effectiveAutoResets (the auto-safe filter behind `factory recover --auto`;
+ * S10 — effectiveAutoResets (the auto-safe filter behind `factory rescue auto`;
  * Decision 48).
  *
  * Pure over {RunState, RescueScan}. The contract these tests pin:

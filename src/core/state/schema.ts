@@ -784,7 +784,7 @@ export const RunStateSchema = z.object({
      * `applyRescue` mutation that performs an `--auto` reset. A sanctioned
      * stored-EVENT exception to derive-don't-store (precedent: the retired
      * `paused_minutes`): "how many self-heal cycles already ran" is history no
-     * state/git re-derivation can recover. `factory recover --auto` requires
+     * state/git re-derivation can recover. `factory rescue auto` requires
      * `attempts === 0`, bounding the self-heal loop to ONE cycle per run.
      */
     self_heal: z
@@ -798,7 +798,7 @@ export const RunStateSchema = z.object({
      * Human-intervention ledger (S11): one entry per human action on the run —
      * `launch` (run create), `conflict` (a `--supersede` resolution, stamped on the
      * NEW run alongside its launch), `resume` (a human resume clearing a park),
-     * `recover` (a manual rescue apply / recover). The second sanctioned
+     * `recover` (an approved rescue apply that did work). The second sanctioned
      * stored-EVENT exception (with `self_heal`): which touches happened is history
      * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
      * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`.

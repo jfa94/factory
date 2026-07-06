@@ -1,4 +1,4 @@
-<!-- last-documented: f1fb7eb10ccfe4f09f5bc783baade5e377d878ac -->
+<!-- last-documented: 9d6cf1cc031e2a41cabf3e12d82309ce1f6ac270 -->
 
 # Dark Factory Plugin
 
@@ -100,7 +100,7 @@ contract.
 - [Run with end-to-end tests](./guides/run-with-e2e.md) — add the autonomous Playwright e2e phase with `--e2e`.
 - [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, `develop` branch protection).
 - [Configure the factory](./guides/configure-the-factory.md) — inspect and edit the config overlay.
-- [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — `factory recover` routes the repair for you; the rescue scan/apply escape hatch underneath.
+- [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — `/factory:resume` routes and consent-gates the repair for you; the rescue scan/apply plumbing underneath.
 - [Build and verify the engine](./guides/build-and-verify.md) — the contributor build/test/bundle workflow.
 
 ### Reference
@@ -120,7 +120,7 @@ contract.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
 - [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
-- [Design Decisions (D1–D49)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
+- [Design Decisions (D1–D50)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
 
 ### Domain
 

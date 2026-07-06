@@ -156,7 +156,7 @@ REFILL (run at loop entry and after every completion):
   case env.kind:
     "done"      → go to Phase 4 (report)
     "finalize"  → factory run finalize --run <run_id>; if the finalized run's
-                  status is "failed", run factory recover --auto --run <run_id>
+                  status is "failed", run factory rescue auto --run <run_id>
                   ONCE (the bounded self-heal, S10/Decision 48):
                     kind "recovered" → REFILL (back to the top of THE LOOP)
                     kind "page"      → report its reason/dead_ends/hints, go to Phase 4
@@ -428,7 +428,7 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
   `factory state <run_id> --summary`. Surface the run
   status (`completed | failed`), the rollup PR, filed issues, and every
   drop with its class — plainly, never papered over. If the self-heal paged
-  (`factory recover --auto` returned `kind:"page"`), include its reason + hints.
+  (`factory rescue auto` returned `kind:"page"`), include its reason + hints.
 - Documentation is no longer a Phase-4 step: the engine runs it as the
   `document` stage in THE LOOP (Phase 3), before finalize ships the rollup.
   On an `--e2e` run, the e2e stage runs before docs (Decision 39) — a failed

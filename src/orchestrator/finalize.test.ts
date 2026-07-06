@@ -416,7 +416,7 @@ describe('finalizeRun', () => {
 
     it('failed + self-heal ELIGIBLE (S10, Decision 48): recoverable task, attempts=0 → PRD comment carries the self-heal sentence', async () => {
         // blocked-environmental → recoverable → resettable; no deps → clean closure;
-        // self_heal unset (attempts defaults 0): the ONE bounded `recover --auto` fires next.
+        // self_heal unset (attempts defaults 0): the ONE bounded `rescue auto` fires next.
         const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
         await seed(tasks)
 

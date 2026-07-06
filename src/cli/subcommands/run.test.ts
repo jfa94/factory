@@ -2011,7 +2011,7 @@ describe('applyResume', () => {
         expect(env.run.human_touches).toEqual([{kind: 'resume', at: new Date(NOW * 1000).toISOString()}])
     })
 
-    it('opts.touch:false clears the park WITHOUT appending a touch (recover route-4 tail)', async () => {
+    it('opts.touch:false clears the park WITHOUT appending a touch (the rescue-apply park-clear tail)', async () => {
         await createBareRun('r1')
         await setStatus('r1', 'paused', '5h')
         const env = asResumed(await applyResume(state, 'r1', underCurve(), defaultConfig(), NOW, {touch: false}))

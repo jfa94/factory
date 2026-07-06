@@ -1677,6 +1677,59 @@ records EVENTS (irrecoverable history), never derivable state.
 
 ---
 
+## Decision 50 — One Consent-Gated Repair Verb: `/factory:resume` Absorbs Rescue and Recover
+
+**Date:** 2026-07-06
+
+**Context:** Decision 48 collapsed the triage knowledge into `factory recover`, but
+the OPERATOR surface still exposed three overlapping verbs (`/factory:resume`,
+`/factory:rescue`, `/factory:recover`) — near-synonyms confusing enough that the
+newest one went unnoticed. And `recover` auto-applied stuck/recoverable resets
+without asking, while `rescue` demanded typed flag incantations (`--task`,
+`--reset-e2e`, …) for the human assertions.
+
+**Decision:**
+
+- **ONE slash command: `/factory:resume`.** The operator intent is always "make my
+  run continue"; escalation is internal, not a second command.
+  `/factory:rescue` and `/factory:recover` are deleted. Supersedes Decision 48's
+  command surface and Decision 35's resume/rescue verb split (both histories stand).
+- **Consent replaces verb-splitting.** `factory rescue scan` (read-only) now carries
+  the routing: `nothing` (no run / terminal with nothing repairable) → report + stop;
+  `resume` (clean park or healthy re-entry, `awaiting` naming the derived park
+  cause) → `factory resume`, no prompt; `repair` → the rescue-protocol skill builds
+  a proposed plan — safe resets, diagnostic-recommended dead-ends
+  (`rescue-diagnostic` agents run first), e2e/traceability verdict clears, rollup
+  recheck, git-drift reconciliation — and presents it as ONE AskUserQuestion
+  multiSelect. The human approves ANY SUBSET; exactly that subset executes via ONE
+  `factory rescue apply`. **Nothing mutates without an approved plan item** —
+  including the stuck/recoverable resets `recover` previously auto-applied. The
+  scan's `hints` (one exact `apply` command per proposable repair) double as the
+  decline path's manual escape hatch.
+- **A healthy `running` run routes `resume`, not `nothing`** — one command always
+  makes progress; `applyResume` is the idempotent re-entry (and re-enters a
+  finalize when all tasks are terminal).
+- **`recover` dies as a name; `rescue scan|apply|auto` is the CLI plumbing.** The
+  bounded self-heal (`recover --auto`) is renamed `factory rescue auto`, semantics
+  identical (Decision 48's `effectiveAutoResets` + `self_heal.attempts === 0`
+  bound). The apply's park-clear tail moved INTO `rescue apply` (`{touch:false}`
+  resume), preserving Decision 49's ONE-action-ONE-touch accounting: an approved
+  plan application appends ONE `recover` touch, and the follow-up
+  `factory resume` is the touchless already-running re-entry. The stored
+  `human_touches` kind literal `'recover'` is RETAINED (existing runs carry it;
+  it is not operator-facing) — the sanctioned exception to the rename.
+- **Model A intact.** The CLI stays deterministic — scan/route/hints in envelopes,
+  `apply` the only writer, never a prompt or an agent spawn. Prompting, diagnostics,
+  and reconciliation live in `commands/resume.md` + `skills/rescue-protocol/`.
+
+**Consequences:** one verb to remember, one interactive consent point, zero typed
+flag incantations on the happy path; a clean park still resumes promptly with no
+prompt at all; and the no-mutation guarantee the old `resume` provided by
+construction is now provided by consent — stronger, because it also covers what
+`recover` used to change silently.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

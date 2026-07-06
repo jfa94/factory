@@ -128,7 +128,7 @@ export interface RescueApplyOptions {
      */
     resetTraceability?: boolean
     /**
-     * The bounded self-heal path (`factory recover --auto`, S10 / Decision 48).
+     * The bounded self-heal path (`factory rescue auto`, S10 / Decision 48).
      * Mutually exclusive with every manual option above (a LOUD error, not a
      * merge): the auto-safe target set is computed INSIDE the locked mutator via
      * {@link effectiveAutoResets} — stuck ∪ recoverable, filtered to tasks that
