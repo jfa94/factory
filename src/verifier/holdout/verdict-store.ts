@@ -11,8 +11,9 @@
  * stored boolean.
  *
  * The verdicts live in the SAME Δ Y confined subtree as the answer key
- * (`runs/<run_id>/holdouts/<task_id>.verdicts.json`): they reveal the withheld
- * criteria text, so they must stay out of an implementer worktree's read reach too.
+ * (`runs/<run_id>/holdouts/<task_id>.r<rung>.verdicts.json`, keyed by escalation
+ * rung): they reveal the withheld criteria text, so they must stay out of an
+ * implementer worktree's read reach too.
  *
  * Two impls mirror {@link import("./store.js").HoldoutStore}:
  * {@link InMemoryHoldoutVerdictStore} (units) and {@link FsHoldoutVerdictStore} (the
@@ -51,71 +52,77 @@ const _holdoutVerdictPin: z.ZodType<HoldoutVerdict> = HoldoutVerdictSchema
 void _holdoutVerdictPin
 
 /**
- * Persist + retrieve the per-task holdout VERDICTS (the validator agent's parsed
- * assessment). `put` is idempotent (overwrites) so a re-validated verify round
- * replaces the stale verdicts; `get` is LOUD if absent.
+ * Persist + retrieve the per-(task, rung) holdout VERDICTS (the validator agent's
+ * parsed assessment). Keyed by escalation rung so a prior rung's verdicts can never
+ * satisfy the current rung's check — an escalation bump implicitly invalidates them
+ * (stale files become inert; the fail-closed reader re-spawns the panel instead).
+ * `put` is idempotent (overwrites) so a re-validated verify round replaces the stale
+ * verdicts; `get` is LOUD if absent.
  */
 export interface HoldoutVerdictStore {
-    put(runId: string, taskId: string, verdicts: readonly HoldoutVerdict[]): Promise<void>
-    get(runId: string, taskId: string): Promise<readonly HoldoutVerdict[]>
-    has(runId: string, taskId: string): Promise<boolean>
+    put(runId: string, taskId: string, rung: number, verdicts: readonly HoldoutVerdict[]): Promise<void>
+    get(runId: string, taskId: string, rung: number): Promise<readonly HoldoutVerdict[]>
+    has(runId: string, taskId: string, rung: number): Promise<boolean>
 }
 
-/** In-memory store: units. Keyed by `runId\0taskId`. */
+/** In-memory store: units. Keyed by `runId taskId rung`. */
 export class InMemoryHoldoutVerdictStore implements HoldoutVerdictStore {
     private readonly verdicts = new Map<string, readonly HoldoutVerdict[]>()
 
-    private key(runId: string, taskId: string): string {
-        return `${runId} ${taskId}`
+    private key(runId: string, taskId: string, rung: number): string {
+        return `${runId} ${taskId} ${rung}`
     }
 
-    put(runId: string, taskId: string, verdicts: readonly HoldoutVerdict[]): Promise<void> {
-        this.verdicts.set(this.key(runId, taskId), [...verdicts])
+    put(runId: string, taskId: string, rung: number, verdicts: readonly HoldoutVerdict[]): Promise<void> {
+        this.verdicts.set(this.key(runId, taskId, rung), [...verdicts])
         return Promise.resolve()
     }
 
-    get(runId: string, taskId: string): Promise<readonly HoldoutVerdict[]> {
-        const v = this.verdicts.get(this.key(runId, taskId))
+    get(runId: string, taskId: string, rung: number): Promise<readonly HoldoutVerdict[]> {
+        const v = this.verdicts.get(this.key(runId, taskId, rung))
         if (v === undefined) {
             return Promise.reject(
-                new Error(`InMemoryHoldoutVerdictStore: no verdicts for task '${taskId}' in run '${runId}'`)
+                new Error(
+                    `InMemoryHoldoutVerdictStore: no verdicts for task '${taskId}' rung ${rung} in run '${runId}'`
+                )
             )
         }
         return Promise.resolve(v)
     }
 
-    has(runId: string, taskId: string): Promise<boolean> {
-        return Promise.resolve(this.verdicts.has(this.key(runId, taskId)))
+    has(runId: string, taskId: string, rung: number): Promise<boolean> {
+        return Promise.resolve(this.verdicts.has(this.key(runId, taskId, rung)))
     }
 }
 
 /**
- * Fs-backed store under `runs/<run_id>/holdouts/<task_id>.verdicts.json` (the Δ Y
- * confined subtree, alongside the answer key). Atomic writes via the shared helper.
+ * Fs-backed store under `runs/<run_id>/holdouts/<task_id>.r<rung>.verdicts.json`
+ * (the Δ Y confined subtree, alongside the answer key). Atomic writes via the
+ * shared helper.
  */
 export class FsHoldoutVerdictStore implements HoldoutVerdictStore {
     constructor(private readonly dataDir: string) {}
 
-    private path(runId: string, taskId: string): string {
+    private path(runId: string, taskId: string, rung: number): string {
         const safe = validateId(taskId, 'task_id')
-        return join(runDir(this.dataDir, runId), 'holdouts', `${safe}.verdicts.json`)
+        return join(runDir(this.dataDir, runId), 'holdouts', `${safe}.r${rung}.verdicts.json`)
     }
 
-    async put(runId: string, taskId: string, verdicts: readonly HoldoutVerdict[]): Promise<void> {
-        const path = this.path(runId, taskId)
+    async put(runId: string, taskId: string, rung: number, verdicts: readonly HoldoutVerdict[]): Promise<void> {
+        const path = this.path(runId, taskId, rung)
         await mkdir(dirname(path), {recursive: true})
         await atomicWriteFile(path, stringifyJson([...verdicts]))
     }
 
-    async get(runId: string, taskId: string): Promise<readonly HoldoutVerdict[]> {
-        const path = this.path(runId, taskId)
+    async get(runId: string, taskId: string, rung: number): Promise<readonly HoldoutVerdict[]> {
+        const path = this.path(runId, taskId, rung)
         const raw = await readFile(path, 'utf8')
         return HoldoutVerdictsSchema.parse(parseJson(raw, path))
     }
 
-    async has(runId: string, taskId: string): Promise<boolean> {
+    async has(runId: string, taskId: string, rung: number): Promise<boolean> {
         try {
-            await readFile(this.path(runId, taskId), 'utf8')
+            await readFile(this.path(runId, taskId, rung), 'utf8')
             return true
         } catch {
             return false

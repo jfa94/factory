@@ -595,7 +595,7 @@ describe('nextAction', () => {
 
             // Assert the holdout record path actually fired: verdict store has entries for T1.
             const verdictStore = new FsHoldoutVerdictStore(dataDir)
-            const verdicts = await verdictStore.get(runId, 'T1')
+            const verdicts = await verdictStore.get(runId, 'T1', 0)
             expect(verdicts.length).toBeGreaterThan(0)
         } finally {
             await cleanup()
@@ -1157,7 +1157,7 @@ describe('recordResults holdout-required guard', () => {
             // Seed prior-rung verdicts on disk: without the guard, applyRecordReviews would read
             // these successfully (no ENOENT) and NOT throw — so the test only fails without the guard.
             const verdictStore = new FsHoldoutVerdictStore(dataDir)
-            await verdictStore.put(runId, 'T1', [{criterion: 'e', satisfied: true, evidence: 'prior rung evidence'}])
+            await verdictStore.put(runId, 'T1', 0, [{criterion: 'e', satisfied: true, evidence: 'prior rung evidence'}])
 
             // Deliver reviews WITHOUT the holdout field (no withheld arg → no holdout in results).
             const resultsWithoutHoldout = approvingReviewsResults(panelEnv)

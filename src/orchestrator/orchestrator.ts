@@ -231,7 +231,7 @@ async function recordResults(
     const verdictStore = new FsHoldoutVerdictStore(deps.dataDir)
     // Holdout BEFORE reviews — the record ordering the old skill enforced by prose.
     if (results.holdout !== undefined) {
-        await applyRecordHoldout(record, runId, taskId, verdictStore, results.holdout.raw)
+        await applyRecordHoldout(record, runId, taskId, task.escalation_rung, verdictStore, results.holdout.raw)
     }
     const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews)
     return env.step

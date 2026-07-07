@@ -12578,23 +12578,23 @@ var FsHoldoutVerdictStore = class {
   constructor(dataDir) {
     this.dataDir = dataDir;
   }
-  path(runId, taskId) {
+  path(runId, taskId, rung) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.r${rung}.verdicts.json`);
   }
-  async put(runId, taskId, verdicts) {
-    const path6 = this.path(runId, taskId);
+  async put(runId, taskId, rung, verdicts) {
+    const path6 = this.path(runId, taskId, rung);
     await mkdir8(dirname6(path6), { recursive: true });
     await atomicWriteFile(path6, stringifyJson([...verdicts]));
   }
-  async get(runId, taskId) {
-    const path6 = this.path(runId, taskId);
+  async get(runId, taskId, rung) {
+    const path6 = this.path(runId, taskId, rung);
     const raw = await readFile10(path6, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path6));
   }
-  async has(runId, taskId) {
+  async has(runId, taskId, rung) {
     try {
-      await readFile10(this.path(runId, taskId), "utf8");
+      await readFile10(this.path(runId, taskId, rung), "utf8");
       return true;
     } catch {
       return false;
@@ -12603,12 +12603,12 @@ var FsHoldoutVerdictStore = class {
 };
 
 // src/verifier/holdout/index.ts
-async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passRate) {
+async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, rung, passRate) {
   if (!await holdout.has(runId, taskId)) {
     return void 0;
   }
   const record = await holdout.get(runId, taskId);
-  const verdicts = await verdictStore.get(runId, taskId);
+  const verdicts = await verdictStore.get(runId, taskId, rung);
   return holdoutEvidence(checkHoldout(record, verdicts, passRate));
 }
 
@@ -13421,12 +13421,13 @@ function buildGateContext(deps, runId, taskId, baseRef) {
     coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
   };
 }
-async function appendHoldoutEvidence(deps, verdictStore, runId, taskId, evidence) {
+async function appendHoldoutEvidence(deps, verdictStore, runId, taskId, rung, evidence) {
   const holdoutGate = await deriveHoldoutEvidence(
     deps.holdout,
     verdictStore,
     runId,
     taskId,
+    rung,
     deps.config.quality.holdoutPassRate
   );
   if (holdoutGate !== void 0) {
@@ -13631,11 +13632,18 @@ function makePhaseHandlers(deps) {
       const fastPathEvidence = [...gate.evidence];
       if (holdoutExpected) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
-        const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
+        const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id, task.escalation_rung);
         if (!hasVerdicts) {
           return panelSpawn();
         }
-        await appendHoldoutEvidence(deps, verdictStore, ctx.run.run_id, task.task_id, fastPathEvidence);
+        await appendHoldoutEvidence(
+          deps,
+          verdictStore,
+          ctx.run.run_id,
+          task.task_id,
+          task.escalation_rung,
+          fastPathEvidence
+        );
       }
       const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, fastPathEvidence);
       if (mergeGate.passed) {
@@ -13958,7 +13966,7 @@ function parseVerdictsFailClosed(raw) {
     return [];
   }
 }
-async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
+async function applyRecordHoldout(deps, runId, taskId, rung, verdictStore, raw) {
   if (!await deps.holdout.has(runId, taskId)) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only record when the orchestrator surfaced a holdout holdout)`
@@ -13966,7 +13974,7 @@ async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
   }
   const record = await deps.holdout.get(runId, taskId);
   const verdicts = parseVerdictsFailClosed(raw);
-  await verdictStore.put(runId, taskId, verdicts);
+  await verdictStore.put(runId, taskId, rung, verdicts);
   const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate);
   return { run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check };
 }
@@ -14076,7 +14084,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   const makeRunner2 = makeReplayRunnerFactory(input);
   const gate = await new GateRunner().run(buildGateContext(deps, runId, taskId, baseRef));
   const gateEvidence = [...gate.evidence];
-  await appendHoldoutEvidence(deps, verdictStore, runId, taskId, gateEvidence);
+  await appendHoldoutEvidence(deps, verdictStore, runId, taskId, task.escalation_rung, gateEvidence);
   const panel = await runPanel({
     reviews,
     source,
@@ -14381,7 +14389,7 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
   }
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
   if (results.holdout !== void 0) {
-    await applyRecordHoldout(record, runId, taskId, verdictStore, results.holdout.raw);
+    await applyRecordHoldout(record, runId, taskId, task.escalation_rung, verdictStore, results.holdout.raw);
   }
   const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews);
   return env.step;

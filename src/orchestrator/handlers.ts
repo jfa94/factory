@@ -381,14 +381,14 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             // already exist on disk before reviewers are persisted (the advance record reads them
             // LOUDLY). So for holdout tasks, missing verdicts imply an UNSANCTIONED write
             // (crash-window or rogue hook) — re-spawn the panel instead of deriving without
-            // holdout evidence (fail-closed). Caveat: the store is task-keyed, not rung-keyed,
-            // so a stale prior-rung verdict still satisfies the check (residual gap, tracked).
+            // holdout evidence (fail-closed). The store is rung-keyed, so a stale prior-rung
+            // verdict cannot satisfy this check — an escalation bump implicitly invalidates it.
             const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id)
             // Mutable evidence copy so we can append holdout gate below without mutating gate.evidence.
             const fastPathEvidence = [...gate.evidence]
             if (holdoutExpected) {
                 const verdictStore = new FsHoldoutVerdictStore(deps.dataDir)
-                const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id)
+                const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id, task.escalation_rung)
                 if (!hasVerdicts) {
                     return panelSpawn()
                 }
@@ -396,7 +396,14 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 // composition (gate-context.ts) on the sanctioned record route, skipped on
                 // merge-resync. Without this a re-synced implementation that fails withheld
                 // criteria can pass the merge gate.
-                await appendHoldoutEvidence(deps, verdictStore, ctx.run.run_id, task.task_id, fastPathEvidence)
+                await appendHoldoutEvidence(
+                    deps,
+                    verdictStore,
+                    ctx.run.run_id,
+                    task.task_id,
+                    task.escalation_rung,
+                    fastPathEvidence
+                )
             }
 
             const mergeGate = deriveMergeGateVerdict({reviewers: task.reviewers}, fastPathEvidence)

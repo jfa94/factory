@@ -38,6 +38,7 @@ export async function appendHoldoutEvidence(
     verdictStore: HoldoutVerdictStore,
     runId: string,
     taskId: string,
+    rung: number,
     evidence: GateEvidence[]
 ): Promise<void> {
     const holdoutGate = await deriveHoldoutEvidence(
@@ -45,6 +46,7 @@ export async function appendHoldoutEvidence(
         verdictStore,
         runId,
         taskId,
+        rung,
         deps.config.quality.holdoutPassRate
     )
     if (holdoutGate !== undefined) {

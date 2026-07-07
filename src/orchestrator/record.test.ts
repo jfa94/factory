@@ -126,7 +126,7 @@ describe('applyRecordHoldout record', () => {
             ['e', true, 'src/y.ts:3'],
         ])
 
-        const env = await applyRecordHoldout(deps, RUN_ID, 't1', verdictStore, raw)
+        const env = await applyRecordHoldout(deps, RUN_ID, 't1', 0, verdictStore, raw)
 
         expect(env.evidence.gate).toBe('holdout')
         expect(env.evidence.observed).toBe(true)
@@ -134,7 +134,7 @@ describe('applyRecordHoldout record', () => {
         expect(env.check.satisfied).toBe(2)
         expect(env.check.withheld).toBe(2)
         // The verdicts were persisted for the later record-reviews re-derivation.
-        expect(await verdictStore.get(RUN_ID, 't1')).toEqual([
+        expect(await verdictStore.get(RUN_ID, 't1', 0)).toEqual([
             {criterion: 'd', satisfied: true, evidence: 'src/x.ts:10'},
             {criterion: 'e', satisfied: true, evidence: 'src/y.ts:3'},
         ])
@@ -147,7 +147,7 @@ describe('applyRecordHoldout record', () => {
             ['e', false, ''],
         ])
 
-        const env = await applyRecordHoldout(deps, RUN_ID, 't1', verdictStore, raw)
+        const env = await applyRecordHoldout(deps, RUN_ID, 't1', 0, verdictStore, raw)
 
         expect(env.check.status).toBe('fail') // 1/2 = 50% < 80%
         expect(env.evidence.observed).toBe(false)
@@ -156,18 +156,18 @@ describe('applyRecordHoldout record', () => {
     it('fails CLOSED on unparseable validator output (verdicts → [], every criterion fails)', async () => {
         await holdout.put(RUN_ID, makeHoldoutRecord('t1', ['d', 'e'], 5))
 
-        const env = await applyRecordHoldout(deps, RUN_ID, 't1', verdictStore, 'not json at all')
+        const env = await applyRecordHoldout(deps, RUN_ID, 't1', 0, verdictStore, 'not json at all')
 
         expect(env.check.status).toBe('fail')
         expect(env.check.satisfied).toBe(0)
         expect(env.evidence.observed).toBe(false)
         // Even on a parse failure, an (empty) verdict array is persisted, so a later
         // record-reviews re-derivation sees the same fail-closed result.
-        expect(await verdictStore.get(RUN_ID, 't1')).toEqual([])
+        expect(await verdictStore.get(RUN_ID, 't1', 0)).toEqual([])
     })
 
     it('is a LOUD error when the task has no withheld answer key', async () => {
-        await expect(applyRecordHoldout(deps, RUN_ID, 't1', verdictStore, validatorJson([]))).rejects.toThrow(
+        await expect(applyRecordHoldout(deps, RUN_ID, 't1', 0, verdictStore, validatorJson([]))).rejects.toThrow(
             /no withheld answer key/
         )
     })
@@ -616,7 +616,7 @@ describe('applyRecordReviews record', () => {
     it('a failing holdout blocks the merge gate even with an approving panel + green gates', async () => {
         await holdout.put(RUN_ID, makeHoldoutRecord(TASK_ID, ['d', 'e'], 5))
         // Persisted verdicts that DO NOT satisfy the withheld criteria → holdout fails.
-        await verdictStore.put(RUN_ID, TASK_ID, [
+        await verdictStore.put(RUN_ID, TASK_ID, 0, [
             {criterion: 'd', satisfied: false, evidence: ''},
             {criterion: 'e', satisfied: false, evidence: ''},
         ])
@@ -637,7 +637,7 @@ describe('applyRecordReviews record', () => {
 
     it('a satisfied holdout + approving panel + green gates advances to ship', async () => {
         await holdout.put(RUN_ID, makeHoldoutRecord(TASK_ID, ['d', 'e'], 5))
-        await verdictStore.put(RUN_ID, TASK_ID, [
+        await verdictStore.put(RUN_ID, TASK_ID, 0, [
             {criterion: 'd', satisfied: true, evidence: 'src/x.ts:1'},
             {criterion: 'e', satisfied: true, evidence: 'src/y.ts:2'},
         ])

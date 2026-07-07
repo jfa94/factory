@@ -30,7 +30,7 @@ import {
     proc,
     commit,
 } from '../verifier/deterministic/fakes.js'
-import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
+import {InMemoryHoldoutStore, FsHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
 import {dialForRung} from '../producer/index.js'
 import {PANEL_ROLES} from '../verifier/judgment/index.js'
 import type {ReviewerResult, PhaseContext, TaskState} from '../types/index.js'
@@ -600,6 +600,45 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
+    })
+
+    it('verify RE-SPAWNS the panel when a holdout task has NO verdicts on record (fail-closed guard)', async () => {
+        // A withheld answer key with a full approving roster but no persisted verdicts
+        // implies an unsanctioned reviewers write — the fast-path must not derive.
+        await holdout.put(RUN_ID, makeHoldoutRecord('t-multi', ['d', 'e'], 5))
+        const handlers = makePhaseHandlers(makeDeps())
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel()})
+        const result = await handlers.verify(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+    })
+
+    it('S1: a stale PRIOR-RUNG holdout verdict does not satisfy the fast-path after an escalation bump', async () => {
+        // Verdicts persisted at rung 0 must be invisible once the task escalated to rung 1 —
+        // the store is rung-keyed, so the fast-path fails closed and re-spawns the panel.
+        await holdout.put(RUN_ID, makeHoldoutRecord('t-multi', ['d', 'e'], 5))
+        await new FsHoldoutVerdictStore(dataDir).put(RUN_ID, 't-multi', 0, [
+            {criterion: 'd', satisfied: true, evidence: 'src/x.ts:10'},
+            {criterion: 'e', satisfied: true, evidence: 'src/y.ts:3'},
+        ])
+        const handlers = makePhaseHandlers(makeDeps())
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel(), escalation_rung: 1})
+        const result = await handlers.verify(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+    })
+
+    it('S1: current-rung holdout verdicts DO satisfy the fast-path — advance to ship', async () => {
+        await holdout.put(RUN_ID, makeHoldoutRecord('t-multi', ['d', 'e'], 5))
+        await new FsHoldoutVerdictStore(dataDir).put(RUN_ID, 't-multi', 1, [
+            {criterion: 'd', satisfied: true, evidence: 'src/x.ts:10'},
+            {criterion: 'e', satisfied: true, evidence: 'src/y.ts:3'},
+        ])
+        const handlers = makePhaseHandlers(makeDeps())
+        const ctx = await ctxFor({task_id: 't-multi', reviewers: approvingPanel(), escalation_rung: 1})
+        const result = await handlers.verify(ctx)
+
+        expect(result).toEqual({kind: 'advance', to: 'ship'})
     })
 
     // Decision 51 — a probe whose diff touches a migration file (otherwise identical

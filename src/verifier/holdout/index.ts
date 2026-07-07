@@ -57,12 +57,13 @@ export async function deriveHoldoutEvidence(
     verdictStore: HoldoutVerdictStore,
     runId: string,
     taskId: string,
+    rung: number,
     passRate: number
 ): Promise<GateEvidence | undefined> {
     if (!(await holdout.has(runId, taskId))) {
         return undefined
     }
     const record = await holdout.get(runId, taskId)
-    const verdicts = await verdictStore.get(runId, taskId)
+    const verdicts = await verdictStore.get(runId, taskId, rung)
     return holdoutEvidence(checkHoldout(record, verdicts, passRate))
 }

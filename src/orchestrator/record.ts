@@ -199,6 +199,7 @@ export async function applyRecordHoldout(
     deps: RecordDeps,
     runId: string,
     taskId: string,
+    rung: number,
     verdictStore: HoldoutVerdictStore,
     raw: string
 ): Promise<RecordHoldoutEnvelope> {
@@ -210,7 +211,7 @@ export async function applyRecordHoldout(
     }
     const record = await deps.holdout.get(runId, taskId)
     const verdicts = parseVerdictsFailClosed(raw)
-    await verdictStore.put(runId, taskId, verdicts)
+    await verdictStore.put(runId, taskId, rung, verdicts)
 
     const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate)
     return {run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check}
@@ -457,7 +458,7 @@ export async function applyRecordReviews(
     // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
     //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
     //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
-    await appendHoldoutEvidence(deps, verdictStore, runId, taskId, gateEvidence)
+    await appendHoldoutEvidence(deps, verdictStore, runId, taskId, task.escalation_rung, gateEvidence)
 
     // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
     const panel = await runPanel({
