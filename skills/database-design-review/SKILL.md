@@ -42,6 +42,7 @@ A diff whose DB files are all clean → `verdict: "approve"` with empty findings
 | G6 Inheritance        | per hierarchy: STI / CTI / concrete        | mixes subtype strategies incoherently in one hierarchy                                   |
 | G7 Dynamic attributes | Real columns → lookup → JSONB+GIN → EAV    | reaches for JSONB/EAV for attributes that are clearly fixed and typed                    |
 | G8 Where a rule lives | Invariant → DB constraint                  | enforces a data invariant only in app code when a constraint/CHECK could hold it (→ L1)  |
+| G9 Tenancy            | Shared schema + mandatory `tenant_id` (+ RLS) | multi-tenant schema with tenant-owned tables lacking `tenant_id`, or per-tenant uniqueness as `UNIQUE(x)` instead of `UNIQUE(tenant_id, x)`, and no stated tenancy model |
 
 Naming (snake_case, FK named after the referenced table, no reserved words) and design-level indexing (FK columns unindexed, composite order wrong for the evident access path, missing partial-unique for soft-delete) are `minor`, non-blocking.
 
@@ -70,6 +71,7 @@ Naming (snake_case, FK named after the referenced table, no reserved words) and 
 - A migration that both adds and drops the same live shape in one step (L6).
 - `LIKE '%term%'` as the evident search plan for a new column → note full-text as `minor`.
 - Every table growing `deleted_at` by reflex (G4).
+- Multi-tenant tables with no `tenant_id` and no recorded tenancy decision (G9).
 
 ## Severity mapping
 
