@@ -151,7 +151,8 @@ build/clear. See [explanation/quota-pacing.md](../explanation/quota-pacing.md).
 
 All GitHub / git I/O: the `git-client` and `gh-client` wrappers (incl.
 `issueComment`/`issueClose` for closing a delivered PRD), branch + PR helpers,
-branch-protection probe/provision, the per-run staging deriver
+branch-protection probe/provision (deletable-by-default since Decision 55) and the
+read-only `branchExists` probe behind `rescue gc`, the per-run staging deriver
 (`run-staging.ts → staging-<run-id>`), the serial merge writer, and the
 `staging-<run-id> → develop` rollup.
 

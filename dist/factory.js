@@ -8390,6 +8390,17 @@ var DefaultGhClient = class {
       throw new Error(`gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
   }
+  async branchExists(owner, repo, branch, opts) {
+    const path6 = `repos/${owner}/${repo}/branches/${branch}`;
+    const r = await this.runner(["api", path6], this.execOpts(opts));
+    if (r.code === 0) {
+      return true;
+    }
+    if (/404|Not Found|Branch not found/i.test(r.stderr)) {
+      return false;
+    }
+    throw ghApiFailure(path6, r);
+  }
   async deleteProtection(owner, repo, branch, opts) {
     const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
     const r = await this.runner(argv, this.execOpts(opts));
@@ -8464,7 +8475,12 @@ var DefaultGhClient = class {
       },
       enforce_admins: true,
       required_pull_request_reviews: null,
-      restrictions: null
+      restrictions: null,
+      // D55: GitHub defaults allow_deletions to FALSE, which made every leftover
+      // per-run staging branch undeletable by hand until its protection rule was
+      // torn down via the API. The plugin never relies on deletion-blocking (its
+      // own teardown always deletes protection first), so keep leftovers deletable.
+      allow_deletions: true
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
     await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path6, "--input", "-"], {
@@ -12927,6 +12943,54 @@ async function applyRescue(state, runId, opts = {}) {
     };
   });
   return { ...nonNull(result), run_status: updated.status };
+}
+
+// src/rescue/gc.ts
+async function probeLeftovers(run10, gh) {
+  const { owner, repo } = splitRepoSlug(run10.spec.repo);
+  return {
+    branch: await gh.branchExists(owner, repo, run10.staging_branch),
+    protection: (await gh.repoProtection(owner, repo, run10.staging_branch)).enabled
+  };
+}
+async function gcScan(runs, gh) {
+  const findings = [];
+  const suspended = [];
+  for (const run10 of runs) {
+    const terminal = isTerminalRunStatus(run10.status);
+    if (!terminal && run10.status !== "suspended") {
+      continue;
+    }
+    const live = await probeLeftovers(run10, gh);
+    if (!live.branch && !live.protection) {
+      continue;
+    }
+    if (terminal) {
+      findings.push({
+        run_id: run10.run_id,
+        run_status: run10.status,
+        staging_branch: run10.staging_branch,
+        branch_exists: live.branch,
+        protection_live: live.protection,
+        banked: run10.status === "failed",
+        hint: `factory rescue gc --apply --run ${run10.run_id}`
+      });
+    } else {
+      suspended.push({
+        run_id: run10.run_id,
+        staging_branch: run10.staging_branch,
+        updated_at: run10.updated_at,
+        hint: `factory run cancel --run ${run10.run_id} --cleanup`
+      });
+    }
+  }
+  return { findings, suspended };
+}
+async function gcApply(run10, gh) {
+  const { owner, repo } = splitRepoSlug(run10.spec.repo);
+  await gh.deleteProtection(owner, repo, run10.staging_branch);
+  await gh.deleteRemoteBranch(owner, repo, run10.staging_branch);
+  return { run_id: run10.run_id, staging_branch: run10.staging_branch };
 }
 
 // src/orchestrator/finalize.ts
@@ -18046,11 +18110,13 @@ Usage:
   factory rescue scan  [--run <id>]
   factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
   factory rescue auto  [--run <id>]
+  factory rescue gc    [--apply --run <id>...]
 
 Actions:
   scan    Classify every task (read-only); report the route + the proposed repair plan.
   apply   Reset the resettable tasks to pending; reopen a terminal run.
-  auto    The runner's bounded self-heal (ONE cycle per run, after a failed finalize).`;
+  auto    The runner's bounded self-heal (ONE cycle per run, after a failed finalize).
+  gc      Sweep terminal runs for leftover staging branches / protection rules (D55).`;
 var SCAN_HELP = `factory rescue scan \u2014 classify a stalled run (read-only)
 
 Usage:
@@ -18115,6 +18181,24 @@ Fired by the runner ONCE after a failed finalize: resets the auto-safe set
 or pages + posts one deduped comment on the originating PRD \u2192 {kind:"page"}.
 Never touches dead-ends, e2e verdicts, or rollups (each needs a human assertion
 the cause is fixed). Both envelopes exit 0.`;
+var GC_HELP = `factory rescue gc \u2014 sweep for orphaned staging branches / protection rules (D55)
+
+Usage:
+  factory rescue gc                       Probe GitHub for leftovers (read-only).
+  factory rescue gc --apply --run <id>... Tear down the named terminal runs' leftovers.
+
+Without --apply: probes every terminal (completed/superseded/failed) and
+suspended run's pinned staging_branch and emits ONE JSON document:
+  { kind:"gc", findings:[...], suspended:[...] }
+findings are terminal runs with a live branch and/or protection rule, each with
+the exact --apply command as its hint; a failed run is flagged banked:true (its
+branch is deliberately kept for rescue \u2014 GC it only once the run is truly dead).
+suspended runs are NEVER GC targets (deleting their branch destroys
+resumability) \u2014 each gets a \`factory run cancel --run <id> --cleanup\` hint.
+
+With --apply: deletes protection FIRST (GitHub blocks deleting a protected
+ref), then the branch, for each named run. Refuses non-terminal runs.
+Idempotent: both deletes tolerate already-gone (404).`;
 function deriveAwaiting(run10) {
   if (run10.quota !== void 0) {
     return "quota";
@@ -18285,6 +18369,34 @@ async function runAuto(argv, overrides = {}) {
   });
   return EXIT.OK;
 }
+async function runGc(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["apply"] });
+  if (args.flag("help") === true) {
+    return emitHelp(GC_HELP);
+  }
+  const { state } = openState();
+  const gh = overrides.ghClient ?? new DefaultGhClient();
+  if (args.flag("apply") === true) {
+    const ids = args.all("run");
+    if (ids.length === 0) {
+      throw new UsageError("gc --apply requires at least one --run <id>");
+    }
+    const cleaned = [];
+    for (const id of ids) {
+      const run10 = await state.read(id);
+      if (!isTerminalRunStatus(run10.status)) {
+        throw new UsageError(
+          `run '${id}' is ${run10.status}, not terminal \u2014 gc refuses to delete a resumable run's branch; cancel it first: factory run cancel --run ${id} --cleanup`
+        );
+      }
+      cleaned.push(await gcApply(run10, gh));
+    }
+    emitJson({ kind: "gc-applied", cleaned });
+    return EXIT.OK;
+  }
+  emitJson({ kind: "gc", ...await gcScan(await state.listRuns(), gh) });
+  return EXIT.OK;
+}
 async function run6(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
@@ -18299,12 +18411,14 @@ async function run6(argv) {
       return runApply(rest);
     case "auto":
       return runAuto(rest);
+    case "gc":
+      return runGc(rest);
     default:
-      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply | auto)`);
+      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply | auto | gc)`);
   }
 }
 var rescueCommand = {
-  describe: "Repair plumbing behind /factory:resume: scan (propose), apply (execute approved), auto (self-heal)",
+  describe: "Repair plumbing behind /factory:resume: scan (propose), apply (execute approved), auto (self-heal), gc (orphaned-branch sweep)",
   run: withUsageGuard("rescue", run6)
 };
 

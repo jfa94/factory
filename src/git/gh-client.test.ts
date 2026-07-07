@@ -258,6 +258,48 @@ describe('deleteRemoteBranch (worktree-safe remote-ref delete, CP2 #11)', () => 
     })
 })
 
+describe('putProtection (the --provision PUT body)', () => {
+    it('sends allow_deletions:true so a leftover per-run staging branch stays hand-deletable (D55)', async () => {
+        let payload: string | Uint8Array | undefined
+        const runner: GhRunner = (_args, opts) => {
+            payload = opts?.input
+            return Promise.resolve(result({}))
+        }
+        const gh = new DefaultGhClient(runner)
+        await gh.putProtection('acme', 'widgets', 'staging-run-1', {
+            requiredStatusChecks: ['quality-gate'],
+            strict: true,
+        })
+        const body = JSON.parse(String(payload ?? '{}')) as Record<string, unknown>
+        expect(body.allow_deletions).toBe(true)
+        expect(body.enforce_admins).toBe(true)
+        expect(body.required_status_checks).toEqual({strict: true, contexts: ['quality-gate']})
+    })
+})
+
+describe('branchExists (read-only remote-branch probe for rescue gc, D55)', () => {
+    it('returns true on a 200', async () => {
+        const runner: GhRunner = (args) => {
+            expect(args).toEqual(['api', 'repos/acme/widgets/branches/staging-run-x'])
+            return Promise.resolve(result({stdout: '{"name":"staging-run-x"}'}))
+        }
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.branchExists('acme', 'widgets', 'staging-run-x')).resolves.toBe(true)
+    })
+
+    it('returns false on a 404 (a missing branch is the answer, not an error)', async () => {
+        const runner: GhRunner = () => Promise.resolve(result({code: 1, stderr: 'HTTP 404: Branch not found'}))
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.branchExists('acme', 'widgets', 'gone')).resolves.toBe(false)
+    })
+
+    it("throws on a non-404 failure (auth/network is NOT silently 'missing')", async () => {
+        const runner: GhRunner = () => Promise.resolve(result({code: 1, stderr: 'HTTP 401: Bad credentials'}))
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.branchExists('acme', 'widgets', 'b')).rejects.toThrow(/401|failed/i)
+    })
+})
+
 describe('deleteProtection (remove branch protection before deleting a per-run staging branch)', () => {
     it('deleteProtection issues DELETE on the branch protection path and tolerates 404', async () => {
         let captured: readonly string[] = []

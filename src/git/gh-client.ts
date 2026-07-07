@@ -115,6 +115,8 @@ export interface GhClient {
     deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>
     /** DELETE branch protection (`gh api -X DELETE …/branches/<branch>/protection`). 404 → success. */
     deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>
+    /** Read-only remote-branch probe (`gh api …/branches/<branch>`). 404 → false; other failures throw. */
+    branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>
     /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered + failure comments). */
     issueComment(args: {repo: string; number: number; body: string}, opts?: GhOpts): Promise<void>
     /**
@@ -325,6 +327,20 @@ export class DefaultGhClient implements GhClient {
         }
     }
 
+    async branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean> {
+        const path = `repos/${owner}/${repo}/branches/${branch}`
+        const r = await this.runner(['api', path], this.execOpts(opts))
+        if (r.code === 0) {
+            return true
+        }
+        // A 404 is the ANSWER (branch gone). Any other non-zero (auth, network) throws —
+        // never silently reported as "missing" (mirrors repoProtection).
+        if (/404|Not Found|Branch not found/i.test(r.stderr)) {
+            return false
+        }
+        throw ghApiFailure(path, r)
+    }
+
     async deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void> {
         const argv = ['api', '-X', 'DELETE', `/repos/${owner}/${repo}/branches/${branch}/protection`]
         const r = await this.runner(argv, this.execOpts(opts))
@@ -421,6 +437,11 @@ export class DefaultGhClient implements GhClient {
             enforce_admins: true,
             required_pull_request_reviews: null,
             restrictions: null,
+            // D55: GitHub defaults allow_deletions to FALSE, which made every leftover
+            // per-run staging branch undeletable by hand until its protection rule was
+            // torn down via the API. The plugin never relies on deletion-blocking (its
+            // own teardown always deletes protection first), so keep leftovers deletable.
+            allow_deletions: true,
         })
         log.info(`provisioning branch protection for ${owner}/${repo}@${branch}`)
         await runOrThrow('gh', this.runner, ['api', '--method', 'PUT', path, '--input', '-'], {

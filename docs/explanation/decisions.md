@@ -1992,6 +1992,47 @@ Decision 53 amendment above (no package.json-script tier in the CI render).
 
 ---
 
+## Decision 55 — Deletable-by-Default Staging Branches + the `rescue gc` Orphan Sweep
+
+**Date:** 2026-07-07
+
+**Context:** Two orphaned `staging-*` branches on a target repo could not be
+deleted by hand — each carried its auto-created exact-name protection rule with
+GitHub's default `allow_deletions: false`, forcing a manual
+`gh api -X DELETE …/protection` workaround. Investigation found (a) one orphan
+was historical only (a pre-pin run superseded across the slash→flat naming flip;
+teardown recomputed the wrong name and the 404-tolerance swallowed the miss —
+impossible since schema v3 made `staging_branch` required), and (b) a live
+structural gap: every teardown path is conditional (merged finalize, supersede,
+opt-in `cancel --cleanup`), so a failed run banked for rescue or an abandoned
+suspended run leaks a protected branch that nothing ever GCs — rescue scan is
+state-pure and terminal runs route to `nothing`.
+
+**Decision (two halves):**
+
+1. **`putProtection` now sends `allow_deletions: true`** (`src/git/gh-client.ts`).
+   The plugin never relies on deletion-blocking — its own teardown always deletes
+   protection first — so a leftover per-run staging branch stays deletable with a
+   plain `git push --delete`. Status checks + `enforce_admins` are unchanged.
+
+2. **`factory rescue gc`** (`src/rescue/gc.ts`) — the self-healing safety net.
+   Scan (read-only, default) probes every **terminal** and **suspended** run's
+   pinned `staging_branch` via `branchExists` (new read-only `GhClient` probe) +
+   `repoProtection`, and reports leftovers with exact hints (Model A: scan
+   proposes, apply writes, consent in the command layer). `--apply --run <id>`
+   tears down protection-then-branch for explicitly named **terminal** runs only;
+   a `failed` run is flagged `banked: true` (its branch is deliberately kept for
+   rescue). Suspended runs are NEVER apply targets — deleting their branch
+   destroys resumability — they get a `factory run cancel --run <id> --cleanup`
+   hint instead (the ergonomic path for the abandoned-suspended-run gap).
+
+**Known ceiling:** gc candidates come from run state only. A rule lingering on a
+branch deleted out-of-band is invisible to the REST branch-protection endpoints
+(404 on a missing branch); enumerating those needs the GraphQL rules API — add
+only if such rules actually accumulate post-`allow_deletions`.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

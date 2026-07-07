@@ -718,12 +718,13 @@ clean lights-out run scores exactly `1.0`). A run with an empty ledger reports
 where `aggregate = sum(completed) / sum(touches)` over runs carrying the ledger
 (`null` when none do). Malformed run dirs warn + skip (tolerant `listRuns`).
 
-## `rescue <scan|apply|auto>`
+## `rescue <scan|apply|auto|gc>`
 
 The repair plumbing under **`/factory:resume`** (Decision 50 — ONE consent-gated
 repair verb; it absorbed `factory recover`, Decision 48's surface). `scan` is the
 read-only scan + route the command layer acts on; `apply` is the ONLY mutation —
-what approved plan items execute; `auto` is the runner's bounded self-heal. The
+what approved plan items execute; `auto` is the runner's bounded self-heal; `gc`
+is the orphaned staging-branch/protection sweep (Decision 55). The
 `/factory:resume` command pairs these with the `rescue-diagnostic` +
 `rescue-reconciler` agents — the CLI itself never spawns agents or prompts. See
 [Rescue a stalled run](../guides/rescue-a-stalled-run.md).
@@ -836,6 +837,45 @@ git drift) and stamps `self_heal {attempts, last_at}` — the sanctioned stored-
 exception. Requires `attempts === 0`; a blocked auto (`attempts > 0`, empty
 effective set, or dead-ends only) emits `{kind:"page"}` and posts ONE deduped PRD
 comment pointing at `factory rescue scan`. Never appends a human touch.
+
+### `rescue gc`
+
+The orphaned staging-branch/protection sweep (Decision 55). Every other rescue
+helper excludes terminal runs — exactly the population that leaks a protected
+`staging-<run-id>` branch when no teardown path fired (a `failed` run banked for
+rescue, a crash between finalize steps, a `suspended` run abandoned after its PRD
+shipped out-of-band). `gc` reclaims those.
+
+```
+factory rescue gc                        # scan: probe GitHub for leftovers (read-only)
+factory rescue gc --apply --run <id>...  # tear down the named terminal runs' leftovers
+```
+
+Without `--apply` (scan): probes every **terminal** (`completed`/`superseded`/`failed`)
+and **suspended** run's pinned `staging_branch` via `branchExists` (a read-only
+`GhClient` probe) + `repoProtection`, and emits `{ kind:"gc", findings, suspended }`:
+
+- `findings` — terminal runs with a live branch and/or protection rule. Each carries
+  `{ run_id, run_status, staging_branch, branch_exists, protection_live, banked, hint }`;
+  `hint` is the exact `factory rescue gc --apply --run <id>` command. A `failed` run is
+  flagged `banked: true` — its branch is deliberately kept for rescue, so GC it only once
+  the run is truly dead.
+- `suspended` — suspended runs with live leftovers. NEVER `gc --apply` targets (deleting
+  their branch destroys resumability); each carries a
+  `factory run cancel --run <id> --cleanup` hint instead.
+
+Candidates come from run state only — a rule lingering on a branch deleted
+out-of-band is invisible to the REST branch-protection endpoints (404 on a missing
+branch).
+
+With `--apply --run <id>` (repeatable): deletes protection FIRST (GitHub blocks
+deleting a protected ref), then the branch, for each named run. Refuses any
+non-terminal run with a loud error pointing at `run cancel --cleanup`. Idempotent —
+both deletes tolerate an already-gone (404) ref. Emits `{ kind:"gc-applied", cleaned }`.
+
+Provisioning note: since Decision 55 `putProtection` sets `allow_deletions: true`, so a
+leftover per-run staging branch also stays deletable with a plain `git push --delete`
+without stripping protection first.
 
 ## `autonomy <ensure|status|preflight>`
 

@@ -15,7 +15,7 @@ import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {rescueCommand, runScan, runAuto, deriveAwaiting, chooseRoute} from './rescue.js'
+import {rescueCommand, runScan, runAuto, runGc, deriveAwaiting, chooseRoute} from './rescue.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {at, nonNull} from '../../shared/index.js'
 import {StateManager} from '../../core/state/index.js'
@@ -63,6 +63,9 @@ describe('rescue arg/usage edges', () => {
     })
     it('auto --help prints help and exits OK', async () => {
         expect(await rescueCommand.run(['auto', '--help'])).toBe(EXIT.OK)
+    })
+    it('gc --help prints help and exits OK', async () => {
+        expect(await rescueCommand.run(['gc', '--help'])).toBe(EXIT.OK)
     })
     it('an unknown action is a usage error', async () => {
         expect(await rescueCommand.run(['frobnicate'])).toBe(EXIT.USAGE)
@@ -517,5 +520,75 @@ describe('rescue scan/apply/auto', () => {
         expect(out().kind).toBe('recovered')
         expect((await state.read(RUN)).human_touches).toEqual([])
         expect((await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')).toHaveLength(0)
+    })
+
+    // ————— gc: the orphaned staging-branch/protection sweep (D55) —————
+
+    const LIVE_PROTECTION = {
+        enabled: true,
+        requiredStatusChecks: ['quality-gate'],
+        strictUpToDate: true,
+        hasMergeQueue: false,
+    }
+
+    function ghWithLeftover(): FakeGhClient {
+        const gh = new FakeGhClient({protection: {[`staging-${RUN}`]: LIVE_PROTECTION}})
+        gh.remoteBranches.add(`staging-${RUN}`)
+        return gh
+    }
+
+    it('gc reports a terminal run with a live branch+rule, with the exact apply hint (read-only)', async () => {
+        await state.update(RUN, (s) => ({...s, status: 'superseded', ended_at: AT, tasks: {}}))
+        const gh = ghWithLeftover()
+        const code = await runGc([], {ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.kind).toBe('gc')
+        expect(env.findings).toEqual([
+            {
+                run_id: RUN,
+                run_status: 'superseded',
+                staging_branch: `staging-${RUN}`,
+                branch_exists: true,
+                protection_live: true,
+                banked: false,
+                hint: `factory rescue gc --apply --run ${RUN}`,
+            },
+        ])
+        expect(gh.protectionDeletes).toEqual([]) // read-only
+    })
+
+    it('gc --apply tears down protection then branch for a terminal run', async () => {
+        await state.update(RUN, (s) => ({...s, status: 'superseded', ended_at: AT, tasks: {}}))
+        const gh = ghWithLeftover()
+        const code = await runGc(['--apply', '--run', RUN], {ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        expect(out()).toEqual({kind: 'gc-applied', cleaned: [{run_id: RUN, staging_branch: `staging-${RUN}`}]})
+        expect(gh.calls).toEqual([`api DELETE protection staging-${RUN}`, `api DELETE refs/heads/staging-${RUN}`])
+    })
+
+    it('gc --apply REFUSES a non-terminal run, pointing at run cancel --cleanup', async () => {
+        // RUN is 'running' from create.
+        const gh = ghWithLeftover()
+        const code = await rescueCommand.run(['gc', '--apply', '--run', RUN])
+        expect(code).toBe(EXIT.USAGE)
+        expect(gh.protectionDeletes).toEqual([])
+    })
+
+    it('gc --apply without --run is a usage error', async () => {
+        expect(await rescueCommand.run(['gc', '--apply'])).toBe(EXIT.USAGE)
+    })
+
+    it('gc lists a suspended run with a live branch under suspended[] with the cancel hint', async () => {
+        await state.update(RUN, (s) => ({...s, status: 'suspended', tasks: {}}))
+        const gh = ghWithLeftover()
+        const code = await runGc([], {ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.findings).toEqual([])
+        const suspended = env.suspended as {run_id: string; hint: string}[]
+        expect(suspended).toHaveLength(1)
+        expect(at(suspended, 0).run_id).toBe(RUN)
+        expect(at(suspended, 0).hint).toBe(`factory run cancel --run ${RUN} --cleanup`)
     })
 })

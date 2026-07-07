@@ -8,7 +8,7 @@ prompt, approve any subset), applied, then resumed. `--dry-run` shows the scan +
 route + proposed plan without writing. Everything below is the **manual CLI
 plumbing** underneath it — reach for `rescue scan`/`apply` by hand when you
 declined the prompt and want to run a specific `hints` command yourself. See
-[reference/cli.md § rescue](../reference/cli.md#rescue-scanapplyauto).
+[reference/cli.md § rescue](../reference/cli.md#rescue-scanapplyautogc).
 
 Bare `factory resume` only re-checks the quota gate — it never touches task
 state. When a crashed or suspended session left tasks **stuck mid-phase** (so a
@@ -185,4 +185,46 @@ There are no repair flags — the old `--task`/`--include-dead-ends`/`--reset-e2
 `--dry-run` stops after the scan (route + proposed plan, report only). Declining
 the whole plan writes nothing and prints each item's manual `hints` command. The
 orchestration lives entirely in `skills/rescue-protocol/SKILL.md`.
+
+## Sweep orphaned staging branches (`rescue gc`)
+
+`rescue scan`/`apply`/`resume` all leave TERMINAL runs alone — but a terminal run
+can leak a protected `staging-<run-id>` branch on GitHub when no teardown path fired
+(a `failed` run banked for rescue, a crash between finalize steps, a `suspended` run
+abandoned after its PRD shipped out-of-band). `rescue gc` (Decision 55) reclaims
+those. It is read-only by default and never touches an active (`running`/`paused`)
+run.
+
+### 1. Scan for leftovers (read-only)
+
+```bash
+factory rescue gc
+```
+
+Probes every terminal (`completed`/`superseded`/`failed`) and `suspended` run's
+pinned staging branch on GitHub and emits `{ kind:"gc", findings, suspended }`:
+
+- `findings` — terminal runs with a live branch and/or protection rule, each with an
+  exact `factory rescue gc --apply --run <id>` hint. A `failed` run is flagged
+  `banked: true` — its branch is deliberately kept for rescue, so only GC it once the
+  run is truly dead.
+- `suspended` — suspended runs with live leftovers. These are NEVER `gc --apply`
+  targets (deleting their branch destroys resumability); each carries a
+  `factory run cancel --run <id> --cleanup` hint instead — cancel the run first, then
+  its `--cleanup` tears the branch down.
+
+### 2. Tear down a terminal run's leftovers
+
+```bash
+factory rescue gc --apply --run <id>    # repeat --run for several runs
+```
+
+Deletes protection first (GitHub blocks deleting a protected ref), then the branch,
+for each named terminal run. It refuses any non-terminal run with a loud error. The
+deletes are idempotent (404-tolerant), so re-running over an already-clean run is a
+no-op. See [reference/cli.md § rescue gc](../reference/cli.md#rescue-gc).
+
+Since Decision 55, per-run staging protection is created with `allow_deletions: true`,
+so a leftover branch you spot by hand also deletes with a plain `git push --delete`
+without stripping its protection rule first.
 </content>

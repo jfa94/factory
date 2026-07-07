@@ -38,6 +38,11 @@ consent prompt. Never edit `state.json` by hand.
 8. **v1 reconciles RUN STATE only.** GitHub-side drift (merged-not-recorded PR, orphan
    branch/worktree, merge conflict, duplicate/closed-unmerged PR) is **out of scope** —
    surface it, do not pretend it is fixed. See `reference/disposition-taxonomy.md`.
+   Exception (D55): leftover staging branches / protection rules of TERMINAL runs have
+   their own sweep — `factory rescue gc` lists them read-only with exact hints;
+   `factory rescue gc --apply --run <id>` (consent-gated, terminal runs only) tears them
+   down. A suspended run's leftovers are never GC'd — its hint is
+   `factory run cancel --run <id> --cleanup`.
 9. **Final step is the handoff to resume**, unless the user declined everything or a
    reconciliation is blocked.
 
@@ -50,7 +55,7 @@ consent prompt. Never edit `state.json` by hand.
 
 ## Protocol
 
-1. **Scan.**
+1.  **Scan.**
 
     ```
     factory rescue scan [--run <id>]
@@ -87,17 +92,17 @@ consent prompt. Never edit `state.json` by hand.
     branch from staging and redo it. Pass each dead-end's `work` line through to the
     `rescue-diagnostic` agent (step 2) as corroborating evidence.
 
-2. **Diagnose dead-ends (only if any).** For each id in `scan.dead_ends`, spawn the
-   read-only `rescue-diagnostic` agent — one `Agent()` per dead-end, in a single message —
-   passing each task's scan line + its matching `work` entry (`work.tasks[task_id]`) + the
-   ground truth you can gather (`worktree_path`, `review_files`, `ci_logs_path`, the durable
-   `spec_path`). See `reference/diagnostic-agent-contract.md`. Harvest each agent's final
-   message (its decision JSON): `reset` → a plan item carrying the agent's reason;
-   `leave-dropped` / `no-action` → excluded (named in the report, step 5). An agent that
-   errors or returns unparseable JSON → treat as `no-action`; never propose on a guess.
+2.  **Diagnose dead-ends (only if any).** For each id in `scan.dead_ends`, spawn the
+    read-only `rescue-diagnostic` agent — one `Agent()` per dead-end, in a single message —
+    passing each task's scan line + its matching `work` entry (`work.tasks[task_id]`) + the
+    ground truth you can gather (`worktree_path`, `review_files`, `ci_logs_path`, the durable
+    `spec_path`). See `reference/diagnostic-agent-contract.md`. Harvest each agent's final
+    message (its decision JSON): `reset` → a plan item carrying the agent's reason;
+    `leave-dropped` / `no-action` → excluded (named in the report, step 5). An agent that
+    errors or returns unparseable JSON → treat as `no-action`; never propose on a guess.
 
-3. **Propose the plan — ONE consent prompt.** Assemble every proposable repair as an
-   `AskUserQuestion` **multiSelect** item, each with what it does + why it is needed:
+3.  **Propose the plan — ONE consent prompt.** Assemble every proposable repair as an
+    `AskUserQuestion` **multiSelect** item, each with what it does + why it is needed:
     - **Safe resets** — one item covering `scan.resettable` (list the ids); executes the
       default `factory rescue apply`.
     - **One item per diagnostic-recommended dead-end** — the id + the diagnostic's reason;
@@ -116,37 +121,34 @@ consent prompt. Never edit `state.json` by hand.
     none). **Declined everything** → report the skipped items with their `hints` commands
     and STOP.
 
-4. **Apply the approved subset — ONE call.** Combine the approved items' flags/ids into a
-   single `factory rescue apply [--run <id>] [--task <id>]... [--reset-e2e]
+4.  **Apply the approved subset — ONE call.** Combine the approved items' flags/ids into a
+    single `factory rescue apply [--run <id>] [--task <id>]... [--reset-e2e]
 [--reset-traceability] [--recheck-rollup]` (approved safe resets = the flagless default
-   set; approved dead-ends = explicit `--task` ids, which reset without
-   `--include-dead-ends`). Emits `{ run_id, run_status, reset: [...], reopened,
+    set; approved dead-ends = explicit `--task` ids, which reset without
+    `--include-dead-ends`). Emits `{ run_id, run_status, reset: [...], reopened,
 skipped: [...], resume? }` — apply also reopens a terminal run and clears any surviving
-   park itself (ONE `recover` touch covers the whole approved plan, Decision 49).
+    park itself (ONE `recover` touch covers the whole approved plan, Decision 49).
 
-5. **Reconcile git/GitHub drift (if approved).** Run state is now repaired, but the remote
-   may still disagree with it. Re-run `factory rescue scan` for the fresh post-apply
-   picture, then spawn the **`rescue-reconciler`** agent (one `Agent()`) passing the run id,
-   that scan JSON, and the repo context — `target_root`, `owner`, `name`,
-   `staging_branch: staging-<run-id>`, and `base_branch` (`config.git.baseBranch`). The
-   agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
-   run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or
-   discards. Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked,
-evidence }`):
-    - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
-      missing source SHA). Report `evidence` and STOP — do not hand off to resume.
-    - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve /
-      skip) before anything destructive happens. On **approve**, you (holding the authority
-      the read-mostly agent lacks) perform that single op yourself; on **skip**, leave it.
-      Never force-push to satisfy a prompt; if reconciliation genuinely requires a force,
-      that is a STOP, not a fix.
-    - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift cleared; proceed.
+5.  **Reconcile git/GitHub drift (if approved).** Run state is now repaired, but the remote
+    may still disagree with it. Re-run `factory rescue scan` for the fresh post-apply
+    picture, then spawn the **`rescue-reconciler`** agent (one `Agent()`) passing the run id,
+    that scan JSON, and the repo context — `target_root`, `owner`, `name`,
+    `staging_branch: staging-<run-id>`, and `base_branch` (`config.git.baseBranch`). The
+    agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
+    run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or
+    discards. Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked,
+evidence }`): - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
+    missing source SHA). Report `evidence` and STOP — do not hand off to resume. - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve /
+    skip) before anything destructive happens. On **approve**, you (holding the authority
+    the read-mostly agent lacks) perform that single op yourself; on **skip**, leave it.
+    Never force-push to satisfy a prompt; if reconciliation genuinely requires a force,
+    that is a STOP, not a fix. - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift cleared; proceed.
 
-    Then report the outcome: what was applied, what was skipped (with each skipped item's
-    exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
-    with `develop` untouched — Decision 34, the correct loud outcome).
+        Then report the outcome: what was applied, what was skipped (with each skipped item's
+        exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
+        with `develop` untouched — Decision 34, the correct loud outcome).
 
-6. **Hand off to resume.** Invoke the orchestrator skill directly (no human round-trip):
+6.  **Hand off to resume.** Invoke the orchestrator skill directly (no human round-trip):
 
     ```
     Skill(pipeline-runner)   # then: factory resume [--run <id>] [--ignore-quota]

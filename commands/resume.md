@@ -32,7 +32,9 @@ The scan envelope is read-only and carries the chosen `route`. Act on it:
 
 - **`nothing`** — no run, or a terminal (completed/superseded/failed-with-nothing-recoverable)
   run. Report it — including any `hints` (e.g. a `--recheck-rollup` pointer for an armed
-  rollup) — and STOP.
+  rollup) — and STOP. For leftover staging branches / protection rules of terminal runs,
+  `factory rescue gc` is the read-only sweep (D55); propose its `--apply` hints, never
+  auto-run them.
 - **`resume`** — the run is clean (parked or a healthy re-entry; `awaiting` names any park
   cause: `quota` | `e2e` | `traceability` | `docs` | `spec-approval`). Run
   `factory resume [--run <id>] [--ignore-quota]`:

@@ -18,3 +18,6 @@ export {applyRescue, resetTaskRow} from './apply.js'
 export type {RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts} from './apply.js'
 
 export {effectiveAutoResets} from './auto.js'
+
+export {gcScan, gcApply} from './gc.js'
+export type {GcFinding, GcSuspendedLine, GcReport, GcCleaned} from './gc.js'
