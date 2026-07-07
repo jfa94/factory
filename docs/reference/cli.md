@@ -130,8 +130,11 @@ factory spec store   --repo <owner/name> --issue <n>
   else fetch the PRD and emit the generate spawn (`{kind:"generate", spawn,
 prd_path, generated_path, max_iterations}`). Before emitting `generate`, a
   **deterministic specifiability gate** ([Decision 47](../explanation/decisions.md#decision-47--spec-hardening-specifiability-gate-prd-traceability-approve-spec-park))
-  screens the raw PRD body (≥200 non-heading chars, ≥1 extractable requirement, an
-  acceptance-criteria-style heading). A PRD that fails is refused loud and terminal —
+  screens the raw PRD body (≥200 non-heading chars, ≥1 extractable requirement, and
+  either an acceptance-criteria-style heading OR nested per-requirement criteria —
+  testable sub-bullets under each requirement, the `/write-a-prd` template shape;
+  [Decision 56](../explanation/decisions.md#decision-56--specifiability-gate-accepts-nested-per-requirement-criteria)).
+  A PRD that fails is refused loud and terminal —
   `{kind:"unspecifiable", prd_path, blockers}` on stdout **and exit `1`** (the exit
   enum is frozen; the envelope `kind` is the machine discriminator) — before any agent
   spawn, so an unspecifiable PRD costs zero agent turns. `resolve` also persists a

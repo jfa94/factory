@@ -122,8 +122,9 @@ The runner follows `skills/pipeline-runner/SKILL.md`:
 resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    spec is `reuse`d or `stored`. `factory spec resolve` first runs a deterministic
    **specifiability gate** over the PRD body and **refuses** (exit 1) an underspecified
-   PRD — too little prose, no extractable requirement, or no acceptance-criteria heading
-   (Decision 47). Flesh out the PRD issue and re-run.
+   PRD — too little prose, no extractable requirement, or neither an acceptance-criteria
+   heading nor nested per-requirement criteria (Decisions 47 + 56). Flesh out the PRD
+   issue and re-run.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
 4. **Drive** — the runner steps the seam as an event loop. `factory next-task` returns

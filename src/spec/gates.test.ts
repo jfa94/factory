@@ -317,4 +317,40 @@ describe('specifiability gate — deterministic pre-generation refusal (S9)', ()
         const r = specifiabilityGate(body)
         expect(r.passed).toBe(true)
     })
+
+    it('Δ specifiability: nested per-requirement criteria pass without an AC heading (D10)', () => {
+        const body = [
+            PROSE_NO_REQUIREMENTS,
+            '',
+            '## Requirements',
+            '',
+            '1. The system must reject sign-up passwords shorter than 8 characters.',
+            '   - POST /signup with a 7-character password returns 400 with error code `password_too_short`',
+            '   - POST /signup with an 8-character password returns no password error',
+            '2. The system must issue a session token on successful login.',
+            '   - POST /login with valid credentials returns 200 with a non-empty `token` field',
+        ].join('\n')
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(true)
+        expect(r.blockers).toEqual([])
+    })
+
+    it('Δ specifiability: nested bullets only under Out of Scope do not count as criteria', () => {
+        const body = [
+            PROSE_NO_REQUIREMENTS,
+            '',
+            '## Requirements',
+            '',
+            '- the landing view must render its first paint within one second on a phone',
+            '',
+            '## Out of Scope',
+            '',
+            '1. rewriting the settings page',
+            '   - the settings page keeps its current layout',
+        ].join('\n')
+        const r = specifiabilityGate(body)
+        expect(r.passed).toBe(false)
+        expect(r.blockers.some((b) => b.includes('acceptance-criteria'))).toBe(true)
+        expect(r.blockers).toHaveLength(1)
+    })
 })

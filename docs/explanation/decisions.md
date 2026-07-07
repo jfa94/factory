@@ -1517,7 +1517,8 @@ least-verified link in the quality spine. Three mechanisms close it.
   `specifiabilityGate(prdBody)` runs in `spec resolve` between the scratch
   `prd.json` write and the `generate` envelope: ≥200 chars of non-heading body,
   ≥1 extractable requirement (`extractPrdRequirements` — Out-of-Scope excluded),
-  and an acceptance-criteria-style section heading. Refusal emits a
+  and an acceptance-criteria-style section heading (or, since Decision 56, nested
+  per-requirement criteria). Refusal emits a
   `{kind:"unspecifiable", blockers}` envelope + `EXIT.ERROR` (exit-code enum is
   FROZEN — the envelope `kind` is the machine discriminator, no new code). The
   runner STOPS before any agent spawn: the PRD needs editing, at zero agent cost.
@@ -2030,6 +2031,32 @@ state-pure and terminal runs route to `nothing`.
 branch deleted out-of-band is invisible to the REST branch-protection endpoints
 (404 on a missing branch); enumerating those needs the GraphQL rules API — add
 only if such rules actually accumulate post-`allow_deletions`.
+
+---
+
+## Decision 56 — Specifiability Gate Accepts Nested Per-Requirement Criteria
+
+**Date:** 2026-07-07
+
+**Context:** The specifiability gate (Decision 47) required a dedicated
+acceptance-criteria-shaped heading (Acceptance Criteria / Acceptance Tests /
+Success Criteria / Definition of Done). PRDs that instead nest testable criteria
+as sub-bullets under each numbered requirement — the `/write-a-prd` template
+shape — carried perfectly verifiable criteria yet were rejected as unspecifiable
+(false-negative repro: jfa94/outsidey#288).
+
+**Decision:** `specifiabilityGate` (`src/spec/gates.ts`) now passes the
+acceptance-criteria check when EITHER an AC-shaped heading is present OR the body
+exhibits the nested criteria-per-requirement shape — a list item followed by a
+deeper-indented bullet, outside excluded (Out-of-Scope / Non-Goals) sections (new
+`hasNestedCriteriaShape` helper, a raw-indent scan sharing the same heading-level
+skip flag as `extractPrdRequirements`). The blocker message names both remedies.
+The ≥200-char and ≥1-extractable-requirement checks are unchanged.
+
+**Consequences:** The two mainstream PRD shapes — a dedicated AC section, and
+per-requirement nested criteria — both pass. No PRD that previously passed now
+fails (the check is strictly widened). Referred to as defect D10 in the author's
+external defect ledger, distinct from this Decision numbering.
 
 ---
 

@@ -10053,12 +10053,47 @@ function specifiabilityGate(body) {
     const heading = /^#{1,6}\s+(.*)$/.exec(l);
     return heading !== null && AC_SECTION_HEADING.test(nonNull(heading[1]).trim());
   });
-  if (!hasAcSection) {
+  if (!hasAcSection && !hasNestedCriteriaShape(body)) {
     blockers.push(
-      'specifiability: no acceptance-criteria-shaped section \u2014 add an "## Acceptance Criteria" (or Definition of Done / Success Criteria) section stating verifiable outcomes'
+      'specifiability: no acceptance-criteria-shaped section and no nested per-requirement criteria \u2014 add an "## Acceptance Criteria" (or Definition of Done / Success Criteria) section, or nest testable criteria as sub-bullets under each requirement'
     );
   }
   return { passed: blockers.length === 0, blockers };
+}
+function hasNestedCriteriaShape(body) {
+  let skipLevel = null;
+  let parentIndent = null;
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) {
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const level = nonNull(heading[1]).length;
+      if (skipLevel !== null && level <= skipLevel) {
+        skipLevel = null;
+      }
+      if (EXCLUDED_SECTION_HEADING.test(nonNull(heading[2]).trim())) {
+        skipLevel = level;
+      }
+      parentIndent = null;
+      continue;
+    }
+    if (skipLevel !== null) {
+      continue;
+    }
+    const item = /^(\s*)(?:[-*+]|\d+[.)])\s+\S/.exec(raw);
+    if (!item) {
+      continue;
+    }
+    const indent = nonNull(item[1]).length;
+    if (parentIndent !== null && indent > parentIndent) {
+      return true;
+    }
+    parentIndent = indent;
+  }
+  return false;
 }
 var HORIZONTAL_MARKERS = [
   "schema",
