@@ -55,7 +55,9 @@ validated as a well-formed URL at config time. Optional tuning
 - `e2e.testDir` (default `e2e`) — the repo-relative directory the committed critical
   suite lives in. It is **schema-locked to `e2e`**: the config parser rejects any other
   value, because the scaffolded `playwright.config.ts` and the TCB write-guard both hardcode
-  that path.
+  that path. The repo's **own** `playwright.config.ts` is held to the same literal at run
+  birth: `run create --e2e` reads it and refuses any `testDir` other than `e2e`/`./e2e`
+  (S4, see [Limitations](#limitations)).
 - `e2e.readyTimeoutMs` (default `30000`) — how long to wait for the app to boot.
 - `e2e.reopenCap` (default `2`) — how many times a task may be reopened by a still-red
   critical journey before the run fails outright.
@@ -229,6 +231,11 @@ the run's e2e contribution in one of:
   [Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag).
   The e2e runner, author, and manifest contract are consumer-agnostic so debug can become
   a second consumer later, but today the only consumer is `factory run --e2e`.
-- The TCB `e2e-suite` write-guard covers only the literal `e2e/` directory; a repo that
-  moves `e2e.testDir` elsewhere is not protected (see
+- The TCB `e2e-suite` write-guard covers only the literal `e2e/` directory. This is a
+  deliberate literal (reading config to widen it would be the circular trust the TCB
+  refuses). The divergence window is instead closed **at run birth** (S4): `assertE2ePrereqs`
+  (`src/orchestrator/preflight.ts`) reads the target repo's own `playwright.config.ts` and
+  refuses a `run create --e2e` whose declared `testDir` is anything other than `e2e`/`./e2e`
+  — including an **absent** declaration, which fails closed because Playwright's own default
+  is `tests`, outside the write-deny. So a suite the guard cannot see never enters a run (see
   [Configuration § e2e](../reference/configuration.md#e2e)).

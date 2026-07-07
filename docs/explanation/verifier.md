@@ -28,7 +28,9 @@ graph TD
 - **Holdout** (`src/verifier/holdout`) — a subset of the acceptance criteria is
   withheld from the producer and validated independently after the fact, guarding
   against work tailored to the visible target. Folded into the merge gate as a
-  `holdout` gate evidence entry.
+  `holdout` gate evidence entry. The withheld answer-key is stored **task-keyed**;
+  the validator's parsed **verdicts** are stored **rung-keyed** — see
+  [Rung-keyed holdout verdicts](#rung-keyed-holdout-verdicts-s1) below.
 - **Judgment layer** (`src/verifier/judgment`) — a panel of reviewers, each
   applying a current best-practice lens, whose confirmed blockers contribute to the
   merge gate.
@@ -129,6 +131,23 @@ and nothing writes it. The runner builds the reviewer prompt **inline** from the
 reviewer's `agents/<role>.md` definition plus the shared
 `skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`
 points at a real per-run artifact a runner Reads (the `ProducerContext`).
+
+## Rung-keyed holdout verdicts (S1)
+
+The holdout verdict store (`src/verifier/holdout/verdict-store.ts`) is keyed by
+`(runId, taskId, rung)`, where `rung` is the task's escalation rung — verdict files
+land at `runs/<run>/holdouts/<task>.r<rung>.verdicts.json`. (The answer-key store
+stays **task-keyed**: the withheld criteria text is stable across escalations.)
+
+The keying is load-bearing for the **crash-resume fast-path** in
+`makePhaseHandlers` (`src/orchestrator/handlers.ts`). On a resumed holdout task the
+handler checks whether verdicts already exist on disk before deriving the merge gate
+without re-spawning the validator panel. Were the store task-keyed, a verdict written
+at a **prior** rung would survive an escalation bump and satisfy that check — the
+implementation is at a new rung, but a stale verdict clears it. With rung-keying, the
+current-rung verdict file is simply **absent** after a bump, so the fast-path
+**fails closed** and re-spawns the panel against the new implementation. A prior
+rung's files become inert rather than misleading.
 
 ## Verify-then-fix (Decision 27)
 

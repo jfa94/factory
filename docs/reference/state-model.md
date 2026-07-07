@@ -27,7 +27,7 @@ $CLAUDE_PLUGIN_DATA/
         ├── audit.jsonl                # append-only audit log
         ├── metrics.jsonl              # append-only telemetry
         ├── report.md                  # finalize/partial report
-        ├── holdouts/                  # withheld answer-keys + verdicts
+        ├── holdouts/                  # <task>.answers.json (task-keyed) + <task>.r<rung>.verdicts.json (rung-keyed, S1)
         └── reviews/                   # reviewer artifacts
 ```
 

@@ -2100,6 +2100,66 @@ parse-level "running ⇒ tasks non-empty" schema invariant — it would brick
 
 ---
 
+## Decision 58 — Gate-Machinery Hole-Closing Sweep (S1–S4)
+
+**Date:** 2026-07-07
+
+**Context:** Four self-documented holes in the gate machinery, each a place where a
+gate could pass on evidence it should not have trusted. They are independent fixes but
+share one theme — close a trust gap at the seam that owns it, without widening any
+trust boundary.
+
+**Decision:** Four folds.
+
+- **S1 — rung-keyed holdout verdicts.** The holdout verdict store
+  (`src/verifier/holdout/verdict-store.ts`) is now keyed by `(runId, taskId, rung)`
+  instead of `(runId, taskId)`; verdict files are
+  `runs/<run>/holdouts/<task>.r<rung>.verdicts.json`. The crash-resume fast-path in
+  `handlers.ts` reads the current-rung file to decide whether it may derive the merge
+  gate without re-spawning the validator panel. Task-keying let a **stale prior-rung**
+  verdict survive an escalation bump and satisfy that check; rung-keying makes the
+  current-rung file absent after a bump, so the fast-path **fails closed** and
+  re-spawns the panel. The answer-key store stays task-keyed (withheld criteria are
+  stable across escalations). Extends the holdout Δ V confinement. See
+  [Rung-keyed holdout verdicts](./verifier.md#rung-keyed-holdout-verdicts-s1).
+
+- **S2 — GateRunner ↔ CI-render partition.** `src/ci/render-quality-gate.ts` now
+  exports `CI_RENDERED_GATES` (`type`/`lint`/`test`/`build`/`mutation`) and
+  `LOCAL_ONLY_GATES` (`tdd`/`coverage`/`sast`), pinned by a cross-check test asserting
+  their union equals `GATE_IDS`. This kills the local-green ≠ CI-green drift class: a
+  9th gate id fails the partition test until classified. No new CI steps were added
+  (`sast`/`coverage` stay local for now). Extends
+  [Decision 53](#decision-53--stack-adaptive-quality-gate-ci-rendered-from-the-gate-contract).
+  See [Which gates CI mirrors](../reference/automated-gates.md#which-gates-ci-mirrors-the-render-partition-s2).
+
+- **S3 — gates-in-force enumeration.** New pure helper `enumerateGatesInForce(contract)`
+  (`src/verifier/deterministic/gate-contract.ts`) returns `{contracted, skipped,
+  warnings}`. `run create` warns on stderr per dropped floor gate and carries `gates`
+  on the created/superseded envelope; the finalize report re-derives the same
+  enumeration from the committed contract (derive-don't-store) into a **Gates in force**
+  section, rendered loudly if the contract is absent/invalid at finalize. `DEFAULT_GATES`
+  = `test`/`tdd`/`type` (universal floor); `build` is a floor gate for every stack except
+  deno (deno waives build by stack, so no false-warn). A dropped floor gate is the one
+  misconfig TCB write-protection can't catch — it guards the file's writability, not its
+  content. Extends [Decision 46](#decision-46--the-gate-contract-scaffold-time-applicability-committed-and-enforced).
+  See [Gates in force](../reference/automated-gates.md#gates-in-force-s3).
+
+- **S4 — `--e2e` testDir preflight.** `assertE2ePrereqs`
+  (`src/orchestrator/preflight.ts`) now reads the target repo's own
+  `playwright.config.ts` and refuses a `run create --e2e` whose declared `testDir` is
+  not the TCB-covered literal `e2e`/`./e2e` (fail-closed on an absent declaration too —
+  Playwright defaults to `tests`, outside TCB write-deny). This closes the `tcb.ts` rule-3b
+  known gap **at run birth**, without introducing config trust: the TCB rule itself stays
+  literal-hardcoded (reading config to widen it would be the circular trust the TCB refuses).
+  Extends [Decision 40 D2](#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language).
+
+**Consequences:** Each seam now fails closed on the evidence it previously over-trusted:
+a stale holdout verdict, a CI/local gate-set drift, a hand-edited dropped floor gate, and
+a Playwright suite outside the write-guard. No trust boundary widened — S1/S4 in particular
+keep their literal/confined invariants and close the window earlier instead.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

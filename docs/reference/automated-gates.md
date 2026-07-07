@@ -93,6 +93,62 @@ truth in the other direction too: `factory scaffold` renders it into the managed
 it writes, so the local gate and the repo's GitHub CI build with identical env. See
 [configuration.md](./configuration.md#gateenv--ci-parity-placeholders).
 
+## Which gates CI mirrors (the render partition, S2)
+
+The local `GateRunner` and the scaffolded GitHub CI job (`quality-gate.yml`,
+[Decision 53](../explanation/decisions.md#decision-53--stack-adaptive-quality-gate-ci-rendered-from-the-gate-contract))
+enforce **overlapping but not identical** gate sets. `src/ci/render-quality-gate.ts`
+pins that split explicitly so local-green can never silently diverge from CI-green:
+
+- `CI_RENDERED_GATES` = `type`, `lint`, `test`, `build`, `mutation` — rendered as CI
+  steps (mutation via its own begin/end region, the other four as plain `- run:`
+  steps). CI mirrors these so a task that passes the local gate also passes the repo's
+  own CI on the shipped commit.
+- `LOCAL_ONLY_GATES` = `tdd`, `coverage`, `sast` — enforced by the local runner but
+  **not** rendered into CI:
+  - `tdd` needs the pre-squash task branch (commit ordering); CI only ever sees the
+    squashed merge, so the check cannot run there.
+  - `coverage` reads a per-tree-SHA local store keyed off the task worktree — no CI
+    analogue.
+  - `sast` is deliberately local for now (a plain command gate, so a future CI step
+    is possible — a classification choice, not a hard constraint).
+
+A cross-check test asserts `[...CI_RENDERED_GATES, ...LOCAL_ONLY_GATES]` equals the
+canonical `GATE_IDS`. A **9th** gate id therefore fails the partition test until it is
+classified into one bucket or the other — the whole point is that adding a gate can't
+skip the local-vs-CI decision. No new CI steps were added by this pinning; `sast` and
+`coverage` stay local.
+
+## Gates in force (S3)
+
+The gates the merge gate will actually enforce for a run are **derived from the
+repo's committed `.factory/gates.json` contract**, never stored on run state
+(derive-don't-store). `enumerateGatesInForce(contract)`
+(`src/verifier/deterministic/gate-contract.ts`) is a pure helper returning:
+
+- `contracted` — the gate ids whose contract entry is `contracted: true`.
+- `skipped` — each `contracted: false` gate id with its committed `reason` (the
+  waiver).
+- `warnings` — one line per **floor** gate that is not contracted (see below).
+
+**`DEFAULT_GATES`** — `test`, `tdd`, `type` — is the universal floor every stack
+resolver contracts unconditionally. `build` is additionally a floor gate for every
+stack **except deno** (deno waives build by stack — `deno check` covers compilation,
+there is no emit step — so a normal deno contract never false-warns).
+
+If a committed contract leaves a floor gate `contracted: false`, an operator
+hand-edited the contract to drop it — the one misconfiguration TCB write-protection
+cannot catch (it guards the file's *writability*, not its *content*). So:
+
+- **At `run create`**, each such dropped floor gate is warned loudly on stderr
+  (`run create: default-set gate '<id>' is not contracted: … — the merge gate will
+  not enforce it`). The created/superseded JSON envelope also carries `gates`
+  (the full `GatesInForce` shape).
+- **At finalize**, the run report re-derives the same enumeration from the committed
+  contract and renders a **Gates in force** markdown section (Enforced / Not
+  contracted / warnings). If the contract is absent or invalid at finalize, the
+  section renders that fact **loudly** rather than omitting it.
+
 ## The gates
 
 | Gate       | Checks                                                                                                                                                                                                                                         | Fail-closed when                                                                                                                                                                |

@@ -215,7 +215,10 @@ factory configure --set e2e.baseURL="http://localhost:3000"
 > `templates/playwright.config.ts` hardcodes `e2e`, and the TCB `e2e-suite` write-guard is
 > hardcoded to the same path component; a custom `testDir` would silently diverge from what
 > actually runs and gates, so the lock closes that gap rather than leaving it a documented
-> limitation. (There is **no** CI `e2e` job — [Decision 40 D11](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)
+> limitation. The **target repo's own** `playwright.config.ts` is checked against the same
+> literal at run birth (S4): `run create --e2e` refuses a config whose declared `testDir` is
+> not `e2e`/`./e2e` (an absent declaration fails closed — Playwright defaults to `tests`,
+> outside the write-deny). (There is **no** CI `e2e` job — [Decision 40 D11](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)
 > removed it from `quality-gate.yml`; e2e gating is run-level only.) See
 > [Run with end-to-end tests](../guides/run-with-e2e.md).
 
