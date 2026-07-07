@@ -34,6 +34,8 @@
 import {
     decideFinalize,
     rollup,
+    loadGateContract,
+    enumerateGatesInForce,
     buildPartialReport,
     renderPartialReportMarkdown,
     renderFailureComment,
@@ -192,7 +194,11 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             : taskTerminal
 
     // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
-    const report = buildPartialReport({...run, status: terminal}, deps.spec, {now})
+    // Gates-in-force (S3): re-derive from the repo's committed contract (derive-don't-store;
+    // the contract is TCB-write-denied to agents, so any mid-run drift is operator-only). If
+    // it can't be loaded at finalize, render that state loudly rather than omitting the section.
+    const gates = await resolveGatesInForce(deps.git)
+    const report = buildPartialReport({...run, status: terminal}, deps.spec, {now, ...gates})
     const markdown = renderPartialReportMarkdown(report)
 
     // 3. persist report.md (atomic full-file replace).
@@ -322,5 +328,30 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
         report,
         ...(rollupResult ? {rollup: rollupResult} : {}),
         failureCommentPosted,
+    }
+}
+
+/**
+ * Re-derive the gates-in-force from the repo's committed contract at finalize (S3).
+ * Returns the shape {@link buildPartialReport} consumes: `{gates}` when the contract
+ * loads, `{gatesUnavailable}` (loud) when it is absent/invalid/unreachable.
+ */
+async function resolveGatesInForce(
+    git: GitClient
+): Promise<{gates: ReturnType<typeof enumerateGatesInForce>} | {gatesUnavailable: string}> {
+    let root: string
+    try {
+        root = await git.showToplevel()
+    } catch (err) {
+        return {gatesUnavailable: `repo root unresolved: ${(err as Error).message}`}
+    }
+    const load = await loadGateContract(root)
+    switch (load.state) {
+        case 'ok':
+            return {gates: enumerateGatesInForce(load.contract)}
+        case 'absent':
+            return {gatesUnavailable: `contract absent at ${root}`}
+        case 'invalid':
+            return {gatesUnavailable: `contract invalid: ${load.error}`}
     }
 }

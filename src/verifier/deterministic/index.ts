@@ -36,11 +36,15 @@ export {
     isAllowedGateRunner,
     classifySkip,
     contractCommand,
+    enumerateGatesInForce,
+    DEFAULT_GATES,
     type GateContract,
     type GateContractEntry,
     type GateContractLoad,
     type GateContractStack,
     type SkipClass,
+    type GatesInForce,
+    type SkippedGate,
 } from './gate-contract.js'
 
 // per-gate strategies

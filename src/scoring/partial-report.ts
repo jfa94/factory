@@ -22,6 +22,7 @@
 import type {RunState, RunStatus, FailureClass} from '../types/index.js'
 import type {TraceabilityVerdictRow} from '../core/state/schema.js'
 import type {SpecManifest, SpecTask} from '../spec/schema.js'
+import type {GatesInForce} from '../verifier/deterministic/index.js'
 import {nonNull, nowIso} from '../shared/index.js'
 
 /** A task that merged into staging (status `done`). */
@@ -129,6 +130,14 @@ export interface PartialRunReport {
      * e.g. a degraded-but-continuing setup condition. Present IFF non-empty.
      */
     warnings?: string[] | undefined
+    /**
+     * The gates the merge gate enforced for this run (S3), re-derived from the
+     * repo's committed contract at finalize (derive-don't-store). Present IFF the
+     * contract loaded; {@link gates_unavailable} carries the reason otherwise.
+     */
+    gates?: GatesInForce | undefined
+    /** Why the gate contract could not be enumerated at finalize (absent/invalid) — rendered loudly. */
+    gates_unavailable?: string | undefined
 }
 
 /** Options for {@link buildPartialReport}. */
@@ -137,6 +146,10 @@ export interface BuildPartialReportOptions {
     now?: string
     /** General run warnings from the finalize coordinator (omitted when empty). */
     warnings?: string[]
+    /** The enumerated gates-in-force (S3), re-derived by the finalize coordinator. */
+    gates?: GatesInForce
+    /** Why the gate contract was unavailable at finalize (absent/invalid). Mutually exclusive with {@link gates}. */
+    gatesUnavailable?: string
 }
 
 /**
@@ -224,6 +237,8 @@ export function buildPartialReport(
         ...buildTraceability(run),
         ...buildCrossVendorAbsences(run, bySpecOrder),
         ...(opts.warnings !== undefined && opts.warnings.length > 0 ? {warnings: opts.warnings} : {}),
+        ...(opts.gates !== undefined ? {gates: opts.gates} : {}),
+        ...(opts.gatesUnavailable !== undefined ? {gates_unavailable: opts.gatesUnavailable} : {}),
     }
 }
 
@@ -398,6 +413,27 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
         }
     }
     out.push('')
+
+    if (report.gates !== undefined) {
+        out.push('## Gates in force')
+        out.push(`Enforced: ${report.gates.contracted.map((id) => `\`${id}\``).join(', ') || '_none_'}`)
+        if (report.gates.skipped.length > 0) {
+            out.push('')
+            out.push('Not contracted:')
+            for (const s of report.gates.skipped) {
+                out.push(`- \`${s.id}\` — ${s.reason}`)
+            }
+        }
+        for (const w of report.gates.warnings) {
+            out.push('')
+            out.push(`⚠️ ${w}`)
+        }
+        out.push('')
+    } else if (report.gates_unavailable !== undefined) {
+        out.push('## Gates in force')
+        out.push(`⚠️ gate contract unavailable at finalize: ${report.gates_unavailable}`)
+        out.push('')
+    }
 
     if (report.e2e_journeys !== undefined) {
         out.push(`## End-to-end journeys verified (${report.e2e_journeys.length})`)

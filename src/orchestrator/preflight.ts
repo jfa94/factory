@@ -8,7 +8,7 @@
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {UsageError} from '../shared/usage-error.js'
-import {loadGateContract, GATE_CONTRACT_REL} from '../verifier/deterministic/index.js'
+import {loadGateContract, GATE_CONTRACT_REL, type GateContract} from '../verifier/deterministic/index.js'
 import type {GitClient} from '../git/index.js'
 
 /**
@@ -95,7 +95,7 @@ export async function assertE2ePrereqs(cwd: string): Promise<void> {
  * sweep without a contract) despite the file existing at the root. Checked on
  * EVERY intent, resume included — a resumed run's sweeps need the contract too.
  */
-export async function assertGateContract(cwd: string, gitClient: GitClient): Promise<void> {
+export async function assertGateContract(cwd: string, gitClient: GitClient): Promise<GateContract> {
     const load = await loadGateContract(cwd)
     if (load.state === 'absent') {
         throw new UsageError(
@@ -112,4 +112,5 @@ export async function assertGateContract(cwd: string, gitClient: GitClient): Pro
             `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked — commit it so task worktrees see the contract.`
         )
     }
+    return load.contract
 }

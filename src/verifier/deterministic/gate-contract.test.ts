@@ -7,6 +7,7 @@ import {
     GateContractSchema,
     classifySkip,
     contractCommand,
+    enumerateGatesInForce,
     loadGateContract,
     validateGateCommand,
     type GateContract,
@@ -239,5 +240,39 @@ describe('contractCommand', () => {
             gates: {...parsed.gates, test: {contracted: true, command: 'vitest; curl evil'}},
         } as GateContract
         expect(() => contractCommand(broken, 'test')).toThrow(/invalid/)
+    })
+})
+
+describe('enumerateGatesInForce', () => {
+    it('splits contracted vs skipped, carrying the skip reason', () => {
+        const contract = GateContractSchema.parse(validContract())
+        const inForce = enumerateGatesInForce(contract)
+        expect(inForce.contracted).toEqual(['test', 'tdd', 'type', 'lint', 'build'])
+        expect(inForce.skipped).toEqual([
+            {id: 'coverage', reason: 'coverage not wired yet'},
+            {id: 'mutation', reason: 'waived via --waive mutation'},
+            {id: 'sast', reason: 'no securityCommand configured'},
+        ])
+    })
+
+    it('no warnings when every floor gate is contracted', () => {
+        expect(enumerateGatesInForce(GateContractSchema.parse(validContract())).warnings).toEqual([])
+    })
+
+    it('warns once per dropped floor gate (operator hand-edit TCB cannot catch)', () => {
+        const raw = validContract()
+        ;(raw.gates as Record<string, unknown>).tdd = {contracted: false, reason: 'operator dropped it'}
+        ;(raw.gates as Record<string, unknown>).build = {contracted: false, reason: 'operator dropped it too'}
+        const warnings = enumerateGatesInForce(GateContractSchema.parse(raw)).warnings
+        expect(warnings).toHaveLength(2)
+        expect(warnings[0]).toMatch(/default-set gate 'tdd' is not contracted.*will not enforce it/)
+        expect(warnings[1]).toMatch(/default-set gate 'build' is not contracted/)
+    })
+
+    it('does NOT warn on a deno contract that waives build by stack', () => {
+        const raw = validContract()
+        raw.stack = 'deno'
+        ;(raw.gates as Record<string, unknown>).build = {contracted: false, reason: 'waived-by-stack: no emit step'}
+        expect(enumerateGatesInForce(GateContractSchema.parse(raw)).warnings).toEqual([])
     })
 })

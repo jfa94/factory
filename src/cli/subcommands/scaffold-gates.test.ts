@@ -9,6 +9,7 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {detectStack, resolveGateContract, recommendFastCheck} from './scaffold-gates.js'
+import {DEFAULT_GATES} from '../../verifier/deterministic/index.js'
 
 let root: string
 
@@ -161,5 +162,21 @@ describe('resolveGateContract — refusals', () => {
         await expect(
             resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
         ).rejects.toThrow(/package\.json is not valid JSON/)
+    })
+})
+
+describe('DEFAULT_GATES ↔ resolver reality', () => {
+    it('every resolver contracts every DEFAULT_GATES id (pins the floor constant to scaffold)', async () => {
+        await npmFixture({'@stryker-mutator/core': '1', '@vitest/coverage-v8': '1'})
+        const npm = await resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
+        for (const id of DEFAULT_GATES) {
+            expect(npm.gates[id].contracted, `npm must contract '${id}'`).toBe(true)
+        }
+        await rm(join(root, 'package.json'), {force: true})
+        await writeFile(join(root, 'deno.json'), JSON.stringify({tasks: {build: 'deno run -A build.ts'}}), 'utf8')
+        const deno = await resolveGateContract({targetRoot: root, waiveMutation: true, waiveCoverage: true})
+        for (const id of DEFAULT_GATES) {
+            expect(deno.gates[id].contracted, `deno must contract '${id}'`).toBe(true)
+        }
     })
 })

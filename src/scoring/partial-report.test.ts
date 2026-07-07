@@ -298,6 +298,33 @@ describe('renderPartialReportMarkdown', () => {
         expect(md).not.toContain('## Incomplete')
     })
 
+    it('renders the Gates in force section (enforced + not-contracted + warnings)', () => {
+        const spec = makeSpec([specTask('t1')])
+        const run = makeRun([doneTask('t1', 1)], {status: 'completed'})
+        const gates = {
+            contracted: ['test', 'type'] as const,
+            skipped: [{id: 'coverage', reason: 'not wired yet'}] as const,
+            warnings: ["default-set gate 'tdd' is not contracted: dropped — the merge gate will not enforce it"],
+        }
+        const md = renderPartialReportMarkdown(buildPartialReport(run, spec, {now: NOW, gates}))
+
+        expect(md).toContain('## Gates in force')
+        expect(md).toContain('Enforced: `test`, `type`')
+        expect(md).toContain('- `coverage` — not wired yet')
+        expect(md).toContain("⚠️ default-set gate 'tdd' is not contracted")
+    })
+
+    it('renders the gates section loudly when the contract was unavailable at finalize', () => {
+        const spec = makeSpec([specTask('t1')])
+        const run = makeRun([doneTask('t1', 1)], {status: 'completed'})
+        const md = renderPartialReportMarkdown(
+            buildPartialReport(run, spec, {now: NOW, gatesUnavailable: 'contract absent at /repo'})
+        )
+
+        expect(md).toContain('## Gates in force')
+        expect(md).toContain('⚠️ gate contract unavailable at finalize: contract absent at /repo')
+    })
+
     it('shows _none_ when nothing shipped', () => {
         const spec = makeSpec([specTask('t1')])
         const run = makeRun([failedTask('t1', 'spec-defect', 'untestable')], {status: 'failed'})

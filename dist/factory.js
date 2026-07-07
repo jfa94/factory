@@ -9154,7 +9154,9 @@ function buildPartialReport(run10, request, opts = {}) {
     ...buildE2eNarrative(run10),
     ...buildTraceability(run10),
     ...buildCrossVendorAbsences(run10, bySpecOrder),
-    ...opts.warnings !== void 0 && opts.warnings.length > 0 ? { warnings: opts.warnings } : {}
+    ...opts.warnings !== void 0 && opts.warnings.length > 0 ? { warnings: opts.warnings } : {},
+    ...opts.gates !== void 0 ? { gates: opts.gates } : {},
+    ...opts.gatesUnavailable !== void 0 ? { gates_unavailable: opts.gatesUnavailable } : {}
   };
 }
 function buildCrossVendorAbsences(run10, bySpecOrder) {
@@ -9264,6 +9266,26 @@ function renderPartialReportMarkdown(report) {
     }
   }
   out.push("");
+  if (report.gates !== void 0) {
+    out.push("## Gates in force");
+    out.push(`Enforced: ${report.gates.contracted.map((id) => `\`${id}\``).join(", ") || "_none_"}`);
+    if (report.gates.skipped.length > 0) {
+      out.push("");
+      out.push("Not contracted:");
+      for (const s of report.gates.skipped) {
+        out.push(`- \`${s.id}\` \u2014 ${s.reason}`);
+      }
+    }
+    for (const w of report.gates.warnings) {
+      out.push("");
+      out.push(`\u26A0\uFE0F ${w}`);
+    }
+    out.push("");
+  } else if (report.gates_unavailable !== void 0) {
+    out.push("## Gates in force");
+    out.push(`\u26A0\uFE0F gate contract unavailable at finalize: ${report.gates_unavailable}`);
+    out.push("");
+  }
   if (report.e2e_journeys !== void 0) {
     out.push(`## End-to-end journeys verified (${report.e2e_journeys.length})`);
     for (const j of report.e2e_journeys) {
@@ -10831,6 +10853,27 @@ async function loadGateContract(rootAbs) {
     return { state: "invalid", error: issues };
   }
   return { state: "ok", contract: result.data };
+}
+var DEFAULT_GATES = ["test", "tdd", "type"];
+function defaultGatesForStack(stack) {
+  return stack === "deno" ? DEFAULT_GATES : [...DEFAULT_GATES, "build"];
+}
+function enumerateGatesInForce(contract) {
+  const contracted = [];
+  const skipped = [];
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (entry.contracted) {
+      contracted.push(id);
+    } else {
+      skipped.push({ id, reason: entry.reason });
+    }
+  }
+  const skippedById = new Map(skipped.map((s) => [s.id, s.reason]));
+  const warnings = defaultGatesForStack(contract.stack).filter((id) => skippedById.has(id)).map(
+    (id) => `default-set gate '${id}' is not contracted: ${skippedById.get(id) ?? ""} \u2014 the merge gate will not enforce it`
+  );
+  return { contracted, skipped, warnings };
 }
 var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
 function classifySkip(reason) {
@@ -13207,7 +13250,8 @@ async function finalizeRun(deps, runId) {
   const run10 = await deps.state.read(runId);
   const taskTerminal = decideFinalize(run10).run_status;
   const terminal = run10.e2e_phase?.status === "failed" || run10.e2e_assessment?.status === "failed" || run10.traceability?.status === "failed" ? "failed" : taskTerminal;
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
+  const gates = await resolveGatesInForce(deps.git);
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now, ...gates });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -13274,6 +13318,23 @@ async function finalizeRun(deps, runId) {
     ...rollupResult ? { rollup: rollupResult } : {},
     failureCommentPosted
   };
+}
+async function resolveGatesInForce(git) {
+  let root;
+  try {
+    root = await git.showToplevel();
+  } catch (err) {
+    return { gatesUnavailable: `repo root unresolved: ${err.message}` };
+  }
+  const load = await loadGateContract(root);
+  switch (load.state) {
+    case "ok":
+      return { gates: enumerateGatesInForce(load.contract) };
+    case "absent":
+      return { gatesUnavailable: `contract absent at ${root}` };
+    case "invalid":
+      return { gatesUnavailable: `contract invalid: ${load.error}` };
+  }
 }
 
 // src/orchestrator/transitions.ts
@@ -16368,6 +16429,7 @@ async function assertGateContract(cwd, gitClient) {
       `run create: ${GATE_CONTRACT_REL} exists but is not git-tracked \u2014 commit it so task worktrees see the contract.`
     );
   }
+  return load.contract;
 }
 
 // src/cli/subcommands/run.ts
@@ -16554,7 +16616,11 @@ async function runCreate(argv, overrides = {}) {
   if (e2e) {
     await assertE2ePrereqs(cwd);
   }
-  await assertGateContract(cwd, gitClient);
+  const contract = await assertGateContract(cwd, gitClient);
+  const gatesInForce = enumerateGatesInForce(contract);
+  for (const warning of gatesInForce.warnings) {
+    emitError(`run create: ${warning}`);
+  }
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig({ dataDir });
@@ -16629,11 +16695,11 @@ async function runCreate(argv, overrides = {}) {
   await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "launch" });
   const out = approveSpec ? await park(result.run) : { run: result.run };
   if (result.kind === "created") {
-    emitJson({ kind: "created", ...out });
+    emitJson({ kind: "created", ...out, gates: gatesInForce });
     return EXIT.OK;
   }
   await emitMetric(dataDir, result.run.run_id, "human_touch", { kind: "conflict" });
-  emitJson({ kind: "superseded", ...out, supersededId: result.supersededId });
+  emitJson({ kind: "superseded", ...out, gates: gatesInForce, supersededId: result.supersededId });
   return EXIT.OK;
 }
 async function runResume(argv) {

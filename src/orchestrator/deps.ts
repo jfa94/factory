@@ -145,7 +145,7 @@ export type {
 } from '../producer/index.js'
 
 // --- deterministic verifier (src/verifier/deterministic) --------------------
-export {GateRunner, loadGateContract, FsCoverageStore} from '../verifier/deterministic/index.js'
+export {GateRunner, loadGateContract, enumerateGatesInForce, FsCoverageStore} from '../verifier/deterministic/index.js'
 export type {GateContext, GateRunResult, GateReportEntry, GateTools} from '../verifier/deterministic/index.js'
 
 // --- judgment verifier (src/verifier/judgment) ------------------------------

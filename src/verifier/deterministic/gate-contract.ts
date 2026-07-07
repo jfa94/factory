@@ -172,6 +172,64 @@ export async function loadGateContract(rootAbs: string): Promise<GateContractLoa
 }
 
 /**
+ * The gates EVERY stack resolver contracts unconditionally (`resolveNpm` /
+ * `resolveDeno` in scaffold-gates.ts). If a committed contract leaves one of these
+ * `contracted:false`, an operator hand-edited the contract to drop a floor gate —
+ * the one misconfig TCB write-protection can't catch (it guards the file's
+ * writability, not its content). `run create` warns on each such gate.
+ */
+export const DEFAULT_GATES: readonly GateId[] = ['test', 'tdd', 'type'] as const
+
+/**
+ * `build` is a floor gate for emit-producing stacks (npm), but deno legitimately
+ * waives it (`deno check` covers compilation, there is no emit step). So it is a
+ * default gate for every stack EXCEPT deno — folded into the warning set per-stack
+ * so a normal deno contract never false-warns.
+ */
+function defaultGatesForStack(stack: GateContractStack): readonly GateId[] {
+    return stack === 'deno' ? DEFAULT_GATES : [...DEFAULT_GATES, 'build']
+}
+
+/** One gate the runner will NOT enforce because its contract entry is `contracted:false`. */
+export interface SkippedGate {
+    readonly id: GateId
+    readonly reason: string
+}
+
+/** The enumerated "gates in force" for a contract, plus operator-misconfig warnings. */
+export interface GatesInForce {
+    readonly contracted: readonly GateId[]
+    readonly skipped: readonly SkippedGate[]
+    /** One line per DEFAULT_GATES id that is NOT contracted (a dropped floor gate). */
+    readonly warnings: readonly string[]
+}
+
+/**
+ * Enumerate which gates a contract puts in force, and warn when a DEFAULT_GATES
+ * floor gate is missing. Pure — derived entirely from the loaded contract.
+ */
+export function enumerateGatesInForce(contract: GateContract): GatesInForce {
+    const contracted: GateId[] = []
+    const skipped: SkippedGate[] = []
+    for (const id of GATE_IDS) {
+        const entry = contract.gates[id]
+        if (entry.contracted) {
+            contracted.push(id)
+        } else {
+            skipped.push({id, reason: entry.reason})
+        }
+    }
+    const skippedById = new Map(skipped.map((s) => [s.id, s.reason]))
+    const warnings = defaultGatesForStack(contract.stack)
+        .filter((id) => skippedById.has(id))
+        .map(
+            (id) =>
+                `default-set gate '${id}' is not contracted: ${skippedById.get(id) ?? ''} — the merge gate will not enforce it`
+        )
+    return {contracted, skipped, warnings}
+}
+
+/**
  * The skip-taxonomy split (Decision 46). SCOPE skips are properties of the TASK
  * (nothing in the diff for the gate to act on) — legitimate, excluded from the
  * conjunction even under a contract. TOOLING skips mean the gate COULD NOT RUN

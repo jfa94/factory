@@ -370,6 +370,71 @@ describe('runCreate boundary (Decision 35)', () => {
         expect((await state.read('run-plain')).status).toBe('running')
     })
 
+    it('created envelope carries the enumerated gates-in-force (S3)', async () => {
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await contractReadyCwd(git)
+
+        const {env} = await captureCreate(['--issue', '42', '--run-id', 'run-gates'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+
+        const gates = env.gates as {contracted: string[]; skipped: {id: string}[]; warnings: string[]}
+        expect(gates.contracted).toEqual(['test', 'tdd', 'type', 'build'])
+        expect(gates.skipped.map((s) => s.id)).toEqual(['coverage', 'mutation', 'sast', 'lint'])
+        expect(gates.warnings).toEqual([]) // full floor → no misconfig warning
+    })
+
+    it('warns (stderr + envelope) when a floor gate is dropped from the contract (S3)', async () => {
+        const droppedFloor = JSON.stringify({
+            version: 1,
+            stack: 'npm',
+            gates: {
+                test: {contracted: true},
+                tdd: {contracted: false, reason: 'operator dropped it'},
+                coverage: {contracted: false, reason: 'x'},
+                mutation: {contracted: false, reason: 'x'},
+                sast: {contracted: false, reason: 'x'},
+                type: {contracted: true},
+                lint: {contracted: false, reason: 'x'},
+                build: {contracted: true},
+            },
+        })
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await mkdtemp(join(tmpdir(), 'factory-contract-cwd-'))
+        contractCwds.push(cwd)
+        await seedScaffoldRepo(cwd, {gates: droppedFloor})
+        git.trackedPaths.add('.factory/gates.json')
+
+        const stderrChunks: string[] = []
+        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => {
+            stderrChunks.push(String(c))
+            return true
+        })
+        const stdoutChunks: string[] = []
+        const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+            stdoutChunks.push(String(c))
+            return true
+        })
+        try {
+            await runCreate(['--issue', '42', '--run-id', 'run-dropped'], {gitClient: git, ghClient: gh, cwd, dataDir})
+        } finally {
+            stderrSpy.mockRestore()
+            stdoutSpy.mockRestore()
+        }
+
+        expect(stderrChunks.join('')).toMatch(/run create: default-set gate 'tdd' is not contracted/)
+        const env = JSON.parse(stdoutChunks.join('')) as Record<string, unknown>
+        const gates = env.gates as {warnings: string[]}
+        expect(gates.warnings).toHaveLength(1)
+    })
+
     it('--approve-spec --resume → UsageError (approval is create-only; resume IS the sign-off)', async () => {
         const create = runCreate(['--issue', '42', '--approve-spec', '--resume'])
         await expect(create).rejects.toMatchObject({isUsageError: true})

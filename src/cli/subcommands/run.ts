@@ -71,6 +71,7 @@ import {
     type RunStagingDeps,
 } from '../../orchestrator/lifecycle.js'
 import {assertE2ePrereqs, assertGateContract} from '../../orchestrator/preflight.js'
+import {enumerateGatesInForce} from '../../verifier/deterministic/index.js'
 
 const RUN_HELP = `factory run — create a run and drive its phases
 
@@ -323,8 +324,15 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     }
     // Contract precondition on EVERY intent, resume included — a resumed run's
     // gate sweeps need the committed contract just like a fresh run's (the
-    // GateRunner throws without one).
-    await assertGateContract(cwd, gitClient)
+    // GateRunner throws without one). The returned contract feeds the gates-in-force
+    // enumeration surfaced on the create envelope (S3).
+    const contract = await assertGateContract(cwd, gitClient)
+    const gatesInForce = enumerateGatesInForce(contract)
+    // Operator misconfig: a dropped floor gate is the one hole TCB protection can't
+    // cover (it guards the file's writability, not its content). Warn loudly.
+    for (const warning of gatesInForce.warnings) {
+        emitError(`run create: ${warning}`)
+    }
     const hasDataDirOverride = overrides.dataDir !== undefined
 
     const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})
@@ -413,12 +421,12 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'launch'})
     const out = approveSpec ? await park(result.run) : {run: result.run}
     if (result.kind === 'created') {
-        emitJson({kind: 'created', ...out})
+        emitJson({kind: 'created', ...out, gates: gatesInForce})
         return EXIT.OK
     }
     // kind === "superseded"
     await emitMetric(dataDir, result.run.run_id, 'human_touch', {kind: 'conflict'})
-    emitJson({kind: 'superseded', ...out, supersededId: result.supersededId})
+    emitJson({kind: 'superseded', ...out, gates: gatesInForce, supersededId: result.supersededId})
     return EXIT.OK
 }
 
