@@ -112,6 +112,14 @@ export interface RescueScan {
      * it may still be `needs_rescue` (recoverable failures to retry on reopen).
      */
     would_deadlock: boolean
+    /**
+     * True iff the run has ZERO tasks (D57) — half-created wreckage from a crash
+     * between run birth and task seeding (impossible for runs created after the
+     * atomic-seeding fix, but pre-existing wreckage must not read as healthy: a
+     * task-only scan over `{}` reports `total: 0` and every fold false). The remedy
+     * is `run cancel --cleanup` + re-create, not a task reset.
+     */
+    empty_task_map: boolean
     /** One-line human summary. */
     summary: string
     /** Per-task lines, in run.tasks order. */
@@ -172,8 +180,14 @@ export function scanRun(run: RunState): RescueScan {
     const e2e_assessment_failed = run.e2e_assessment?.status === 'failed'
     const traceability_failed = run.traceability?.status === 'failed'
     const rollup_pending = run.rollup?.merged === false
+    const empty_task_map = all.length === 0
     const needs_rescue =
-        resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending
+        resettable.length > 0 ||
+        e2e_failed ||
+        e2e_assessment_failed ||
+        traceability_failed ||
+        rollup_pending ||
+        empty_task_map
 
     return {
         run_id: run.run_id,
@@ -194,6 +208,7 @@ export function scanRun(run: RunState): RescueScan {
         traceability_failed,
         rollup_pending,
         would_deadlock,
+        empty_task_map,
         summary: summarize(
             run.status,
             resettable.length,
@@ -202,7 +217,8 @@ export function scanRun(run: RunState): RescueScan {
             e2e_failed,
             e2e_assessment_failed,
             traceability_failed,
-            rollup_pending
+            rollup_pending,
+            empty_task_map
         ),
         tasks,
     }
@@ -217,8 +233,12 @@ function summarize(
     e2eFailed: boolean,
     e2eAssessmentFailed: boolean,
     traceabilityFailed: boolean,
-    rollupPending: boolean
+    rollupPending: boolean,
+    emptyTaskMap: boolean
 ): string {
+    if (emptyTaskMap) {
+        return `run '${status}': zero tasks — half-created; cancel it (\`factory run cancel --cleanup\`) and re-create`
+    }
     const e2eTail = e2eFailed ? ' (e2e phase failed — needs a fix + --reset-e2e)' : ''
     const assessTail = e2eAssessmentFailed ? ' (e2e assessment failed — needs a fix + --reset-e2e)' : ''
     const traceTail = traceabilityFailed ? ' (PRD-traceability failed — needs a fix + --reset-traceability)' : ''

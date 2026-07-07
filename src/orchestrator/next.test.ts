@@ -330,31 +330,29 @@ describe('nextTask', () => {
         }
     })
 
-    // Empty run (tasks: {}) → all-terminal with empty cascade_failed.
-    it('empty run (no tasks) → all-terminal with cascade_failed []', async () => {
+    // Empty run (tasks: {}) is half-created wreckage (D57): creation seeds atomically,
+    // so a zero-task run can only be a crash between birth and seeding on a pre-D57
+    // engine. Throws LOUD naming the remedy — never a vacuous finalize.
+    it('empty run (no tasks) → loud UsageError naming half-created + remedy', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps()
         try {
-            // Clear the default T1 so the run has zero tasks (traceability concluded —
-            // a vacuously-completed run would otherwise owe the S9 audit first).
+            // Clear the default T1 so the run has zero tasks.
             await deps.state.update(runId, (s) => ({...s, tasks: {}, traceability: TRACED}))
 
-            const env = await nextTask(deps, runId)
-            expect(env).toMatchObject({kind: 'finalize', cascade_failed: []})
+            await expect(nextTask(deps, runId)).rejects.toThrow(/zero tasks.*half-created.*run cancel/s)
         } finally {
             await cleanup()
         }
     })
 
-    // Empty run + quota breach → all-terminal pre-gate (vacuously finished; e.g. a
-    // crash between state.create and task seeding). The gate must NOT run — the
-    // step-2 and step-6 all-terminal semantics agree on tasks: {}.
-    it('empty run + quota-breach → all-terminal with no checkpoint written', async () => {
+    // Empty run + quota breach → the guard fires BEFORE the quota gate: wreckage
+    // must never write a pause checkpoint (that would park it as "resumable").
+    it('empty run + quota-breach → throws with no checkpoint written', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps({usage: PAUSE_5H})
         try {
             await deps.state.update(runId, (s) => ({...s, tasks: {}, traceability: TRACED}))
 
-            const env = await nextTask(deps, runId)
-            expect(env).toMatchObject({kind: 'finalize', cascade_failed: []})
+            await expect(nextTask(deps, runId)).rejects.toThrow(/zero tasks/)
             const run = await deps.state.read(runId)
             expect(run.status).toBe('running')
             expect(run.quota).toBeUndefined()

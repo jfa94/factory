@@ -11,8 +11,8 @@
  * The `factory run <action>` CLI boundary OVER these (exit codes, stdout
  * envelopes, flag guards, preconditions) lives in src/cli/subcommands/run.test.ts.
  */
-import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {rm} from 'node:fs/promises'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
+import {mkdir, rm, symlink} from 'node:fs/promises'
 import {join} from 'node:path'
 
 import {
@@ -28,7 +28,8 @@ import {nonNull} from '../shared/index.js'
 import {StateManager} from '../core/state/manager.js'
 import {SpecStore} from '../spec/index.js'
 import {makeSpec, makePrd} from './orchestrator-fixtures.js'
-import {specDir} from '../core/state/paths.js'
+import {specDir, runsRoot, runStatePath} from '../core/state/paths.js'
+import {atomicWriteFile} from '../shared/atomic-write.js'
 import {FakeGitClient, FakeGhClient} from '../git/index.js'
 import {defaultConfig} from '../config/schema.js'
 import {FIVE_HOUR_WINDOW_SECONDS, SEVEN_DAY_WINDOW_SECONDS, type UsageReading} from '../quota/index.js'
@@ -253,6 +254,46 @@ describe('createRun', () => {
         expect(run.human_touches).toEqual([{kind: 'launch', at: run.started_at}])
         // Persisted: round-trips through a fresh read.
         expect((await state.read('run-touch')).human_touches).toEqual([{kind: 'launch', at: run.started_at}])
+    })
+
+    it('INCIDENT 2026-07-07 (D57): v2 state behind the per-repo pointer → create succeeds whole', async () => {
+        // Plant the exact wreckage: an old-schema run dir named by current/<repo-key>.
+        await mkdir(join(runsRoot(dataDir), 'run-old'), {recursive: true})
+        await atomicWriteFile(runStatePath(dataDir, 'run-old'), JSON.stringify({schema_version: 2, run_id: 'run-old'}))
+        await mkdir(join(dataDir, 'current'), {recursive: true})
+        await symlink(join('..', 'runs', 'run-old'), join(dataDir, 'current', 'acme-widgets'))
+
+        const warns: string[] = []
+        const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+            warns.push(String(chunk))
+            return true
+        })
+        let run
+        try {
+            run = await createRun(state, store, {repo: REPO, issue: 42, runId: 'run-new'})
+        } finally {
+            spy.mockRestore()
+        }
+        expect(warns.some((w) => w.includes('unparseable'))).toBe(true)
+        // Born whole: tasks + launch touch present, pointer repointed.
+        expect(Object.keys(run.tasks).sort()).toEqual(['t1', 't2'])
+        expect(run.human_touches).toEqual([{kind: 'launch', at: run.started_at}])
+        expect(nonNull(await state.readCurrentForRepo(REPO)).run_id).toBe('run-new')
+    })
+
+    it('is provably single-write: zero state.update() calls during creation (D57)', async () => {
+        const update = state.update.bind(state)
+        let updates = 0
+        state.update = (...args: Parameters<typeof update>) => {
+            updates++
+            return update(...args)
+        }
+
+        const run = await createRun(state, store, {repo: REPO, issue: 42, runId: 'run-1w'})
+        expect(updates).toBe(0)
+        // Everything the retired follow-up update() used to seed is already there.
+        expect(Object.keys(run.tasks).sort()).toEqual(['t1', 't2'])
+        expect(run.human_touches).toEqual([{kind: 'launch', at: run.started_at}])
     })
 
     it('Δ S9 preflight: refuses to create a run on a spec with no durable PRD snapshot', async () => {

@@ -42,6 +42,7 @@ import {MAX_DOCS_ATTEMPTS} from './docs.js'
 import {MAX_TRACE_ATTEMPTS} from './traceability.js'
 import {applyQuotaGate, quotaStopFields, type QuotaStop} from './quota-gate.js'
 import {applyCircuitBreaker} from './circuit-breaker-gate.js'
+import {UsageError} from '../shared/usage-error.js'
 import type {OrchestratorDeps} from './orchestrator.js'
 
 /**
@@ -226,6 +227,19 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     //    write a pause checkpoint (mirrors nextAction in orchestrator.ts).
     if (isTerminalRunStatus(run.status)) {
         return {...ctx(), kind: 'done', run_status: run.status}
+    }
+
+    // 1.5. Empty-set guard (D57): a non-terminal run with ZERO tasks is always
+    //      half-created wreckage — creation seeds atomically (lifecycle) and debug
+    //      runs are born at seed, so no legitimate zero-task run exists. Without
+    //      this, `every` on `{}` below is vacuously true and the run routes to a
+    //      vacuous finalize. Same rule as deriveAllGatesVerdict/decideFinalize:
+    //      never treat "nothing ran" as a pass.
+    if (Object.keys(run.tasks).length === 0) {
+        throw new UsageError(
+            `run '${runId}' has zero tasks — half-created (creation crashed before task seeding); ` +
+                `cancel it (\`factory run cancel --run ${runId} --cleanup\`) and re-run \`factory run create\``
+        )
     }
 
     // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run

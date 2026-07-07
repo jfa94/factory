@@ -9,7 +9,7 @@
  * terminal-only refusal live in the CLI layer, not here.
  */
 import {describe, it, expect} from 'vitest'
-import {gcScan, gcApply} from './gc.js'
+import {gcScan, gcApply, gcApplyStale} from './gc.js'
 import {parseRunState, isTerminalRunStatus} from '../core/state/index.js'
 import {FakeGhClient} from '../git/index.js'
 import type {RunState, RunStatus} from '../types/index.js'
@@ -127,5 +127,90 @@ describe('gcApply — teardown for ONE terminal run', () => {
         gh.failDeleteProtection = new Error('HTTP 401: Bad credentials')
         await expect(gcApply(mkRun('run-a', 'superseded'), gh)).rejects.toThrow(/401/)
         expect(gh.deletedBranches).toEqual([]) // branch delete never reached
+    })
+})
+
+describe('gcScan — stale (unparseable) run dirs (D57)', () => {
+    it('reports a v2 dir with reason + branch, probing GitHub when branch + repo are extractable', async () => {
+        const gh = ghWithLeftover('run-v2')
+        const report = await gcScan([], gh, [
+            {run_id: 'run-v2', reason: 'schema-v2', staging_branch: 'staging-run-v2', repo: 'acme/widgets'},
+        ])
+        expect(report.stale).toEqual([
+            {
+                run_id: 'run-v2',
+                reason: 'schema-v2',
+                staging_branch: 'staging-run-v2',
+                branch_exists: true,
+                protection_live: true,
+                hint: 'factory rescue gc --apply --run run-v2',
+            },
+        ])
+        // Read-only: nothing deleted.
+        expect(gh.protectionDeletes).toEqual([])
+        expect(gh.deletedBranches).toEqual([])
+    })
+
+    it('skips the GitHub probe when the branch was not extractable (state-side line only)', async () => {
+        const gh = new FakeGhClient()
+        const report = await gcScan([], gh, [{run_id: 'run-corrupt', reason: 'corrupt-json'}])
+        expect(report.stale).toEqual([
+            {run_id: 'run-corrupt', reason: 'corrupt-json', hint: 'factory rescue gc --apply --run run-corrupt'},
+        ])
+        expect(gh.calls).toEqual([])
+    })
+
+    it('parseable v3 runs never appear in stale[] (they route through findings/suspended)', async () => {
+        const gh = new FakeGhClient()
+        const report = await gcScan([mkRun('run-v3', 'completed')], gh)
+        expect(report.stale).toEqual([])
+    })
+})
+
+describe('gcApplyStale — sweep ONE unparseable run dir (D57)', () => {
+    it('tears down protection → branch → state dir when the branch was extractable', async () => {
+        const gh = ghWithLeftover('run-v2')
+        const deleted: string[] = []
+        const cleaned = await gcApplyStale(
+            {run_id: 'run-v2', reason: 'schema-v2', staging_branch: 'staging-run-v2', repo: 'acme/widgets'},
+            gh,
+            (rid) => {
+                deleted.push(rid)
+                return Promise.resolve()
+            }
+        )
+        expect(cleaned).toEqual({run_id: 'run-v2', staging_branch: 'staging-run-v2', state_deleted: true})
+        // Protection FIRST, then branch, then the state-side delete.
+        expect(gh.calls).toEqual(['api DELETE protection staging-run-v2', 'api DELETE refs/heads/staging-run-v2'])
+        expect(deleted).toEqual(['run-v2'])
+    })
+
+    it('sweeps state-side ONLY when no branch was extractable (corrupt JSON / pre-D33)', async () => {
+        const gh = new FakeGhClient()
+        const deleted: string[] = []
+        const cleaned = await gcApplyStale({run_id: 'run-corrupt', reason: 'corrupt-json'}, gh, (rid) => {
+            deleted.push(rid)
+            return Promise.resolve()
+        })
+        expect(cleaned).toEqual({run_id: 'run-corrupt', state_deleted: true})
+        expect(gh.calls).toEqual([])
+        expect(deleted).toEqual(['run-corrupt'])
+    })
+
+    it('propagates a genuine teardown failure — the state dir is NOT deleted', async () => {
+        const gh = ghWithLeftover('run-v2')
+        gh.failDeleteProtection = new Error('HTTP 401: Bad credentials')
+        const deleted: string[] = []
+        await expect(
+            gcApplyStale(
+                {run_id: 'run-v2', reason: 'schema-v2', staging_branch: 'staging-run-v2', repo: 'acme/widgets'},
+                gh,
+                (rid) => {
+                    deleted.push(rid)
+                    return Promise.resolve()
+                }
+            )
+        ).rejects.toThrow(/401/)
+        expect(deleted).toEqual([])
     })
 })

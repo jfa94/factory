@@ -11,7 +11,8 @@
  * FACTORY_AUTONOMOUS_MODE=1 — `auto` shares `factory resume`'s gate.
  */
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {mkdtemp, rm} from 'node:fs/promises'
+import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises'
+import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -577,6 +578,40 @@ describe('rescue scan/apply/auto', () => {
 
     it('gc --apply without --run is a usage error', async () => {
         expect(await rescueCommand.run(['gc', '--apply'])).toBe(EXIT.USAGE)
+    })
+
+    it('gc reports a stale (unparseable) run dir under stale[]; --apply sweeps dir + pointer (D57)', async () => {
+        const staleId = 'run-stale-v2'
+        await mkdir(join(dataDir, 'runs', staleId), {recursive: true})
+        await writeFile(
+            join(dataDir, 'runs', staleId, 'state.json'),
+            JSON.stringify({schema_version: 2, run_id: staleId, staging_branch: `staging-${staleId}`, spec: SPEC})
+        )
+        const gh = new FakeGhClient()
+        gh.remoteBranches.add(`staging-${staleId}`)
+
+        expect(await runGc([], {ghClient: gh})).toBe(EXIT.OK)
+        const env = out()
+        expect(env.stale).toEqual([
+            {
+                run_id: staleId,
+                reason: 'schema-v2',
+                staging_branch: `staging-${staleId}`,
+                branch_exists: true,
+                protection_live: false,
+                hint: `factory rescue gc --apply --run ${staleId}`,
+            },
+        ])
+
+        stdout.length = 0
+        expect(await runGc(['--apply', '--run', staleId], {ghClient: gh})).toBe(EXIT.OK)
+        expect(out()).toEqual({
+            kind: 'gc-applied',
+            cleaned: [],
+            stale_cleaned: [{run_id: staleId, staging_branch: `staging-${staleId}`, state_deleted: true}],
+        })
+        expect(existsSync(join(dataDir, 'runs', staleId))).toBe(false)
+        expect(gh.deletedBranches).toEqual([`staging-${staleId}`])
     })
 
     it('gc lists a suspended run with a live branch under suspended[] with the cancel hint', async () => {

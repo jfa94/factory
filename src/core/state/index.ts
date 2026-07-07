@@ -83,7 +83,13 @@ export {
 export type {GateId, EvidenceGate, GateEvidence, GateVerdict} from './derive.js'
 
 // --- StateManager + path helpers ---
-export {StateManager, type StateManagerOptions, type CreateRunArgs, type LockTuning} from './manager.js'
+export {
+    StateManager,
+    type StateManagerOptions,
+    type CreateRunArgs,
+    type LockTuning,
+    type StaleRunDir,
+} from './manager.js'
 
 export {
     SPECS_DIR,

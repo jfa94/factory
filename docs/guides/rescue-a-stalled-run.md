@@ -70,6 +70,11 @@ merged:false, reason?}`). Two shapes: **(a)** a `completed` run whose rollup was
   finalize (`number` absent) — no apply flag; resolve the staging↔develop conflict by hand,
   then plain `factory resume` (step 3c). Neither is ever auto-recovered — the scan surfaces
   them; a human asserts the cause cleared.
+- `empty_task_map` — the run has **zero tasks** (Decision 57): half-created wreckage from a
+  crash between run birth and task seeding. There is nothing to reset, so the scan's only hint
+  is `factory run cancel --run <id> --cleanup` — cancel the half-created run, then re-run
+  `factory run create`. (Runs created after the atomic-seeding fix are born whole and can never
+  hit this; it exists to make pre-existing wreckage visible rather than scan as healthy.)
 
 The scan also carries a read-only `work` field — a git-grounded survey of how much
 committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
@@ -202,7 +207,7 @@ factory rescue gc
 ```
 
 Probes every terminal (`completed`/`superseded`/`failed`) and `suspended` run's
-pinned staging branch on GitHub and emits `{ kind:"gc", findings, suspended }`:
+pinned staging branch on GitHub and emits `{ kind:"gc", findings, suspended, stale }`:
 
 - `findings` — terminal runs with a live branch and/or protection rule, each with an
   exact `factory rescue gc --apply --run <id>` hint. A `failed` run is flagged
@@ -212,6 +217,11 @@ pinned staging branch on GitHub and emits `{ kind:"gc", findings, suspended }`:
   targets (deleting their branch destroys resumability); each carries a
   `factory run cancel --run <id> --cleanup` hint instead — cancel the run first, then
   its `--cleanup` tears the branch down.
+- `stale` — run dirs this engine **cannot parse** (Decision 57): an old schema version or
+  corrupt JSON. A stale `current` pointer at one of these is what crashes `run create`, so
+  sweep them. Each carries `{ run_id, reason, staging_branch?, branch_exists?,
+  protection_live?, hint }` (GitHub is probed only when `staging_branch` + repo were
+  raw-extractable); the `hint` is the same `factory rescue gc --apply --run <id>` command.
 
 ### 2. Tear down a terminal run's leftovers
 
@@ -222,7 +232,10 @@ factory rescue gc --apply --run <id>    # repeat --run for several runs
 Deletes protection first (GitHub blocks deleting a protected ref), then the branch,
 for each named terminal run. It refuses any non-terminal run with a loud error. The
 deletes are idempotent (404-tolerant), so re-running over an already-clean run is a
-no-op. See [reference/cli.md § rescue gc](../reference/cli.md#rescue-gc).
+no-op. A named id that is a **stale** run dir (Decision 57) instead routes to the stale
+sweep: best-effort branch/protection teardown (when raw-extractable), then the run dir plus
+any `current` pointer naming it are deleted (reported under `stale_cleaned`). See
+[reference/cli.md § rescue gc](../reference/cli.md#rescue-gc).
 
 Since Decision 55, per-run staging protection is created with `allow_deletions: true`,
 so a leftover branch you spot by hand also deletes with a plain `git push --delete`

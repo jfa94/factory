@@ -204,27 +204,26 @@ async function createRunFromManifest(
         })
     }
 
-    await state.create({
+    // D57: seed tasks + the launch touch IN the create payload — one write births a
+    // complete run. A throw inside create() (pointer clobber guard) can then never
+    // strand a `running` run with zero tasks the way the 2026-07-07 incident did.
+    return state.create({
         run_id: opts.runId,
         spec: specStore.toPointer(request),
         staging_branch: branch,
         // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
         execution_mode: 'sequential',
+        tasks: seeded,
+        // S11: the launch touch — every run costs at least one human action, so a
+        // clean lights-out run scores exactly 1.0 on the derived touch metric.
+        // `at` omitted → create() stamps it with the birth timestamp (=== started_at).
+        human_touches: [{kind: 'launch' as const}],
         ...(opts.shipMode !== undefined ? {ship_mode: opts.shipMode} : {}),
         ...(opts.ownerSession !== undefined ? {owner_session: opts.ownerSession} : {}),
         ...(opts.ignoreQuota === true ? {ignore_quota: true} : {}),
         ...(opts.e2e === true ? {e2e: true} : {}),
         ...(opts.debug === true ? {debug: true} : {}),
     })
-    const run = await state.update(opts.runId, (s) => ({
-        ...s,
-        tasks: seeded,
-        // S11: the launch touch — every run costs at least one human action, so a
-        // clean lights-out run scores exactly 1.0 on the derived touch metric.
-        human_touches: [{kind: 'launch' as const, at: s.started_at}],
-    }))
-
-    return run
 }
 
 /**

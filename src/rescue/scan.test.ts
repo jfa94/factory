@@ -134,6 +134,18 @@ describe('scanRun — resettable / dead_ends / needs_rescue', () => {
         expect(scan.summary).toMatch(/dead-end/) // names the unrecoverable fail
     })
 
+    it('empty_task_map: zero tasks → flagged + needs_rescue + half-created summary (D57)', () => {
+        const scan = scanRun(mkRun([]))
+        expect(scan.empty_task_map).toBe(true)
+        expect(scan.needs_rescue).toBe(true)
+        expect(scan.summary).toMatch(/zero tasks.*half-created/)
+    })
+
+    it('empty_task_map is false on any non-empty run', () => {
+        const scan = scanRun(mkRun([{task_id: 'a', status: 'done'}]))
+        expect(scan.empty_task_map).toBe(false)
+    })
+
     it("e2e_failed is true when the e2e phase is failed, even with every task done — and needs_rescue follows it (a run stuck ONLY on a failed e2e verdict must not scan as 'nothing to rescue')", () => {
         const scan = scanRun(
             mkRun(

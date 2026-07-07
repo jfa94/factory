@@ -19,5 +19,5 @@ export type {RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts} from './ap
 
 export {effectiveAutoResets} from './auto.js'
 
-export {gcScan, gcApply} from './gc.js'
-export type {GcFinding, GcSuspendedLine, GcReport, GcCleaned} from './gc.js'
+export {gcScan, gcApply, gcApplyStale} from './gc.js'
+export type {GcFinding, GcSuspendedLine, GcStaleLine, GcReport, GcCleaned, GcStaleCleaned} from './gc.js'

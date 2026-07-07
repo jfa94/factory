@@ -7190,9 +7190,9 @@ function mergeGateBlockReason(reviewers, gateEvidence) {
 }
 
 // src/core/state/manager.ts
-import { mkdir as mkdir5, readFile as readFile3, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir5, readFile as readFile3, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname4, join as join4 } from "node:path";
+import { basename as basename3, dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
 import { tmpdir } from "node:os";
@@ -7370,7 +7370,8 @@ var StateManager = class _StateManager {
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},
       spec: args.spec,
-      tasks: {},
+      tasks: args.tasks ?? {},
+      ...args.human_touches !== void 0 ? { human_touches: args.human_touches.map((t) => ({ kind: t.kind, at: t.at ?? now })) } : {},
       started_at: now,
       updated_at: now,
       ended_at: null
@@ -7491,6 +7492,93 @@ var StateManager = class _StateManager {
     return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
   }
   /**
+   * Enumerate the run dirs THIS engine cannot parse (D57) — the population
+   * {@link listRuns} warn-skips: an old-schema stamp (`schema_version !== 3`) or
+   * corrupt JSON. These are `rescue gc` sweep candidates; a stale pointer at one
+   * of them is what crashed `run create` in the 2026-07-07 incident. Best-effort
+   * raw field extraction (`staging_branch`, `spec.repo`) enables the GitHub-side
+   * teardown; a structurally-invalid v3 state is NOT stale (current-engine
+   * wreckage — surfaces loudly through targeted reads, never swept here).
+   */
+  async listStaleRunDirs() {
+    let entries;
+    try {
+      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+    } catch (err) {
+      if (isEnoent(err)) {
+        return [];
+      }
+      throw err;
+    }
+    const stale = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      let raw;
+      try {
+        raw = await readFile3(runStatePath(this.dataDir, entry.name), "utf8");
+      } catch (err) {
+        if (isEnoent(err)) {
+          continue;
+        }
+        throw err;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        stale.push({ run_id: entry.name, reason: "corrupt-json" });
+        continue;
+      }
+      const obj = parsed;
+      const v = obj?.schema_version;
+      if (v === 3) {
+        continue;
+      }
+      const branch = obj?.staging_branch;
+      const repo = obj?.spec?.repo;
+      stale.push({
+        run_id: entry.name,
+        reason: `schema-v${JSON.stringify(v)}`,
+        ...typeof branch === "string" && branch.length > 0 ? { staging_branch: branch } : {},
+        ...typeof repo === "string" && repo.length > 0 ? { repo } : {}
+      });
+    }
+    return stale.sort((a, b) => b.run_id.localeCompare(a.run_id));
+  }
+  /**
+   * Delete a run dir outright and drop any `current` pointer naming it (D57) —
+   * `rescue gc --apply`'s stale-run sweep. NOT a lifecycle verb: live runs are
+   * cancelled/superseded through state, never deleted; this exists solely for
+   * wreckage {@link read} cannot even parse, so it takes no lock (there is no
+   * valid state to serialize against).
+   */
+  async deleteRun(runId) {
+    await rm(runDir(this.dataDir, runId), { recursive: true, force: true });
+    const links = [currentLinkPath(this.dataDir)];
+    try {
+      const repoLinks = await readdir(currentRepoRoot(this.dataDir), { withFileTypes: true });
+      links.push(...repoLinks.map((e) => join4(currentRepoRoot(this.dataDir), e.name)));
+    } catch (err) {
+      if (!isEnoent(err)) {
+        throw err;
+      }
+    }
+    for (const link of links) {
+      let target;
+      try {
+        target = await readlink(link);
+      } catch {
+        continue;
+      }
+      if (basename3(target) === runId) {
+        await rm(link, { force: true }).catch(() => {
+        });
+      }
+    }
+  }
+  /**
    * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
    * resolve-or-reuse path of `run create`: a repeated create returns the live run
    * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
@@ -7608,10 +7696,25 @@ var StateManager = class _StateManager {
    * (a different repo's pointer) never trip it. The just-created run's `state.json`
    * already exists, so it stays addressable via `--run <id>` after the throw.
    * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+   *
+   * POINTER-LIVENESS TOLERANCE (D57): an UNPARSEABLE pointer target (old-schema,
+   * corrupt JSON) classifies as STALE — warn loudly and repoint. A run this engine
+   * cannot parse cannot be owned by a live session of this engine, so it can never
+   * prove the "still-live, different owner" condition the guard exists for. Mirrors
+   * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
+   * contract for every other caller.
    */
   async pointCurrentAt(state) {
     const repo = state.spec.repo;
-    const existing = await this.readCurrentForRepo(repo);
+    let existing;
+    try {
+      existing = await this.readCurrentForRepo(repo);
+    } catch (err) {
+      log4.warn(
+        `state: current pointer for repo '${repo}' names an unparseable run \u2014 treating as stale and repointing: ${err.message}`
+      );
+      existing = null;
+    }
     if (existing !== null && existing.run_id !== state.run_id && !isTerminalRunStatus(existing.status) && existing.owner_session !== void 0 && state.owner_session !== void 0 && existing.owner_session !== state.owner_session) {
       throw new Error(
         `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
@@ -12693,7 +12796,8 @@ function scanRun(run10) {
   const e2e_assessment_failed = run10.e2e_assessment?.status === "failed";
   const traceability_failed = run10.traceability?.status === "failed";
   const rollup_pending = run10.rollup?.merged === false;
-  const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending;
+  const empty_task_map = all.length === 0;
+  const needs_rescue = resettable.length > 0 || e2e_failed || e2e_assessment_failed || traceability_failed || rollup_pending || empty_task_map;
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -12713,6 +12817,7 @@ function scanRun(run10) {
     traceability_failed,
     rollup_pending,
     would_deadlock,
+    empty_task_map,
     summary: summarize(
       run10.status,
       resettable.length,
@@ -12721,12 +12826,16 @@ function scanRun(run10) {
       e2e_failed,
       e2e_assessment_failed,
       traceability_failed,
-      rollup_pending
+      rollup_pending,
+      empty_task_map
     ),
     tasks
   };
 }
-function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAssessmentFailed, traceabilityFailed, rollupPending) {
+function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAssessmentFailed, traceabilityFailed, rollupPending, emptyTaskMap) {
+  if (emptyTaskMap) {
+    return `run '${status}': zero tasks \u2014 half-created; cancel it (\`factory run cancel --cleanup\`) and re-create`;
+  }
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
   const assessTail = e2eAssessmentFailed ? " (e2e assessment failed \u2014 needs a fix + --reset-e2e)" : "";
   const traceTail = traceabilityFailed ? " (PRD-traceability failed \u2014 needs a fix + --reset-traceability)" : "";
@@ -12988,7 +13097,7 @@ async function probeLeftovers(run10, gh) {
     protection: (await gh.repoProtection(owner, repo, run10.staging_branch)).enabled
   };
 }
-async function gcScan(runs, gh) {
+async function gcScan(runs, gh, staleDirs = []) {
   const findings = [];
   const suspended = [];
   for (const run10 of runs) {
@@ -13019,13 +13128,46 @@ async function gcScan(runs, gh) {
       });
     }
   }
-  return { findings, suspended };
+  const stale = [];
+  for (const dir of staleDirs) {
+    let live;
+    if (dir.staging_branch !== void 0 && dir.repo !== void 0) {
+      const { owner, repo } = splitRepoSlug(dir.repo);
+      live = {
+        branch: await gh.branchExists(owner, repo, dir.staging_branch),
+        protection: (await gh.repoProtection(owner, repo, dir.staging_branch)).enabled
+      };
+    }
+    stale.push({
+      run_id: dir.run_id,
+      reason: dir.reason,
+      ...dir.staging_branch !== void 0 ? { staging_branch: dir.staging_branch } : {},
+      ...live !== void 0 ? { branch_exists: live.branch, protection_live: live.protection } : {},
+      hint: `factory rescue gc --apply --run ${dir.run_id}`
+    });
+  }
+  return { findings, suspended, stale };
 }
 async function gcApply(run10, gh) {
   const { owner, repo } = splitRepoSlug(run10.spec.repo);
   await gh.deleteProtection(owner, repo, run10.staging_branch);
   await gh.deleteRemoteBranch(owner, repo, run10.staging_branch);
   return { run_id: run10.run_id, staging_branch: run10.staging_branch };
+}
+async function gcApplyStale(dir, gh, deleteRun) {
+  let tornDown;
+  if (dir.staging_branch !== void 0 && dir.repo !== void 0) {
+    const { owner, repo } = splitRepoSlug(dir.repo);
+    await gh.deleteProtection(owner, repo, dir.staging_branch);
+    await gh.deleteRemoteBranch(owner, repo, dir.staging_branch);
+    tornDown = dir.staging_branch;
+  }
+  await deleteRun(dir.run_id);
+  return {
+    run_id: dir.run_id,
+    ...tornDown !== void 0 ? { staging_branch: tornDown } : {},
+    state_deleted: true
+  };
 }
 
 // src/orchestrator/finalize.ts
@@ -14757,6 +14899,11 @@ async function nextTask(deps, runId) {
   if (isTerminalRunStatus(run10.status)) {
     return { ...ctx(), kind: "done", run_status: run10.status };
   }
+  if (Object.keys(run10.tasks).length === 0) {
+    throw new UsageError(
+      `run '${runId}' has zero tasks \u2014 half-created (creation crashed before task seeding); cancel it (\`factory run cancel --run ${runId} --cleanup\`) and re-run \`factory run create\``
+    );
+  }
   const allTerminal = Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run10);
   const needsAssessment = wantsE2eAssessment(run10, allTerminal, needsE2e);
@@ -15926,26 +16073,23 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
       provision: true
     });
   }
-  await state.create({
+  return state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(request),
     staging_branch: branch,
     // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
     execution_mode: "sequential",
+    tasks: seeded,
+    // S11: the launch touch — every run costs at least one human action, so a
+    // clean lights-out run scores exactly 1.0 on the derived touch metric.
+    // `at` omitted → create() stamps it with the birth timestamp (=== started_at).
+    human_touches: [{ kind: "launch" }],
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
     ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
     ...opts.e2e === true ? { e2e: true } : {},
     ...opts.debug === true ? { debug: true } : {}
   });
-  const run10 = await state.update(opts.runId, (s) => ({
-    ...s,
-    tasks: seeded,
-    // S11: the launch touch — every run costs at least one human action, so a
-    // clean lights-out run scores exactly 1.0 on the derived touch metric.
-    human_touches: [{ kind: "launch", at: s.started_at }]
-  }));
-  return run10;
 }
 async function createRun(state, specStore, opts) {
   return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
@@ -18224,15 +18368,19 @@ Usage:
 
 Without --apply: probes every terminal (completed/superseded/failed) and
 suspended run's pinned staging_branch and emits ONE JSON document:
-  { kind:"gc", findings:[...], suspended:[...] }
+  { kind:"gc", findings:[...], suspended:[...], stale:[...] }
 findings are terminal runs with a live branch and/or protection rule, each with
 the exact --apply command as its hint; a failed run is flagged banked:true (its
 branch is deliberately kept for rescue \u2014 GC it only once the run is truly dead).
 suspended runs are NEVER GC targets (deleting their branch destroys
 resumability) \u2014 each gets a \`factory run cancel --run <id> --cleanup\` hint.
+stale entries are run dirs this engine cannot parse (old schema / corrupt JSON,
+D57) \u2014 their pointers are what crash \`run create\`; sweep them.
 
 With --apply: deletes protection FIRST (GitHub blocks deleting a protected
-ref), then the branch, for each named run. Refuses non-terminal runs.
+ref), then the branch, for each named run. Refuses non-terminal runs. A named
+STALE run dir is swept instead: best-effort branch/protection teardown (when
+raw-extractable), then the dir + any \`current\` pointer naming it are deleted.
 Idempotent: both deletes tolerate already-gone (404).`;
 function deriveAwaiting(run10) {
   if (run10.quota !== void 0) {
@@ -18247,7 +18395,8 @@ function deriveAwaiting(run10) {
   if (run10.docs?.status === "failed") {
     return "docs";
   }
-  const untouched = Object.values(run10.tasks).every((t) => t.status === "pending" && t.started_at === void 0);
+  const tasks = Object.values(run10.tasks);
+  const untouched = tasks.length > 0 && tasks.every((t) => t.status === "pending" && t.started_at === void 0);
   return untouched ? "spec-approval" : "unknown";
 }
 function chooseRoute(run10, scan) {
@@ -18278,6 +18427,9 @@ function repairHints(runId, scan) {
   }
   if (scan.rollup_pending && scan.run_status === "completed") {
     hints.push(`factory rescue apply --run ${runId} --recheck-rollup`);
+  }
+  if (scan.empty_task_map) {
+    hints.push(`factory run cancel --run ${runId} --cleanup`);
   }
   return hints;
 }
@@ -18417,7 +18569,13 @@ async function runGc(argv, overrides = {}) {
       throw new UsageError("gc --apply requires at least one --run <id>");
     }
     const cleaned = [];
+    const staleCleaned = [];
     for (const id of ids) {
+      const staleDir = (await state.listStaleRunDirs()).find((d) => d.run_id === id);
+      if (staleDir !== void 0) {
+        staleCleaned.push(await gcApplyStale(staleDir, gh, (rid) => state.deleteRun(rid)));
+        continue;
+      }
       const run10 = await state.read(id);
       if (!isTerminalRunStatus(run10.status)) {
         throw new UsageError(
@@ -18426,10 +18584,10 @@ async function runGc(argv, overrides = {}) {
       }
       cleaned.push(await gcApply(run10, gh));
     }
-    emitJson({ kind: "gc-applied", cleaned });
+    emitJson({ kind: "gc-applied", cleaned, ...staleCleaned.length > 0 ? { stale_cleaned: staleCleaned } : {} });
     return EXIT.OK;
   }
-  emitJson({ kind: "gc", ...await gcScan(await state.listRuns(), gh) });
+  emitJson({ kind: "gc", ...await gcScan(await state.listRuns(), gh, await state.listStaleRunDirs()) });
   return EXIT.OK;
 }
 async function run6(argv) {

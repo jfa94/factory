@@ -25,17 +25,26 @@
  *     loud, never silently ignored.
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
-import {mkdir, readFile, readdir, rename, rm, symlink, unlink} from 'node:fs/promises'
+import {mkdir, readFile, readdir, readlink, rename, rm, symlink, unlink} from 'node:fs/promises'
 import {isEnoent} from '../../shared/fs-errors.js'
 import {existsSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {basename, dirname, join} from 'node:path'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../../shared/file-lock.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
 import {parseJson, stringifyJson} from '../../shared/json.js'
 import {nowIso} from '../../shared/time.js'
 import {createLogger} from '../../shared/logging.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/load.js'
-import {currentLinkPath, currentRepoLinkPath, runDir, runsRoot, runStatePath, specDir, RUNS_DIR} from './paths.js'
+import {
+    currentLinkPath,
+    currentRepoLinkPath,
+    currentRepoRoot,
+    runDir,
+    runsRoot,
+    runStatePath,
+    specDir,
+    RUNS_DIR,
+} from './paths.js'
 import {parseRunState, type RunState, type SpecPointer, type TaskState, isTerminalRunStatus} from './schema.js'
 import {UsageError} from '../../shared/usage-error.js'
 import {at} from '../../shared/index.js'
@@ -71,6 +80,31 @@ export interface CreateRunArgs {
     e2e?: RunState['e2e']
     /** `/factory:debug` session marker (Decision 39, Task 4/6); mirrors `e2e`/`ignore_quota`. */
     debug?: RunState['debug']
+    /**
+     * Seeded task map (D57): passing it here makes creation ATOMIC — one write
+     * births a complete run, so a crash mid-create can never leave a `running`
+     * run with zero tasks. Validated by parseRunState (incl. F2 key===task_id).
+     */
+    tasks?: RunState['tasks']
+    /**
+     * Birth-time touches (the S11 launch touch), written in the same single write.
+     * An omitted `at` is stamped with the birth timestamp, so `at === started_at`
+     * holds exactly (callers cannot know `now` before create() mints it).
+     */
+    human_touches?: {kind: RunState['human_touches'][number]['kind']; at?: string}[]
+}
+
+/**
+ * A run dir this engine cannot parse — a `rescue gc` sweep candidate (D57).
+ * `staging_branch`/`repo` are best-effort raw extractions (old schemas may
+ * predate the pinned branch, Decision 33) enabling GitHub-side teardown.
+ */
+export interface StaleRunDir {
+    run_id: string
+    /** `schema-v<N>` (incl. `schema-vundefined` for an unstamped file) or `corrupt-json`. */
+    reason: string
+    staging_branch?: string
+    repo?: string
 }
 
 export class StateManager {
@@ -191,7 +225,10 @@ export class StateManager {
             ...(args.e2e !== undefined ? {e2e: args.e2e} : {}),
             ...(args.debug !== undefined ? {debug: args.debug} : {}),
             spec: args.spec,
-            tasks: {},
+            tasks: args.tasks ?? {},
+            ...(args.human_touches !== undefined
+                ? {human_touches: args.human_touches.map((t) => ({kind: t.kind, at: t.at ?? now}))}
+                : {}),
             started_at: now,
             updated_at: now,
             ended_at: null,
@@ -325,6 +362,98 @@ export class StateManager {
             }
         }
         return runs.sort((a, b) => b.run_id.localeCompare(a.run_id))
+    }
+
+    /**
+     * Enumerate the run dirs THIS engine cannot parse (D57) — the population
+     * {@link listRuns} warn-skips: an old-schema stamp (`schema_version !== 3`) or
+     * corrupt JSON. These are `rescue gc` sweep candidates; a stale pointer at one
+     * of them is what crashed `run create` in the 2026-07-07 incident. Best-effort
+     * raw field extraction (`staging_branch`, `spec.repo`) enables the GitHub-side
+     * teardown; a structurally-invalid v3 state is NOT stale (current-engine
+     * wreckage — surfaces loudly through targeted reads, never swept here).
+     */
+    async listStaleRunDirs(): Promise<StaleRunDir[]> {
+        let entries
+        try {
+            entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
+        } catch (err) {
+            if (isEnoent(err)) {
+                return []
+            }
+            throw err
+        }
+        const stale: StaleRunDir[] = []
+        for (const entry of entries) {
+            if (!entry.isDirectory()) {
+                continue
+            }
+            let raw: string
+            try {
+                raw = await readFile(runStatePath(this.dataDir, entry.name), 'utf8')
+            } catch (err) {
+                if (isEnoent(err)) {
+                    continue
+                } // no state.json yet (mid-creation) — not stale
+                throw err
+            }
+            let parsed: unknown
+            try {
+                parsed = JSON.parse(raw)
+            } catch {
+                stale.push({run_id: entry.name, reason: 'corrupt-json'})
+                continue
+            }
+            const obj = parsed as Record<string, unknown> | null
+            const v = obj?.schema_version
+            if (v === 3) {
+                continue
+            } // parseable version stamp — not this sweep's business
+            const branch = obj?.staging_branch
+            const repo = (obj?.spec as Record<string, unknown> | undefined)?.repo
+            stale.push({
+                run_id: entry.name,
+                reason: `schema-v${JSON.stringify(v)}`,
+                ...(typeof branch === 'string' && branch.length > 0 ? {staging_branch: branch} : {}),
+                ...(typeof repo === 'string' && repo.length > 0 ? {repo} : {}),
+            })
+        }
+        return stale.sort((a, b) => b.run_id.localeCompare(a.run_id))
+    }
+
+    /**
+     * Delete a run dir outright and drop any `current` pointer naming it (D57) —
+     * `rescue gc --apply`'s stale-run sweep. NOT a lifecycle verb: live runs are
+     * cancelled/superseded through state, never deleted; this exists solely for
+     * wreckage {@link read} cannot even parse, so it takes no lock (there is no
+     * valid state to serialize against).
+     */
+    async deleteRun(runId: string): Promise<void> {
+        await rm(runDir(this.dataDir, runId), {recursive: true, force: true})
+        // Sweep both pointer families: dropping a dangling pointer here is what stops
+        // the stale target from ever tripping create()'s pointer read again.
+        const links = [currentLinkPath(this.dataDir)]
+        try {
+            const repoLinks = await readdir(currentRepoRoot(this.dataDir), {withFileTypes: true})
+            links.push(...repoLinks.map((e) => join(currentRepoRoot(this.dataDir), e.name)))
+        } catch (err) {
+            if (!isEnoent(err)) {
+                throw err
+            }
+        }
+        for (const link of links) {
+            let target: string
+            try {
+                target = await readlink(link)
+            } catch {
+                continue // not a symlink / already gone
+            }
+            if (basename(target) === runId) {
+                await rm(link, {force: true}).catch(() => {
+                    /* best-effort — a dangling pointer is tolerated by every reader */
+                })
+            }
+        }
     }
 
     /**
@@ -466,10 +595,25 @@ export class StateManager {
      * (a different repo's pointer) never trip it. The just-created run's `state.json`
      * already exists, so it stays addressable via `--run <id>` after the throw.
      * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+     *
+     * POINTER-LIVENESS TOLERANCE (D57): an UNPARSEABLE pointer target (old-schema,
+     * corrupt JSON) classifies as STALE — warn loudly and repoint. A run this engine
+     * cannot parse cannot be owned by a live session of this engine, so it can never
+     * prove the "still-live, different owner" condition the guard exists for. Mirrors
+     * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
+     * contract for every other caller.
      */
     private async pointCurrentAt(state: RunState): Promise<void> {
         const repo = state.spec.repo
-        const existing = await this.readCurrentForRepo(repo)
+        let existing: RunState | null
+        try {
+            existing = await this.readCurrentForRepo(repo)
+        } catch (err) {
+            log.warn(
+                `state: current pointer for repo '${repo}' names an unparseable run — treating as stale and repointing: ${(err as Error).message}`
+            )
+            existing = null
+        }
         if (
             existing !== null &&
             existing.run_id !== state.run_id &&

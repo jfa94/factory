@@ -16,7 +16,16 @@ import {emitJson, emitLine, emitHelp} from '../io.js'
 import {loadConfig} from '../../config/index.js'
 import {isTerminalRunStatus, type StateManager} from '../../core/state/index.js'
 import {readCurrentForCwd, type CurrentRunOverrides, resolveRunIdOrCurrent} from '../current.js'
-import {scanRun, applyRescue, assessWork, gcScan, gcApply, type RescueScan, type WorkProbe} from '../../rescue/index.js'
+import {
+    scanRun,
+    applyRescue,
+    assessWork,
+    gcScan,
+    gcApply,
+    gcApplyStale,
+    type RescueScan,
+    type WorkProbe,
+} from '../../rescue/index.js'
 import {DefaultGitClient, DefaultGhClient, type GhClient} from '../../git/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
 import {nowEpoch, nowIso} from '../../shared/time.js'
@@ -115,15 +124,19 @@ Usage:
 
 Without --apply: probes every terminal (completed/superseded/failed) and
 suspended run's pinned staging_branch and emits ONE JSON document:
-  { kind:"gc", findings:[...], suspended:[...] }
+  { kind:"gc", findings:[...], suspended:[...], stale:[...] }
 findings are terminal runs with a live branch and/or protection rule, each with
 the exact --apply command as its hint; a failed run is flagged banked:true (its
 branch is deliberately kept for rescue — GC it only once the run is truly dead).
 suspended runs are NEVER GC targets (deleting their branch destroys
 resumability) — each gets a \`factory run cancel --run <id> --cleanup\` hint.
+stale entries are run dirs this engine cannot parse (old schema / corrupt JSON,
+D57) — their pointers are what crash \`run create\`; sweep them.
 
 With --apply: deletes protection FIRST (GitHub blocks deleting a protected
-ref), then the branch, for each named run. Refuses non-terminal runs.
+ref), then the branch, for each named run. Refuses non-terminal runs. A named
+STALE run dir is swept instead: best-effort branch/protection teardown (when
+raw-extractable), then the dir + any \`current\` pointer naming it are deleted.
 Idempotent: both deletes tolerate already-gone (404).`
 
 /** Test seam: current-run resolution + gh (the PRD page comment) + the clock. */
@@ -155,7 +168,10 @@ export function deriveAwaiting(run: RunState): string {
         return 'docs'
     }
     // S9 --approve-spec park: suspended straight after create, no task ever touched.
-    const untouched = Object.values(run.tasks).every((t) => t.status === 'pending' && t.started_at === undefined)
+    // Length guard (D57): `every` on an empty map is vacuously true, and a zero-task
+    // run is half-created wreckage, not a spec-approval park.
+    const tasks = Object.values(run.tasks)
+    const untouched = tasks.length > 0 && tasks.every((t) => t.status === 'pending' && t.started_at === undefined)
     return untouched ? 'spec-approval' : 'unknown'
 }
 
@@ -197,6 +213,10 @@ function repairHints(runId: string, scan: RescueScan): string[] {
     // (the scan summary says so), so no apply command is proposed for it.
     if (scan.rollup_pending && scan.run_status === 'completed') {
         hints.push(`factory rescue apply --run ${runId} --recheck-rollup`)
+    }
+    // D57: a zero-task run has nothing to reset — the only repair is cancel + re-create.
+    if (scan.empty_task_map) {
+        hints.push(`factory run cancel --run ${runId} --cleanup`)
     }
     return hints
 }
@@ -391,7 +411,15 @@ export async function runGc(argv: string[], overrides: RescueOverrides = {}): Pr
             throw new UsageError('gc --apply requires at least one --run <id>')
         }
         const cleaned = []
+        const staleCleaned = []
         for (const id of ids) {
+            // D57: an id whose dir exists but cannot be parsed routes to the stale
+            // sweep (teardown + delete dir + drop pointers) instead of throwing.
+            const staleDir = (await state.listStaleRunDirs()).find((d) => d.run_id === id)
+            if (staleDir !== undefined) {
+                staleCleaned.push(await gcApplyStale(staleDir, gh, (rid) => state.deleteRun(rid)))
+                continue
+            }
             const run = await state.read(id) // loud on a missing run
             if (!isTerminalRunStatus(run.status)) {
                 throw new UsageError(
@@ -401,11 +429,11 @@ export async function runGc(argv: string[], overrides: RescueOverrides = {}): Pr
             }
             cleaned.push(await gcApply(run, gh))
         }
-        emitJson({kind: 'gc-applied', cleaned})
+        emitJson({kind: 'gc-applied', cleaned, ...(staleCleaned.length > 0 ? {stale_cleaned: staleCleaned} : {})})
         return EXIT.OK
     }
 
-    emitJson({kind: 'gc', ...(await gcScan(await state.listRuns(), gh))})
+    emitJson({kind: 'gc', ...(await gcScan(await state.listRuns(), gh, await state.listStaleRunDirs()))})
     return EXIT.OK
 }
 

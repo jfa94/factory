@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {mkdtemp, mkdir, rm, readFile} from 'node:fs/promises'
+import {mkdtemp, mkdir, rm, readFile, symlink} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -541,6 +541,112 @@ describe('per-repo current pointer + clobber guard (run-isolation L2.6/L2.7)', (
             run_id: 'run-B',
             staging_branch: 'staging-run-B',
         })
+    })
+})
+
+describe('D57: born whole — birth-write seeding + stale-pointer tolerance + stale-dir sweep', () => {
+    /** Plant an unparseable (schema-v2) run dir, optionally pointed at by the per-repo pointer. */
+    async function plantV2Run(runId: string, opts: {point?: string; body?: Record<string, unknown>} = {}) {
+        await mkdir(join(runsRoot(dataDir), runId), {recursive: true})
+        await atomicWriteFile(
+            runStatePath(dataDir, runId),
+            JSON.stringify({schema_version: 2, run_id: runId, ...opts.body})
+        )
+        if (opts.point !== undefined) {
+            await mkdir(join(dataDir, 'current'), {recursive: true})
+            await symlink(join('..', 'runs', runId), join(dataDir, 'current', opts.point))
+        }
+    }
+
+    function spyWarns(): {warns: string[]; restore: () => void} {
+        const warns: string[] = []
+        const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+            warns.push(String(chunk))
+            return true
+        })
+        return {
+            warns,
+            restore: () => {
+                spy.mockRestore()
+            },
+        }
+    }
+
+    it('create({tasks, human_touches}) persists both in the ONE birth write', async () => {
+        const m = mgr()
+        const run = await m.create({
+            run_id: 'run-1',
+            staging_branch: 'staging-run-1',
+            spec,
+            tasks: {t1: {task_id: 't1'} as never, t2: {task_id: 't2', depends_on: ['t1']} as never},
+            human_touches: [{kind: 'launch'}],
+        })
+        // Straight off disk — no follow-up update() could have filled these in.
+        const onDisk = parseRunState(JSON.parse(await readFile(runStatePath(dataDir, 'run-1'), 'utf8')))
+        expect(Object.keys(onDisk.tasks).sort()).toEqual(['t1', 't2'])
+        expect(onDisk.tasks.t2?.depends_on).toEqual(['t1'])
+        // An omitted touch `at` is stamped with the birth timestamp — `at === started_at` exactly.
+        expect(onDisk.human_touches).toEqual([{kind: 'launch', at: run.started_at}])
+    })
+
+    it('create() without them keeps the empty defaults', async () => {
+        const m = mgr()
+        const run = await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec})
+        expect(run.tasks).toEqual({})
+        expect(run.human_touches).toEqual([])
+    })
+
+    it('INCIDENT: unparseable pointer target → create() warns, repoints, succeeds (2026-07-07)', async () => {
+        await plantV2Run('run-old', {point: 'acme-widgets'})
+        const m = mgr()
+        const {warns, restore} = spyWarns()
+        try {
+            const run = await m.create({run_id: 'run-new', staging_branch: 'staging-run-new', spec})
+            expect(run.run_id).toBe('run-new')
+        } finally {
+            restore()
+        }
+        expect(warns.some((w) => w.includes('unparseable') && w.includes('acme/widgets'))).toBe(true)
+        expect(await m.readCurrentForRepo('acme/widgets')).toMatchObject({run_id: 'run-new'})
+    })
+
+    it('readCurrentForRepo keeps its LOUD contract on the same stale pointer', async () => {
+        await plantV2Run('run-old', {point: 'acme-widgets'})
+        await expect(mgr().readCurrentForRepo('acme/widgets')).rejects.toThrow(/schema v2/)
+    })
+
+    it('listStaleRunDirs: old-schema + corrupt-json reported, v3 + mid-creation dirs skipped', async () => {
+        const m = mgr()
+        await m.create({run_id: 'run-v3', staging_branch: 'staging-run-v3', spec})
+        await plantV2Run('run-v2', {body: {staging_branch: 'staging-run-v2', spec: {repo: 'acme/widgets'}}})
+        await plantV2Run('run-v2-bare') // no staging_branch/repo extractable
+        await mkdir(join(runsRoot(dataDir), 'run-corrupt'), {recursive: true})
+        await atomicWriteFile(runStatePath(dataDir, 'run-corrupt'), 'not json {')
+        await mkdir(join(runsRoot(dataDir), 'run-midcreate'), {recursive: true}) // no state.json → skip
+
+        const stale = await m.listStaleRunDirs()
+        expect(stale.map((s) => s.run_id)).toEqual(['run-v2-bare', 'run-v2', 'run-corrupt'])
+        expect(stale.find((s) => s.run_id === 'run-v2')).toEqual({
+            run_id: 'run-v2',
+            reason: 'schema-v2',
+            staging_branch: 'staging-run-v2',
+            repo: 'acme/widgets',
+        })
+        expect(stale.find((s) => s.run_id === 'run-v2-bare')).toEqual({run_id: 'run-v2-bare', reason: 'schema-v2'})
+        expect(stale.find((s) => s.run_id === 'run-corrupt')).toEqual({run_id: 'run-corrupt', reason: 'corrupt-json'})
+    })
+
+    it('deleteRun removes the dir + every pointer naming it, leaves other pointers alone', async () => {
+        const m = mgr()
+        await plantV2Run('run-old', {point: 'acme-widgets'})
+        const other: SpecPointer = {repo: 'acme/other', spec_id: '7-search', issue_number: 7}
+        await m.create({run_id: 'run-keep', staging_branch: 'staging-run-keep', spec: other})
+
+        await m.deleteRun('run-old')
+        expect(existsSync(join(runsRoot(dataDir), 'run-old'))).toBe(false)
+        expect(existsSync(join(dataDir, 'current', 'acme-widgets'))).toBe(false)
+        // The unrelated repo's pointer + global pointer (naming run-keep) survive.
+        expect(await m.readCurrentForRepo('acme/other')).toMatchObject({run_id: 'run-keep'})
     })
 })
 

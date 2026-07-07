@@ -742,7 +742,7 @@ factory rescue scan [--run <id>]
 
 Emits a `RescueScan` plus the routing `/factory:resume` acts on: `{ run_id, run_status,
 counts, resettable, dead_ends, needs_rescue, e2e_failed, e2e_assessment_failed,
-traceability_failed, rollup_pending, would_deadlock, summary, tasks, work,
+traceability_failed, rollup_pending, empty_task_map, would_deadlock, summary, tasks, work,
 route, reconcile, hints, awaiting? }`. The routing fields:
 
 - `route` — `nothing` (no run, or terminal with nothing repairable) | `resume`
@@ -774,6 +774,14 @@ purely durable-state check, no live GitHub call) but is **never auto-recovered**
 `--recheck-rollup` repair hint is proposed **only for the `completed` case** (`run_status
 === "completed"`); the conflict case needs a human to resolve the staging↔develop merge and
 then a plain `factory resume` (the scan summary says so), so no apply command is offered.
+
+`empty_task_map` is `true` iff the run has **zero tasks** (Decision 57) — half-created
+wreckage from a crash between run birth and task seeding (impossible for runs created after
+the atomic-seeding fix, but pre-existing wreckage must not scan as healthy: a task-only scan
+over `{}` reports `total: 0` with every other fold `false`). It folds into `needs_rescue`,
+and its only repair `hint` is `factory run cancel --run <id> --cleanup` — there is nothing to
+reset, so the remedy is cancel + re-create, never a task reset. The parked-cause derivation
+(`awaiting`) likewise no longer misreads an empty task map as `spec-approval`.
 
 The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
 (`assessWork`, `src/rescue/assess.ts`):
@@ -856,7 +864,7 @@ factory rescue gc --apply --run <id>...  # tear down the named terminal runs' le
 
 Without `--apply` (scan): probes every **terminal** (`completed`/`superseded`/`failed`)
 and **suspended** run's pinned `staging_branch` via `branchExists` (a read-only
-`GhClient` probe) + `repoProtection`, and emits `{ kind:"gc", findings, suspended }`:
+`GhClient` probe) + `repoProtection`, and emits `{ kind:"gc", findings, suspended, stale }`:
 
 - `findings` — terminal runs with a live branch and/or protection rule. Each carries
   `{ run_id, run_status, staging_branch, branch_exists, protection_live, banked, hint }`;
@@ -866,6 +874,14 @@ and **suspended** run's pinned `staging_branch` via `branchExists` (a read-only
 - `suspended` — suspended runs with live leftovers. NEVER `gc --apply` targets (deleting
   their branch destroys resumability); each carries a
   `factory run cancel --run <id> --cleanup` hint instead.
+- `stale` — run dirs **this engine cannot parse** (Decision 57): an old schema version
+  (`schema_version !== 3`) or corrupt JSON — the population `listRuns` warn-skips, and a
+  stale `current` pointer at one of these is what crashed `run create` in the 2026-07-07
+  incident. Each carries `{ run_id, reason, staging_branch?, branch_exists?, protection_live?,
+  hint }`; `reason` is `schema-v<N>` or `corrupt-json`. `staging_branch`/`repo` are
+  **best-effort raw extractions** from the unparseable JSON — GitHub is probed (and the live
+  fields populated) only when both were extractable; otherwise the finding is state-side only.
+  `hint` is the same `factory rescue gc --apply --run <id>` sweep command.
 
 Candidates come from run state only — a rule lingering on a branch deleted
 out-of-band is invisible to the REST branch-protection endpoints (404 on a missing
@@ -874,7 +890,12 @@ branch).
 With `--apply --run <id>` (repeatable): deletes protection FIRST (GitHub blocks
 deleting a protected ref), then the branch, for each named run. Refuses any
 non-terminal run with a loud error pointing at `run cancel --cleanup`. Idempotent —
-both deletes tolerate an already-gone (404) ref. Emits `{ kind:"gc-applied", cleaned }`.
+both deletes tolerate an already-gone (404) ref. A named id that is a **stale** run dir
+(Decision 57) routes to the stale sweep instead: best-effort branch/protection teardown
+(when raw-extractable), then the run dir plus any `current` pointer naming it are deleted
+(`StateManager.deleteRun`). Emits `{ kind:"gc-applied", cleaned, stale_cleaned? }` — the
+`stale_cleaned` array (one `{ run_id, staging_branch?, state_deleted: true }` per swept
+stale dir) is present only when a stale id was swept.
 
 Provisioning note: since Decision 55 `putProtection` sets `allow_deletions: true`, so a
 leftover per-run staging branch also stays deletable with a plain `git push --delete`

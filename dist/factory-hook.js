@@ -7983,9 +7983,9 @@ function parseRunState(raw) {
 }
 
 // src/core/state/manager.ts
-import { mkdir as mkdir3, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir3, readFile, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname3, join as join4 } from "node:path";
+import { basename as basename3, dirname as dirname3, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
@@ -8132,7 +8132,8 @@ var StateManager = class _StateManager {
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       ...args.debug !== void 0 ? { debug: args.debug } : {},
       spec: args.spec,
-      tasks: {},
+      tasks: args.tasks ?? {},
+      ...args.human_touches !== void 0 ? { human_touches: args.human_touches.map((t) => ({ kind: t.kind, at: t.at ?? now })) } : {},
       started_at: now,
       updated_at: now,
       ended_at: null
@@ -8253,6 +8254,93 @@ var StateManager = class _StateManager {
     return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
   }
   /**
+   * Enumerate the run dirs THIS engine cannot parse (D57) — the population
+   * {@link listRuns} warn-skips: an old-schema stamp (`schema_version !== 3`) or
+   * corrupt JSON. These are `rescue gc` sweep candidates; a stale pointer at one
+   * of them is what crashed `run create` in the 2026-07-07 incident. Best-effort
+   * raw field extraction (`staging_branch`, `spec.repo`) enables the GitHub-side
+   * teardown; a structurally-invalid v3 state is NOT stale (current-engine
+   * wreckage — surfaces loudly through targeted reads, never swept here).
+   */
+  async listStaleRunDirs() {
+    let entries;
+    try {
+      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+    } catch (err) {
+      if (isEnoent(err)) {
+        return [];
+      }
+      throw err;
+    }
+    const stale = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      let raw;
+      try {
+        raw = await readFile(runStatePath(this.dataDir, entry.name), "utf8");
+      } catch (err) {
+        if (isEnoent(err)) {
+          continue;
+        }
+        throw err;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        stale.push({ run_id: entry.name, reason: "corrupt-json" });
+        continue;
+      }
+      const obj = parsed;
+      const v = obj?.schema_version;
+      if (v === 3) {
+        continue;
+      }
+      const branch = obj?.staging_branch;
+      const repo = obj?.spec?.repo;
+      stale.push({
+        run_id: entry.name,
+        reason: `schema-v${JSON.stringify(v)}`,
+        ...typeof branch === "string" && branch.length > 0 ? { staging_branch: branch } : {},
+        ...typeof repo === "string" && repo.length > 0 ? { repo } : {}
+      });
+    }
+    return stale.sort((a, b) => b.run_id.localeCompare(a.run_id));
+  }
+  /**
+   * Delete a run dir outright and drop any `current` pointer naming it (D57) —
+   * `rescue gc --apply`'s stale-run sweep. NOT a lifecycle verb: live runs are
+   * cancelled/superseded through state, never deleted; this exists solely for
+   * wreckage {@link read} cannot even parse, so it takes no lock (there is no
+   * valid state to serialize against).
+   */
+  async deleteRun(runId) {
+    await rm(runDir(this.dataDir, runId), { recursive: true, force: true });
+    const links = [currentLinkPath(this.dataDir)];
+    try {
+      const repoLinks = await readdir(currentRepoRoot(this.dataDir), { withFileTypes: true });
+      links.push(...repoLinks.map((e) => join4(currentRepoRoot(this.dataDir), e.name)));
+    } catch (err) {
+      if (!isEnoent(err)) {
+        throw err;
+      }
+    }
+    for (const link of links) {
+      let target;
+      try {
+        target = await readlink(link);
+      } catch {
+        continue;
+      }
+      if (basename3(target) === runId) {
+        await rm(link, { force: true }).catch(() => {
+        });
+      }
+    }
+  }
+  /**
    * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
    * resolve-or-reuse path of `run create`: a repeated create returns the live run
    * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
@@ -8370,10 +8458,25 @@ var StateManager = class _StateManager {
    * (a different repo's pointer) never trip it. The just-created run's `state.json`
    * already exists, so it stays addressable via `--run <id>` after the throw.
    * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+   *
+   * POINTER-LIVENESS TOLERANCE (D57): an UNPARSEABLE pointer target (old-schema,
+   * corrupt JSON) classifies as STALE — warn loudly and repoint. A run this engine
+   * cannot parse cannot be owned by a live session of this engine, so it can never
+   * prove the "still-live, different owner" condition the guard exists for. Mirrors
+   * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
+   * contract for every other caller.
    */
   async pointCurrentAt(state) {
     const repo = state.spec.repo;
-    const existing = await this.readCurrentForRepo(repo);
+    let existing;
+    try {
+      existing = await this.readCurrentForRepo(repo);
+    } catch (err) {
+      log7.warn(
+        `state: current pointer for repo '${repo}' names an unparseable run \u2014 treating as stale and repointing: ${err.message}`
+      );
+      existing = null;
+    }
     if (existing !== null && existing.run_id !== state.run_id && !isTerminalRunStatus(existing.status) && existing.owner_session !== void 0 && state.owner_session !== void 0 && existing.owner_session !== state.owner_session) {
       throw new Error(
         `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
@@ -8455,7 +8558,7 @@ var SpawnRequestSchema = external_exports.object({
 
 // src/hooks/hook-context.ts
 import { existsSync as existsSync5 } from "node:fs";
-import { lstat, readlink } from "node:fs/promises";
+import { lstat, readlink as readlink2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
 var BrokenRunStateError = class extends Error {
   constructor(target) {
@@ -8488,7 +8591,7 @@ async function loadActiveRun(opts = {}) {
   if (!existsSync5(link)) {
     let target = "<unreadable>";
     try {
-      target = await readlink(link);
+      target = await readlink2(link);
     } catch {
     }
     throw new BrokenRunStateError(target);

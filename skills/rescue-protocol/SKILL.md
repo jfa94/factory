@@ -70,7 +70,7 @@ consent prompt. Never edit `state.json` by hand.
       "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — one plan item
       "dead_ends":  ["<task-id>", ...],   // diagnose first; propose only recommended resets
       "needs_rescue", "e2e_failed", "e2e_assessment_failed", "traceability_failed",
-      "rollup_pending", "would_deadlock", "summary",
+      "rollup_pending", "would_deadlock", "empty_task_map", "summary",
       "route",                            // nothing | resume | repair
       "reconcile",                        // true = recorded git state drifted
       "hints": ["factory rescue apply ...", ...],  // one exact command per proposable repair
@@ -115,6 +115,9 @@ consent prompt. Never edit `state.json` by hand.
       landed; executes `--recheck-rollup`.
     - **Reconcile git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
       (step 5); forward-only fixes are autonomous, anything destructive prompts again.
+    - **Cancel half-created run** (`empty_task_map`, D57) — zero tasks means creation
+      crashed before seeding; nothing is repairable. Executes `factory run cancel
+      --run <id> --cleanup`, then re-run `factory run create`.
 
     A question holds at most 4 options — split the items across up to 4 multiSelect
     questions in the same call when there are more. The human approves any subset (or

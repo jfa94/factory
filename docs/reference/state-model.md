@@ -59,7 +59,14 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   statusline ticks, `hook-context.loadActiveRun`, `next-task`); `pointCurrentAt`
   refuses loud (before any write) to repoint a repo whose current names a
   still-live run owned by a different known session (the new run stays
-  addressable via `--run`).
+  addressable via `--run`). **Pointer-liveness tolerance ([Decision 57](../explanation/decisions.md#decision-57--runs-are-born-whole-atomic-seeding--stale-run-sweep)):**
+  inside `pointCurrentAt` **only**, an *unparseable* pointer target (old schema / corrupt
+  JSON) is treated as **stale** — it warns and repoints rather than throwing, since a run
+  this engine cannot parse cannot be owned by a live session and so can never prove the
+  "still-live, different owner" condition the guard exists for. This mirrors `listRuns`'
+  tolerate-loudly precedent; every **targeted** read keeps its loud contract. This tolerance
+  is what stops a schema-v2 pointer from crashing `run create` (the 2026-07-07 incident); the
+  stale run dir it named is separately sweepable via [`rescue gc`](./cli.md#rescue-gc).
 - **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`
   and `specs/`. The producer (test-writer / implementer) edits here; because the
   path encodes `(run-id, task-id)`, the write-scope guard derives run ownership
@@ -74,6 +81,20 @@ rejected). The same sanitizer keys both `specs/` and `current/`.
 Every state mutation goes through the `StateManager` (`manager.ts`) — the only
 sanctioned write path. Writes are atomic (write-temp-then-rename) and
 lock-protected (`proper-lockfile`).
+
+**Runs are born whole ([Decision 57](../explanation/decisions.md#decision-57--runs-are-born-whole-atomic-seeding--stale-run-sweep)).**
+`StateManager.create()` accepts the seeded `tasks` map and birth-time `human_touches` in the
+*same single write*, so a run is created complete — a crash mid-create can never leave a
+`running` run with zero tasks (the class of half-created wreckage the 2026-07-07 incident
+produced). An omitted touch `at` is stamped with the birth timestamp, so the `launch` touch's
+`at === started_at` holds exactly. `createRunFromManifest` passes the seeded map in the create
+payload; there is no follow-up `update()` to seed tasks. Two engine-owned recovery helpers
+serve the wreckage class the fix prevents but does not retroactively clean:
+`listStaleRunDirs()` enumerates run dirs this engine cannot parse (schema-v≠3 / corrupt JSON,
+with best-effort `staging_branch`/`repo` extraction), and `deleteRun(runId)` removes a run dir
+outright plus any `current` pointer naming it — a lock-free sweep for wreckage no valid state
+can be serialized against, driven only by [`rescue gc --apply`](./cli.md#rescue-gc), never a
+lifecycle verb.
 
 ## No stored verdicts (derive-don't-store)
 

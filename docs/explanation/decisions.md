@@ -2060,6 +2060,46 @@ external defect ledger, distinct from this Decision numbering.
 
 ---
 
+## Decision 57 — Runs Are Born Whole (Atomic Seeding + Stale-Run Sweep)
+
+**Date:** 2026-07-07
+
+**Context:** `factory run create` (2026-07-07 incident, PRD jfa94/outsidey#288)
+crashed between its two state writes: `create()` wrote a valid `running` run
+with `tasks: {}`, then the follow-up `update()` seeding tasks never ran because
+`pointCurrentAt` had already thrown — the per-repo `current` pointer still named
+a schema-v2 run and the clobber guard's read is loud on unparseable state. The
+half-created run looked completable: `next-task`'s `every()` was vacuously true
+on zero tasks (silent finalize routing), `rescue scan` reported it healthy
+(`needs_rescue: false, total: 0`), and the v2 wreckage itself was invisible to
+`rescue gc` (which only sees `listRuns()`' parsed output).
+
+**Decision:** Five folds. (a) **Atomic seeding** — `StateManager.create()`
+accepts `tasks` + `human_touches` (an omitted touch `at` is stamped with the
+birth timestamp, so `at === started_at` holds exactly); `createRunFromManifest`
+passes the seeded map in the create payload and the follow-up `update()` is
+deleted — one write births a complete run. (b) **Pointer-liveness tolerance** —
+in `pointCurrentAt` only, an unparseable pointer target is *stale* (warn +
+repoint), mirroring `listRuns`' tolerate-loudly precedent; every targeted read
+keeps its loud contract. (c) **Empty-set guard** — `next-task` on a `running`
+run with zero tasks throws a `UsageError` naming it half-created (the third and
+last `every`-on-empty site, after `deriveAllGatesVerdict` and `decideFinalize`).
+(d) `rescue scan` reports `empty_task_map`, folded into `needs_rescue`. (e)
+`rescue gc` sweeps unparseable run dirs: `StateManager.listStaleRunDirs()`
+(schema-v≠3 / corrupt-json, best-effort branch+repo extraction) feeds a `stale`
+section in the gc report; `--apply --run <id>` routes stale ids to
+`gcApplyStale` — protection→branch teardown when extractable, then
+`deleteRun()` (dir + any `current` pointer naming it).
+
+**Consequences:** A run either exists whole (tasks + launch touch) or not at
+all; an empty run can never pass anything. The incident is a regression test
+(`lifecycle.test.ts`), create is provably single-write, and the v2 wreckage
+class that caused B1 is now visible and sweepable. Deliberately skipped: a
+parse-level "running ⇒ tasks non-empty" schema invariant — it would brick
+*reading* (thus cancelling) existing wreckage.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability
