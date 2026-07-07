@@ -348,17 +348,22 @@ async function readWorkflowFacts(targetRoot: string): Promise<WorkflowFacts> {
     }
 }
 
-/** Append any missing {@link GITIGNORE_ENTRIES} to the target `.gitignore`. */
-async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
-    const path = join(root, '.gitignore')
+/** Append any of `entries` missing from `<root>/<filename>`, creating it if absent. */
+async function ensureIgnoreFile(
+    root: string,
+    filename: string,
+    entries: readonly string[],
+    lists: FileLists
+): Promise<void> {
+    const path = join(root, filename)
     const rel = relative(root, path)
     if (!existsSync(path)) {
-        await writeFile(path, GITIGNORE_ENTRIES.join('\n') + '\n', 'utf8')
+        await writeFile(path, entries.join('\n') + '\n', 'utf8')
         lists.created.push(rel)
         return
     }
     const current = await readFile(path, 'utf8')
-    const missing = GITIGNORE_ENTRIES.filter((e) => !current.split('\n').includes(e))
+    const missing = entries.filter((e) => !current.split('\n').includes(e))
     if (missing.length === 0) {
         lists.present.push(rel)
         return
@@ -366,6 +371,29 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
     const sep = current.endsWith('\n') ? '' : '\n'
     await writeFile(path, current + sep + missing.join('\n') + '\n', 'utf8')
     lists.present.push(rel)
+}
+
+/** Append any missing {@link GITIGNORE_ENTRIES} to the target `.gitignore`. */
+async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
+    await ensureIgnoreFile(root, '.gitignore', GITIGNORE_ENTRIES, lists)
+}
+
+/**
+ * `.github/scripts/shard-mutation-scope.mjs` is an esbuild bundle (see
+ * `templates/.github/scripts/shard-mutation-scope.mjs` — generated, not
+ * hand-formatted); it never matches a target repo's own prettier style.
+ * The plugin repo itself `.prettierignore`s the equivalent path for the same
+ * reason — scaffold must guarantee the same exclusion in the target so
+ * `prettier --check .` stays clean there too.
+ */
+const PRETTIERIGNORE_ENTRIES = [
+    '# factory plugin: generated bundle (esbuild output, not hand-formatted)',
+    '.github/scripts/',
+]
+
+/** Append any missing {@link PRETTIERIGNORE_ENTRIES} to the target `.prettierignore`. */
+async function ensurePrettierignore(root: string, lists: FileLists): Promise<void> {
+    await ensureIgnoreFile(root, '.prettierignore', PRETTIERIGNORE_ENTRIES, lists)
 }
 
 /**
@@ -434,6 +462,9 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
                     : undefined
             await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform)
         }
+        // The shard script above is an esbuild bundle in the plugin's own style —
+        // exclude it from the target's prettier pass the same way the plugin repo does.
+        await ensurePrettierignore(opts.targetRoot, lists)
     } else {
         log.info(
             `skipping the CI net (${CI_NET_RELS.join(', ')}) — the quality-gate workflow renders for ` +

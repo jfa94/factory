@@ -18321,16 +18321,16 @@ async function readWorkflowFacts(targetRoot) {
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
   };
 }
-async function ensureGitignore(root, lists) {
-  const path7 = join26(root, ".gitignore");
+async function ensureIgnoreFile(root, filename, entries, lists) {
+  const path7 = join26(root, filename);
   const rel = relative(root, path7);
   if (!existsSync10(path7)) {
-    await writeFile4(path7, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+    await writeFile4(path7, entries.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
   const current = await readFile17(path7, "utf8");
-  const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
+  const missing = entries.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
@@ -18338,6 +18338,16 @@ async function ensureGitignore(root, lists) {
   const sep4 = current.endsWith("\n") ? "" : "\n";
   await writeFile4(path7, current + sep4 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
+}
+async function ensureGitignore(root, lists) {
+  await ensureIgnoreFile(root, ".gitignore", GITIGNORE_ENTRIES, lists);
+}
+var PRETTIERIGNORE_ENTRIES = [
+  "# factory plugin: generated bundle (esbuild output, not hand-formatted)",
+  ".github/scripts/"
+];
+async function ensurePrettierignore(root, lists) {
+  await ensureIgnoreFile(root, ".prettierignore", PRETTIERIGNORE_ENTRIES, lists);
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
@@ -18377,6 +18387,7 @@ async function runScaffold(opts) {
       ) : void 0;
       await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
     }
+    await ensurePrettierignore(opts.targetRoot, lists);
   } else {
     log33.info(
       `skipping the CI net (${CI_NET_RELS.join(", ")}) \u2014 the quality-gate workflow renders for npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`

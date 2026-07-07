@@ -113,6 +113,18 @@ describe('runScaffold', () => {
         const gitignore = await readFile(join(root, '.gitignore'), 'utf8')
         expect(gitignore).toMatch(/\.claude-plugin-data\//)
 
+        // The shard script is an esbuild bundle in the plugin's own style — the target
+        // must .prettierignore it too, or `prettier --check .` flags it (bug #1).
+        expect(report.files_created).toContain('.prettierignore')
+        expect(existsSync(join(root, '.prettierignore'))).toBe(true)
+        const prettierignore = await readFile(join(root, '.prettierignore'), 'utf8')
+        expect(prettierignore).toMatch(/\.github\/scripts\//)
+
+        // The seeded e2e spec must not disable a rule for a plugin scaffold never
+        // installs/configures (bug #1, `playwright/no-skipped-test`).
+        const e2eSpec = await readFile(join(root, 'e2e', 'example.spec.ts'), 'utf8')
+        expect(e2eSpec).not.toContain('playwright/no-skipped-test')
+
         // Decision 40 D11: no e2e job in CI — it would gate CI merges on infra CI
         // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
         // Decision 53: no auto-merge job either — the engine owns both merge points.
@@ -324,6 +336,28 @@ describe('runScaffold', () => {
         // Idempotent + non-duplicating: a second run appends nothing.
         await runScaffold(args)
         expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe(gitignore)
+    })
+
+    it('appends the shard-script exclusion to an existing .prettierignore, and is idempotent', async () => {
+        await writeFile(join(root, '.prettierignore'), 'dist/\n', 'utf8')
+        const args = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        }
+        const report = await runScaffold(args)
+        expect(report.files_created).not.toContain('.prettierignore') // appended, not (re)created
+        const prettierignore = await readFile(join(root, '.prettierignore'), 'utf8')
+        expect(prettierignore).toMatch(/^dist\/$/m) // user's existing entry preserved
+        expect(prettierignore).toMatch(/^\.github\/scripts\/$/m)
+
+        await runScaffold(args)
+        expect(await readFile(join(root, '.prettierignore'), 'utf8')).toBe(prettierignore)
     })
 
     it('REFUSES loudly when develop protection is missing and --provision is off', async () => {

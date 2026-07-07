@@ -19,7 +19,6 @@ test('control: app shell renders', async ({page}) => {
     await expect(page).toHaveTitle(/.+/)
 })
 
-// eslint-disable-next-line playwright/no-skipped-test -- placeholder journey, replace or delete
 test.skip('example journey: replace with a real money-path', async ({page}) => {
     await page.goto('/')
     // await page.getByRole("link", { name: "Sign up" }).click();

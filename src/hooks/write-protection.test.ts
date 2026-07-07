@@ -35,7 +35,7 @@ describe('write-protection — TCB write-deny (Δ W)', () => {
         return parseHookInput(JSON.stringify({tool_name: tool, tool_input}))
     }
 
-    const deps = () => ({dataDir, repoRoot, cwd: repoRoot})
+    const deps = () => ({dataDir, repoRoot, cwd: repoRoot, autonomousMode: true})
 
     it('Δ W: Edit to .github/workflows/quality-gate.yml is blocked', () => {
         const p = join(repoRoot, '.github', 'workflows', 'quality-gate.yml')
@@ -116,6 +116,22 @@ describe('write-protection — TCB write-deny (Δ W)', () => {
         const traversal = join(repoRoot, 'src', '..', '.github', 'workflows', 'ci.yml')
         writeFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'x')
         expect(isDeny(decideWriteProtection(editInput('Edit', traversal), deps()))).toBe(true)
+    })
+
+    it('autonomous-mode gate: TCB writes pass through outside a pipeline session', () => {
+        const p = join(repoRoot, '.github', 'workflows', 'quality-gate.yml')
+        writeFileSync(p, 'x')
+        expect(isDeny(decideWriteProtection(editInput('Edit', p), {...deps(), autonomousMode: false}))).toBe(false)
+        const holdout = join(dataDir, 'runs', 'run-1', 'holdouts', 'a.json')
+        expect(isDeny(decideWriteProtection(editInput('Write', holdout), {...deps(), autonomousMode: false}))).toBe(
+            false
+        )
+    })
+
+    it('autonomous-mode gate: still denied when autonomous', () => {
+        const p = join(repoRoot, '.github', 'workflows', 'quality-gate.yml')
+        writeFileSync(p, 'x')
+        expect(isDeny(decideWriteProtection(editInput('Edit', p), {...deps(), autonomousMode: true}))).toBe(true)
     })
 
     it('non-write tools (Read) pass through', () => {

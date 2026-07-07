@@ -13,9 +13,16 @@
  * a nested shell, so shell-bypass never sees it; this arm closes that hole.
  *
  * The denylist is HARDCODED in tcb.ts and is NEVER consulted from config — the
- * load-bearing kill of the circular config bypass (Δ W). This is unconditional:
- * it does not depend on a run being active or on config state; an implementer
- * must never write a TCB path.
+ * load-bearing kill of the circular config bypass (Δ W). It does not depend on
+ * config state; an implementer must never write a TCB path.
+ *
+ * Scoped to autonomous mode (mirrors branch-protection.ts's nested-shell gate):
+ * the threat this guard defends against — an agent writing a TCB path — only
+ * exists during a pipeline run, and pipeline sessions (+ their subagents)
+ * always carry FACTORY_AUTONOMOUS_MODE=1. Firing unconditionally would also
+ * block a HUMAN doing sanctioned maintenance on a project-owned TCB-adjacent
+ * file (e.g. e2e/example.spec.ts, hooks/**) in an ordinary interactive
+ * session — a constant false positive with no attacker on the other end.
  *
  * The data dir (so the out-of-repo `runs/**`/`specs/**` stores match at their
  * absolute paths) is resolved best-effort via the Config seam — PATH RESOLUTION
@@ -26,6 +33,7 @@ import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 import {createLogger, nonNull} from '../shared/index.js'
 
 const log = createLogger('write-protection')
+import {isAutonomous} from '../autonomy/mode.js'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
 import {isTcbProtected, type TcbContext} from './tcb.js'
 import {
@@ -164,6 +172,8 @@ export interface WriteProtectionDeps extends DataDirOptions {
     cwd?: string
     /** Repo root for the `hooks/**` rule (defaults to cwd). */
     repoRoot?: string
+    /** Override the autonomous-mode signal (defaults to {@link isAutonomous}). */
+    autonomousMode?: boolean
 }
 
 /** Resolve the TCB context (data dir + repo root) for a check, best-effort. */
@@ -192,6 +202,11 @@ function resolveTcbContext(deps: WriteProtectionDeps): TcbContext {
  * A MultiEdit is blocked if ANY of its targets is TCB-protected.
  */
 export function decideWriteProtection(input: HookInput | null, deps: WriteProtectionDeps = {}): HookDecision {
+    const autonomousMode = deps.autonomousMode ?? isAutonomous()
+    if (!autonomousMode) {
+        return allow()
+    }
+
     const tool = toolNameOf(input)
     const isBash = tool === 'Bash'
     if (!isBash && !WRITE_TOOLS.has(tool)) {

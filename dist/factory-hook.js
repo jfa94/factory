@@ -7079,6 +7079,10 @@ function resolveTcbContext(deps) {
   return { repoRoot: deps.repoRoot ?? cwd, dataDir };
 }
 function decideWriteProtection(input, deps = {}) {
+  const autonomousMode = deps.autonomousMode ?? isAutonomous();
+  if (!autonomousMode) {
+    return allow();
+  }
   const tool = toolNameOf(input);
   const isBash = tool === "Bash";
   if (!isBash && !WRITE_TOOLS.has(tool)) {
