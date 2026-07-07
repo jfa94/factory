@@ -137,3 +137,43 @@ export function buildProducerContext(input: BuildProducerContextInput): Producer
         injectedPriorFailure: priorFailures.length > 0,
     }
 }
+
+/**
+ * Render a {@link ProducerContext} to the final producer agent prompt string
+ * (3b(i)): the engine composes this at spawn time so the runner spawns
+ * `agents[0].prompt` VERBATIM instead of dereferencing a `prompt_ref` and
+ * re-assembling it. Includes the cd-sentence the runner used to hand-append
+ * (pinning the worktree + branch discipline into the envelope itself).
+ */
+export function renderProducerPrompt(ctx: ProducerContext, worktree: string): string {
+    const lines: string[] = [
+        `Task ${ctx.taskId}: ${ctx.title}`,
+        '',
+        ctx.description,
+        '',
+        'Acceptance criteria:',
+        ...ctx.acceptanceCriteria.map((c) => `- ${c}`),
+    ]
+    if (ctx.files.length > 0) {
+        lines.push('', 'Scoped files:', ...ctx.files.map((f) => `- ${f}`))
+    }
+    if (ctx.fixInstructions.length > 0) {
+        lines.push('', 'Confirmed blockers to fix (patch forward, do not nuke prior work):')
+        for (const fi of ctx.fixInstructions) {
+            const loc =
+                fi.file !== undefined ? (fi.line !== undefined ? ` (${fi.file}:${fi.line})` : ` (${fi.file})`) : ''
+            lines.push(`- [${fi.reviewer}]${loc} ${fi.description}`)
+        }
+    }
+    if (ctx.priorFailures.length > 0) {
+        lines.push('', "Prior failures — don't repeat these:")
+        for (const pf of ctx.priorFailures) {
+            lines.push(`- rung ${pf.rung}: ${pf.summary}`)
+        }
+    }
+    lines.push(
+        '',
+        `Your working tree is ${worktree} (already checked out on the task branch). cd there; make ALL commits there.`
+    )
+    return lines.join('\n')
+}

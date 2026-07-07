@@ -15,7 +15,7 @@ import {describe, expect, it} from 'vitest'
 import {nextTask} from './next.js'
 import {scanRun} from '../rescue/scan.js'
 import {MAX_DOCS_ATTEMPTS} from './docs.js'
-import {makeOrchestratorDeps, PAUSE_5H} from './orchestrator-fixtures.js'
+import {makeOrchestratorDeps, PAUSE_5H, NOW} from './orchestrator-fixtures.js'
 import type {UsageReading} from '../quota/usage-source.js'
 import {nonNull} from '../shared/index.js'
 
@@ -172,6 +172,92 @@ describe('nextTask', () => {
         } finally {
             await cleanup()
         }
+    })
+
+    // S1: engine-side stall TTL — an in-flight spawn whose clock has aged past
+    // config.stallTtlMinutes is flagged in work.stale (advisory, status unchanged).
+    describe('work.stale (S1 stall TTL)', () => {
+        /** Seed T1 in-flight (status executing, phase exec) with a given spawned_at. */
+        async function seedInFlight(
+            deps: Awaited<ReturnType<typeof makeOrchestratorDeps>>['deps'],
+            runId: string,
+            spawnedAt: number
+        ) {
+            await deps.state.updateTask(runId, 'T1', (t) => ({
+                ...t,
+                status: 'executing',
+                phase: 'exec',
+                spawn_in_flight: {phase: 'exec', rung: 0, tip_sha: 'sha', spawned_at: spawnedAt},
+            }))
+        }
+
+        it('a spawn older than the TTL lands in work.stale', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 2000) // default stallTtlMinutes=20 → 1200s
+                const env = await nextTask(deps, runId)
+                expect(env).toMatchObject({kind: 'work', stale: ['T1']})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        it('a fresh spawn does not land in work.stale', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 10)
+                const env = await nextTask(deps, runId)
+                expect(env).toMatchObject({kind: 'work', stale: []})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        it('a re-drive (spawned_at refreshed) clears staleness', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 2000)
+                const staleEnv = await nextTask(deps, runId)
+                expect(staleEnv).toMatchObject({kind: 'work', stale: ['T1']})
+
+                // Simulate the orchestrator's re-drive refresh (orchestrator.test.ts pins the
+                // write side; this pins next.ts reacting to the refreshed clock).
+                await deps.state.updateTask(runId, 'T1', (t) => ({
+                    ...t,
+                    spawn_in_flight:
+                        t.spawn_in_flight === undefined ? undefined : {...t.spawn_in_flight, spawned_at: NOW},
+                }))
+
+                const freshEnv = await nextTask(deps, runId)
+                expect(freshEnv).toMatchObject({kind: 'work', stale: []})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        it('respects a configured stallTtlMinutes override', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 120)
+                // 120s old task: not stale at the 20min default, IS stale at a 1min TTL.
+                const defaultEnv = await nextTask(deps, runId)
+                expect(defaultEnv).toMatchObject({kind: 'work', stale: []})
+
+                const tightened = {...deps, config: {...deps.config, stallTtlMinutes: 1}}
+                const tightEnv = await nextTask(tightened, runId)
+                expect(tightEnv).toMatchObject({kind: 'work', stale: ['T1']})
+            } finally {
+                await cleanup()
+            }
+        })
     })
 
     it('all tasks terminal → all-terminal', async () => {

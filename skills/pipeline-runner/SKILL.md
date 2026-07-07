@@ -334,19 +334,17 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 
 **`expects: "producer-status"`** (stages tests/exec — ONE producer agent):
 
-1. Read the persisted context: `$CLAUDE_PLUGIN_DATA/runs/<run_id>/<agents[0].prompt_ref>`
-   (a ProducerContext JSON).
-2. Spawn the producer — `subagent_type` = the manifest agent's `agent_type`
+1. Spawn the producer — `subagent_type` = the manifest agent's `agent_type`
    VERBATIM, model mapped, `maxTurns` from
    the manifest, **isolation OMITTED**, plus the manifest agent's `effort` as the
    spawn's `effort` opt **when present** (the dial sets it only on high escalation
-   rungs; omit it otherwise to inherit the default). Build the prompt from the ProducerContext +
-   _"Your working tree is `<tenv.worktree>` (already checked out on the task branch). `cd` there; make ALL commits there."_
+   rungs; omit it otherwise to inherit the default). Prompt = `agents[0].prompt`
+   VERBATIM (the engine composes the full ProducerContext + cd-sentence at spawn time).
    The test-writer commits failing tests first (TDD); the implementer commits the
    minimal implementation. They follow `agents/test-writer.md` / `agents/implementer.md`.
-3. Capture its terminal STATUS line (`STATUS: DONE` | `STATUS: BLOCKED — escalate` |
+2. Capture its terminal STATUS line (`STATUS: DONE` | `STATUS: BLOCKED — escalate` |
    `STATUS: NEEDS_CONTEXT`).
-4. Results file: `{ "result_key": <tenv.result_key verbatim>, "producer": { "status": "<line>" } }`.
+3. Results file: `{ "result_key": <tenv.result_key verbatim>, "producer": { "status": "<line>" } }`.
 
 **`expects: "reviews"`** (stage verify — the review panel, plus sidecar):
 
@@ -366,11 +364,12 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
     **Cross-vendor quality-reviewer (Δ U/S5).** The manifest carries the engine's
     resolved `cross_vendor` stamp; it decides how the `quality-reviewer` entry runs:
     - `cross_vendor.status == "present"` → do NOT spawn the Claude quality-reviewer.
-      Run it via Bash instead:
-      `codex exec --model <cross_vendor.model> --sandbox read-only --cd <tenv.worktree> "<prompt>"`
-      where `<prompt>` = the `agents/quality-reviewer.md` charter body + the
-      `skills/review-protocol/SKILL.md` contract + the SAME diff-scope context the
-      Claude spawn would get (`git diff <tenv.base_ref>`, task title/criteria).
+      Run it via Bash instead, spawning `cross_vendor.prompt` VERBATIM (3b/ii — the
+      engine already composed the `agents/quality-reviewer.md` charter + the
+      `skills/review-protocol/SKILL.md` contract + the diff-scope pointer; the
+      runner supplies only the invariant vendor-exec flags, never reassembles the
+      prompt itself):
+      `codex exec --model <cross_vendor.model> --sandbox read-only --cd <tenv.worktree> "<cross_vendor.prompt>"`
       Parse the RawReview JSON from stdout (last JSON object). On rc≠0, unparseable
       output, or a wrong-shape verdict: FALL BACK to spawning the Claude
       quality-reviewer as normal AND set
@@ -382,12 +381,14 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
       `"no cross-vendor stamp on manifest"`.
 
 3. **Verify-then-fix:** for EACH finding that is `blocking:true` AND citable, spawn an
-   INDEPENDENT finding-verifier (`general-purpose`, isolation `"worktree"`, model
-   `opus`, adversarial framing — _"try to refute this finding against the actual
-   code"_, inspecting via `git -C <tenv.worktree> diff <tenv.base_ref>`). Its prompt
-   interpolates ONLY `{reviewer, severity, claim, file, line, quote}` — NEVER the
-   finding's `description` (anti-anchoring: the verifier must judge the bare claim
-   against the code, not be led by the reviewer's reasoning chain). It returns
+   INDEPENDENT finding-verifier using `manifest.verifier_spec` VERBATIM — `agent_type`,
+   `model`, `isolation` (3b/iii: no more hardcoded `general-purpose`/`opus`/
+   `"worktree"`). Render `verifier_spec.prompt_template` by substituting EXACTLY
+   `verifier_spec.interpolate_fields` (today: `{reviewer, severity, claim, file, line,
+   quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier must
+   judge the bare claim against the code, not be led by the reviewer's reasoning
+   chain). Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
+   <tenv.base_ref>`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
     ```json
@@ -410,9 +411,9 @@ Every spawn envelope carries `agent_type` — spawn
 `Task(subagent_type: <the envelope's agent_type VERBATIM>)` with the entry's
 model/max_turns; honor isolation as given (producers and run-level stage agents
 say "isolation OMITTED — works IN the envelope's worktree"; panel reviewers say
-`"worktree"`). NEVER re-derive the type from `role` or from prose. The ONE
-runner-chosen type not carried by an envelope: the finding-verifier
-(`general-purpose`, step 3 above).
+`"worktree"`). NEVER re-derive the type from `role` or from prose. The
+finding-verifier (step 3 above) is spawned from `manifest.verifier_spec`, not
+hardcoded — same rule, different field.
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the

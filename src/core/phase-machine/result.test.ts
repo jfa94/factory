@@ -22,7 +22,6 @@ const request: SpawnRequest = {
             isolation: 'worktree',
             model: 'sonnet',
             max_turns: 60,
-            prompt_ref: 'p.md',
         },
     ],
 }

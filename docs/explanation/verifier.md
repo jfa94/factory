@@ -96,7 +96,7 @@ optional; supplying it does not change the required roster.
 
 Cross-vendor availability is **probed, not assumed** (Decision 44): the engine runs
 `codex --version` (memoized, `src/verifier/judgment/codex-probe.ts`) and stamps the
-verify spawn manifest with `cross_vendor: {status:"present",model} | {status:"absent",reason}`.
+verify spawn manifest with `cross_vendor: {status:"present",model,prompt} | {status:"absent",reason}`.
 The runner executes the quality-reviewer via `codex exec` when present and reports an
 honest `crossVendorAbsent` reason when it can't. Absence is surfaced per shipped task in
 `report.md` (`## Review independence`) and the run summary; `review.requireCrossVendor`
@@ -124,13 +124,26 @@ sometimes happened to be current, and reviewers Read files directly).
 for every "inspect the diff" instruction. (Same root cause as the worktree-base
 invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-branch-as-integration-point).)
 
-A reviewer's lens is **not** delivered as a per-run prompt file. The spawn
-request carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
-purely to satisfy the request schema's non-empty constraint — the runner never reads it
-and nothing writes it. The runner builds the reviewer prompt **inline** from the
-reviewer's `agents/<role>.md` definition plus the shared
-`skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`
-points at a real per-run artifact a runner Reads (the `ProducerContext`).
+A reviewer's lens is **not** delivered as a per-run prompt file. Panel-reviewer specs
+carry **no `prompt` field** at all — the runner builds each reviewer prompt **inline**
+from the reviewer's `agents/<role>.md` definition plus the shared
+`skills/review-protocol/SKILL.md` contract. The other two spawn slots on a verify
+manifest, by contrast, ARE engine-composed and spawned verbatim so the runner does no
+prompt assembly for them:
+
+- **Producer specs** carry the full prompt in `AgentSpec.prompt` — the composed
+  `ProducerContext` plus the cd-to-worktree sentence, built at spawn time
+  (`renderProducerPrompt`, `src/producer/prompt-context.ts`). (The old
+  `prompt_ref`-plus-`ArtifactStore` machinery the runner used to dereference and Read is
+  gone.)
+- The **cross-vendor quality-reviewer** slot: when `cross_vendor.status === "present"`
+  the stamp carries a pre-composed `prompt` (the quality-reviewer charter +
+  review-protocol contract + a worktree/base-ref diff pointer,
+  `composeCrossVendorPrompt`, `src/verifier/judgment/cross-vendor-prompt.ts`) that the
+  runner spawns verbatim via `codex exec` — supplying only the invariant vendor-exec
+  flags. The same composition feeds the whole-scope `/factory:debug` path.
+- The **finding-verifier** slot (`verifier_spec`, below) carries a `prompt_template`
+  the runner interpolates per finding.
 
 ## Rung-keyed holdout verdicts (S1)
 
@@ -171,7 +184,13 @@ task:
    The verifier is **claim-only** (anti-anchoring, Decision 44): its prompt is
    built from `{reviewer, severity, claim, file, line, quote}` — never the
    reviewer's `description` reasoning chain, so it can't be led to the same
-   wrong conclusion.
+   wrong conclusion. The finding-verifier is spawned from the manifest's
+   `verifier_spec` **template** (`{ agent_type, model, isolation, prompt_template,
+   interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
+   hardcoded agent-type/model/isolation — the finding set is only known after the panel
+   returns, so the engine ships the fixed framing with `{field}` placeholders and the
+   runner substitutes exactly `interpolate_fields` per finding. This closes the last
+   spawn decision the runner used to make on its own.
 
 Only confirmed blockers reach the producer. This is why the runner must run a
 finding-verifier for each blocking + citable finding and feed its verdict back: a

@@ -137,6 +137,8 @@ export type {
     SpawnRole,
     AgentSpec,
     SpawnRequest,
+    CrossVendorStamp,
+    VerifierSpec,
     PhaseResult,
     AdvanceResult,
     SpawnAgentsResult,

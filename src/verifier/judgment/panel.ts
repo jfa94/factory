@@ -26,8 +26,36 @@
  * (D26 fixed depth). The request is validated through the frozen
  * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
-import {parseSpawnRequest, AGENT_TYPE_BY_ROLE, type SpawnRequest, type SpawnRole} from '../../types/index.js'
+import {
+    parseSpawnRequest,
+    AGENT_TYPE_BY_ROLE,
+    GENERAL_PURPOSE_AGENT_TYPE,
+    type SpawnRequest,
+    type SpawnRole,
+    type VerifierSpec,
+} from '../../types/index.js'
 import type {CrossVendorResolution} from './vendor.js'
+
+/**
+ * The finding-verifier's fixed framing (3b/iii) — an adversarial "try to refute
+ * this" posture, with `{field}` placeholders for EXACTLY the whitelisted
+ * per-finding data the runner interpolates. Never `{description}` — the
+ * reviewer's reasoning chain must not lead the independent verifier
+ * (anti-anchoring, D27).
+ */
+const VERIFIER_INTERPOLATE_FIELDS = ['reviewer', 'severity', 'claim', 'file', 'line', 'quote'] as const
+
+const VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
+following review finding against the actual code — do not assume it is correct.
+
+Reviewer: {reviewer}
+Severity: {severity}
+Claim: {claim}
+Cited location: {file}:{line}
+Quoted source: {quote}
+
+Inspect the cited file/line yourself before deciding. Return EXACTLY one JSON
+object as your final message: { "holds": true|false, "note": "<why>" }.`
 
 /**
  * The four fixed panel roles, in a stable order. CLOSED: this list IS the panel
@@ -57,24 +85,6 @@ export function panelRolesFor(dbApplicable: boolean): readonly SpawnRole[] {
 }
 
 /**
- * The `prompt_ref` placeholder for a panel reviewer. The WS2 AgentSpecSchema
- * requires a non-empty `prompt_ref` on EVERY agent, but — UNLIKE producers, whose
- * `prompt_ref` points at a real per-run ProducerContext artifact the runner Reads
- * (handlers.ts `producerSpawn` → `putProducerContext`) — NO orchestrator reads this value
- * for a reviewer. The ONE runner (the `skills/pipeline-runner/SKILL.md` panel
- * step) builds the reviewer prompt INLINE
- * from the reviewer's `agents/<role>.md` definition plus the shared
- * `skills/review-protocol/SKILL.md` contract; the reviewer's lens lives in its agent
- * definition + the static protocol, so there is no per-run reviewer prompt file to
- * point at. This returns a stable, role-derived value purely to satisfy the schema's
- * non-empty constraint — it is NOT a readable artifact (CP2 #7: nothing writes a
- * `reviews/prompts/<role>.md` file, and no runner should try to Read one).
- */
-function promptRefFor(role: SpawnRole): string {
-    return `reviews/prompts/${role}.md`
-}
-
-/**
  * Build the risk-INVARIANT panel {@link SpawnRequest}.
  *
  * @param resumePhase the per-task phase the engine resumes at once the panel
@@ -90,6 +100,10 @@ function promptRefFor(role: SpawnRole): string {
  * @param dbApplicable whether the task diff touches DB files (`touchesDatabase`) —
  *   true appends the `database-design-reviewer` specialist (Decision 51). Defaults
  *   to false so pre-existing callers keep the exact four-lens floor.
+ * @param crossVendorPrompt the composed codex prompt (3b/ii, {@link
+ *   import("./cross-vendor-prompt.js").composeCrossVendorPrompt}) — REQUIRED
+ *   when `crossVendor.status === 'present'` (parseSpawnRequest fails loud
+ *   otherwise); ignored when absent/omitted.
  *
  * The output is validated through {@link parseSpawnRequest}; an empty/blank
  * model or non-positive `maxTurns` therefore fails LOUDLY at the seam rather than
@@ -101,7 +115,8 @@ export function buildPanelManifest(
     model: string,
     maxTurns: number,
     crossVendor?: CrossVendorResolution,
-    dbApplicable = false
+    dbApplicable = false,
+    crossVendorPrompt?: string
 ): SpawnRequest {
     const agents = panelRolesFor(dbApplicable).map((role) => ({
         role,
@@ -109,17 +124,24 @@ export function buildPanelManifest(
         isolation: 'worktree' as const,
         model,
         max_turns: maxTurns,
-        prompt_ref: promptRefFor(role),
     }))
     const cross_vendor =
         crossVendor === undefined
             ? undefined
             : crossVendor.status === 'present'
-              ? ({status: 'present', model: crossVendor.slot.model} as const)
+              ? ({status: 'present', model: crossVendor.slot.model, prompt: crossVendorPrompt} as const)
               : ({status: 'absent', reason: crossVendor.reason} as const)
+    const verifier_spec: VerifierSpec = {
+        agent_type: GENERAL_PURPOSE_AGENT_TYPE,
+        model,
+        isolation: 'worktree',
+        prompt_template: VERIFIER_PROMPT_TEMPLATE,
+        interpolate_fields: [...VERIFIER_INTERPOLATE_FIELDS],
+    }
     return parseSpawnRequest({
         resume_phase: resumePhase,
         agents,
         ...(cross_vendor !== undefined ? {cross_vendor} : {}),
+        verifier_spec,
     })
 }

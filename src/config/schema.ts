@@ -330,6 +330,13 @@ export const ConfigSchema = z
          * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
          */
         maxParallelTasks: z.number().int().positive().default(3),
+        /**
+         * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
+         * before `next-task` flags it in `work.stale` (advisory — a hung agent that
+         * died silently is never re-driven inside a live session otherwise). Default
+         * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+         */
+        stallTtlMinutes: z.number().int().positive().default(20),
     })
     .default({})
 

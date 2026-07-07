@@ -182,7 +182,7 @@ one.
 | `failure_reason`          | string?                       | Human-facing fail reason; set _iff_ failed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `phase`                   | TaskPhase?                    | The `next-action` orchestrator's resume cursor (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `merge_resyncs`           | int ≥0 (default 0)            | Ship live-merge re-sync count (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn, carrying the emit-time `spawned_at` clock read by stall-TTL detection (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `e2e_feedback`            | string?                       | Feedback carried from a failing e2e journey into this task's NEXT implementation pass (the e2e reopen loop, [Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)). Set by the e2e coroutine when it reopens the task (via `resetTaskRow`); injected into the producer's prior-failure context. **Transient — not a failure field; allowed on any status.**                                                                                                                                           |
 | `started_at` / `ended_at` | string?                       | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -249,11 +249,11 @@ boundaries; exhausting it fails the task as `blocked-environmental`.
 
 ### `spawn_in_flight` — idempotent re-spawn checkpoint
 
-`{ phase: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string }` (optional). The
-checkpoint that makes a stop-mid-spawn plus `factory resume` idempotent. Producers
-commit to the **shared** task worktree, so a stop in the post-spawn / pre-record
-window leaves the abandoned producer's partial commits (and uncommitted edits) on
-the task branch.
+`{ phase: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string, spawned_at: number }`
+(optional). The checkpoint that makes a stop-mid-spawn plus `factory resume`
+idempotent. Producers commit to the **shared** task worktree, so a stop in the
+post-spawn / pre-record window leaves the abandoned producer's partial commits (and
+uncommitted edits) on the task branch.
 
 - **Set on a fresh spawn.** When the orchestrator emits a spawn for `(phase, rung)`, it
   records the task-branch `tip_sha` at emit time.
@@ -267,6 +267,15 @@ rung)` before any results were recorded, the orchestrator resets the worktree to
 - **Scope.** `phase` is the spawn-phase subset (`tests | exec | verify`) — preflight
   and ship never spawn. A `verify` re-spawn's reset is a no-op (the panel reviewers
   run in their own isolated worktrees, so the shared worktree HEAD never moved).
+- **`spawned_at` — stall-TTL clock.** Epoch **seconds** (the shared quota clock,
+  `OrchestratorDeps.now()`) stamped at spawn emit and refreshed on a matching re-entry
+  (`src/orchestrator/orchestrator.ts`). `next-task` reads it to flag a task whose spawn
+  has aged past `config.stallTtlMinutes` in the `work` envelope's advisory `stale` list
+  (a silently-dead agent otherwise never self-heals in a live session — see
+  [cli.md](./cli.md#next-task)). Detection is read-only: no status change. Defaults to
+  `0` (epoch) so an untimed checkpoint persisted before this field existed parses as
+  maximally stale — an untimed in-flight spawn should be flagged for re-drive, not
+  silently trusted.
 
 (The `phase` literals duplicate the orchestrator's spawn-phase set deliberately, so
 `src/core/state` need not import the orchestrator; a cross-check test keeps them equal.)

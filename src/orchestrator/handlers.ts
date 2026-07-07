@@ -41,7 +41,10 @@ import {
     resolveReviewModel,
     dialForRung,
     buildProducerContext,
+    renderProducerPrompt,
     resolveCodexCrossVendor,
+    composeCrossVendorPrompt,
+    resolvePluginRoot,
     ESCALATION_CAP,
     splitHoldout,
     makeHoldoutRecord,
@@ -150,12 +153,12 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     }
 
     /**
-     * Assemble + PERSIST a producer prompt-context for `(role, rung)` and return the
-     * one-agent spawn request that resumes at `resumePhase`. The context is built from
-     * the holdout-stripped `visibleCriteria` only; the prior-failure note is recorded in
-     * IFF the dial injects it (rung ≥ 2).
+     * Assemble a producer prompt-context for `(role, rung)` and return the
+     * one-agent spawn request (prompt inlined verbatim, 3b(i)) that resumes at
+     * `resumePhase`. The context is built from the holdout-stripped `visibleCriteria`
+     * only; the prior-failure note is recorded in IFF the dial injects it (rung ≥ 2).
      */
-    async function producerSpawn(
+    function producerSpawn(
         role: ProducerSpawnRole,
         specTask: SpecTask,
         runId: string,
@@ -163,7 +166,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         resumePhase: TaskPhase,
         extraPriorFailures: readonly PriorFailureNote[] = [],
         confirmedBlockers?: readonly ConfirmedBlocker[]
-    ): Promise<PhaseResult> {
+    ): PhaseResult {
         const dial = dialForRung(specTask.risk_tier, rung, deps.config)
         const split = splitFor(deps.config, runId, specTask)
         const context: ProducerContext = buildProducerContext({
@@ -182,7 +185,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             // concrete PATCH instructions rather than re-nuking the implementation.
             ...(confirmedBlockers !== undefined ? {confirmedBlockers} : {}),
         })
-        const promptRef = await deps.artifacts.putProducerContext(runId, specTask.task_id, `${role}-r${rung}`, context)
+        const worktree = taskWorktreePath(deps.dataDir, runId, specTask.task_id)
         const request: SpawnRequest = parseSpawnRequest({
             resume_phase: resumePhase,
             agents: [
@@ -193,7 +196,8 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                     // No implementer-specific turn budget exists; both producer roles share the
                     // test-writer cap (documented WS10 decision).
                     max_turns: deps.config.testWriter.maxTurns,
-                    prompt_ref: promptRef,
+                    // 3b(i): the runner spawns this VERBATIM.
+                    prompt: renderProducerPrompt(context, worktree),
                     // Effort is set ONLY once the dial has climbed the model to its ceiling
                     // (rung ≥ 3 for sub-ceiling tasks, ≥ 2 for high-tier). Omitted ⇒ the agent
                     // inherits the spawn default — never pass `effort: undefined`.
@@ -300,20 +304,22 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
          * visible criteria (recomputed from the same seed — never re-persisted), resume
          * at verify.
          */
-        async exec(ctx: PhaseContext): Promise<PhaseResult> {
+        exec(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'exec')
             const specTask = specTaskOf(deps.spec, task.task_id)
-            return producerSpawn(
-                'implementer',
-                specTask,
-                ctx.run.run_id,
-                task.escalation_rung,
-                'verify',
-                e2eFeedbackNote(task),
-                // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
-                // gate-stderr record (record.ts persisted it on the wait-retry branch) —
-                // patches the specific verified misses instead of re-nuking.
-                task.fix_findings
+            return Promise.resolve(
+                producerSpawn(
+                    'implementer',
+                    specTask,
+                    ctx.run.run_id,
+                    task.escalation_rung,
+                    'verify',
+                    e2eFeedbackNote(task),
+                    // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+                    // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+                    // patches the specific verified misses instead of re-nuking.
+                    task.fix_findings
+                )
             )
         },
 
@@ -348,13 +354,23 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                         `environmental blocker: cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`
                     )
                 }
+                // 3b(ii): compose the codex prompt ONLY when there's a slot to spawn it into.
+                const crossVendorPrompt =
+                    crossVendor.status === 'present'
+                        ? await composeCrossVendorPrompt({
+                              pluginRoot: resolvePluginRoot(),
+                              baseRef: gateCtx.baseRef,
+                              worktree,
+                          })
+                        : undefined
                 return spawn(
                     buildPanelManifest(
                         'verify',
                         resolveReviewModel(deps.config),
                         deps.config.review.maxTurnsDeep,
                         crossVendor,
-                        dbApplicable
+                        dbApplicable,
+                        crossVendorPrompt
                     )
                 )
             }

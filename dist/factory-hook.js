@@ -2310,6 +2310,16 @@ function emitBlockDecision(decision, write = (s) => process.stderr.write(s)) {
   write(payload + "\n");
   return payload;
 }
+function emitSessionStartContext(additionalContext, write = (s) => process.stdout.write(s)) {
+  const payload = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext
+    }
+  });
+  write(payload + "\n");
+  return payload;
+}
 function decisionToExitCode(decision) {
   return decision.action === "deny" ? EXIT.ERROR : EXIT.OK;
 }
@@ -6691,7 +6701,14 @@ var ConfigSchema = external_exports.object({
    * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
    * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
    */
-  maxParallelTasks: external_exports.number().int().positive().default(3)
+  maxParallelTasks: external_exports.number().int().positive().default(3),
+  /**
+   * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
+   * before `next-task` flags it in `work.stale` (advisory — a hung agent that
+   * died silently is never re-driven inside a live session otherwise). Default
+   * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+   */
+  stallTtlMinutes: external_exports.number().int().positive().default(20)
 }).default({});
 
 // src/config/load.ts
@@ -7571,7 +7588,14 @@ var TaskStateSchema = external_exports.object({
   spawn_in_flight: external_exports.object({
     phase: external_exports.enum(SPAWN_PHASES),
     rung: external_exports.number().int().min(0),
-    tip_sha: external_exports.string().min(1)
+    tip_sha: external_exports.string().min(1),
+    /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
+     * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
+     * (`next.ts` `work.stale`) reads this — advisory only, no status change.
+     * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
+     * existed parses as maximally stale — correct: an untimed in-flight spawn
+     * should be flagged for re-drive, not silently trusted. */
+    spawned_at: external_exports.number().default(0)
   }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
@@ -8534,8 +8558,13 @@ var AgentSpecSchema = external_exports.object({
   model: external_exports.string().min(1),
   /** Hard turn budget for the agent (positive integer). */
   max_turns: external_exports.number().int().positive(),
-  /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: external_exports.string().min(1),
+  /**
+   * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
+   * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
+   * the runner still builds those prompts inline from `agents/<role>.md` +
+   * `skills/review-protocol/SKILL.md` (unchanged).
+   */
+  prompt: external_exports.string().min(1).optional(),
   /**
    * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
    * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
@@ -8544,16 +8573,25 @@ var AgentSpecSchema = external_exports.object({
   effort: EffortEnum.optional()
 });
 var CrossVendorStampSchema = external_exports.union([
-  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1) }),
+  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1), prompt: external_exports.string().min(1) }),
   external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
 ]);
+var VerifierSpecSchema = external_exports.object({
+  agent_type: external_exports.string().min(1),
+  model: external_exports.string().min(1),
+  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
+  prompt_template: external_exports.string().min(1),
+  interpolate_fields: external_exports.array(external_exports.string().min(1)).min(1)
+});
 var SpawnRequestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
   agents: external_exports.array(AgentSpecSchema).min(1),
   /** Cross-vendor resolution — verify panel manifests only (S5/C). */
-  cross_vendor: CrossVendorStampSchema.optional()
+  cross_vendor: CrossVendorStampSchema.optional(),
+  /** Finding-verifier spawn template — verify panel manifests only (3b/iii). */
+  verifier_spec: VerifierSpecSchema.optional()
 });
 
 // src/hooks/hook-context.ts
@@ -8952,6 +8990,19 @@ async function runStopGate(_argv = [], deps = {}) {
   return EXIT.OK;
 }
 
+// src/hooks/session-start.ts
+var FACTORY_HARNESS_REMINDER = `<FACTORY_HARNESS_REMINDER>
+You are the factory pipeline runner. Iron Laws:
+1. Never decide a transition \u2014 the only next action is what the last envelope said.
+2. Spawn exactly what the manifest says; collect output verbatim.
+3. Fail loud \u2014 an unknown envelope kind or unexpected error means STOP and surface it.
+Re-load skills/pipeline-runner/SKILL.md before taking any pipeline action.
+</FACTORY_HARNESS_REMINDER>`;
+function runSessionStart(_argv = [], deps = {}) {
+  emitSessionStartContext(FACTORY_HARNESS_REMINDER, deps.emit);
+  return EXIT.OK;
+}
+
 // src/hooks/main.ts
 var hookRegistry = {
   "branch-protection": {
@@ -8981,6 +9032,10 @@ var hookRegistry = {
   "stop-gate": {
     describe: "Stop: log a resumability hint for an owned all-terminal run (never mutates state \u2014 `factory resume` finalizes); block ONLY on state corruption",
     run: (argv) => runStopGate(argv)
+  },
+  "session-start": {
+    describe: "SessionStart (compact): re-inject the runner Iron Laws + a pointer to reload the pipeline-runner skill",
+    run: (argv) => runSessionStart(argv)
   }
 };
 function printHelp() {

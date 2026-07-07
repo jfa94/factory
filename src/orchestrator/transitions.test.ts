@@ -142,7 +142,7 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         await seedTask({
             task_id: 't1',
             status: 'shipping',
-            spawn_in_flight: {phase: 'verify', rung: 0, tip_sha: 'sha-tip'},
+            spawn_in_flight: {phase: 'verify', rung: 0, tip_sha: 'sha-tip', spawned_at: 0},
         })
         await completeTask(deps, RUN_ID, 't1')
         expect((await readTask('t1')).spawn_in_flight).toBeUndefined()
@@ -186,7 +186,7 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
             task_id: 't1',
             status: 'executing',
             escalation_rung: 2, // must match spawn_in_flight.rung (T3: rung never goes backward)
-            spawn_in_flight: {phase: 'exec', rung: 2, tip_sha: 'sha-tip'},
+            spawn_in_flight: {phase: 'exec', rung: 2, tip_sha: 'sha-tip', spawned_at: 0},
         })
         await failTask(deps, RUN_ID, 't1', 'capability-budget', 'cap reached')
         expect((await readTask('t1')).spawn_in_flight).toBeUndefined()

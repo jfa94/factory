@@ -94,6 +94,23 @@ CLI's JSON contract.
   inherits identical control flow for free. The event loop stays thin; a future
   out-of-session scheduler would just be a second runner over the same unchanged
   seam.
+- **Zero prompt-assembly in the runner.** The last decisions the runner still made
+  on its own — assembling a producer's prompt, composing the Codex cross-vendor
+  reviewer prompt, and choosing the finding-verifier's agent-type/model/isolation —
+  are now carried by envelope fields the engine composes (`AgentSpec.prompt`,
+  `cross_vendor.prompt`, `verifier_spec`; see
+  [engine-vocabulary](../reference/engine-vocabulary.md#spawn-payload) and
+  [verifier.md](./verifier.md)). The runner spawns them verbatim. (Panel-reviewer
+  prompts remain the one thing the runner builds inline, from the committed
+  `agents/<role>.md` + `skills/review-protocol/SKILL.md` — static plugin surface, not
+  per-run engine output.)
+- **Self-healing inside a live session.** Two failure modes that used to strand a
+  session now recover without a human: a mid-run **compaction** that drops the runner
+  skill from context is re-seeded by the `SessionStart` re-injection hook (once wired —
+  see [hooks.md](../reference/hooks.md#sessionstart-wiring-is-pending)), and a
+  **silently-dead agent** whose spawn never returns is flagged by an engine-side stall
+  TTL (`config.stallTtlMinutes`) in the `work` envelope's `stale` list so the runner
+  abandons and re-drives it.
 
 ## The cost
 

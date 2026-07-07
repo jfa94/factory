@@ -24,7 +24,7 @@ export {
     SPEC_GENERATOR_AGENT_TYPE,
     SPEC_REVIEWER_AGENT_TYPE,
 } from './spawn.js'
-export type {SpawnRole, AgentSpec, SpawnRequest} from './spawn.js'
+export type {SpawnRole, AgentSpec, SpawnRequest, CrossVendorStamp, VerifierSpec} from './spawn.js'
 
 // --- PhaseResult union + constructors + primitives ---
 export {

@@ -348,6 +348,13 @@ export const TaskStateSchema = z.object({
             phase: z.enum(SPAWN_PHASES),
             rung: z.number().int().min(0),
             tip_sha: z.string().min(1),
+            /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
+             * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
+             * (`next.ts` `work.stale`) reads this — advisory only, no status change.
+             * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
+             * existed parses as maximally stale — correct: an untimed in-flight spawn
+             * should be flagged for re-drive, not silently trusted. */
+            spawned_at: z.number().default(0),
         })
         .optional(),
 

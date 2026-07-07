@@ -201,6 +201,25 @@ export function emitBlockDecision(
 }
 
 /**
+ * Emit the Claude Code SessionStart `additionalContext` JSON on stdout — the
+ * harness contract for injecting text into a (re)started session's context.
+ * Returns the JSON written so tests can assert the shape without spying on stdout.
+ */
+export function emitSessionStartContext(
+    additionalContext: string,
+    write: (s: string) => void = (s) => process.stdout.write(s)
+): string {
+    const payload = JSON.stringify({
+        hookSpecificOutput: {
+            hookEventName: 'SessionStart',
+            additionalContext,
+        },
+    })
+    write(payload + '\n')
+    return payload
+}
+
+/**
  * Map a {@link HookDecision} to a dispatcher {@link ExitCode}. A deny is a
  * blocking exit (Claude Code treats a non-zero PreToolUse exit, or the
  * permission-decision JSON, as a block); an allow is OK.

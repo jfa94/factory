@@ -6,7 +6,6 @@ const validAgent = {
     agent_type: 'implementation-reviewer',
     model: 'opus',
     max_turns: 40,
-    prompt_ref: 'reviews/impl.md',
 }
 
 describe('parseSpawnRequest', () => {
@@ -50,9 +49,12 @@ describe('parseSpawnRequest', () => {
         expect(() => parseSpawnRequest({resume_phase: 'postexec', agents: [validAgent]})).toThrow()
     })
 
-    it('rejects a non-positive max_turns and empty prompt_ref (loud)', () => {
+    it('rejects a non-positive max_turns (loud)', () => {
         expect(() => parseSpawnRequest({resume_phase: 'exec', agents: [{...validAgent, max_turns: 0}]})).toThrow()
-        expect(() => parseSpawnRequest({resume_phase: 'exec', agents: [{...validAgent, prompt_ref: ''}]})).toThrow()
+    })
+
+    it('rejects an empty optional prompt when present (loud)', () => {
+        expect(() => parseSpawnRequest({resume_phase: 'exec', agents: [{...validAgent, prompt: ''}]})).toThrow()
     })
 
     it('accepts an optional effort and rejects an empty one (loud)', () => {

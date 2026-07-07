@@ -171,7 +171,12 @@ describe('debugReviewEmit', () => {
         }
         expect(env.codex_available).toBe(true)
         expect(env.codex_absent_reason).toBeUndefined()
-        expect(env.manifest.cross_vendor).toEqual({status: 'present', model: 'gpt-5-codex'})
+        expect(env.manifest.cross_vendor?.status).toBe('present')
+        expect(env.manifest.cross_vendor).toMatchObject({status: 'present', model: 'gpt-5-codex'})
+        // 3b(ii): the composed codex prompt is a non-empty string, spawned verbatim by the runner.
+        expect(
+            env.manifest.cross_vendor?.status === 'present' ? env.manifest.cross_vendor.prompt : undefined
+        ).toBeTruthy()
     })
 })
 

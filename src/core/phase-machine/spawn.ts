@@ -82,8 +82,13 @@ export const AgentSpecSchema = z.object({
     model: z.string().min(1),
     /** Hard turn budget for the agent (positive integer). */
     max_turns: z.number().int().positive(),
-    /** Pointer to the prompt artifact, run-store relative (non-empty). */
-    prompt_ref: z.string().min(1),
+    /**
+     * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
+     * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
+     * the runner still builds those prompts inline from `agents/<role>.md` +
+     * `skills/review-protocol/SKILL.md` (unchanged).
+     */
+    prompt: z.string().min(1).optional(),
     /**
      * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
      * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
@@ -96,14 +101,38 @@ export type AgentSpec = z.infer<typeof AgentSpecSchema>
 /**
  * The resolved cross-vendor slot stamped on a VERIFY panel manifest (S5/C).
  * `present` ⇒ the runner executes the quality-reviewer via `codex exec` with
- * `model`; `absent` ⇒ all-Claude panel, and the runner echoes `reason` verbatim
- * as `crossVendorAbsent` in its results file. Absent from producer manifests.
+ * `model`, spawning `prompt` VERBATIM (3b/ii — the engine composes the charter +
+ * review-protocol contract + worktree/base pointer at spawn time; the runner
+ * supplies only the invariant `codex exec` flags); `absent` ⇒ all-Claude panel,
+ * and the runner echoes `reason` verbatim as `crossVendorAbsent` in its results
+ * file. Absent from producer manifests.
  */
 export const CrossVendorStampSchema = z.union([
-    z.object({status: z.literal('present'), model: z.string().min(1)}),
+    z.object({status: z.literal('present'), model: z.string().min(1), prompt: z.string().min(1)}),
     z.object({status: z.literal('absent'), reason: z.string().min(1)}),
 ])
 export type CrossVendorStamp = z.infer<typeof CrossVendorStampSchema>
+
+/**
+ * The independent finding-verifier's spawn TEMPLATE (3b/iii), stamped on VERIFY
+ * panel manifests only. A template, not a per-finding spec — the finding set is
+ * only known after the panel returns, so `prompt_template` carries the fixed
+ * framing with `{field}` placeholders for the whitelisted per-finding data; the
+ * runner renders one INSTANCE per blocking+citable finding by substituting
+ * EXACTLY `interpolate_fields` (never the finding's `description` — anti-
+ * anchoring, the verifier must judge the bare claim, not the reviewer's
+ * reasoning). `agent_type`/`model`/`isolation` replace the runner's old
+ * hardcoded `general-purpose`/`opus`/`"worktree"` — the last spawn decision not
+ * carried by an envelope, now closed.
+ */
+export const VerifierSpecSchema = z.object({
+    agent_type: z.string().min(1),
+    model: z.string().min(1),
+    isolation: z.enum(['worktree', 'none']).default('worktree'),
+    prompt_template: z.string().min(1),
+    interpolate_fields: z.array(z.string().min(1)).min(1),
+})
+export type VerifierSpec = z.infer<typeof VerifierSpecSchema>
 
 /**
  * The full request: the phase the engine RESUMES at once the listed agents have
@@ -116,6 +145,8 @@ export const SpawnRequestSchema = z.object({
     agents: z.array(AgentSpecSchema).min(1),
     /** Cross-vendor resolution — verify panel manifests only (S5/C). */
     cross_vendor: CrossVendorStampSchema.optional(),
+    /** Finding-verifier spawn template — verify panel manifests only (3b/iii). */
+    verifier_spec: VerifierSpecSchema.optional(),
 })
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>
 

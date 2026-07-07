@@ -23,6 +23,7 @@ describe('hook dispatch', () => {
             'holdout-guard',
             'pipeline-guards',
             'secret-guard',
+            'session-start',
             'stop-gate',
             'subagent-stop',
             'write-protection',

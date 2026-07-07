@@ -22,6 +22,7 @@ import {runSecretGuard} from './secret-guard.js'
 import {runPipelineGuards} from './pipeline-guards.js'
 import {runSubagentStop} from './subagent-stop.js'
 import {runStopGate} from './stop-gate.js'
+import {runSessionStart} from './session-start.js'
 
 /** The mutable hook registry. WS9 registers the real guards here. */
 export const hookRegistry: Record<string, Hook> = {
@@ -54,6 +55,11 @@ export const hookRegistry: Record<string, Hook> = {
         describe:
             'Stop: log a resumability hint for an owned all-terminal run (never mutates state — `factory resume` finalizes); block ONLY on state corruption',
         run: (argv) => runStopGate(argv),
+    },
+    'session-start': {
+        describe:
+            'SessionStart (compact): re-inject the runner Iron Laws + a pointer to reload the pipeline-runner skill',
+        run: (argv) => runSessionStart(argv),
     },
 }
 

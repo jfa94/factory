@@ -22,10 +22,6 @@ export {specTaskOf, shipBody} from './handlers.js'
 // -- dependency-bundle types (the reporter deps the orchestrators + CLI wire) ----------
 export type {ShipMode, HandlerDeps} from './types.js'
 
-// -- prompt-artifact store (the prompt_ref round-trip) -----------------------
-export {InMemoryArtifactStore, FsArtifactStore} from './artifacts.js'
-export type {ArtifactStore} from './artifacts.js'
-
 // -- docs applicability check ------------------------------------------------
 export {isDocsApplicable} from './docs-applicable.js'
 

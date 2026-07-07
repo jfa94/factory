@@ -89,7 +89,6 @@ describe('loadCliDeps', () => {
         expect(deps.git).toBeDefined()
         expect(deps.gh).toBeDefined()
         expect(deps.tools).toBeDefined()
-        expect(deps.artifacts).toBeDefined()
         expect(deps.holdout).toBeDefined()
         expect(deps.state).toBeInstanceOf(StateManager)
         expect(deps.dataDir).toBe(dataDir)

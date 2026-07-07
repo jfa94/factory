@@ -382,7 +382,7 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
     const session = await readSession(deps.dataDir, runId)
     // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
     const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
-    const built = buildReviewManifest({
+    const built = await buildReviewManifest({
         resumePhase: 'verify',
         model: resolveReviewModel(deps.config),
         maxTurns: deps.config.review.maxTurnsDeep,

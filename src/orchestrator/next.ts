@@ -63,6 +63,14 @@ export type NextTask =
           readonly cascade_failed: readonly string[]
           /** Max tasks the runner may drive in flight at once (config `maxParallelTasks`). */
           readonly max_parallel: number
+          /**
+           * Task ids (subset of `ready`) whose `spawn_in_flight` has aged past
+           * `config.stallTtlMinutes` (S1). Advisory only — status is unchanged, the
+           * task stays in `ready`. Means: abandon the in-flight spawn and re-drive
+           * via `next-action` (idempotent — resets the worktree + re-spawns; the old
+           * agent's late results are rejected by the stale `result_key` guard).
+           */
+          readonly stale: readonly string[]
       })
     | (NextContext & {
           readonly kind: 'finalize'
@@ -392,6 +400,13 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     const inFlight = ready.filter((t) => t.status !== 'pending').map((t) => t.task_id)
     const pending = ready.filter((t) => t.status === 'pending').map((t) => t.task_id)
     const ordered = [...inFlight, ...pending]
+    // S1 stall TTL: an in-flight spawn whose clock (refreshed on every emit/re-drive,
+    // see orchestrator.ts) has aged past the configured TTL is flagged for the runner
+    // to abandon and re-drive — a silently-dead agent otherwise never self-heals.
+    const ttlSeconds = deps.config.stallTtlMinutes * 60
+    const stale = ready
+        .filter((t) => t.spawn_in_flight !== undefined && deps.now() - t.spawn_in_flight.spawned_at > ttlSeconds)
+        .map((t) => t.task_id)
 
     if (ordered.length === 0) {
         // Circuit breaker (Decision 34): no task is actionable yet non-terminal work
@@ -421,5 +436,6 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
         ready: ordered,
         cascade_failed: cascadeFailed,
         max_parallel: deps.config.maxParallelTasks,
+        stale,
     }
 }

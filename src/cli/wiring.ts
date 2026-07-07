@@ -18,7 +18,7 @@ import {StateManager} from '../core/state/index.js'
 import {SpecStore} from '../spec/index.js'
 import {DefaultGitClient, DefaultGhClient, isValidRepoSlug} from '../git/index.js'
 import {defaultGateTools} from '../verifier/deterministic/index.js'
-import {FsArtifactStore, isDocsApplicable} from '../orchestrator/index.js'
+import {isDocsApplicable} from '../orchestrator/index.js'
 import {FsHoldoutStore} from '../verifier/holdout/index.js'
 import {StatuslineUsageSignal} from '../quota/index.js'
 import {nowEpoch} from '../shared/time.js'
@@ -113,7 +113,6 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
         git: new DefaultGitClient(),
         gh: new DefaultGhClient(),
         tools: defaultGateTools(config.quality.gateEnv),
-        artifacts: new FsArtifactStore(dataDir),
         holdout: new FsHoldoutStore(dataDir),
         dataDir,
         owner,

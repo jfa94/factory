@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {buildProducerContext} from './prompt-context.js'
+import {buildProducerContext, renderProducerPrompt} from './prompt-context.js'
 import {fakeFinding} from './fakes.js'
 
 describe('prompt-context — holdout integrity (D5/Δ Y)', () => {
@@ -125,5 +125,63 @@ describe('prompt-context — fix-forward instructions (D27)', () => {
             line: 10,
             description: 'eslint exit=1: no-unsafe-assignment',
         })
+    })
+})
+
+describe('renderProducerPrompt — 3b(i) inline spawn prompt', () => {
+    it('renders title/description/criteria and the cd-sentence with the worktree path', () => {
+        const ctx = buildProducerContext({
+            taskId: 'T1',
+            title: 'Add login',
+            description: 'Implement the login form.',
+            visibleCriteria: ['renders a form', 'submits credentials'],
+            files: ['src/login.ts'],
+            rung: 0,
+        })
+        const prompt = renderProducerPrompt(ctx, '/data/runs/run-1/worktrees/T1')
+
+        expect(prompt).toContain('Add login')
+        expect(prompt).toContain('Implement the login form.')
+        expect(prompt).toContain('- renders a form')
+        expect(prompt).toContain('- submits credentials')
+        expect(prompt).toContain('- src/login.ts')
+        expect(prompt).toContain(
+            'Your working tree is /data/runs/run-1/worktrees/T1 (already checked out on the task branch). cd there; make ALL commits there.'
+        )
+    })
+
+    it('renders fix instructions and prior-failure notes when present', () => {
+        const ctx = buildProducerContext({
+            taskId: 'T1',
+            title: 't',
+            description: 'd',
+            visibleCriteria: ['c'],
+            files: [],
+            rung: 2,
+            confirmedBlockers: [{reviewer: 'quality-reviewer', file: 'src/x.ts', line: 5, description: 'null deref'}],
+            priorFailures: [{rung: 1, summary: 'merge gate blocked by security'}],
+        })
+        const prompt = renderProducerPrompt(ctx, '/wt')
+
+        expect(prompt).toContain('Confirmed blockers to fix')
+        expect(prompt).toContain('[quality-reviewer] (src/x.ts:5) null deref')
+        expect(prompt).toContain("Prior failures — don't repeat these:")
+        expect(prompt).toContain('rung 1: merge gate blocked by security')
+    })
+
+    it('omits the scoped-files/fix/prior-failure sections when empty', () => {
+        const ctx = buildProducerContext({
+            taskId: 'T1',
+            title: 't',
+            description: 'd',
+            visibleCriteria: ['c'],
+            files: [],
+            rung: 0,
+        })
+        const prompt = renderProducerPrompt(ctx, '/wt')
+
+        expect(prompt).not.toContain('Scoped files:')
+        expect(prompt).not.toContain('Confirmed blockers to fix')
+        expect(prompt).not.toContain('Prior failures')
     })
 })

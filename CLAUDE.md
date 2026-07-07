@@ -47,4 +47,4 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 
 ## Known gaps (deliberate)
 
-- The old bash SessionStart hook (Iron-Laws re-injection after compaction) was not ported to TS; the runner skill is re-loaded per `/factory:run` invocation instead.
+- The SessionStart compaction re-injection hook (`src/hooks/session-start.ts`) is implemented and bundled but `hooks/hooks.json` still needs its `SessionStart`/`compact` block added by hand — `hooks/**` is TCB-protected, so the engine cannot self-wire it.

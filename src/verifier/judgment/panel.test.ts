@@ -54,13 +54,59 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         expect(() => buildPanelManifest('verify', 'opus', 0)).toThrow()
     })
 
+    describe('3b(iii) verifier_spec template', () => {
+        it('stamps agent_type/model/isolation/prompt_template/interpolate_fields on every manifest', () => {
+            const m = buildPanelManifest('verify', 'opus', 40)
+            expect(m.verifier_spec?.agent_type).toBe('general-purpose')
+            expect(m.verifier_spec?.model).toBe('opus')
+            expect(m.verifier_spec?.isolation).toBe('worktree')
+            expect(m.verifier_spec?.prompt_template).toContain('{reviewer}')
+            expect(m.verifier_spec?.interpolate_fields).toEqual([
+                'reviewer',
+                'severity',
+                'claim',
+                'file',
+                'line',
+                'quote',
+            ])
+        })
+
+        it('never interpolates {description} — anti-anchoring (D27)', () => {
+            const m = buildPanelManifest('verify', 'opus', 40)
+            expect(m.verifier_spec?.interpolate_fields).not.toContain('description')
+            expect(m.verifier_spec?.prompt_template).not.toContain('{description}')
+        })
+
+        it('reuses the SAME model as the reviewer panel (Δ T)', () => {
+            const m = buildPanelManifest('verify', 'sonnet', 40)
+            expect(m.verifier_spec?.model).toBe('sonnet')
+        })
+    })
+
     describe('S5/C cross-vendor stamp', () => {
-        it("present resolution stamps { status: 'present', model } from the slot", () => {
-            const m = buildPanelManifest('verify', 'opus', 40, {
+        it("present resolution stamps { status: 'present', model, prompt } from the slot", () => {
+            const m = buildPanelManifest(
+                'verify',
+                'opus',
+                40,
+                {status: 'present', slot: {vendor: 'codex', model: 'gpt-5-codex'}},
+                false,
+                'the composed codex prompt'
+            )
+            expect(m.cross_vendor).toEqual({
                 status: 'present',
-                slot: {vendor: 'codex', model: 'gpt-5-codex'},
+                model: 'gpt-5-codex',
+                prompt: 'the composed codex prompt',
             })
-            expect(m.cross_vendor).toEqual({status: 'present', model: 'gpt-5-codex'})
+        })
+
+        it('a present resolution with no crossVendorPrompt fails LOUD (never spawns codex blind)', () => {
+            expect(() =>
+                buildPanelManifest('verify', 'opus', 40, {
+                    status: 'present',
+                    slot: {vendor: 'codex', model: 'gpt-5-codex'},
+                })
+            ).toThrow()
         })
 
         it("absent resolution stamps { status: 'absent', reason } verbatim", () => {

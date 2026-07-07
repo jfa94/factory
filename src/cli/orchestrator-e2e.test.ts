@@ -38,12 +38,7 @@ import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
 import {contractedLoader, makeFakeTools} from '../verifier/deterministic/fakes.js'
 import {type HoldoutStore, InMemoryHoldoutStore} from '../verifier/holdout/index.js'
-import {
-    InMemoryArtifactStore,
-    runTraceabilityEmit,
-    runTraceabilityRecord,
-    type ShipMode,
-} from '../orchestrator/index.js'
+import {runTraceabilityEmit, runTraceabilityRecord, type ShipMode} from '../orchestrator/index.js'
 import {PANEL_ROLES} from '../verifier/judgment/index.js'
 import {fakeUsageSignal} from '../quota/index.js'
 import {ESCALATION_CAP} from '../producer/index.js'
@@ -261,7 +256,6 @@ describe('runner orchestrator seam — golden contract E2E', () => {
     let git: FakeGitClient
     let gh: FakeGhClient
     let holdout: InMemoryHoldoutStore
-    let artifacts: InMemoryArtifactStore
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-orch-e2e-'))
@@ -273,7 +267,6 @@ describe('runner orchestrator seam — golden contract E2E', () => {
         git = new FakeGitClient({remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging'}})
         gh = new FakeGhClient()
         holdout = new InMemoryHoldoutStore()
-        artifacts = new InMemoryArtifactStore()
     })
 
     afterEach(async () => {
@@ -292,7 +285,6 @@ describe('runner orchestrator seam — golden contract E2E', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts,
             holdout,
             dataDir,
             owner: 'acme',

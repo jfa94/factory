@@ -26,7 +26,6 @@
  */
 import type {Config, GhClient, GitClient, HoldoutStore, ProvisionWorktreeFn, SpecManifest, VendorProbe} from './deps.js'
 import type {GateContractLoad, GateTools} from '../verifier/deterministic/index.js'
-import type {ArtifactStore} from './artifacts.js'
 
 /**
  * Dry-run / cutover-safety mode (locked decision 5 / plan §Verification step 4).
@@ -71,8 +70,6 @@ export interface HandlerDeps {
      * for unit tests (the runner THROWS without a contract).
      */
     readonly loadContract?: (rootAbs: string) => Promise<GateContractLoad>
-    /** Persists producer prompt-context artifacts; references them via prompt_ref. */
-    readonly artifacts: ArtifactStore
     /**
      * The Δ Y answer-key store. The tests/exec reporters split the spec criteria
      * (deterministic) and persist the WITHHELD set here — the confined answer key

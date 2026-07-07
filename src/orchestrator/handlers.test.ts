@@ -14,7 +14,6 @@ import {join} from 'node:path'
 
 import {makePhaseHandlers, specTaskOf, shipBody} from './handlers.js'
 import {taskWorktreePath} from './paths.js'
-import {InMemoryArtifactStore} from './artifacts.js'
 import type {HandlerDeps} from './types.js'
 
 import {defaultConfig} from '../config/schema.js'
@@ -89,6 +88,13 @@ function makeSpec(): SpecManifest {
     })
 }
 
+/** Extract the "- <criterion>" lines under the inlined prompt's "Acceptance criteria:" heading. */
+function criteriaFromPrompt(prompt: string): string[] {
+    const after = prompt.split('Acceptance criteria:\n')[1] ?? ''
+    const section = after.split('\n\n')[0] ?? ''
+    return section.split('\n').filter((l) => l.startsWith('- '))
+}
+
 /** A git probe whose full default gate sweep is GREEN (TDD-valid history). */
 function greenProbe(): FakeGitProbe {
     return new FakeGitProbe({
@@ -107,7 +113,6 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
     let dataDir: string
     let state: StateManager
     let holdout: InMemoryHoldoutStore
-    let artifacts: InMemoryArtifactStore
     let git: FakeGitClient
     let gh: FakeGhClient
 
@@ -118,7 +123,6 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
         })
         holdout = new InMemoryHoldoutStore()
-        artifacts = new InMemoryArtifactStore()
         git = new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging'}})
         gh = new FakeGhClient()
         await state.create({
@@ -174,7 +178,6 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts,
             holdout,
             dataDir,
             owner: 'acme',
@@ -380,9 +383,9 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         const dial = dialForRung('medium', 0, deps.config)
         expect(agent.model).toBe(dial.model)
         expect(agent.effort).toBeUndefined() // rung 0 carries no effort override
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.acceptanceCriteria).toHaveLength(4) // 5 total − 1 withheld
-        expect(persisted.injectedPriorFailure).toBe(false)
+        // The inlined prompt (3b(i)) is built off the holdout-stripped visible criteria.
+        expect(criteriaFromPrompt(nonNull(agent.prompt))).toHaveLength(4) // 5 total − 1 withheld
+        expect(agent.prompt).not.toContain("Prior failures — don't repeat these:")
     })
 
     it('tests on a single-criterion task withholds nothing (no answer-key) but still spawns', async () => {
@@ -422,9 +425,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(agent.effort).toBe(dial.effort)
         expect(agent.effort).toBeUndefined()
         expect(dial.injectsPriorFailure).toBe(true)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.injectedPriorFailure).toBe(true)
-        expect(persisted.priorFailures.length).toBeGreaterThan(0)
+        expect(agent.prompt).toContain("Prior failures — don't repeat these:")
     })
 
     it('tests injects the test-revision note even at rung 1 (gated on the persisted field, not the dial)', async () => {
@@ -445,9 +446,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         }
         const agent = at(result.request.agents, 0)
         expect(dialForRung('medium', 1, deps.config).injectsPriorFailure).toBe(false)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.injectedPriorFailure).toBe(true)
-        expect(at(persisted.priorFailures, 0).summary).toContain('auth.uid()')
+        expect(agent.prompt).toContain("Prior failures — don't repeat these:")
+        expect(agent.prompt).toContain('auth.uid()')
     })
 
     it('tests injects the e2e-reopen note (Decision 39) even at rung 1, alongside a test-revision note', async () => {
@@ -465,9 +465,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         const agent = at(result.request.agents, 0)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.injectedPriorFailure).toBe(true)
-        expect(persisted.priorFailures.some((f) => f.summary.includes('order confirmation'))).toBe(true)
+        expect(agent.prompt).toContain("Prior failures — don't repeat these:")
+        expect(agent.prompt).toContain('order confirmation')
     })
 
     it('tests threads the dialed effort into the request once the model has hit its ceiling (rung 3 = ceiling+xhigh)', async () => {
@@ -518,9 +517,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         const agent = at(result.request.agents, 0)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.injectedPriorFailure).toBe(true)
-        expect(persisted.priorFailures.some((f) => f.summary.includes('order confirmation'))).toBe(true)
+        expect(agent.prompt).toContain("Prior failures — don't repeat these:")
+        expect(agent.prompt).toContain('order confirmation')
     })
 
     it("exec threads a persisted fix_findings record (D5 fix-forward) into the implementer's fixInstructions", async () => {
@@ -544,15 +542,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         const agent = at(result.request.agents, 0)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.fixInstructions).toEqual([
-            {
-                reviewer: 'lint',
-                file: 'src/lib/x.ts',
-                line: 10,
-                description: 'eslint exit=1: no-unsafe-assignment',
-            },
-        ])
+        expect(agent.prompt).toContain('Confirmed blockers to fix')
+        expect(agent.prompt).toContain('- [lint] (src/lib/x.ts:10) eslint exit=1: no-unsafe-assignment')
     })
 
     it('exec with no fix_findings yields empty fixInstructions (a fresh attempt, not a patch)', async () => {
@@ -565,8 +556,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         const agent = at(result.request.agents, 0)
-        const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref)
-        expect(persisted.fixInstructions).toEqual([])
+        expect(agent.prompt).not.toContain('Confirmed blockers to fix')
     })
 
     // -- verify (CLI single-step reporter; NO holdout) ------------------------
@@ -581,6 +571,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             throw new Error('unreachable')
         }
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
+        // 3b(iii): the real verify-phase handler stamps verifier_spec on every panel manifest.
+        expect(result.request.verifier_spec).toMatchObject({agent_type: 'general-purpose', isolation: 'worktree'})
     })
 
     it('verify RE-SPAWNS the panel when only a SUBSET of reviewers is on record (fail-closed roster)', async () => {
@@ -708,7 +700,12 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         if (result.kind !== 'spawn-agents') {
             throw new Error('unreachable')
         }
-        expect(result.request.cross_vendor).toEqual({status: 'present', model: 'gpt-5-codex'})
+        expect(result.request.cross_vendor?.status).toBe('present')
+        expect(result.request.cross_vendor).toMatchObject({status: 'present', model: 'gpt-5-codex'})
+        // 3b(ii): the engine composes the codex prompt at spawn time — non-empty, carries the review charter.
+        expect(
+            result.request.cross_vendor?.status === 'present' ? result.request.cross_vendor.prompt : undefined
+        ).toContain('RawReview')
     })
 
     it('S5/C: requireCrossVendor=block + absent fails TERMINAL blocked-environmental WITHOUT spawning the panel', async () => {

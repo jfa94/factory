@@ -20,11 +20,13 @@ exits `2`.
 | `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                   |
 | `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                            |
 | `stop-gate`         | Stop                                        | Pass-through + resumability hint. NEVER finalizes and performs NO state mutation; an owned, all-terminal run is left `running` (with a log hint) so the next `factory resume` routes it through the real `finalizeRun`. Blocks ONLY on an inaccessible data directory. Never blocks a session end with pending work — the run stays resumable via `factory resume`. |
+| `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`. A mid-run **compaction** can drop the runner's protocol from conversation context; this emits an `additionalContext` reminder so a compacted session never loses the pointer. Reads no state (the reminder is static). **Registered but not yet wired** — see [SessionStart wiring is pending](#sessionstart-wiring-is-pending). |
 
 ## `hooks.json` wiring
 
-The seven guards are wired across five matcher entries (some guards run under more
-than one matcher):
+Seven guards are wired across five matcher entries (some guards run under more
+than one matcher). The `session-start` hook is **registered but not yet wired** (see
+[below](#sessionstart-wiring-is-pending)):
 
 ```mermaid
 graph TD
@@ -44,6 +46,16 @@ graph TD
 
 Each entry carries a timeout (5–15s) and a status message. The full mapping is in
 `hooks/hooks.json`.
+
+### SessionStart wiring is pending
+
+The `session-start` hook (`src/hooks/session-start.ts`) is implemented, bundled into
+`dist/factory-hook.js`, and dispatchable from the registry — but `hooks/hooks.json`
+does **not** yet carry a `SessionStart` matcher entry (with `matcher:"compact"`), so
+it does not fire in production. `hooks/**` is TCB-protected (the `write-protection`
+guard denies edits to it), so the engine cannot self-wire the block; it must be added
+by hand. Until then the compaction re-injection is dormant. See the "Known gaps"
+section of `CLAUDE.md`.
 
 ## Fail-closed posture
 

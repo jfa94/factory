@@ -11,8 +11,8 @@ import {buildReviewManifest, adjudicateWholeScope, runCommittedE2e, foldE2eIntoB
 import {at} from '../shared/index.js'
 
 describe('buildReviewManifest', () => {
-    it("bundles buildPanelManifest's request with the debug-specific diff-scope fields", () => {
-        const result = buildReviewManifest({
+    it("bundles buildPanelManifest's request with the debug-specific diff-scope fields", async () => {
+        const result = await buildReviewManifest({
             resumePhase: 'verify',
             model: 'opus',
             maxTurns: 40,
@@ -25,7 +25,12 @@ describe('buildReviewManifest', () => {
         expect(result.worktree).toBe('/tmp/debug-worktree')
         expect(result.codexAvailable).toBe(true)
         expect(result.codexAbsentReason).toBeUndefined()
-        expect(result.manifest.cross_vendor).toEqual({status: 'present', model: 'gpt-5-codex'})
+        expect(result.manifest.cross_vendor?.status).toBe('present')
+        expect(result.manifest.cross_vendor).toMatchObject({status: 'present', model: 'gpt-5-codex'})
+        // 3b(ii): the composed codex prompt is a non-empty string carrying the diff-scope pointer.
+        expect(
+            result.manifest.cross_vendor?.status === 'present' ? result.manifest.cross_vendor.prompt : undefined
+        ).toContain('git -C /tmp/debug-worktree diff origin/main')
         expect(result.manifest.resume_phase).toBe('verify')
         const roles = result.manifest.agents.map((a) => a.role).sort()
         expect(roles).toEqual([...PANEL_ROLES].sort())
@@ -35,8 +40,8 @@ describe('buildReviewManifest', () => {
         expect([...turns]).toEqual([40])
     })
 
-    it('an absent resolution yields codexAvailable=false plus the exact reason (stamped on the manifest too)', () => {
-        const result = buildReviewManifest({
+    it('an absent resolution yields codexAvailable=false plus the exact reason (stamped on the manifest too)', async () => {
+        const result = await buildReviewManifest({
             resumePhase: 'verify',
             model: 'opus',
             maxTurns: 40,
@@ -53,8 +58,8 @@ describe('buildReviewManifest', () => {
         expect(result.base).toBe('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
     })
 
-    it('delegates validation to buildPanelManifest — a blank model fails LOUD, no new validation logic added', () => {
-        expect(() =>
+    it('delegates validation to buildPanelManifest — a blank model fails LOUD, no new validation logic added', async () => {
+        await expect(
             buildReviewManifest({
                 resumePhase: 'verify',
                 model: '',
@@ -63,7 +68,7 @@ describe('buildReviewManifest', () => {
                 worktree: '/tmp/debug-worktree',
                 crossVendor: {status: 'present', slot: {vendor: 'codex', model: 'gpt-5-codex'}},
             })
-        ).toThrow()
+        ).rejects.toThrow()
     })
 })
 

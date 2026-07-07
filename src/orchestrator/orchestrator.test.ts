@@ -29,7 +29,7 @@ import {PANEL_ROLES} from '../verifier/judgment/index.js'
 import {ESCALATION_CAP} from '../producer/index.js'
 import {at, nonNull} from '../shared/index.js'
 
-import {makeOrchestratorDeps, PAUSE_5H} from './orchestrator-fixtures.js'
+import {makeOrchestratorDeps, PAUSE_5H, NOW} from './orchestrator-fixtures.js'
 import type {OrchestratorDeps} from './orchestrator.js'
 import {FakeGhClient, type FakeGitClient} from '../git/fakes.js'
 import {runScopedBranch, runStagingBranch} from '../git/index.js'
@@ -262,6 +262,7 @@ describe('nextAction', () => {
                 phase: 'tests',
                 rung: 0,
                 tip_sha: git.localBranches.get(taskBranch),
+                spawned_at: NOW,
             })
         } finally {
             await cleanup()
@@ -302,6 +303,29 @@ describe('nextAction', () => {
         }
     })
 
+    it('refreshes spawned_at on a matching re-entry (S1 stall TTL clock reset)', async () => {
+        const {deps, runId, cleanup} = await makeOrchestratorDeps()
+        try {
+            const env1 = await nextAction(deps, runId, 'T1') // fresh tests spawn
+            if (env1.kind !== 'spawn') {
+                throw new Error('expected tests spawn')
+            }
+            const run1 = await deps.state.read(runId)
+            expect(run1.tasks.T1?.spawn_in_flight?.spawned_at).toBe(NOW)
+
+            // Re-enter the SAME (phase, rung) later — a live re-drive, not a fresh spawn.
+            const LATER = NOW + 999
+            ;(deps as {now: () => number}).now = () => LATER
+            const env2 = await nextAction(deps, runId, 'T1')
+            expect(env2).toEqual(env1) // same spawn envelope re-emitted (idempotent)
+
+            const run2 = await deps.state.read(runId)
+            expect(run2.tasks.T1?.spawn_in_flight?.spawned_at).toBe(LATER)
+        } finally {
+            await cleanup()
+        }
+    })
+
     it('advancing phases overwrites the checkpoint so a stale prior-phase entry never resets (WS2)', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps()
         try {
@@ -328,6 +352,7 @@ describe('nextAction', () => {
                 phase: 'exec',
                 rung: 0,
                 tip_sha: git.localBranches.get(runScopedBranch(runId, 'T1')),
+                spawned_at: NOW,
             })
         } finally {
             await cleanup()

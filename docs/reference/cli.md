@@ -620,10 +620,16 @@ Every envelope also carries the self-resolved run context (`run_id`, canonical
 
 Emits one of:
 
-- `{ kind:"work", run_id, ready:[...], cascade_failed:[...], max_parallel }` — ready
+- `{ kind:"work", run_id, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }` — ready
   tasks, **in-flight first** (crash-resume finishes started work before opening
   new), then pending in spec order. `max_parallel` is the config's
-  `maxParallelTasks` — the runner drives at most that many tasks in flight.
+  `maxParallelTasks` — the runner drives at most that many tasks in flight. `stale`
+  is the subset of `ready` whose in-flight spawn has aged past
+  `config.stallTtlMinutes` (`spawn_in_flight.spawned_at`, [state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)) — **advisory only**,
+  the task's status is unchanged: it tells the runner to abandon a silently-dead
+  agent's in-flight spawn and re-drive the task via `next-action` (idempotent — the
+  reset re-spawns clean, and the dead agent's late results are rejected by the stale
+  `result_key` guard). An empty list is the steady state.
 - `{ kind:"traceability", run_id, data_dir, ship_mode }` — all tasks are terminal and
   the run will complete (non-debug), but the PRD-traceability audit has not concluded
   (Decision 47). Ordered **after the e2e phase, before `document`**. The runner runs
@@ -658,10 +664,20 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
 
 - `{ kind:"spawn", run_id, task_id, phase, result_key, request, holdout?, expects, worktree, base_ref }`
   — the agents to run (`request.agents`) and what to feed back. Each agent carries
-  `{ role, agent_type, model, max_turns, prompt_ref, isolation, effort? }`; `agent_type`
+  `{ role, agent_type, model, max_turns, prompt?, isolation, effort? }`; `agent_type`
   is the runner-facing `Task(subagent_type)` value the runner spawns **verbatim**
   (`AGENT_TYPE_BY_ROLE`, `src/core/phase-machine/spawn.ts`, Decision 52) — there is no
-  prose spawn matrix for the runner to re-derive. `effort` (the `Agent`
+  prose spawn matrix for the runner to re-derive. `prompt` (when present) is the
+  engine-composed agent prompt the runner spawns **verbatim** — set on producer specs
+  (the full `ProducerContext` + the cd-to-worktree sentence, composed at spawn time);
+  omitted on panel-reviewer specs, whose lens the runner still builds inline from
+  `agents/<role>.md` + `skills/review-protocol/SKILL.md`. A verify (`expects:"reviews"`)
+  request additionally carries `request.cross_vendor` (the resolved Codex slot — when
+  `status:"present"` it includes a pre-composed quality-reviewer `prompt` the runner
+  spawns verbatim via `codex exec`) and `request.verifier_spec` (the finding-verifier
+  spawn template — `{ agent_type, model, isolation, prompt_template, interpolate_fields }`;
+  the runner renders one instance per blocking+citable finding by substituting only the
+  whitelisted `interpolate_fields`, never the finding's `description`). `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of

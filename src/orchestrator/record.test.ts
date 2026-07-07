@@ -28,7 +28,6 @@ import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
 import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore, InMemoryHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
-import {InMemoryArtifactStore} from './artifacts.js'
 import {ESCALATION_CAP} from '../producer/index.js'
 import {captureStream} from '../cli/test-helpers.js'
 import type {TaskState} from '../types/index.js'
@@ -105,7 +104,6 @@ describe('applyRecordHoldout record', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
             owner: 'acme',
@@ -281,7 +279,6 @@ describe('applyRecordReviews record', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
             owner: 'acme',
@@ -753,7 +750,6 @@ describe('applyRecordReviews record', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
             owner: 'acme',
@@ -905,7 +901,6 @@ describe('applyRecordReviews record', () => {
                 coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
                 sast: {contracted: false, reason: 'fixture: no security command'},
             }),
-            artifacts: new InMemoryArtifactStore(),
             holdout,
             dataDir,
             owner: 'acme',

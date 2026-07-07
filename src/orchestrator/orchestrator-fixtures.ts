@@ -19,7 +19,6 @@ import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
 import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
-import {InMemoryArtifactStore} from './artifacts.js'
 import {fakeUsageSignal, type UsageReading} from '../quota/usage-source.js'
 import type {TaskState, RunStatus} from '../types/index.js'
 import {isTerminalRunStatus} from '../core/state/schema.js'
@@ -209,7 +208,6 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
             coverage: {contracted: false, reason: 'fixture: coverage not exercised'},
             sast: {contracted: false, reason: 'fixture: no security command'},
         }),
-        artifacts: new InMemoryArtifactStore(),
         holdout,
         dataDir,
         owner: 'acme',

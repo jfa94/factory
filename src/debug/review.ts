@@ -30,7 +30,9 @@
  * start reading `result.mergeGate`/`result.result` off of this call.
  */
 import {buildPanelManifest} from '../verifier/judgment/panel.js'
+import {composeCrossVendorPrompt} from '../verifier/judgment/cross-vendor-prompt.js'
 import type {CrossVendorResolution} from '../verifier/judgment/vendor.js'
+import {resolvePluginRoot} from '../config/index.js'
 import {parseRawReview, type Finding} from '../verifier/judgment/finding.js'
 import {runPanel, type AdjudicatedReviewer} from '../verifier/judgment/panel-run.js'
 import {buildWorktreeSource, makeReplayRunnerFactory, type ReviewerVerifications} from '../orchestrator/record.js'
@@ -58,8 +60,12 @@ export interface DebugReviewManifest {
  * Build the whole-scope review's panel manifest. A thin wrapper: delegates ALL
  * validation to {@link buildPanelManifest} (via `parseSpawnRequest`) and bundles
  * the result with the debug-specific diff-scope fields. No new validation logic.
+ *
+ * 3b(ii): when the cross-vendor slot is present, composes the SAME codex prompt
+ * the per-task verify phase does ({@link composeCrossVendorPrompt}) — async only
+ * for that reason (a real fs read of the two plugin docs).
  */
-export function buildReviewManifest(opts: {
+export async function buildReviewManifest(opts: {
     readonly resumePhase: SpawnRequest['resume_phase']
     readonly model: string
     readonly maxTurns: number
@@ -67,8 +73,23 @@ export function buildReviewManifest(opts: {
     readonly worktree: string
     /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
     readonly crossVendor: CrossVendorResolution
-}): DebugReviewManifest {
-    const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns, opts.crossVendor)
+}): Promise<DebugReviewManifest> {
+    const crossVendorPrompt =
+        opts.crossVendor.status === 'present'
+            ? await composeCrossVendorPrompt({
+                  pluginRoot: resolvePluginRoot(),
+                  baseRef: opts.base,
+                  worktree: opts.worktree,
+              })
+            : undefined
+    const manifest = buildPanelManifest(
+        opts.resumePhase,
+        opts.model,
+        opts.maxTurns,
+        opts.crossVendor,
+        false,
+        crossVendorPrompt
+    )
     return {
         manifest,
         base: opts.base,

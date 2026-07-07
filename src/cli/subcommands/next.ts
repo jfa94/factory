@@ -20,7 +20,7 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context — run_id, data_dir (canonical), ship_mode — so the runner adopts them
 from the first \`next-task\`:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  → call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }

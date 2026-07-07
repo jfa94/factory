@@ -435,11 +435,23 @@ export async function nextAction(
                     const inFlight = task.spawn_in_flight
                     if (inFlight?.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
                         await deps.git.resetHardClean(inFlight.tip_sha, {cwd: worktree})
+                        // Refresh spawned_at on re-entry (S1's stall TTL): this spawn is being
+                        // actively re-driven, so its clock restarts — otherwise a task making
+                        // genuine progress through repeated re-entries would trip work.stale.
+                        await deps.state.updateTask(runId, taskId, (t) => ({
+                            ...t,
+                            spawn_in_flight: {...inFlight, spawned_at: deps.now()},
+                        }))
                     } else {
                         const tip_sha = await deps.git.revParse('HEAD', {cwd: worktree})
                         await deps.state.updateTask(runId, taskId, (t) => ({
                             ...t,
-                            spawn_in_flight: {phase: spawnPhase, rung: t.escalation_rung, tip_sha},
+                            spawn_in_flight: {
+                                phase: spawnPhase,
+                                rung: t.escalation_rung,
+                                tip_sha,
+                                spawned_at: deps.now(),
+                            },
                         }))
                     }
                 }

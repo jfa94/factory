@@ -21,7 +21,6 @@ import {StateManager} from '../core/state/manager.js'
 import {FakeGitClient, FakeGhClient} from '../git/fakes.js'
 import {makeFakeTools} from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore} from '../verifier/holdout/index.js'
-import {InMemoryArtifactStore} from './artifacts.js'
 import type {PhaseContext} from '../types/index.js'
 
 // ---------------------------------------------------------------------------
@@ -104,7 +103,6 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
         git,
         gh,
         tools: makeFakeTools(),
-        artifacts: new InMemoryArtifactStore(),
         holdout: new InMemoryHoldoutStore(),
         dataDir,
         owner: 'acme',

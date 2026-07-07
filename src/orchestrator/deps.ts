@@ -10,6 +10,9 @@
  * "addressable from one place" discipline the seam barrels themselves follow.
  */
 
+// --- config (src/config) -----------------------------------------------------
+export {resolvePluginRoot} from '../config/index.js'
+
 // --- frozen cross-domain seams (src/types) ----------------------------------
 export {
     advance,
@@ -127,6 +130,7 @@ export type {SpecManifest, SpecTask} from '../spec/index.js'
 export {
     dialForRung,
     buildProducerContext,
+    renderProducerPrompt,
     classifyFailure,
     ESCALATION_CAP,
     parseProducerStatus,
@@ -158,6 +162,7 @@ export {
     resolveReviewModel,
     parseRawReview,
     resolveCodexCrossVendor,
+    composeCrossVendorPrompt,
 } from '../verifier/judgment/index.js'
 export type {
     RunPanelInput,

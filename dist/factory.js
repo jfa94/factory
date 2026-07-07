@@ -89,14 +89,14 @@ var require_polyfills = __commonJS({
       fs.fstatSync = statFixSync(fs.fstatSync);
       fs.lstatSync = statFixSync(fs.lstatSync);
       if (fs.chmod && !fs.lchmod) {
-        fs.lchmod = function(path6, mode, cb) {
+        fs.lchmod = function(path7, mode, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchmodSync = function() {
         };
       }
       if (fs.chown && !fs.lchown) {
-        fs.lchown = function(path6, uid, gid, cb) {
+        fs.lchown = function(path7, uid, gid, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchownSync = function() {
@@ -163,9 +163,9 @@ var require_polyfills = __commonJS({
         };
       })(fs.readSync);
       function patchLchmod(fs2) {
-        fs2.lchmod = function(path6, mode, callback) {
+        fs2.lchmod = function(path7, mode, callback) {
           fs2.open(
-            path6,
+            path7,
             constants.O_WRONLY | constants.O_SYMLINK,
             mode,
             function(err, fd) {
@@ -181,8 +181,8 @@ var require_polyfills = __commonJS({
             }
           );
         };
-        fs2.lchmodSync = function(path6, mode) {
-          var fd = fs2.openSync(path6, constants.O_WRONLY | constants.O_SYMLINK, mode);
+        fs2.lchmodSync = function(path7, mode) {
+          var fd = fs2.openSync(path7, constants.O_WRONLY | constants.O_SYMLINK, mode);
           var threw = true;
           var ret;
           try {
@@ -203,8 +203,8 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path6, at2, mt, cb) {
-            fs2.open(path6, constants.O_SYMLINK, function(er, fd) {
+          fs2.lutimes = function(path7, at2, mt, cb) {
+            fs2.open(path7, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
@@ -216,8 +216,8 @@ var require_polyfills = __commonJS({
               });
             });
           };
-          fs2.lutimesSync = function(path6, at2, mt) {
-            var fd = fs2.openSync(path6, constants.O_SYMLINK);
+          fs2.lutimesSync = function(path7, at2, mt) {
+            var fd = fs2.openSync(path7, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
@@ -335,11 +335,11 @@ var require_legacy_streams = __commonJS({
         ReadStream,
         WriteStream
       };
-      function ReadStream(path6, options) {
-        if (!(this instanceof ReadStream)) return new ReadStream(path6, options);
+      function ReadStream(path7, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path7, options);
         Stream.call(this);
         var self = this;
-        this.path = path6;
+        this.path = path7;
         this.fd = null;
         this.readable = true;
         this.paused = false;
@@ -384,10 +384,10 @@ var require_legacy_streams = __commonJS({
           self._read();
         });
       }
-      function WriteStream(path6, options) {
-        if (!(this instanceof WriteStream)) return new WriteStream(path6, options);
+      function WriteStream(path7, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path7, options);
         Stream.call(this);
-        this.path = path6;
+        this.path = path7;
         this.fd = null;
         this.writable = true;
         this.flags = "w";
@@ -530,14 +530,14 @@ var require_graceful_fs = __commonJS({
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
       fs2.readFile = readFile20;
-      function readFile20(path6, options, cb) {
+      function readFile20(path7, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$readFile(path6, options, cb);
-        function go$readFile(path7, options2, cb2, startTime) {
-          return fs$readFile(path7, options2, function(err) {
+        return go$readFile(path7, options, cb);
+        function go$readFile(path8, options2, cb2, startTime) {
+          return fs$readFile(path8, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$readFile, [path7, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$readFile, [path8, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -547,14 +547,14 @@ var require_graceful_fs = __commonJS({
       }
       var fs$writeFile = fs2.writeFile;
       fs2.writeFile = writeFile5;
-      function writeFile5(path6, data, options, cb) {
+      function writeFile5(path7, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$writeFile(path6, data, options, cb);
-        function go$writeFile(path7, data2, options2, cb2, startTime) {
-          return fs$writeFile(path7, data2, options2, function(err) {
+        return go$writeFile(path7, data, options, cb);
+        function go$writeFile(path8, data2, options2, cb2, startTime) {
+          return fs$writeFile(path8, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$writeFile, [path7, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$writeFile, [path8, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -565,14 +565,14 @@ var require_graceful_fs = __commonJS({
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
         fs2.appendFile = appendFile2;
-      function appendFile2(path6, data, options, cb) {
+      function appendFile2(path7, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$appendFile(path6, data, options, cb);
-        function go$appendFile(path7, data2, options2, cb2, startTime) {
-          return fs$appendFile(path7, data2, options2, function(err) {
+        return go$appendFile(path7, data, options, cb);
+        function go$appendFile(path8, data2, options2, cb2, startTime) {
+          return fs$appendFile(path8, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$appendFile, [path7, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$appendFile, [path8, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -603,31 +603,31 @@ var require_graceful_fs = __commonJS({
       var fs$readdir = fs2.readdir;
       fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path6, options, cb) {
+      function readdir3(path7, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path7, options2, cb2, startTime) {
-          return fs$readdir(path7, fs$readdirCallback(
-            path7,
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path8, options2, cb2, startTime) {
+          return fs$readdir(path8, fs$readdirCallback(
+            path8,
             options2,
             cb2,
             startTime
           ));
-        } : function go$readdir2(path7, options2, cb2, startTime) {
-          return fs$readdir(path7, options2, fs$readdirCallback(
-            path7,
+        } : function go$readdir2(path8, options2, cb2, startTime) {
+          return fs$readdir(path8, options2, fs$readdirCallback(
+            path8,
             options2,
             cb2,
             startTime
           ));
         };
-        return go$readdir(path6, options, cb);
-        function fs$readdirCallback(path7, options2, cb2, startTime) {
+        return go$readdir(path7, options, cb);
+        function fs$readdirCallback(path8, options2, cb2, startTime) {
           return function(err, files) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
               enqueue([
                 go$readdir,
-                [path7, options2, cb2],
+                [path8, options2, cb2],
                 err,
                 startTime || Date.now(),
                 Date.now()
@@ -698,7 +698,7 @@ var require_graceful_fs = __commonJS({
         enumerable: true,
         configurable: true
       });
-      function ReadStream(path6, options) {
+      function ReadStream(path7, options) {
         if (this instanceof ReadStream)
           return fs$ReadStream.apply(this, arguments), this;
         else
@@ -718,7 +718,7 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function WriteStream(path6, options) {
+      function WriteStream(path7, options) {
         if (this instanceof WriteStream)
           return fs$WriteStream.apply(this, arguments), this;
         else
@@ -736,22 +736,22 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function createReadStream(path6, options) {
-        return new fs2.ReadStream(path6, options);
+      function createReadStream(path7, options) {
+        return new fs2.ReadStream(path7, options);
       }
-      function createWriteStream(path6, options) {
-        return new fs2.WriteStream(path6, options);
+      function createWriteStream(path7, options) {
+        return new fs2.WriteStream(path7, options);
       }
       var fs$open = fs2.open;
       fs2.open = open2;
-      function open2(path6, flags, mode, cb) {
+      function open2(path7, flags, mode, cb) {
         if (typeof mode === "function")
           cb = mode, mode = null;
-        return go$open(path6, flags, mode, cb);
-        function go$open(path7, flags2, mode2, cb2, startTime) {
-          return fs$open(path7, flags2, mode2, function(err, fd) {
+        return go$open(path7, flags, mode, cb);
+        function go$open(path8, flags2, mode2, cb2, startTime) {
+          return fs$open(path8, flags2, mode2, function(err, fd) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$open, [path7, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$open, [path8, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -1280,7 +1280,7 @@ var require_mtime_precision = __commonJS({
 var require_lockfile = __commonJS({
   "node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
     "use strict";
-    var path6 = __require("path");
+    var path7 = __require("path");
     var fs = require_graceful_fs();
     var retry = require_retry2();
     var onExit = require_signal_exit();
@@ -1291,7 +1291,7 @@ var require_lockfile = __commonJS({
     }
     function resolveCanonicalPath(file, options, callback) {
       if (!options.realpath) {
-        return callback(null, path6.resolve(file));
+        return callback(null, path7.resolve(file));
       }
       options.fs.realpath(file, callback);
     }
@@ -1741,10 +1741,10 @@ async function bestEffortUnlink(p) {
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path6, cause) {
+  constructor(message, path7, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path6;
+    this.path = path7;
     this.cause = cause;
   }
 };
@@ -1756,14 +1756,14 @@ function parseJson(text, sourcePath) {
     throw new JsonParseError(`invalid JSON${where}: ${cause.message}`, sourcePath, cause);
   }
 }
-async function readJsonFile(path6) {
-  return parseJson(await readFile(path6, "utf8"), path6);
+async function readJsonFile(path7) {
+  return parseJson(await readFile(path7, "utf8"), path7);
 }
 function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
-async function writeJsonFile(path6, value) {
-  await atomicWriteFile(path6, stringifyJson(value));
+async function writeJsonFile(path7, value) {
+  await atomicWriteFile(path7, stringifyJson(value));
 }
 
 // node_modules/zod/v3/external.js
@@ -2244,8 +2244,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path6, errorMaps, issueData } = params;
-  const fullPath = [...path6, ...issueData.path || []];
+  const { data, path: path7, errorMaps, issueData } = params;
+  const fullPath = [...path7, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -2361,11 +2361,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path6, key) {
+  constructor(parent, value, path7, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path6;
+    this._path = path7;
     this._key = key;
   }
   get path() {
@@ -5931,9 +5931,9 @@ function getOrThrow(m, k, msg) {
 }
 
 // src/shared/jsonl.ts
-async function appendJsonl(path6, record) {
-  await mkdir2(dirname2(path6), { recursive: true });
-  await appendFile(path6, JSON.stringify(record) + "\n", "utf8");
+async function appendJsonl(path7, record) {
+  await mkdir2(dirname2(path7), { recursive: true });
+  await appendFile(path7, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/time.ts
@@ -6294,7 +6294,14 @@ var ConfigSchema = external_exports.object({
    * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
    * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
    */
-  maxParallelTasks: external_exports.number().int().positive().default(3)
+  maxParallelTasks: external_exports.number().int().positive().default(3),
+  /**
+   * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
+   * before `next-task` flags it in `work.stale` (advisory — a hung agent that
+   * died silently is never re-driven inside a live session otherwise). Default
+   * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+   */
+  stallTtlMinutes: external_exports.number().int().positive().default(20)
 }).default({});
 
 // src/config/load.ts
@@ -6434,9 +6441,9 @@ function parseSetToken(token) {
   if (eq <= 0) {
     throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
   }
-  const path6 = splitPath(token.slice(0, eq));
+  const path7 = splitPath(token.slice(0, eq));
   const rawValue = token.slice(eq + 1);
-  return { path: path6, value: coerceValue(rawValue) };
+  return { path: path7, value: coerceValue(rawValue) };
 }
 function coerceValue(raw) {
   try {
@@ -6446,32 +6453,32 @@ function coerceValue(raw) {
   }
 }
 function splitPath(dotted) {
-  const path6 = dotted.split(".");
-  if (path6.length === 0 || path6.some((s) => s.length === 0)) {
+  const path7 = dotted.split(".");
+  if (path7.length === 0 || path7.some((s) => s.length === 0)) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
-  return path6;
+  return path7;
 }
-function setAtPath(obj, path6, value) {
+function setAtPath(obj, path7, value) {
   const next = structuredClone(obj);
   let cursor = next;
-  for (let i = 0; i < path6.length - 1; i++) {
-    const key = at(path6, i);
+  for (let i = 0; i < path7.length - 1; i++) {
+    const key = at(path7, i);
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[at(path6, path6.length - 1)] = value;
+  cursor[at(path7, path7.length - 1)] = value;
   return next;
 }
-function unsetAtPath(obj, path6) {
+function unsetAtPath(obj, path7) {
   const next = structuredClone(obj);
   const parents = [];
   let cursor = next;
-  for (let i = 0; i < path6.length - 1; i++) {
-    const key = at(path6, i);
+  for (let i = 0; i < path7.length - 1; i++) {
+    const key = at(path7, i);
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6479,7 +6486,7 @@ function unsetAtPath(obj, path6) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  Reflect.deleteProperty(cursor, at(path6, path6.length - 1));
+  Reflect.deleteProperty(cursor, at(path7, path7.length - 1));
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = at(parents, i);
     const child = container[key];
@@ -6491,14 +6498,14 @@ function unsetAtPath(obj, path6) {
   }
   return next;
 }
-function getAtPath(config, path6) {
+function getAtPath(config, path7) {
   let cursor = config;
-  for (const key of path6) {
+  for (const key of path7) {
     if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-      throw new Error(`configure: '${path6.join(".")}' has no value (not an object at '${key}')`);
+      throw new Error(`configure: '${path7.join(".")}' has no value (not an object at '${key}')`);
     }
     if (!(key in cursor)) {
-      throw new Error(`configure: unknown config key '${path6.join(".")}'`);
+      throw new Error(`configure: unknown config key '${path7.join(".")}'`);
     }
     cursor = cursor[key];
   }
@@ -6669,7 +6676,14 @@ var TaskStateSchema = external_exports.object({
   spawn_in_flight: external_exports.object({
     phase: external_exports.enum(SPAWN_PHASES),
     rung: external_exports.number().int().min(0),
-    tip_sha: external_exports.string().min(1)
+    tip_sha: external_exports.string().min(1),
+    /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
+     * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
+     * (`next.ts` `work.stale`) reads this — advisory only, no status change.
+     * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
+     * existed parses as maximally stale — correct: an untimed in-flight spawn
+     * should be flagged for re-drive, not silently trusted. */
+    spawned_at: external_exports.number().default(0)
   }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
@@ -7394,9 +7408,9 @@ var StateManager = class _StateManager {
    * schema/JSON violation (never a silent partial).
    */
   async read(runId) {
-    const path6 = this.statePath(runId);
-    const raw = await readFile3(path6, "utf8");
-    return _StateManager.guardedParse(parseJson(raw, path6), path6);
+    const path7 = this.statePath(runId);
+    const raw = await readFile3(path7, "utf8");
+    return _StateManager.guardedParse(parseJson(raw, path7), path7);
   }
   /**
    * True iff a RunState exists on disk for this run id. Synchronous,
@@ -7823,15 +7837,15 @@ function optionalString(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 async function parseResultsFlag(args, parse) {
-  const path6 = args.flag("results");
-  if (typeof path6 === "string" && path6.length > 0) {
+  const path7 = args.flag("results");
+  if (typeof path7 === "string" && path7.length > 0) {
     try {
-      return await parse(path6);
+      return await parse(path7);
     } catch (err) {
-      throw new UsageError(`--results ${path6}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new UsageError(`--results ${path7}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (path6 !== void 0) {
+  if (path7 !== void 0) {
     throw new UsageError("--results requires a file path");
   }
   return void 0;
@@ -7902,8 +7916,8 @@ async function run(argv) {
   }
   let raw = readRawConfig();
   for (const token of sets) {
-    const { path: path6, value } = parseSetToken(token);
-    raw = setAtPath(raw, path6, value);
+    const { path: path7, value } = parseSetToken(token);
+    raw = setAtPath(raw, path7, value);
   }
   for (const token of unsets) {
     raw = unsetAtPath(raw, splitPath(token));
@@ -7918,7 +7932,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join24 } from "node:path";
+import { join as join23 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -7985,8 +7999,13 @@ var AgentSpecSchema = external_exports.object({
   model: external_exports.string().min(1),
   /** Hard turn budget for the agent (positive integer). */
   max_turns: external_exports.number().int().positive(),
-  /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: external_exports.string().min(1),
+  /**
+   * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
+   * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
+   * the runner still builds those prompts inline from `agents/<role>.md` +
+   * `skills/review-protocol/SKILL.md` (unchanged).
+   */
+  prompt: external_exports.string().min(1).optional(),
   /**
    * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
    * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
@@ -7995,16 +8014,25 @@ var AgentSpecSchema = external_exports.object({
   effort: EffortEnum.optional()
 });
 var CrossVendorStampSchema = external_exports.union([
-  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1) }),
+  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1), prompt: external_exports.string().min(1) }),
   external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
 ]);
+var VerifierSpecSchema = external_exports.object({
+  agent_type: external_exports.string().min(1),
+  model: external_exports.string().min(1),
+  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
+  prompt_template: external_exports.string().min(1),
+  interpolate_fields: external_exports.array(external_exports.string().min(1)).min(1)
+});
 var SpawnRequestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
   agents: external_exports.array(AgentSpecSchema).min(1),
   /** Cross-vendor resolution — verify panel manifests only (S5/C). */
-  cross_vendor: CrossVendorStampSchema.optional()
+  cross_vendor: CrossVendorStampSchema.optional(),
+  /** Finding-verifier spawn template — verify panel manifests only (3b/iii). */
+  verifier_spec: VerifierSpecSchema.optional()
 });
 function parseSpawnRequest(raw) {
   return SpawnRequestSchema.parse(raw);
@@ -8234,9 +8262,9 @@ var DefaultGitClient = class {
   async worktreeAdd(args, opts) {
     await this.execOrThrow(["worktree", "add", ...args], opts);
   }
-  async worktreeExists(path6, opts) {
+  async worktreeExists(path7, opts) {
     const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
-    return r.stdout.split("\n").some((line) => line === `worktree ${path6}`);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path7}`);
   }
   async worktreeRemove(args, opts) {
     const r = await this.exec(["worktree", "remove", ...args], opts);
@@ -8283,24 +8311,24 @@ function parseRemoteUrl(url) {
   if (trimmed.length === 0) {
     return null;
   }
-  let path6;
+  let path7;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
-    path6 = scp[1];
+    path7 = scp[1];
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
       const afterScheme = nonNull(withScheme[1]);
       const firstSlash = afterScheme.indexOf("/");
       if (firstSlash >= 0) {
-        path6 = afterScheme.slice(firstSlash + 1);
+        path7 = afterScheme.slice(firstSlash + 1);
       }
     }
   }
-  if (path6 === void 0) {
+  if (path7 === void 0) {
     return null;
   }
-  let p = path6.replace(/\/+$/, "");
+  let p = path7.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
   if (segments.length < 2) {
@@ -8399,8 +8427,8 @@ function parseGhJson(result, schema, where) {
   const raw = parseJson(result.stdout, where);
   return schema.parse(raw);
 }
-function ghApiFailure(path6, r) {
-  return new Error(`gh api ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+function ghApiFailure(path7, r) {
+  return new Error(`gh api ${path7} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
 }
 var DefaultGhClient = class {
   runner;
@@ -8487,22 +8515,22 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
-    const path6 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
-    const r = await this.runner(["api", "--method", "DELETE", path6], this.execOpts(opts));
+    const path7 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path7], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|Not Found|HTTP 404/i.test(r.stderr)) {
-      throw new Error(`gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api DELETE ${path7} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
   }
   async branchExists(owner, repo, branch, opts) {
-    const path6 = `repos/${owner}/${repo}/branches/${branch}`;
-    const r = await this.runner(["api", path6], this.execOpts(opts));
+    const path7 = `repos/${owner}/${repo}/branches/${branch}`;
+    const r = await this.runner(["api", path7], this.execOpts(opts));
     if (r.code === 0) {
       return true;
     }
     if (/404|Not Found|Branch not found/i.test(r.stderr)) {
       return false;
     }
-    throw ghApiFailure(path6, r);
+    throw ghApiFailure(path7, r);
   }
   async deleteProtection(owner, repo, branch, opts) {
     const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
@@ -8537,8 +8565,8 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
-    const path6 = `repos/${owner}/${repo}/branches/${branch}/protection`;
-    const r = await this.runner(["api", path6], this.execOpts(opts));
+    const path7 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path7], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
         return {
@@ -8548,12 +8576,12 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw ghApiFailure(path6, r);
+      throw ghApiFailure(path7, r);
     }
     if (r.truncated) {
-      throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped protection JSON`);
+      throw new Error(`gh api ${path7}: output truncated \u2014 refusing to parse clipped protection JSON`);
     }
-    const raw = GhProtectionSchema.parse(parseJson(r.stdout, path6));
+    const raw = GhProtectionSchema.parse(parseJson(r.stdout, path7));
     const rsc = raw.required_status_checks ?? null;
     let mq = false;
     try {
@@ -8570,7 +8598,7 @@ var DefaultGhClient = class {
     };
   }
   async putProtection(owner, repo, branch, body, opts) {
-    const path6 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const path7 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const payload = JSON.stringify({
       required_status_checks: {
         strict: body.strict,
@@ -8586,24 +8614,24 @@ var DefaultGhClient = class {
       allow_deletions: true
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
-    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path6, "--input", "-"], {
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path7, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
     });
   }
   async mergeQueueProbe(owner, repo, branch, opts) {
-    const path6 = `repos/${owner}/${repo}/rules/branches/${branch}`;
-    const r = await this.runner(["api", path6], this.execOpts(opts));
+    const path7 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path7], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found/i.test(r.stderr)) {
         return false;
       }
-      throw ghApiFailure(path6, r);
+      throw ghApiFailure(path7, r);
     }
     if (r.truncated) {
-      throw new Error(`gh api ${path6}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
+      throw new Error(`gh api ${path7}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
     }
-    const rules = GhRulesSchema.safeParse(parseJson(r.stdout, path6));
+    const rules = GhRulesSchema.safeParse(parseJson(r.stdout, path7));
     return rules.success && rules.data.some((rule) => rule.type === "merge_queue");
   }
 };
@@ -8768,10 +8796,10 @@ async function resyncTaskBranchOntoStaging(args) {
   }
   return attempt;
 }
-async function removeWorktreeBestEffort(gitClient, path6) {
-  const code = await gitClient.worktreeRemove(["--force", path6]);
-  if (code !== 0 && existsSync5(path6)) {
-    log8.warn(`worktree remove --force ${path6} exited ${code ?? "null"} \u2014 worktree may be leaked`);
+async function removeWorktreeBestEffort(gitClient, path7) {
+  const code = await gitClient.worktreeRemove(["--force", path7]);
+  if (code !== 0 && existsSync5(path7)) {
+    log8.warn(`worktree remove --force ${path7} exited ${code ?? "null"} \u2014 worktree may be leaked`);
   }
 }
 
@@ -9077,11 +9105,11 @@ async function ensureStaging(args) {
     `staging: ${remote}/${staging} and ${remote}/${base} have DIVERGED (merge-base=${mergeBase}, staging=${stagingTip}, base=${baseTip}) \u2014 refusing to reconcile (no silent main fallback)`
   );
 }
-async function materializeStagingWorktree(gitClient, path6, branch, remote, base) {
-  if (await gitClient.worktreeExists(path6)) {
-    await ensureOnStaging({ gitClient, path: path6, branch, remote, base });
+async function materializeStagingWorktree(gitClient, path7, branch, remote, base) {
+  if (await gitClient.worktreeExists(path7)) {
+    await ensureOnStaging({ gitClient, path: path7, branch, remote, base });
   } else {
-    await gitClient.worktreeAdd(["-b", branch, path6, `${remote}/${base}`]);
+    await gitClient.worktreeAdd(["-b", branch, path7, `${remote}/${base}`]);
   }
 }
 
@@ -10065,10 +10093,10 @@ var SpecStore = class {
    * snapshot is missing — never a silent null (traceability would audit nothing).
    */
   async readPrd(repo, specId) {
-    const path6 = join7(specDir(this.dataDir, repo, specId), PRD_FILE);
+    const path7 = join7(specDir(this.dataDir, repo, specId), PRD_FILE);
     let raw;
     try {
-      raw = await readFile4(path6, "utf8");
+      raw = await readFile4(path7, "utf8");
     } catch (err) {
       if (isEnoent(err)) {
         throw new Error(
@@ -10077,7 +10105,7 @@ var SpecStore = class {
       }
       throw err;
     }
-    return parsePrd(parseJson(raw, path6), path6);
+    return parsePrd(parseJson(raw, path7), path7);
   }
   /** Build the run-facing {@link SpecPointer} from a request. */
   toPointer(request) {
@@ -10657,6 +10685,37 @@ function buildProducerContext(input) {
     priorFailures,
     injectedPriorFailure: priorFailures.length > 0
   };
+}
+function renderProducerPrompt(ctx, worktree) {
+  const lines = [
+    `Task ${ctx.taskId}: ${ctx.title}`,
+    "",
+    ctx.description,
+    "",
+    "Acceptance criteria:",
+    ...ctx.acceptanceCriteria.map((c) => `- ${c}`)
+  ];
+  if (ctx.files.length > 0) {
+    lines.push("", "Scoped files:", ...ctx.files.map((f) => `- ${f}`));
+  }
+  if (ctx.fixInstructions.length > 0) {
+    lines.push("", "Confirmed blockers to fix (patch forward, do not nuke prior work):");
+    for (const fi of ctx.fixInstructions) {
+      const loc = fi.file !== void 0 ? fi.line !== void 0 ? ` (${fi.file}:${fi.line})` : ` (${fi.file})` : "";
+      lines.push(`- [${fi.reviewer}]${loc} ${fi.description}`);
+    }
+  }
+  if (ctx.priorFailures.length > 0) {
+    lines.push("", "Prior failures \u2014 don't repeat these:");
+    for (const pf of ctx.priorFailures) {
+      lines.push(`- rung ${pf.rung}: ${pf.summary}`);
+    }
+  }
+  lines.push(
+    "",
+    `Your working tree is ${worktree} (already checked out on the task branch). cd there; make ALL commits there.`
+  );
+  return lines.join("\n");
 }
 
 // src/producer/classify.ts
@@ -12029,6 +12088,18 @@ function resolveReviewModel(config) {
 }
 
 // src/verifier/judgment/panel.ts
+var VERIFIER_INTERPOLATE_FIELDS = ["reviewer", "severity", "claim", "file", "line", "quote"];
+var VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
+following review finding against the actual code \u2014 do not assume it is correct.
+
+Reviewer: {reviewer}
+Severity: {severity}
+Claim: {claim}
+Cited location: {file}:{line}
+Quoted source: {quote}
+
+Inspect the cited file/line yourself before deciding. Return EXACTLY one JSON
+object as your final message: { "holds": true|false, "note": "<why>" }.`;
 var PANEL_ROLES = [
   "implementation-reviewer",
   "quality-reviewer",
@@ -12039,23 +12110,27 @@ var DB_DESIGN_ROLE = "database-design-reviewer";
 function panelRolesFor(dbApplicable) {
   return dbApplicable ? [...PANEL_ROLES, DB_DESIGN_ROLE] : PANEL_ROLES;
 }
-function promptRefFor(role) {
-  return `reviews/prompts/${role}.md`;
-}
-function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false) {
+function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false, crossVendorPrompt) {
   const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
     agent_type: AGENT_TYPE_BY_ROLE[role],
     isolation: "worktree",
     model,
-    max_turns: maxTurns,
-    prompt_ref: promptRefFor(role)
+    max_turns: maxTurns
   }));
-  const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model } : { status: "absent", reason: crossVendor.reason };
+  const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model, prompt: crossVendorPrompt } : { status: "absent", reason: crossVendor.reason };
+  const verifier_spec = {
+    agent_type: GENERAL_PURPOSE_AGENT_TYPE,
+    model,
+    isolation: "worktree",
+    prompt_template: VERIFIER_PROMPT_TEMPLATE,
+    interpolate_fields: [...VERIFIER_INTERPOLATE_FIELDS]
+  };
   return parseSpawnRequest({
     resume_phase: resumePhase,
     agents,
-    ...cross_vendor !== void 0 ? { cross_vendor } : {}
+    ...cross_vendor !== void 0 ? { cross_vendor } : {},
+    verifier_spec
   });
 }
 
@@ -12074,12 +12149,29 @@ var DB_PATH_PATTERNS = [
   /\.sql$/i
   // bare SQL anywhere
 ];
-function isDbPath(path6) {
-  return DB_PATH_PATTERNS.some((p) => p.test(path6));
+function isDbPath(path7) {
+  return DB_PATH_PATTERNS.some((p) => p.test(path7));
 }
 async function touchesDatabase(git, baseRef, opts) {
   const changed = await git.changedFiles(baseRef, opts);
   return changed.some(isDbPath);
+}
+
+// src/verifier/judgment/cross-vendor-prompt.ts
+import { readFile as readFile9 } from "node:fs/promises";
+import path5 from "node:path";
+async function composeCrossVendorPrompt(input) {
+  const [charter, contract] = await Promise.all([
+    readFile9(path5.join(input.pluginRoot, "agents", "quality-reviewer.md"), "utf8"),
+    readFile9(path5.join(input.pluginRoot, "skills", "review-protocol", "SKILL.md"), "utf8")
+  ]);
+  return [
+    charter.trim(),
+    "",
+    contract.trim(),
+    "",
+    `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}\`.`
+  ].join("\n");
 }
 
 // src/verifier/judgment/vendor.ts
@@ -12549,7 +12641,7 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir7, readFile as readFile9 } from "node:fs/promises";
+import { mkdir as mkdir7, readFile as readFile10 } from "node:fs/promises";
 import { dirname as dirname5, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -12586,18 +12678,18 @@ var FsHoldoutStore = class {
     return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
-    const path6 = this.path(runId, record.task_id);
-    await mkdir7(dirname5(path6), { recursive: true });
-    await atomicWriteFile(path6, stringifyJson(record));
+    const path7 = this.path(runId, record.task_id);
+    await mkdir7(dirname5(path7), { recursive: true });
+    await atomicWriteFile(path7, stringifyJson(record));
   }
   async get(runId, taskId) {
-    const path6 = this.path(runId, taskId);
-    const raw = await readFile9(path6, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path6), path6);
+    const path7 = this.path(runId, taskId);
+    const raw = await readFile10(path7, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path7), path7);
   }
   async has(runId, taskId) {
     try {
-      await readFile9(this.path(runId, taskId), "utf8");
+      await readFile10(this.path(runId, taskId), "utf8");
       return true;
     } catch (err) {
       if (isEnoent(err)) {
@@ -12609,7 +12701,7 @@ var FsHoldoutStore = class {
 };
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir8, readFile as readFile10 } from "node:fs/promises";
+import { mkdir as mkdir8, readFile as readFile11 } from "node:fs/promises";
 import { dirname as dirname6, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
@@ -12626,18 +12718,18 @@ var FsHoldoutVerdictStore = class {
     return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.r${rung}.verdicts.json`);
   }
   async put(runId, taskId, rung, verdicts) {
-    const path6 = this.path(runId, taskId, rung);
-    await mkdir8(dirname6(path6), { recursive: true });
-    await atomicWriteFile(path6, stringifyJson([...verdicts]));
+    const path7 = this.path(runId, taskId, rung);
+    await mkdir8(dirname6(path7), { recursive: true });
+    await atomicWriteFile(path7, stringifyJson([...verdicts]));
   }
   async get(runId, taskId, rung) {
-    const path6 = this.path(runId, taskId, rung);
-    const raw = await readFile10(path6, "utf8");
-    return HoldoutVerdictsSchema.parse(parseJson(raw, path6));
+    const path7 = this.path(runId, taskId, rung);
+    const raw = await readFile11(path7, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path7));
   }
   async has(runId, taskId, rung) {
     try {
-      await readFile10(this.path(runId, taskId, rung), "utf8");
+      await readFile11(this.path(runId, taskId, rung), "utf8");
       return true;
     } catch {
       return false;
@@ -12656,7 +12748,7 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, rung,
 }
 
 // src/verifier/e2e/runner.ts
-import path5 from "node:path";
+import path6 from "node:path";
 import { access as access4 } from "node:fs/promises";
 var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
 async function pathExists2(p) {
@@ -12668,13 +12760,13 @@ async function pathExists2(p) {
   }
 }
 async function resolveLocalPlaywrightBin(cwd, exists = pathExists2) {
-  let dir = path5.resolve(cwd);
+  let dir = path6.resolve(cwd);
   for (; ; ) {
-    const candidate = path5.join(dir, "node_modules", ".bin", "playwright");
+    const candidate = path6.join(dir, "node_modules", ".bin", "playwright");
     if (await exists(candidate)) {
       return candidate;
     }
-    const parent = path5.dirname(dir);
+    const parent = path6.dirname(dir);
     if (parent === dir) {
       return null;
     }
@@ -13530,7 +13622,7 @@ function makePhaseHandlers(deps) {
       }
     ] : [];
   }
-  async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
+  function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
@@ -13549,7 +13641,7 @@ function makePhaseHandlers(deps) {
       // concrete PATCH instructions rather than re-nuking the implementation.
       ...confirmedBlockers !== void 0 ? { confirmedBlockers } : {}
     });
-    const promptRef = await deps.artifacts.putProducerContext(runId, specTask.task_id, `${role}-r${rung}`, context);
+    const worktree = taskWorktreePath(deps.dataDir, runId, specTask.task_id);
     const request = parseSpawnRequest({
       resume_phase: resumePhase,
       agents: [
@@ -13560,7 +13652,8 @@ function makePhaseHandlers(deps) {
           // No implementer-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
           max_turns: deps.config.testWriter.maxTurns,
-          prompt_ref: promptRef,
+          // 3b(i): the runner spawns this VERBATIM.
+          prompt: renderProducerPrompt(context, worktree),
           // Effort is set ONLY once the dial has climbed the model to its ceiling
           // (rung ≥ 3 for sub-ceiling tasks, ≥ 2 for high-tier). Omitted ⇒ the agent
           // inherits the spawn default — never pass `effort: undefined`.
@@ -13638,20 +13731,22 @@ function makePhaseHandlers(deps) {
      * visible criteria (recomputed from the same seed — never re-persisted), resume
      * at verify.
      */
-    async exec(ctx) {
+    exec(ctx) {
       const task = requireTask3(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return producerSpawn(
-        "implementer",
-        specTask,
-        ctx.run.run_id,
-        task.escalation_rung,
-        "verify",
-        e2eFeedbackNote(task),
-        // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
-        // gate-stderr record (record.ts persisted it on the wait-retry branch) —
-        // patches the specific verified misses instead of re-nuking.
-        task.fix_findings
+      return Promise.resolve(
+        producerSpawn(
+          "implementer",
+          specTask,
+          ctx.run.run_id,
+          task.escalation_rung,
+          "verify",
+          e2eFeedbackNote(task),
+          // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+          // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+          // patches the specific verified misses instead of re-nuking.
+          task.fix_findings
+        )
       );
     },
     /**
@@ -13676,13 +13771,19 @@ function makePhaseHandlers(deps) {
             `environmental blocker: cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`
           );
         }
+        const crossVendorPrompt = crossVendor.status === "present" ? await composeCrossVendorPrompt({
+          pluginRoot: resolvePluginRoot(),
+          baseRef: gateCtx.baseRef,
+          worktree
+        }) : void 0;
         return spawn2(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
             deps.config.review.maxTurnsDeep,
             crossVendor,
-            dbApplicable
+            dbApplicable,
+            crossVendorPrompt
           )
         );
       };
@@ -13764,36 +13865,9 @@ function shipBody(runId, specTask) {
   ].join("\n");
 }
 
-// src/orchestrator/artifacts.ts
-import { mkdir as mkdir9, readFile as readFile11 } from "node:fs/promises";
-import { dirname as dirname7, join as join14 } from "node:path";
-function producerRef(taskId, label) {
-  return `prompts/${taskId}/${label}.json`;
-}
-var FsArtifactStore = class {
-  constructor(dataDir) {
-    this.dataDir = dataDir;
-  }
-  absPath(runId, ref) {
-    return join14(runDir(this.dataDir, runId), ref);
-  }
-  async putProducerContext(runId, taskId, label, context) {
-    const ref = producerRef(taskId, label);
-    const path6 = this.absPath(runId, ref);
-    await mkdir9(dirname7(path6), { recursive: true });
-    await atomicWriteFile(path6, stringifyJson(context));
-    return ref;
-  }
-  async getProducerContext(runId, promptRef) {
-    const path6 = this.absPath(runId, promptRef);
-    const raw = await readFile11(path6, "utf8");
-    return parseJson(raw, path6);
-  }
-};
-
 // src/orchestrator/docs-applicable.ts
 import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { join as join14 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -13813,14 +13887,14 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join15(repoRoot, "docs"));
+    const s = await stat(join14(repoRoot, "docs"));
     if (!s.isDirectory()) {
       return false;
     }
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join14(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
@@ -13985,9 +14059,9 @@ async function persistStepCursor(deps, runId, taskId, step) {
     await markInFlight(deps, runId, taskId, step.phase);
   }
 }
-async function readJsonInput(path6) {
-  const raw = await readFile13(path6, "utf8");
-  return parseJson(raw, path6);
+async function readJsonInput(path7) {
+  const raw = await readFile13(path7, "utf8");
+  return parseJson(raw, path7);
 }
 function producerPhaseInfo(phase) {
   if (phase === "tests") {
@@ -14556,11 +14630,20 @@ async function nextAction(deps, runId, taskId, results) {
           const inFlight = task.spawn_in_flight;
           if (inFlight?.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
             await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
+            await deps.state.updateTask(runId, taskId, (t) => ({
+              ...t,
+              spawn_in_flight: { ...inFlight, spawned_at: deps.now() }
+            }));
           } else {
             const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
             await deps.state.updateTask(runId, taskId, (t) => ({
               ...t,
-              spawn_in_flight: { phase: spawnPhase, rung: t.escalation_rung, tip_sha }
+              spawn_in_flight: {
+                phase: spawnPhase,
+                rung: t.escalation_rung,
+                tip_sha,
+                spawned_at: deps.now()
+              }
             }));
           }
         }
@@ -14619,7 +14702,7 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join16 } from "node:path";
+import { join as join15 } from "node:path";
 
 // src/orchestrator/stage-helpers.ts
 async function ensureStageWorktree(git, opts) {
@@ -14646,7 +14729,7 @@ var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join16(dataDir, "worktrees", runId, ".docs");
+  return join15(dataDir, "worktrees", runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -14716,12 +14799,12 @@ async function runDocsRecord(deps, runId, results) {
 }
 
 // src/orchestrator/traceability.ts
-import { join as join17 } from "node:path";
+import { join as join16 } from "node:path";
 var TRACE_MODEL = "opus";
 var TRACE_MAX_TURNS = 60;
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".trace");
+  return join16(dataDir, "worktrees", runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -15058,6 +15141,8 @@ async function nextTask(deps, runId) {
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
+  const ttlSeconds = deps.config.stallTtlMinutes * 60;
+  const stale = ready.filter((t) => t.spawn_in_flight !== void 0 && deps.now() - t.spawn_in_flight.spawned_at > ttlSeconds).map((t) => t.task_id);
   if (ordered.length === 0) {
     const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
     const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -15079,7 +15164,8 @@ async function nextTask(deps, runId) {
     kind: "work",
     ready: ordered,
     cascade_failed: cascadeFailed,
-    max_parallel: deps.config.maxParallelTasks
+    max_parallel: deps.config.maxParallelTasks,
+    stale
   };
 }
 
@@ -15118,21 +15204,21 @@ var E2eResultsSchema = external_exports.object({
 }).strict();
 
 // src/orchestrator/e2e-paths.ts
-import { join as join18 } from "node:path";
+import { join as join17 } from "node:path";
 function e2eWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-author");
+  return join17(dataDir, "worktrees", runId, ".e2e-author");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-run");
+  return join17(dataDir, "worktrees", runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-base-proof");
+  return join17(dataDir, "worktrees", runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-throwaway");
+  return join17(dataDir, "worktrees", runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join18(dataDir, "worktrees", runId, ".e2e-adjudicate");
+  return join17(dataDir, "worktrees", runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -15168,17 +15254,17 @@ function scrubbedE2eEnv(cfg, boot) {
 import { isAbsolute as isAbsolute2 } from "node:path";
 
 // src/orchestrator/e2e-shared.ts
-import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
+import { copyFile, mkdir as mkdir9, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname7 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
-    await mkdir10(dirname8(to), { recursive: true });
+    await mkdir9(dirname7(to), { recursive: true });
     await copyFile(from, to);
   }
-  async writeConfig(path6, contents) {
-    await mkdir10(dirname8(path6), { recursive: true });
-    await writeFile2(path6, contents);
+  async writeConfig(path7, contents) {
+    await mkdir9(dirname7(path7), { recursive: true });
+    await writeFile2(path7, contents);
   }
 };
 var E2E_AUTHOR_MODEL = "opus";
@@ -15228,7 +15314,7 @@ function unattributableToolingFailure(r) {
 }
 
 // src/orchestrator/e2e-proof.ts
-import { join as join19 } from "node:path";
+import { join as join18 } from "node:path";
 function classifyBaseRun(specs) {
   const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
@@ -15256,7 +15342,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   });
   try {
     for (const entry of critical) {
-      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
+      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -15324,7 +15410,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
 }
 
 // src/orchestrator/e2e-suite.ts
-import { join as join20 } from "node:path";
+import { join as join19 } from "node:path";
 var log28 = createLogger("e2e");
 function buildAdjudicationPrompt(args) {
   const taskLines = specTaskLines(args.spec);
@@ -15517,7 +15603,7 @@ async function recordAdjudication(deps, runId, run10, results, emit2) {
   return runSuiteAndDecide(deps, runId);
 }
 function throwawayConfigPath(worktree) {
-  return join20(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join19(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -15904,13 +15990,13 @@ async function runE2eRecord(deps, runId, results) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join21 } from "node:path";
+import { join as join20 } from "node:path";
 var log31 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "opus";
 var ASSESSOR_MAX_TURNS = 60;
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
-  return join21(dataDir, "worktrees", runId, ".e2e-assess");
+  return join20(dataDir, "worktrees", runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -16245,7 +16331,7 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 }
 
 // src/cli/subcommands/run.ts
-import { join as join23 } from "node:path";
+import { join as join22 } from "node:path";
 
 // src/cli/wiring.ts
 function splitRepo(slug) {
@@ -16282,7 +16368,6 @@ async function loadCliDeps(opts) {
     git: new DefaultGitClient(),
     gh: new DefaultGhClient(),
     tools: defaultGateTools(config.quality.gateEnv),
-    artifacts: new FsArtifactStore(dataDir),
     holdout: new FsHoldoutStore(dataDir),
     dataDir,
     owner,
@@ -16366,13 +16451,13 @@ function decideAutonomyPreflight(input) {
 
 // src/orchestrator/preflight.ts
 import { readFile as readFile14 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join21 } from "node:path";
 var TCB_COVERED_TEST_DIRS = ["e2e", "./e2e"];
 async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile14(join21(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -16393,7 +16478,7 @@ async function assertE2ePrereqs(cwd) {
   }
   let configRaw;
   try {
-    configRaw = await readFile14(join22(cwd, "playwright.config.ts"), "utf8");
+    configRaw = await readFile14(join21(cwd, "playwright.config.ts"), "utf8");
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -16634,7 +16719,7 @@ async function runCreate(argv, overrides = {}) {
     ghClient,
     config,
     targetRoot: cwd,
-    orchestratorWorktreePath: join23(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
+    orchestratorWorktreePath: join22(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
@@ -16687,7 +16772,7 @@ async function runCreate(argv, overrides = {}) {
     return {
       run: parked,
       spec_approval: {
-        spec_path: join23(specDir(dataDir, repoSlug, run10.spec.spec_id), "spec.md"),
+        spec_path: join22(specDir(dataDir, repoSlug, run10.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -16769,7 +16854,7 @@ function phaseCommand(opts) {
     const { dataDir, state } = openState();
     const runId = await resolveRunIdOrCurrent(state, args, `run ${opts.phase}`);
     const deps = await loadCliDeps({ dataDir, runId });
-    const results = await parseResultsFlag(args, async (path6) => opts.parse(await readJsonInput(path6)));
+    const results = await parseResultsFlag(args, async (path7) => opts.parse(await readJsonInput(path7)));
     emitJson(results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId));
     return EXIT.OK;
   };
@@ -17015,8 +17100,20 @@ var specCommand = {
 };
 
 // src/debug/review.ts
-function buildReviewManifest(opts) {
-  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns, opts.crossVendor);
+async function buildReviewManifest(opts) {
+  const crossVendorPrompt = opts.crossVendor.status === "present" ? await composeCrossVendorPrompt({
+    pluginRoot: resolvePluginRoot(),
+    baseRef: opts.base,
+    worktree: opts.worktree
+  }) : void 0;
+  const manifest = buildPanelManifest(
+    opts.resumePhase,
+    opts.model,
+    opts.maxTurns,
+    opts.crossVendor,
+    false,
+    crossVendorPrompt
+  );
   return {
     manifest,
     base: opts.base,
@@ -17294,10 +17391,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join24(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join23(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join24(dataDir, "debug", runId, `pass-${pass}`);
+  return join23(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -17335,7 +17432,7 @@ async function debugStart(deps, opts = {}) {
 async function debugReviewEmit(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
   const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
-  const built = buildReviewManifest({
+  const built = await buildReviewManifest({
     resumePhase: "verify",
     model: resolveReviewModel(deps.config),
     maxTurns: deps.config.review.maxTurnsDeep,
@@ -17371,8 +17468,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join24(passDir, "findings.json");
-  const reportPath = join24(passDir, "findings.md");
+  const findingsPath = join23(passDir, "findings.json");
+  const reportPath = join23(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -17650,10 +17747,10 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
+import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname10, join as join27, relative } from "node:path";
+import { dirname as dirname9, join as join26, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/ci/inject-gate-env.ts
@@ -17854,9 +17951,9 @@ function renderQualityGate(template, opts) {
 }
 
 // src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
+import { mkdir as mkdir10, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
-import { join as join25 } from "node:path";
+import { join as join24 } from "node:path";
 var log32 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -17914,44 +18011,44 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join25(opts.targetRoot, ".claude");
-  const path6 = join25(dir, "settings.json");
-  const created = !existsSync8(path6);
+  const dir = join24(opts.targetRoot, ".claude");
+  const path7 = join24(dir, "settings.json");
+  const created = !existsSync8(path7);
   let existing = {};
   if (!created) {
-    const raw = await readFile15(path6, "utf8");
+    const raw = await readFile15(path7, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
     } else {
       log32.warn(
-        `${path6} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+        `${path7} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
   }
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   if (created || changed) {
-    await mkdir11(dir, { recursive: true });
-    await atomicWriteFile(path6, stringifyJson(settings));
+    await mkdir10(dir, { recursive: true });
+    await atomicWriteFile(path7, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path6 };
+  return { settings, changed, created, path: path7 };
 }
 
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname9, join as join26 } from "node:path";
+import { mkdir as mkdir11, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname8, join as join25 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync9(join26(targetRoot, "deno.json")) || existsSync9(join26(targetRoot, "deno.jsonc"))) {
+  if (existsSync9(join25(targetRoot, "deno.json")) || existsSync9(join25(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync9(join26(targetRoot, "package.json"))) {
+  if (existsSync9(join25(targetRoot, "package.json"))) {
     return "npm";
   }
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join26(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join25(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -17965,9 +18062,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join25(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join26(targetRoot, file), "utf8");
+  const raw = await readFile16(join25(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -17985,7 +18082,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join25(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -17995,7 +18092,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join25(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -18017,11 +18114,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join25(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join25(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -18087,8 +18184,8 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack, contract: load.contract };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join26(opts.targetRoot, GATE_CONTRACT_REL);
-  await mkdir12(dirname9(dest), { recursive: true });
+  const dest = join25(opts.targetRoot, GATE_CONTRACT_REL);
+  await mkdir11(dirname8(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack, contract };
 }
@@ -18150,13 +18247,13 @@ var GITIGNORE_ENTRIES = [
   "*.worktree"
 ];
 function resolveTemplatesDir() {
-  let dir = dirname10(fileURLToPath(import.meta.url));
+  let dir = dirname9(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join27(dir, "templates");
-    if (existsSync10(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join26(dir, "templates");
+    if (existsSync10(join26(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname10(dir);
+    const parent = dirname9(dir);
     if (parent === dir) {
       break;
     }
@@ -18180,8 +18277,8 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
-  const src = join27(templatesDir, ...segs);
-  const dest = join27(targetRoot, ...segs);
+  const src = join26(templatesDir, ...segs);
+  const dest = join26(targetRoot, ...segs);
   if (!existsSync10(src)) {
     log33.warn(`template missing, skipping: ${src}`);
     return;
@@ -18191,7 +18288,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     return transform ? transform(text) : text;
   };
   if (!existsSync10(dest)) {
-    await mkdir13(dirname10(dest), { recursive: true });
+    await mkdir12(dirname9(dest), { recursive: true });
     await writeFile4(dest, await render(), "utf8");
     lists.created.push(entry.rel);
     return;
@@ -18209,8 +18306,8 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync10(join27(targetRoot, "pnpm-lock.yaml"));
-  const raw = await readFile17(join27(targetRoot, "package.json"), "utf8");
+  const pnpm = existsSync10(join26(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile17(join26(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
     pkg = JSON.parse(raw);
@@ -18219,32 +18316,32 @@ async function readWorkflowFacts(targetRoot) {
   }
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync10(join27(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync10(join26(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
   };
 }
 async function ensureGitignore(root, lists) {
-  const path6 = join27(root, ".gitignore");
-  const rel = relative(root, path6);
-  if (!existsSync10(path6)) {
-    await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  const path7 = join26(root, ".gitignore");
+  const rel = relative(root, path7);
+  if (!existsSync10(path7)) {
+    await writeFile4(path7, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile17(path6, "utf8");
+  const current = await readFile17(path7, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep4 = current.endsWith("\n") ? "" : "\n";
-  await writeFile4(path6, current + sep4 + missing.join("\n") + "\n", "utf8");
+  await writeFile4(path7, current + sep4 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync10(join27(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync10(join26(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (CI_NET_RELS.includes(entry.rel)) {
       continue;
@@ -18800,7 +18897,7 @@ async function run7(argv) {
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
   const shipMode = parseShipMode(args.flag("ship-mode"));
-  const results = await parseResultsFlag(args, async (path6) => parseDriveResults(await readJsonInput(path6)));
+  const results = await parseResultsFlag(args, async (path7) => parseDriveResults(await readJsonInput(path7)));
   const deps = await loadOrchestratorDeps({
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
@@ -18823,7 +18920,7 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the runner adopts them
 from the first \`next-task\`:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  \u2192 call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
@@ -18876,7 +18973,7 @@ var nextCommand = {
 
 // src/cli/subcommands/statusline.ts
 import { readFile as readFile18 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { join as join27 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -18912,7 +19009,7 @@ async function renderProgress(deps) {
       return "";
     }
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
-    const raw = await readFile18(join28(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
     const run10 = JSON.parse(raw);
     if (typeof run10.run_id !== "string" || typeof run10.status !== "string") {
       return "";
@@ -19011,7 +19108,7 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync11 } from "node:fs";
 import { readFile as readFile19 } from "node:fs/promises";
-import { join as join29 } from "node:path";
+import { join as join28 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log35 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -19049,7 +19146,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join29(dataDir, "merged-settings.json");
+  return join28(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -19131,12 +19228,12 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path6 = join29(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync11(path6)) {
+  const path7 = join28(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync11(path7)) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile19(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") {
       return parsed.version;
     }
@@ -19148,7 +19245,7 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join28(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync11(userSettingsPath)) {
@@ -19163,7 +19260,7 @@ async function runAutonomyEnsure(opts = {}) {
       log35.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join29(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join28(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile19(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
@@ -19174,11 +19271,11 @@ async function runAutonomyEnsure(opts = {}) {
     home,
     version
   });
-  const path6 = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path6, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path6}`;
+  const path7 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path7, stringifyJson(merged));
+  const relaunchCommand = `claude --worktree --settings ${path7}`;
   write(
-    `Wrote autonomous settings \u2192 ${path6}
+    `Wrote autonomous settings \u2192 ${path7}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
@@ -19186,49 +19283,49 @@ Relaunch the session in autonomous mode with:
 (the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
-  return { path: path6, relaunchCommand };
+  return { path: path7, relaunchCommand };
 }
 function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
-  let path6 = "";
+  let path7 = "";
   try {
     const dataDir = opts.dataDir ?? resolveDataDir();
-    path6 = mergedSettingsPath(dataDir);
+    path7 = mergedSettingsPath(dataDir);
   } catch {
   }
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path6.length > 0 && existsSync11(path6),
-    mergedSettingsPath: path6
+    mergedSettingsPresent: path7.length > 0 && existsSync11(path7),
+    mergedSettingsPath: path7
   };
   if (opts.json === true) {
     write(stringifyJson(status) + "\n");
   } else if (status.autonomous) {
     write(
       `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
-merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path6.length > 0 ? ` at ${path6}` : ""}
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path7.length > 0 ? ` at ${path7}` : ""}
 `
     );
   } else {
     write(
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
-merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absent"}
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path7}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path6}
+  claude --worktree --settings ${path7}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
   }
   return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
-async function readOnDiskVersion(path6) {
-  if (!existsSync11(path6)) {
+async function readOnDiskVersion(path7) {
+  if (!existsSync11(path7)) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile19(path6, "utf8"));
+    const parsed = JSON.parse(await readFile19(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -19268,10 +19365,10 @@ async function runAutonomyPreflight(opts = {}) {
     pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   } catch {
   }
-  const path6 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path6.length > 0 && existsSync11(path6);
+  const path7 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path7.length > 0 && existsSync11(path7);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path6) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path7) : void 0;
   const decision = decideAutonomyPreflight({
     autonomous: isAutonomous(env),
     mergedSettingsPresent,

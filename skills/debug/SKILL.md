@@ -126,16 +126,18 @@ quality-reviewer recipe, and verify-then-fix EXACTLY per
 re-derived here — with these debug-only deltas:
 
 - Each reviewer's prompt is built INLINE from that role's `agents/<role>.md` body
-  PLUS the `skills/review-protocol/SKILL.md` contract — there is no per-run prompt
-  file to Read (`prompt_ref` is a schema placeholder, never a real artifact; see
-  `panel.ts`'s `promptRefFor` doc comment).
+  PLUS the `skills/review-protocol/SKILL.md` contract — panel manifest entries
+  carry no `prompt` field, so there is no per-run prompt file to Read.
 - Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>` — the
   envelope's `base`/`worktree` verbatim (no task worktree, no `base_ref`).
 - Cross-vendor resolution is read OFF THIS ENVELOPE, never re-derived:
   `codex_available` is the CLI's REAL probe (config `codex.model` + a live
   `codex --version`; `debugReviewEmit`); when `false` the envelope carries
   `codex_absent_reason` — echo it VERBATIM as `crossVendorAbsent.reason` in the
-  results file (2b). The manifest's `cross_vendor` stamp mirrors it.
+  results file (2b). The manifest's `cross_vendor` stamp mirrors it — when
+  `status:"present"` it also carries a pre-composed `prompt` (3b/ii, same
+  composition as the per-task verify phase); spawn it VERBATIM via the SAME
+  `codex exec` recipe as `skills/pipeline-runner/SKILL.md`, never reassembled here.
 
 ### 2b. Record the results
 

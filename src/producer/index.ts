@@ -23,6 +23,7 @@ export {dialForRung, type DialResult} from './model-dial.js'
 // Structured producer prompt-context assembly (holdout-safe).
 export {
     buildProducerContext,
+    renderProducerPrompt,
     type BuildProducerContextInput,
     type ProducerContext,
     type FixInstruction,

@@ -33,7 +33,6 @@ const mkManifest = (
             isolation: 'worktree',
             model: 'sonnet',
             max_turns: 60,
-            prompt_ref: `prompts/${role}.md`,
         },
     ],
 })

@@ -31,6 +31,10 @@ a loop:
 Both returns are discriminated unions whose `kind` is an **imperative** — it tells
 the runner what to do, not what state something is in.
 
+The `work` kind also carries an advisory `stale` list — ready tasks whose in-flight
+spawn has aged past `config.stallTtlMinutes`, telling the runner to abandon a
+silently-dead agent and re-drive (see [cli.md](./cli.md#next-task)).
+
 **`NextTask` kinds:** `work` (drive this ready task) · `traceability` (run the
 PRD-traceability audit — every non-debug run, before docs) · `document` (run the docs
 phase) · `finalize` (everything terminal — roll up) · `done` (run already terminal)
@@ -61,10 +65,27 @@ verify → ship` (`TaskPhase`). The run-level phase is `finalize`.
 
 A `spawn` action carries a **`SpawnRequest`**: `{ resume_phase, agents: AgentSpec[] }`,
 optionally a `holdout?: AgentSpec` (the holdout validator). An **`AgentSpec`** is one
-agent to spawn — `{ role, isolation, model, max_turns, prompt_ref, effort? }`. The
+agent to spawn — `{ role, isolation, model, max_turns, prompt?, effort? }`. The
 runner spawns exactly the agents the request names and feeds their raw output back
 via `--results`, keyed by **`result_key`** so the orchestrator knows which spawn the
 output answers.
+
+`prompt` is the engine-composed prompt the runner spawns **verbatim** — the engine
+does the prompt assembly, not the runner. It is set on producer specs (the full
+`ProducerContext` + the cd-to-worktree sentence) and omitted on panel-reviewer specs,
+whose lens the runner still builds inline from `agents/<role>.md` +
+`skills/review-protocol/SKILL.md`. A verify (`expects:"reviews"`) request adds two
+verify-only fields:
+
+- **`cross_vendor`** — the resolved cross-vendor slot (S5/C). `{status:"present", model, prompt}`
+  ⇒ run the quality-reviewer via `codex exec`, spawning the pre-composed `prompt` verbatim;
+  `{status:"absent", reason}` ⇒ all-Claude panel, echo `reason` as `crossVendorAbsent`.
+- **`verifier_spec`** — the independent finding-verifier's spawn **template**
+  `{ agent_type, model, isolation, prompt_template, interpolate_fields }`. The finding set
+  is only known after the panel returns, so the runner renders one instance per
+  blocking+citable finding by substituting exactly `interpolate_fields` into
+  `prompt_template` — never the finding's `description` (anti-anchoring). This carries the
+  last spawn decision (`agent_type`/`model`/`isolation`) that the runner used to hardcode.
 
 ## Execution mode
 
