@@ -16304,8 +16304,9 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/orchestrator/preflight.ts
-import { access as access5, readFile as readFile14 } from "node:fs/promises";
+import { readFile as readFile14 } from "node:fs/promises";
 import { join as join22 } from "node:path";
+var TCB_COVERED_TEST_DIRS = ["e2e", "./e2e"];
 async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
@@ -16329,8 +16330,9 @@ async function assertE2ePrereqs(cwd) {
       missing.push("@playwright/test (dependencies or devDependencies)");
     }
   }
+  let configRaw;
   try {
-    await access5(join22(cwd, "playwright.config.ts"));
+    configRaw = await readFile14(join22(cwd, "playwright.config.ts"), "utf8");
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -16338,6 +16340,15 @@ async function assertE2ePrereqs(cwd) {
     throw new UsageError(
       `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(", ")}. Run \`factory scaffold\` to seed playwright.config.ts + e2e/, and install @playwright/test.`
     );
+  }
+  if (configRaw !== void 0) {
+    const declared = /testDir\s*:\s*['"]([^'"]+)['"]/.exec(configRaw)?.[1];
+    if (declared === void 0 || !TCB_COVERED_TEST_DIRS.includes(declared)) {
+      const found = declared === void 0 ? "no testDir declaration" : `testDir '${declared}'`;
+      throw new UsageError(
+        `run create: --e2e requires playwright.config.ts to declare testDir 'e2e' (found ${found}). The TCB write-deny protects the literal e2e/ path only \u2014 a suite anywhere else would be write-open to the implementer. Run \`factory scaffold\` to seed the standard config.`
+      );
+    }
   }
 }
 async function assertGateContract(cwd, gitClient) {

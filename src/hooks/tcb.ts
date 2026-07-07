@@ -214,9 +214,11 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     //     could make its own feature's failing journey pass without fixing the bug.
     //     Only the e2e-author agent (never the implementer/test-writer) writes here.
     //     Hardcoded to the literal "e2e" component per the Δ W invariant above (no
-    //     config parameter) — a repo that customizes `e2e.testDir` away from the
-    //     default is NOT covered by this rule; a known limitation, not a bypass path
-    //     an implementer can reach (it can't set config either).
+    //     config parameter). The divergence window is closed at run birth, not here:
+    //     `assertE2ePrereqs` (S4) refuses an --e2e run whose playwright.config.ts
+    //     declares any other testDir, so a suite this rule can't see never enters a
+    //     run. This rule stays literal — reading config to widen it would be the
+    //     circular trust the TCB refuses.
     if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
         const e2eDir = canonicalizeAnchor(resolve(ctx.repoRoot, 'e2e'))
         rules.push({

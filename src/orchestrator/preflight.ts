@@ -5,17 +5,30 @@
  *   - {@link assertE2ePrereqs}   — the repo carries the static Playwright prereqs (--e2e, Decision 40 D2).
  *   - {@link assertGateContract} — a present, valid, git-TRACKED `.factory/gates.json` (S7, Decision 46).
  */
-import {access, readFile} from 'node:fs/promises'
+import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {UsageError} from '../shared/usage-error.js'
 import {loadGateContract, GATE_CONTRACT_REL} from '../verifier/deterministic/index.js'
 import type {GitClient} from '../git/index.js'
 
 /**
+ * The Playwright testDirs the TCB write-deny actually covers: rule 3b (tcb.ts)
+ * hardcodes the literal `e2e` component per the Δ W invariant, so any other
+ * testDir would leave the committed suite write-open to the implementer. Checked
+ * against the repo's OWN playwright.config.ts (string-level), never the factory
+ * config — reading config to decide what the TCB protects would be exactly the
+ * circular trust the TCB exists to refuse.
+ */
+const TCB_COVERED_TEST_DIRS: readonly string[] = ['e2e', './e2e']
+
+/**
  * Create-time eager check (Decision 40 D2): `--e2e` fails create unless the repo
- * already carries the three STATIC Playwright prerequisites. Deep validation (boot,
- * auth, coverage) belongs to the e2e-assessment phase — this only catches "e2e was
- * never set up here" before a run is born, when the fix is still one command.
+ * already carries the three STATIC Playwright prerequisites AND its
+ * playwright.config.ts declares the TCB-covered testDir (S4 — fail-closed: an
+ * absent declaration means Playwright's own default `tests`, outside the TCB
+ * write-deny). Deep validation (boot, auth, coverage) belongs to the
+ * e2e-assessment phase — this only catches "e2e was never set up here" before a
+ * run is born, when the fix is still one command.
  */
 export async function assertE2ePrereqs(cwd: string): Promise<void> {
     const missing: string[] = []
@@ -48,8 +61,10 @@ export async function assertE2ePrereqs(cwd: string): Promise<void> {
             missing.push('@playwright/test (dependencies or devDependencies)')
         }
     }
+    let configRaw: string | undefined
     try {
-        await access(join(cwd, 'playwright.config.ts'))
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- reads the target repo's own playwright.config.ts at cwd, an internal derived path
+        configRaw = await readFile(join(cwd, 'playwright.config.ts'), 'utf8')
     } catch {
         missing.push('playwright.config.ts')
     }
@@ -58,6 +73,17 @@ export async function assertE2ePrereqs(cwd: string): Promise<void> {
             `run create: --e2e requires a Playwright-ready repo; missing: ${missing.join(', ')}. ` +
                 'Run `factory scaffold` to seed playwright.config.ts + e2e/, and install @playwright/test.'
         )
+    }
+    if (configRaw !== undefined) {
+        const declared = /testDir\s*:\s*['"]([^'"]+)['"]/.exec(configRaw)?.[1]
+        if (declared === undefined || !TCB_COVERED_TEST_DIRS.includes(declared)) {
+            const found = declared === undefined ? 'no testDir declaration' : `testDir '${declared}'`
+            throw new UsageError(
+                `run create: --e2e requires playwright.config.ts to declare testDir 'e2e' (found ${found}). ` +
+                    'The TCB write-deny protects the literal e2e/ path only — a suite anywhere else would be ' +
+                    'write-open to the implementer. Run `factory scaffold` to seed the standard config.'
+            )
+        }
     }
 }
 

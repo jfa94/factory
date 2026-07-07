@@ -563,6 +563,55 @@ describe('runCreate boundary (Decision 35)', () => {
         }
     })
 
+    it('S4: --e2e with a NONSTANDARD playwright testDir → UsageError naming the TCB-covered path', async () => {
+        // A suite outside the literal e2e/ dir would be write-open to the implementer
+        // (TCB rule 3b protects the literal path only) — refuse before the run is born.
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await playwrightReadyCwd(git)
+        await writeFile(join(cwd, 'playwright.config.ts'), "export default {testDir: 'tests/e2e'};\n")
+        const create = runCreate(['--issue', '42', '--run-id', 'run-e2e-dir', '--e2e'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+        await expect(create).rejects.toMatchObject({isUsageError: true})
+        await expect(create).rejects.toThrow(/testDir 'tests\/e2e'/)
+    })
+
+    it('S4: --e2e with NO testDir declaration → UsageError (fail-closed: Playwright defaults to tests/)', async () => {
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await playwrightReadyCwd(git)
+        await writeFile(join(cwd, 'playwright.config.ts'), 'export default {};\n')
+        const create = runCreate(['--issue', '42', '--run-id', 'run-e2e-nodir', '--e2e'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+        await expect(create).rejects.toMatchObject({isUsageError: true})
+        await expect(create).rejects.toThrow(/no testDir declaration/)
+    })
+
+    it("S4: --e2e accepts the bare 'e2e' testDir spelling", async () => {
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await playwrightReadyCwd(git)
+        await writeFile(join(cwd, 'playwright.config.ts'), "export default {testDir: 'e2e'};\n")
+        const code = await runCreate(['--issue', '42', '--run-id', 'run-e2e-bare-dir', '--e2e'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+        expect(code).toBe(EXIT.OK)
+    })
+
     it('runCreate: no --e2e → run defaults to e2e:false', async () => {
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
         git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)

@@ -76,6 +76,7 @@ export async function seedScaffoldRepo(dir: string, opts: SeedScaffoldRepoOpts =
             join(dir, 'package.json'),
             JSON.stringify({name: 't', devDependencies: {'@playwright/test': '^1.0.0'}})
         )
-        await writeFile(join(dir, 'playwright.config.ts'), 'export default {};\n')
+        // testDir must be the TCB-covered literal — the S4 preflight refuses anything else.
+        await writeFile(join(dir, 'playwright.config.ts'), "export default {testDir: './e2e'};\n")
     }
 }
