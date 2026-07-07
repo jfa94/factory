@@ -76,7 +76,7 @@ describe('renderQualityGate — npm stack', () => {
         expect(out).not.toContain('npm ci')
     })
 
-    it('falls back to GateRunner built-ins when no script exists (local/CI parity)', () => {
+    it('renders the GateRunner built-ins (local/CI parity)', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).toContain('- run: npx tsc --noEmit')
         expect(out).toContain('- run: npx eslint .')
@@ -84,34 +84,26 @@ describe('renderQualityGate — npm stack', () => {
         expect(out).toContain('- run: npm run build')
     })
 
-    it('prefers package.json scripts when they exist', () => {
+    it('IGNORES package.json scripts — the local gate never runs them, so CI must not either', () => {
         const out = renderQualityGate(template, {
             ...NPM_OPTS,
             scripts: {typecheck: 't', lint: 'l', test: 'vitest run', build: 'b'},
         })
-        expect(out).toContain('- run: npm run typecheck')
-        expect(out).toContain('- run: npm run lint')
-        expect(out).toContain('- run: npm test')
-        expect(out).not.toContain('npx tsc')
-    })
-
-    it("ignores npm's default no-test-specified script stub", () => {
-        const out = renderQualityGate(template, {
-            ...NPM_OPTS,
-            scripts: {...NPM_OPTS.scripts, test: 'echo "Error: no test specified" && exit 1'},
-        })
+        expect(out).toContain('- run: npx tsc --noEmit')
+        expect(out).toContain('- run: npx eslint .')
         expect(out).toContain('- run: npx vitest run')
+        expect(out).not.toContain('- run: npm run typecheck')
         expect(out).not.toContain('- run: npm test')
     })
 
-    it('a contracted command override wins over scripts and built-ins', () => {
+    it('a contracted command override wins over built-ins', () => {
         const out = renderQualityGate(template, {
             ...NPM_OPTS,
             contract: npmContract({test: {contracted: true, command: 'vitest run --pool=forks'}}),
             scripts: {test: 'vitest run', build: 'b'},
         })
         expect(out).toContain('- run: vitest run --pool=forks')
-        expect(out).not.toContain('- run: npm test')
+        expect(out).not.toContain('- run: npx vitest run')
     })
 
     it('omits an uncontracted gate, leaving its reason as an audit comment', () => {
@@ -196,15 +188,15 @@ describe('renderQualityGate — structure invariants', () => {
 })
 
 describe('renderQualityGate — pnpm stack', () => {
-    it('renders pnpm setup + script-based gate steps (the outsidey shape)', () => {
+    it('renders pnpm setup + built-in gate steps (the outsidey shape: scripts ≡ built-ins)', () => {
         const out = renderQualityGate(template, PNPM_OPTS)
         expect(out).toContain('pnpm/action-setup')
         expect(out).toContain('cache: pnpm')
         expect(out).toContain('- run: pnpm install --frozen-lockfile')
-        expect(out).toContain('- run: pnpm typecheck')
-        expect(out).toContain('- run: pnpm lint')
-        expect(out).toContain('- run: pnpm test')
-        expect(out).toContain('- run: pnpm build')
+        expect(out).toContain('- run: pnpm exec tsc --noEmit')
+        expect(out).toContain('- run: pnpm exec eslint .')
+        expect(out).toContain('- run: pnpm exec vitest run')
+        expect(out).toContain('- run: pnpm run build')
         expect(out).toContain('run: pnpm next typegen')
         expect(out).toContain('- run: pnpm deps:validate')
         expect(out).toContain('pnpm exec stryker run \\')

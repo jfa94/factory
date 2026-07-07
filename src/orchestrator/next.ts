@@ -9,7 +9,7 @@
  *
  * Circuit breaker (Decision 34): when no task is actionable yet non-terminal work
  * remains (dependency cycle / mutually-stuck graph), each wedged task is failed as
- * `spec-defect` and the envelope `all-terminal` is returned. The orchestrator routes this
+ * `spec-defect` and a `finalize` envelope is returned. The orchestrator routes this
  * to finalize → `failed`, leaving `develop` clean. Every fail is LOUD (failTask
  * warns) with the full wedged set in the reason.
  *
@@ -23,7 +23,7 @@
  * Single-writer assumption: lock-free snapshot reads are sound because v1 has
  * exactly one orchestrator process writing state; subagents never write run state.
  *
- * `cascade_failed` on the `all-terminal` variant is THIS-INVOCATION-ONLY — it
+ * `cascade_failed` on the `finalize` variant is THIS-INVOCATION-ONLY — it
  * lists tasks failed by the cascade loop in this call. Authoritative fail
  * visibility lives in run state (task.status === "failed") and the finalize
  * rollup.
@@ -345,12 +345,26 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     //     already-finished run; never write on a terminal run) and AFTER the quota
     //     gate (a paused run early-returns above, so quota waiting never trips the
     //     breaker). A trip is a HARD abort — fail every remaining non-terminal task
-    //     LOUD (capability-budget, breaker reason carried) and fall through to
+    //     LOUD (blocked-environmental, breaker reason carried) and fall through to
     //     all-terminal → finalize → `failed`, reusing the wedge-fail path.
+    //     Swept tasks are CONSEQUENCES of the trip, not independent failures, so they
+    //     carry a breaker-EXCLUDED class (like the cascade sweep above): counting them
+    //     as capability-budget would poison the breaker's own signal — a partial
+    //     `rescue apply --task <genuine-failures>` reopen would re-trip on the leftover
+    //     swept rows before any agent runs. blocked-environmental also makes them
+    //     rescue-RECOVERABLE (they never ran; default rescue may retry them). A default
+    //     apply that leaves the GENUINE capability dead-ends failed still re-trips —
+    //     the cumulative count is unchanged; that is honest, not poisoning.
     const breaker = await applyCircuitBreaker(deps, runId)
     if (breaker !== null) {
         for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
-            await failTask(deps, runId, t.task_id, 'capability-budget', `circuit breaker tripped: ${breaker.reason}`)
+            await failTask(
+                deps,
+                runId,
+                t.task_id,
+                'blocked-environmental',
+                `circuit breaker tripped: ${breaker.reason}`
+            )
             cascadeFailed.push(t.task_id)
         }
         run = await deps.state.read(runId)

@@ -29,12 +29,12 @@ import {
     advance,
     spawn,
     waitRetry,
+    taskFailed,
     deriveMergeGateVerdict,
     mergeGateBlockReason,
     createTaskWorktree,
     provisionWorktree,
     GateRunner,
-    FsCoverageStore,
     buildPanelManifest,
     panelRolesFor,
     touchesDatabase,
@@ -49,7 +49,6 @@ import {
     AGENT_TYPE_BY_ROLE,
     decideFinalize,
     type Config,
-    type GateContext,
     type PriorFailureNote,
     type ConfirmedBlocker,
     type ProducerContext,
@@ -64,9 +63,8 @@ import {
 } from './deps.js'
 import type {HandlerDeps} from './types.js'
 import {taskWorktreePath} from './paths.js'
-import {taskExemptReader} from './exempt.js'
-import {runCoverageDir} from '../core/state/index.js'
-import {FsHoldoutVerdictStore, deriveHoldoutEvidence} from '../verifier/holdout/index.js'
+import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
+import {FsHoldoutVerdictStore} from '../verifier/holdout/index.js'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../shared/index.js'
 import {join} from 'node:path'
 
@@ -329,17 +327,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         async verify(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'verify')
             const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id)
-            const gateCtx: GateContext = {
-                runId: ctx.run.run_id,
-                taskId: task.task_id,
-                worktree,
-                baseRef: ctx.run.staging_branch,
-                config: deps.config,
-                tools: deps.tools,
-                exemptReader: taskExemptReader(deps, worktree),
-                ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
-                coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id)),
-            }
+            const gateCtx = buildGateContext(deps, ctx.run.run_id, task.task_id, ctx.run.staging_branch)
             const gate = await new GateRunner().run(gateCtx)
 
             // Decision 51 — content-conditional DB specialist: derived from the diff
@@ -348,16 +336,16 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             const expectedRoster = panelRolesFor(dbApplicable)
 
             // S5/C — resolve the cross-vendor slot ONCE per spawn decision. In block
-            // mode an absent second vendor cannot pass the merge gate, so fail fast
-            // with an honest wait-retry INSTEAD of burning a full panel run.
+            // mode an absent second vendor cannot pass the merge gate — and the probe
+            // is process-sticky, so no producer retry can repair it. Fail TERMINAL
+            // blocked-environmental (rescue-recoverable, breaker-excluded) instead of
+            // a wait-retry that would burn the escalation ladder against a missing binary.
             const panelSpawn = async (): Promise<PhaseResult> => {
                 const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
                 if (deps.config.review.requireCrossVendor === 'block' && crossVendor.status === 'absent') {
-                    return waitRetry(
-                        'verify',
-                        `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`,
-                        ctx.attempt ?? 1,
-                        ESCALATION_CAP + 1
+                    return taskFailed(
+                        'blocked-environmental',
+                        `environmental blocker: cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`
                     )
                 }
                 return spawn(
@@ -404,21 +392,11 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 if (!hasVerdicts) {
                     return panelSpawn()
                 }
-                // Re-derive holdout gate evidence for the fast-path. The normal composition site
-                // is applyRecordReviews's deriveHoldoutEvidence call (record.ts), skipped on merge-resync.
-                // Without this a re-synced implementation that fails withheld criteria can pass
-                // the merge gate. deriveHoldoutEvidence() returns undefined if no record exists,
-                // but holdoutExpected guarantees one does.
-                const holdoutGate = await deriveHoldoutEvidence(
-                    deps.holdout,
-                    verdictStore,
-                    ctx.run.run_id,
-                    task.task_id,
-                    deps.config.quality.holdoutPassRate
-                )
-                if (holdoutGate !== undefined) {
-                    fastPathEvidence.push(holdoutGate)
-                }
+                // Re-derive holdout gate evidence for the fast-path. record.ts runs the same
+                // composition (gate-context.ts) on the sanctioned record route, skipped on
+                // merge-resync. Without this a re-synced implementation that fails withheld
+                // criteria can pass the merge gate.
+                await appendHoldoutEvidence(deps, verdictStore, ctx.run.run_id, task.task_id, fastPathEvidence)
             }
 
             const mergeGate = deriveMergeGateVerdict({reviewers: task.reviewers}, fastPathEvidence)

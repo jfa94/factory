@@ -72,6 +72,13 @@ describe("readCurrentForCwd — per-repo current run from the caller's checkout"
         const state = mgr()
         expect(await readCurrentForCwd(state, {gitClient: git('acme/widgets'), cwd: '/x'})).toBeNull()
     })
+
+    it('rethrows a NON-UsageError from repo resolution (broken git env must not masquerade as "no current run")', async () => {
+        const state = mgr()
+        const broken = new FakeGitClient()
+        broken.remoteUrl = () => Promise.reject(new Error('git: spawn ENOENT'))
+        await expect(readCurrentForCwd(state, {gitClient: broken, cwd: '/x'})).rejects.toThrow(/ENOENT/)
+    })
 })
 
 describe('resolveRunIdOrCurrent — --run flag with current-run fallback', () => {

@@ -21,7 +21,7 @@ export interface RenderQualityGateOpts {
     readonly packageManager: 'pnpm' | 'npm'
     /** Whether a lockfile exists (npm without one → `npm install`, no cache). */
     readonly hasLockfile: boolean
-    /** The target package.json `scripts` map. */
+    /** The target package.json `scripts` map — read ONLY for the optional deps:validate step, never for gate commands. */
     readonly scripts: Readonly<Record<string, string>>
     /** Whether `next` is a dependency (adds the typegen step). */
     readonly hasNextDep: boolean
@@ -30,9 +30,6 @@ export interface RenderQualityGateOpts {
 /** Pinned action refs shared by the generated setup blocks (keep in sync with the template). */
 const SETUP_NODE = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0'
 const PNPM_SETUP = 'pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8'
-
-/** npm's `npm init` test-script stub — presence means "no real test script". */
-const NPM_TEST_STUB = 'Error: no test specified'
 
 /** Replace the single line whose trimmed content is `marker` with `block` lines at the marker's indent. */
 function replaceMarker(lines: string[], marker: string, block: readonly string[]): string[] {
@@ -45,30 +42,31 @@ function replaceMarker(lines: string[], marker: string, block: readonly string[]
     return [...lines.slice(0, idx), ...block.map((b) => (b === '' ? '' : indent + b)), ...lines.slice(idx + 1)]
 }
 
-/** The command a contracted COMMAND gate runs in CI: override > script > GateRunner built-in. */
-function gateCommand(entry: GateContractEntry, opts: RenderQualityGateOpts, script: string, builtin: string): string {
+/**
+ * The command a contracted COMMAND gate runs in CI: override > GateRunner built-in —
+ * exactly the two tiers the local GateRunner resolves, so CI and the local gate run
+ * the SAME command. There is deliberately NO package.json-script tier: the local
+ * gate never consults scripts, so rendering them here was the one channel where CI
+ * could diverge (a repo's `test` script running something the merge gate never ran).
+ * The sanctioned custom-command path is the `.factory/gates.json` override
+ * (Decision 46), honored by both consumers. `builtin` arrives package-manager-ready
+ * (build's built-in IS `npm run build`/`pnpm run build` — the local DefaultBuildTool
+ * runs the script by name).
+ */
+function gateCommand(entry: GateContractEntry, builtin: string): string {
     if (entry.contracted && entry.command !== undefined) {
         return entry.command
     }
-    const pm = opts.packageManager
-    const scriptBody = opts.scripts[script]
-    const hasScript = scriptBody !== undefined && !(script === 'test' && scriptBody.includes(NPM_TEST_STUB))
-    if (hasScript) {
-        if (pm === 'pnpm') {
-            return `pnpm ${script}`
-        }
-        return script === 'test' ? 'npm test' : `npm run ${script}`
-    }
-    return pm === 'pnpm' ? `pnpm exec ${builtin}` : `npx ${builtin}`
+    return builtin
 }
 
 /** One `- run:` step (or the uncontracted audit comment) for a quality-job gate. */
-function gateStep(id: GateId, opts: RenderQualityGateOpts, script: string, builtin: string): readonly string[] {
+function gateStep(id: GateId, opts: RenderQualityGateOpts, builtin: string): readonly string[] {
     const entry = opts.contract.gates[id]
     if (!entry.contracted) {
         return [`# ${id} gate uncontracted: ${entry.reason}`]
     }
-    return [`- run: ${gateCommand(entry, opts, script, builtin)}`]
+    return [`- run: ${gateCommand(entry, builtin)}`]
 }
 
 /** The checkout-adjacent package-manager setup steps for the quality job. */
@@ -99,10 +97,11 @@ function gatesBlock(opts: RenderQualityGateOpts): readonly string[] {
             `  run: ${pm === 'pnpm' ? 'pnpm next typegen' : 'npx next typegen'}`
         )
     }
-    lines.push(...gateStep('type', opts, 'typecheck', 'tsc --noEmit'))
-    lines.push(...gateStep('lint', opts, 'lint', 'eslint .'))
-    lines.push(...gateStep('test', opts, 'test', 'vitest run'))
-    lines.push(...gateStep('build', opts, 'build', 'npm run build'))
+    const run = pm === 'pnpm' ? 'pnpm exec' : 'npx'
+    lines.push(...gateStep('type', opts, `${run} tsc --noEmit`))
+    lines.push(...gateStep('lint', opts, `${run} eslint .`))
+    lines.push(...gateStep('test', opts, `${run} vitest run`))
+    lines.push(...gateStep('build', opts, `${pm} run build`))
     lines.push(
         "  # Build-time env for CI parity with the factory's local merge gate. Managed by",
         '  # the factory: `factory scaffold` replaces the marker below with a real `env:`',

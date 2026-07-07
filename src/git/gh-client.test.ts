@@ -250,6 +250,12 @@ describe('deleteRemoteBranch (worktree-safe remote-ref delete, CP2 #11)', () => 
         const gh = new DefaultGhClient(runner)
         await expect(gh.deleteRemoteBranch('o', 'r', 'b')).rejects.toThrow(/401|failed/i)
     })
+
+    it("throws on a refused 422 ('Validation Failed', e.g. ruleset-protected ref) — only the benign 422 is tolerated", async () => {
+        const runner: GhRunner = () => Promise.resolve(result({code: 1, stderr: 'HTTP 422: Validation Failed'}))
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.deleteRemoteBranch('o', 'r', 'b')).rejects.toThrow(/Validation Failed/)
+    })
 })
 
 describe('deleteProtection (remove branch protection before deleting a per-run staging branch)', () => {

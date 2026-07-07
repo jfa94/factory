@@ -29,6 +29,7 @@ import type {StageDone, StageFailed, StageSpawnBase} from './stage-helpers.js'
 import {z} from 'zod'
 import {
     provisionWorktree,
+    removeWorktreeBestEffort,
     isTerminalTaskStatus,
     E2eAffectedSpecSchema,
     type Config,
@@ -230,7 +231,7 @@ async function failAssessment(
     attempts: number
 ): Promise<Extract<AssessmentAction, {kind: 'failed'}>> {
     const worktree = assessmentWorktreePath(deps.dataDir, runId)
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
 
     const run = await deps.state.read(runId)
     const open = Object.values(run.tasks).filter((t) => !isTerminalTaskStatus(t.status))
@@ -338,7 +339,7 @@ export async function runAssessmentRecord(
     if (changed.length > 0) {
         await publishToStaging(deps.git, staging, assessBranchName(runId))
     }
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
 
     // A degraded verdict ALWAYS retains a non-empty warning in durable state: neither
     // `warning` nor `reason` is schema-required, so without this default a detail-less

@@ -1883,9 +1883,19 @@ The CI workflow was a second, hardcoded source of truth for the same facts.
    Scaffold resolves the contract **before** the CI net renders (a two-pass
    template loop: seeds → contract → managed CI net), then threads it plus
    lockfile-detected package manager, `package.json` scripts, and a `next`-dep
-   flag into the render. Each quality-job gate step is **override > script >
-   GateRunner built-in** (`npx tsc --noEmit`, `npx eslint .`, `npx vitest run`,
-   `npm run build`), so CI and the local gate run the same command. An
+   flag into the render. Each quality-job gate step is **override > GateRunner
+   built-in** (`npx`/`pnpm exec` + `tsc --noEmit`, `eslint .`, `vitest run`;
+   build renders `npm run build`/`pnpm run build` — the local `DefaultBuildTool`
+   runs the script by name) — exactly the two tiers the local GateRunner
+   resolves, so CI and the local gate run the same command. There is
+   deliberately **no package.json-script tier** (amended 2026-07-07): the local
+   gate never consults scripts, so a script tier was the one channel where CI
+   could diverge from the merge gate; a repo needing a custom command contracts
+   it in `.factory/gates.json` (Decision 46), which both consumers honor. The
+   CI `test` step is the same tool/config but un-scoped (the local gate runs
+   diff-scoped vitest per task) — inherent and desirable: CI is the full-suite
+   backstop. Existing repos pick the new render up on their next `factory
+scaffold`. An
    uncontracted gate is omitted with an audit comment. Drift is still measured
    against the **rendered** output, so per-repo rendering stays idempotent.
    Composes with the existing `injectGateEnvIntoWorkflow` (gate-env still a
@@ -1920,6 +1930,65 @@ The CI workflow was a second, hardcoded source of truth for the same facts.
 **Consequence:** Scaffolding a repo whose `develop` protection lacks the three
 default contexts now refuses unless `--provision` is passed (the default list is
 no longer empty). This is intentional: required-by-default is the point.
+
+---
+
+## Decision 54 — Review-Remediation Sweep: Honest Failure Classes and Non-Masking Recovery
+
+**Date:** 2026-07-07
+
+**Context:** A comprehensive-review pass surfaced a cluster of correctness
+defects where a failure was **misclassified** (poisoning a downstream signal) or a
+cleanup path **masked** the original fault. None is a new capability — each restores
+an invariant an existing decision already assumed.
+
+**Decision (the coherent fixes):**
+
+1. **The circuit-breaker trip sweep fails `blocked-environmental`, not
+   `capability-budget`** (`src/orchestrator/next.ts`). When the breaker (Decisions
+   34/45) trips, it sweeps every remaining non-terminal task. Those tasks are
+   **consequences** of the trip, not independent capability failures — so they now
+   carry the breaker-**excluded** class (like the wedge cascade), matching the
+   breaker's own derive-don't-store signal (`circuit-breaker-gate.ts` counts only
+   genuine `capability-budget` fails). A `capability-budget` sweep counted its own
+   output: a partial `rescue apply --task <genuine-failures>` reopen would re-trip on
+   the leftover swept rows before any agent ran. The class also makes swept tasks
+   rescue-**recoverable** (they never ran).
+
+2. **Block-mode cross-vendor absence is a terminal `blocked-environmental` fail, not
+   a burned escalation ladder** (`src/orchestrator/handlers.ts`,
+   `src/orchestrator/record.ts`). With `review.requireCrossVendor=block` and codex
+   absent, the merge gate can never pass — and the vendor probe is **process-sticky**,
+   so no producer re-run can repair a missing binary. Both the verify-reporter and the
+   record path now short-circuit to a terminal failure instead of climbing all four
+   escalation rungs to `capability-budget`. Recovery: `rescue apply` reset → `factory
+resume` in a **fresh process** re-probes codex.
+
+3. **Finalize's forward-reconcile conflict persists a durable marker and stays
+   recoverable** (`src/orchestrator/finalize.ts`). Step 6 now uses `tryMergeNoForce`
+   (abort-clean — never leave the tree mid-merge); on conflict it writes `run.rollup
+{merged:false, reason}` (with `number` **absent**, distinguishing it from an
+   armed-but-not-landed rollup PR — `RollupMarker.number` is now optional in
+   `schema.ts`) and throws with resolution instructions. The run stays **non-terminal**;
+   `rescue scan` flags it (`rollup_pending`) and the summary branches on run status —
+   terminal → `--recheck-rollup`, non-terminal → resolve-conflict-then-`resume`. This
+   extends Decision 33's forward-reconcile without a silent data-loss window.
+
+4. **Cleanup and detection stop masking real errors.** `gh deleteRemoteBranch`
+   (`src/git/gh-client.ts`) tightened its tolerated-stderr regex to `/Reference does
+not exist|Not Found|HTTP 404/i` — a **refused 422** (ruleset-protected ref) now
+   throws instead of masquerading as already-gone. A shared `removeWorktreeBestEffort`
+   (`src/git/worktree.ts`) replaces ten ad-hoc teardowns: it never throws (cleanup
+   paths must not mask the original failure) but **warns** on a nonzero exit with the
+   path still on disk (never silently leaks). `readCurrentForCwd` (`src/cli/current.ts`)
+   narrowed its catch to `UsageError → null`; a broken git env now **rethrows** rather
+   than reporting "no current run".
+
+**Also in this sweep (non-behavioral):** a single composition site for the
+deterministic-gate context + holdout evidence (`src/orchestrator/gate-context.ts`,
+shared by the verify reporter and `applyRecordReviews`); `resyncShipRetry` extracted
+from `nextAction`; `--ignore-quota` documented in `factory resume` help; and the
+Decision 53 amendment above (no package.json-script tier in the CI render).
 
 ---
 

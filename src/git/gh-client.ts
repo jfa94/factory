@@ -315,10 +315,12 @@ export class DefaultGhClient implements GhClient {
     async deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void> {
         // Remote-ref delete via the API — never `git branch -D` (a worktree holds the
         // local branch). Idempotent: a 422 "Reference does not exist" / 404 means the
-        // ref is already gone (success). Any other non-zero is a real error → throw.
+        // ref is already gone (success). Message-anchored like deleteProtection — a bare
+        // /422/ would also swallow REFUSALS (ruleset-protected ref → "422: Validation
+        // Failed"). Any other non-zero is a real error → throw.
         const path = `repos/${owner}/${repo}/git/refs/heads/${branch}`
         const r = await this.runner(['api', '--method', 'DELETE', path], this.execOpts(opts))
-        if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
+        if (r.code !== 0 && !/Reference does not exist|Not Found|HTTP 404/i.test(r.stderr)) {
             throw new Error(`gh api DELETE ${path} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
         }
     }

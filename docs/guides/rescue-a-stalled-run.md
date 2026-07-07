@@ -62,11 +62,14 @@ Run-level flags also fold into `needs_rescue` even when every task is `done`:
   failed `e2e_assessment` so the assessment re-runs.
 - `traceability_failed` — the PRD-traceability audit concluded `failed` (S9, Decision 47).
   Cleared only by `apply --reset-traceability`, once the unmet PRD intent is addressed.
-- `rollup_pending` — a `completed` run whose staging→develop rollup was **armed but never
-  landed** (e.g. GitHub's branch policy blocked the queued `--auto` merge, D3), persisted as
-  `run.rollup {number, merged:false, reason?}`. Cleared only by `apply --recheck-rollup`
-  (step 4b), and only once you've confirmed the queued merge actually landed. None of these is
-  ever auto-recovered — the scan surfaces them; a human asserts the cause cleared.
+- `rollup_pending` — the staging→develop rollup did not land (`run.rollup {number?,
+merged:false, reason?}`). Two shapes: **(a)** a `completed` run whose rollup was **armed but
+  never landed** (e.g. GitHub's branch policy blocked the queued `--auto` merge, D3;
+  `number` present) — cleared by `apply --recheck-rollup` (step 3b) once you've confirmed the
+  merge landed; **(b)** a **non-terminal** run that hit a **forward-reconcile conflict** in
+  finalize (`number` absent) — no apply flag; resolve the staging↔develop conflict by hand,
+  then plain `factory resume` (step 3c). Neither is ever auto-recovered — the scan surfaces
+  them; a human asserts the cause cleared.
 
 The scan also carries a read-only `work` field — a git-grounded survey of how much
 committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
@@ -122,6 +125,24 @@ factory rescue apply --recheck-rollup
 re-driven `finalizeRun` re-checks the PR: finding it merged, it completes the PRD-close and
 per-run branch GC and clears the pointer. There is no polling and the staging branch is
 retained until the merge is confirmed.
+
+## 3c. Resolve a forward-reconcile conflict
+
+When `scan` reports `rollup_pending: true` on a **non-terminal** run (`run.rollup.number`
+absent), finalize's forward-reconcile (Decision 33 — merging develop's new commits into the
+run's `staging-<run-id>` branch before the rollup PR) hit a **merge conflict**. Finalize
+aborts the merge clean (never leaving the tree mid-merge), persists the `merged:false`
+marker, and throws with instructions — the run stays non-terminal, so there is **no
+`apply` flag** for this case. Resolve it by hand on the staging branch, then resume:
+
+```bash
+git checkout staging-<run-id>
+git merge origin/develop      # resolve conflicts, commit, and push
+factory resume
+```
+
+The re-entered `finalizeRun` re-runs the reconcile (now clean), pushes, opens the rollup PR,
+and overwrites the marker with the real rollup result.
 
 ## 4. Reconcile git/GitHub drift
 

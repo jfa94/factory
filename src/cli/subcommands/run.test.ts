@@ -29,6 +29,7 @@ import {FakeGitClient, FakeGhClient} from '../../git/index.js'
 import {defaultConfig} from '../../config/schema.js'
 import {runDocsEmit, runDocsRecord, type DocsRunDeps} from '../../orchestrator/docs.js'
 import {makeTempDataDir, seedScaffoldRepo} from '../test-fixtures.js'
+import {readMetrics} from '../../scoring/index.js'
 
 const REPO = 'acme/widgets'
 
@@ -1242,5 +1243,114 @@ describe('runDocs — CLI-level integration (T)', () => {
         expect(run.status).not.toBe('suspended')
         expect(run.docs?.attempts).toBe(2)
         await rm(dataDir, {recursive: true, force: true})
+    })
+})
+
+// ---------------------------------------------------------------------------
+// runResume (factory resume) — quota re-check + checkpoint clear via the CLI
+// ---------------------------------------------------------------------------
+// Driven through `resumeCommand.run` (runResume is not exported). The suite pins
+// the CLI-layer behavior applyResume's unit tests cannot see: the --ignore-quota
+// persist-before-plan ordering, the pause path leaving state untouched, the S11
+// human_touch metric mirror, and the flag-rejection guards.
+describe('runResume (factory resume)', () => {
+    let dataDir: string
+    let prevPluginData: string | undefined
+    let state: StateManager
+    let store: SpecStore
+
+    beforeEach(async () => {
+        dataDir = await makeTempDataDir('factory-resume-')
+        prevPluginData = process.env.CLAUDE_PLUGIN_DATA
+        process.env.CLAUDE_PLUGIN_DATA = dataDir
+        state = new StateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(request([task('t1', [])]), '# spec\n', makePrd())
+    })
+    afterEach(async () => {
+        if (prevPluginData === undefined) {
+            delete process.env.CLAUDE_PLUGIN_DATA
+        } else {
+            process.env.CLAUDE_PLUGIN_DATA = prevPluginData
+        }
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    /** Seed a run, then park it 7d-suspended with a quota checkpoint (a quota-caused stop). */
+    async function seedSuspended(runId: string): Promise<void> {
+        await createRun(state, store, {repo: REPO, issue: 42, runId, ownerSession: 'sess-resume'})
+        await state.update(runId, (s) => ({
+            ...s,
+            status: 'suspended' as const,
+            quota: {binding_window: '7d' as const, resets_at_epoch: Math.floor(Date.now() / 1000) + 3600},
+        }))
+    }
+
+    /** Run `factory resume <argv>`; capture the JSON envelope + exit code. */
+    async function resume(argv: string[]): Promise<{env: Record<string, unknown>; code: number; stderr: string}> {
+        const chunks: string[] = []
+        const errChunks: string[] = []
+        const out = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+            chunks.push(String(c))
+            return true
+        })
+        const err = vi.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => {
+            errChunks.push(String(c))
+            return true
+        })
+        let code: number
+        try {
+            code = await resumeCommand.run(argv)
+        } finally {
+            out.mockRestore()
+            err.mockRestore()
+        }
+        return {
+            env: chunks.length > 0 ? (JSON.parse(chunks.join('')) as Record<string, unknown>) : {},
+            code,
+            stderr: errChunks.join(''),
+        }
+    }
+
+    it('--ignore-quota persists ignore_quota AND resumes despite an unavailable (fail-closed) reading', async () => {
+        await seedSuspended('run-iq')
+        // No usage-cache.json in the temp data dir → the reading is `unavailable`,
+        // which without the flag fail-closed pauses (proven by the test below).
+        const {env, code} = await resume(['--run', 'run-iq', '--ignore-quota'])
+        expect(code).toBe(EXIT.OK)
+        expect(env.kind).toBe('resumed')
+        const run = await state.read('run-iq')
+        expect(run.ignore_quota).toBe(true)
+        expect(run.status).toBe('running')
+        expect(run.quota).toBeUndefined() // checkpoint cleared
+    })
+
+    it('plain resume on the same parked run fail-closed pauses and leaves state untouched', async () => {
+        await seedSuspended('run-park')
+        const {env, code} = await resume(['--run', 'run-park'])
+        expect(code).toBe(EXIT.OK)
+        expect(env.kind).toBe('pause')
+        const run = await state.read('run-park')
+        expect(run.status).toBe('suspended')
+        expect(run.ignore_quota).toBe(false)
+        expect(run.quota).toBeDefined() // checkpoint intact
+    })
+
+    it("a resume that clears the checkpoint mirrors the S11 human_touch 'resume' metric", async () => {
+        await seedSuspended('run-touch')
+        await resume(['--run', 'run-touch', '--ignore-quota'])
+        const metrics = await readMetrics(dataDir, 'run-touch')
+        const touches = metrics.filter((m) => m.event === 'human_touch')
+        expect(touches.map((m) => (m.data as {kind: string}).kind)).toContain('resume')
+    })
+
+    it('rejects --e2e (create-only flag) as a usage error', async () => {
+        await seedSuspended('run-flags')
+        const {code, stderr} = await resume(['--run', 'run-flags', '--e2e'])
+        expect(code).toBe(EXIT.USAGE)
+        expect(stderr).toMatch(/--no-ship\/--e2e are not valid on resume/)
     })
 })

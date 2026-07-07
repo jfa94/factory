@@ -13,6 +13,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {nextTask} from './next.js'
+import {scanRun} from '../rescue/scan.js'
 import {MAX_DOCS_ATTEMPTS} from './docs.js'
 import {makeOrchestratorDeps, PAUSE_5H} from './orchestrator-fixtures.js'
 import type {UsageReading} from '../quota/usage-source.js'
@@ -420,8 +421,17 @@ describe('nextTask', () => {
 
             const run = await deps.state.read(runId)
             expect(run.tasks.T4?.status).toBe('failed')
-            expect(run.tasks.T4?.failure_class).toBe('capability-budget')
+            // Swept tasks are CONSEQUENCES of the trip, not independent failures: a
+            // breaker-EXCLUDED class, or a rescue-reopen re-drive would re-trip on the
+            // sweep's own output and undo any partial rescue.
+            expect(run.tasks.T4?.failure_class).toBe('blocked-environmental')
             expect(run.tasks.T4?.failure_reason).toMatch(/circuit breaker tripped/)
+
+            // Rescue sees the swept task as recoverable (it never ran) and the genuine
+            // capability failures as dead-ends.
+            const scan = scanRun(run)
+            expect(scan.tasks.find((t) => t.task_id === 'T4')?.disposition).toBe('recoverable')
+            expect(scan.tasks.find((t) => t.task_id === 'T1')?.disposition).toBe('dead-end')
         } finally {
             await cleanup()
         }

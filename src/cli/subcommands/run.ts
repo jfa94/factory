@@ -131,9 +131,11 @@ RunState JSON (run_id is the top-level field).`
 const RESUME_HELP = `factory resume — re-check quota and resume a paused/suspended run
 
 Usage:
-  factory resume [--run <id>]
+  factory resume [--run <id>] [--ignore-quota]
 
-  --run   The run to resume (defaults to runs/current).
+  --run            The run to resume (defaults to runs/current).
+  --ignore-quota   Persist ignore_quota on the run and resume regardless of the
+                   live usage reading (also skips re-suspension on later steps).
 
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              — window recovered (or already running)
@@ -304,13 +306,16 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
                 'resuming a parked run IS the spec sign-off.'
         )
     }
-    const picked = [supersede && 'supersede', resume && 'resume', fresh && 'fresh'].filter(
-        Boolean
-    ) as RunIntent['intent'][]
-    if (picked.length > 1) {
+    if ([supersede, resume, fresh].filter(Boolean).length > 1) {
         throw new UsageError('run create: pass at most one of --new / --supersede / --resume')
     }
-    const intent: NonNullable<RunIntent['intent']> = picked[0] ?? 'default'
+    const intent: NonNullable<RunIntent['intent']> = supersede
+        ? 'supersede'
+        : resume
+          ? 'resume'
+          : fresh
+            ? 'fresh'
+            : 'default'
     const ignoreQuota = args.flag('ignore-quota') === true
     const e2e = args.flag('e2e') === true
     if (e2e) {
@@ -323,7 +328,7 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     const hasDataDirOverride = overrides.dataDir !== undefined
 
     const dataDir = resolveDataDir(hasDataDirOverride ? {dataDir: overrides.dataDir} : {})
-    const config = loadConfig(hasDataDirOverride ? {dataDir} : {})
+    const config = loadConfig({dataDir})
     const state = new StateManager({dataDir})
     const specStore = new SpecStore({dataDir})
     // Decision 33: build the staging deps bundle (git + gh + config + root + repo

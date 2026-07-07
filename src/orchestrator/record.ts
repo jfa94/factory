@@ -30,11 +30,10 @@ import {parseJson} from '../shared/json.js'
 import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
 import {taskWorktreePath} from './paths.js'
 import {canonicalizePath} from '../hooks/tcb.js'
-import {taskExemptReader} from './exempt.js'
-import {runCoverageDir} from '../core/state/index.js'
+import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
 import {classifyFailure, ESCALATION_CAP, parseProducerStatus} from '../producer/index.js'
 import {nextPhase, phaseToInFlightStatus} from '../types/index.js'
-import {GateRunner, FsCoverageStore, type GateContext} from '../verifier/deterministic/index.js'
+import {GateRunner} from '../verifier/deterministic/index.js'
 import {
     runPanel,
     parseRawReview,
@@ -49,7 +48,6 @@ import {
 import {
     checkHoldout,
     holdoutEvidence,
-    deriveHoldoutEvidence,
     parseHoldoutVerdicts,
     type HoldoutVerdict,
     type HoldoutVerdictStore,
@@ -453,33 +451,13 @@ export async function applyRecordReviews(
     const makeRunner = makeReplayRunnerFactory(input)
 
     // 2. deterministic gates (re-run, never read back — Δ V).
-    const gateCtx: GateContext = {
-        runId,
-        taskId,
-        worktree,
-        baseRef,
-        config: deps.config,
-        tools: deps.tools,
-        exemptReader: taskExemptReader(deps, worktree),
-        ...(deps.loadContract === undefined ? {} : {loadContract: deps.loadContract}),
-        coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId)),
-    }
-    const gate = await new GateRunner().run(gateCtx)
+    const gate = await new GateRunner().run(buildGateContext(deps, runId, taskId, baseRef))
     const gateEvidence: GateEvidence[] = [...gate.evidence]
 
     // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
     //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
     //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
-    const holdoutGate = await deriveHoldoutEvidence(
-        deps.holdout,
-        verdictStore,
-        runId,
-        taskId,
-        deps.config.quality.holdoutPassRate
-    )
-    if (holdoutGate !== undefined) {
-        gateEvidence.push(holdoutGate)
-    }
+    await appendHoldoutEvidence(deps, verdictStore, runId, taskId, gateEvidence)
 
     // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
     const panel = await runPanel({
@@ -538,20 +516,36 @@ export async function applyRecordReviews(
         }))
         step = {done: false, phase: nextPhaseVal}
     } else if (panel.result.kind === 'wait-retry') {
-        // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
-        // escalating — the same "separate write ahead of the ladder transition"
-        // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
-        // `{...t}` spread then carries it across the rung bump while it clears reviewers.
-        const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
-        await deps.state.updateTask(runId, taskId, (t) => ({...t, fix_findings: fixFindings}))
-        step = await escalateOrFail(
-            deps,
-            runId,
-            taskId,
-            classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
-            'exec'
-        )
-        await persistStepCursor(deps, runId, taskId, step)
+        // Block-mode cross-vendor absence is ENVIRONMENTAL, not a producer defect:
+        // the probe is process-sticky, so no implementer re-run can repair a missing
+        // codex binary. Fail fast blocked-environmental (rescue-recoverable,
+        // breaker-excluded) instead of burning the escalation ladder. No fix_findings
+        // write — there is nothing for the next rung to fix.
+        if (deps.config.review.requireCrossVendor === 'block' && panel.crossVendorAbsence !== undefined) {
+            step = await escalateOrFail(
+                deps,
+                runId,
+                taskId,
+                classifyFailure({kind: 'environmental', reason: panel.crossVendorAbsence.reason}),
+                'exec'
+            )
+            await persistStepCursor(deps, runId, taskId, step)
+        } else {
+            // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
+            // escalating — the same "separate write ahead of the ladder transition"
+            // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
+            // `{...t}` spread then carries it across the rung bump while it clears reviewers.
+            const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
+            await deps.state.updateTask(runId, taskId, (t) => ({...t, fix_findings: fixFindings}))
+            step = await escalateOrFail(
+                deps,
+                runId,
+                taskId,
+                classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
+                'exec'
+            )
+            await persistStepCursor(deps, runId, taskId, step)
+        }
     } else {
         throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`)
     }

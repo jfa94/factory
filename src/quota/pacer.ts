@@ -28,7 +28,7 @@ import {computeWindowHour, computeWindowDay, hourlyThresholdFor, dailyThresholdF
  *   - `pause-5h`          — 5h window over curve; PAUSE in place (RunStatus paused),
  *                           self-heals as the curve rises. Carries the resume horizon.
  *   - `suspend-7d`        — 7d window over curve (dominant); SUSPEND (persist + clean
- *                           exit, RunStatus suspended), resume via `factory run resume`.
+ *                           exit, RunStatus suspended), resume via `factory resume`.
  *   - `unavailable-halt`  — usage could not be observed (fail-closed sentinel); HALT
  *                           cleanly rather than proceed blind.
  */

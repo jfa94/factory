@@ -53,7 +53,7 @@ import {buildHoldoutPrompt, FsHoldoutVerdictStore} from '../verifier/holdout/ind
 import {isSpawnPhase} from './results.js'
 import type {DriveResults, ResultKey, SpawnPhase} from './results.js'
 import type {HandlerDeps} from './types.js'
-import {createLogger} from '../shared/index.js'
+import {createLogger, nonNull} from '../shared/index.js'
 
 const log = createLogger('orchestrator')
 
@@ -238,6 +238,93 @@ async function recordResults(
 }
 
 /**
+ * The ship-refusal re-sync leg of the wait-retry arm (Bug #1): a serial-writer
+ * BEHIND refusal means staging advanced under this task. Re-routing to exec alone
+ * re-runs the producer on the SAME stale base, so ship refuses again every cycle
+ * until the budget burns. Forward-merge the current staging tip INTO the task
+ * branch (and re-push, so the remote PR head advances — the serializer reads
+ * BEHIND from the remote) BEFORE the re-route, so exec re-runs on the integrated
+ * base. A clean textual merge can still be a SEMANTIC conflict (both sides apply
+ * but break a test together); exec→verify is exactly the fix-forward path that
+ * repairs it and re-runs every gate. A real merge conflict is terminal
+ * blocked-environmental (tree already aborted-clean). The merge runs before the
+ * atomic bump so a crash replays it (idempotent: a second merge is "already up
+ * to date") until the bump commits phase→exec.
+ *
+ * Returns `done` with the terminal step (missing worktree / merge conflict /
+ * re-sync budget exhausted) or `continue` after the atomic bump+cursor write —
+ * the caller re-enters the loop at exec with the cursor already persisted.
+ */
+async function resyncShipRetry(
+    deps: OrchestratorDeps,
+    runId: string,
+    taskId: string,
+    stagingBranch: string,
+    reason: string
+): Promise<{kind: 'done'; step: TaskStep} | {kind: 'continue'}> {
+    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    if (!(await deps.git.worktreeExists(worktree))) {
+        const step = await failStep(
+            deps,
+            runId,
+            taskId,
+            'blocked-environmental',
+            `staging re-sync: task worktree missing (${worktree})`
+        )
+        return {kind: 'done', step}
+    }
+    const resync = await resyncTaskBranchOntoStaging({
+        git: deps.git,
+        cwd: worktree,
+        branch: runScopedBranch(runId, taskId),
+        stagingBranch,
+    })
+    if (!resync.merged) {
+        const step = await failStep(
+            deps,
+            runId,
+            taskId,
+            'blocked-environmental',
+            `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
+        )
+        return {kind: 'done', step}
+    }
+    // Live-merge refusal → bounded re-sync through exec (persisted budget).
+    // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
+    // crash between the bump and the next markInFlight cannot double-spend the
+    // budget (old code committed the bump under phase "ship", then markInFlight
+    // separately wrote the exec cursor — a crash in that window replayed ship
+    // and re-bumped). The capped check runs inside the mutator against the
+    // committed value, never a stale pre-read. Over-cap is a terminal failure and
+    // deliberately leaves the cursor at "ship" (the failure is the next write,
+    // idempotent on resume) so a crash-during-fail doesn't re-run exec+verify
+    // and re-spend agent budget.
+    const bumpedRun = await deps.state.updateTask(runId, taskId, (t) => {
+        const merge_resyncs = t.merge_resyncs + 1
+        if (merge_resyncs > MERGE_RESYNC_CAP) {
+            return {...t, merge_resyncs}
+        }
+        return {...t, merge_resyncs, phase: 'exec', status: phaseToInFlightStatus('exec')}
+    })
+    const bumped = nonNull(bumpedRun.tasks[taskId], `orchestrator: task '${taskId}' vanished mid-resync`)
+    if (bumped.merge_resyncs > MERGE_RESYNC_CAP) {
+        const step = await failStep(
+            deps,
+            runId,
+            taskId,
+            'blocked-environmental',
+            `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${reason}`
+        )
+        return {kind: 'done', step}
+    }
+    log.info(
+        `task '${taskId}' merge refused (${reason}); re-routing to exec to re-sync ` +
+            `(attempt ${bumped.merge_resyncs}/${MERGE_RESYNC_CAP})`
+    )
+    return {kind: 'continue'}
+}
+
+/**
  * Collapse a terminal {@link TaskStep} into the `done` {@link NextAction}. The
  * completeTask/failStep transitions at the loop's terminal arms ALWAYS return
  * `done:true`; a non-terminal step there is an internal invariant break, so throw
@@ -379,87 +466,13 @@ export async function nextAction(
             }
             case 'wait-retry': {
                 if (result.phase === 'ship') {
-                    // Bug #1: a serial-writer BEHIND refusal means staging advanced under this
-                    // task. Re-routing to exec alone re-runs the producer on the SAME stale base,
-                    // so ship refuses again every cycle until the budget burns. Forward-merge the
-                    // current staging tip INTO the task branch (and re-push, so the remote PR head
-                    // advances — the serializer reads BEHIND from the remote) BEFORE the re-route,
-                    // so exec re-runs on the integrated base. A clean textual merge can still be a
-                    // SEMANTIC conflict (both sides apply but break a test together); exec→verify is
-                    // exactly the fix-forward path that repairs it and re-runs every gate. A real
-                    // merge conflict is terminal blocked-environmental (tree already aborted-clean).
-                    // Done before the atomic bump so a crash replays the merge (idempotent: a second
-                    // merge is "already up to date") until the bump commits phase→exec.
-                    const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId)
-                    const stagingBranch = run.staging_branch
-                    if (!(await deps.git.worktreeExists(resyncWorktree))) {
-                        const step = await failStep(
-                            deps,
-                            runId,
-                            taskId,
-                            'blocked-environmental',
-                            `staging re-sync: task worktree missing (${resyncWorktree})`
-                        )
-                        return doneFromStep(runId, taskId, step)
+                    // Ship-refusal re-sync (Bug #1) — see resyncShipRetry.
+                    const retry = await resyncShipRetry(deps, runId, taskId, run.staging_branch, result.reason)
+                    if (retry.kind === 'done') {
+                        return doneFromStep(runId, taskId, retry.step)
                     }
-                    const resync = await resyncTaskBranchOntoStaging({
-                        git: deps.git,
-                        cwd: resyncWorktree,
-                        branch: runScopedBranch(runId, taskId),
-                        stagingBranch,
-                    })
-                    if (!resync.merged) {
-                        const step = await failStep(
-                            deps,
-                            runId,
-                            taskId,
-                            'blocked-environmental',
-                            `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
-                        )
-                        return doneFromStep(runId, taskId, step)
-                    }
-                    // Live-merge refusal → bounded re-sync through exec (persisted budget).
-                    // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
-                    // crash between the bump and the next markInFlight cannot double-spend the
-                    // budget (old code committed the bump under phase "ship", then markInFlight
-                    // separately wrote the exec cursor — a crash in that window replayed ship
-                    // and re-bumped). The capped check runs inside the mutator against the
-                    // committed value, never a stale pre-read. Over-cap is a terminal failure and
-                    // deliberately leaves the cursor at "ship" (the failure is the next write,
-                    // idempotent on resume) so a crash-during-fail doesn't re-run exec+verify
-                    // and re-spend agent budget.
-                    let newResyncs = 0
-                    let overCap = false
-                    await deps.state.updateTask(runId, taskId, (t) => {
-                        newResyncs = t.merge_resyncs + 1
-                        overCap = newResyncs > MERGE_RESYNC_CAP
-                        if (overCap) {
-                            return {...t, merge_resyncs: newResyncs}
-                        }
-                        return {
-                            ...t,
-                            merge_resyncs: newResyncs,
-                            phase: 'exec',
-                            status: phaseToInFlightStatus('exec'),
-                        }
-                    })
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- overCap is mutated inside the .map() callback above; TS's control-flow analysis doesn't track closure assignment and wrongly narrows it to `false`
-                    if (overCap) {
-                        const step = await failStep(
-                            deps,
-                            runId,
-                            taskId,
-                            'blocked-environmental',
-                            `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
-                        )
-                        return doneFromStep(runId, taskId, step)
-                    }
-                    log.info(
-                        `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync ` +
-                            `(attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
-                    )
                     phase = 'exec'
-                    cursorPersisted = true // exec cursor written ATOMICALLY with the bump above
+                    cursorPersisted = true // exec cursor written ATOMICALLY with the bump in resyncShipRetry
                     continue
                 }
                 // verify merge gate blocked on a crash-resume replay → same classify path as the record.

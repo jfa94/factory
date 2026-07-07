@@ -7,7 +7,14 @@
  */
 import {join} from 'node:path'
 import {ensureStageWorktree} from './stage-helpers.js'
-import {runE2e, DefaultPlaywrightTool, provisionWorktree, type E2eManifestEntry, type E2eSpecResult} from './deps.js'
+import {
+    runE2e,
+    DefaultPlaywrightTool,
+    provisionWorktree,
+    removeWorktreeBestEffort,
+    type E2eManifestEntry,
+    type E2eSpecResult,
+} from './deps.js'
 import {CONTROL_TITLE_PREFIX} from './e2e-schemas.js'
 import {e2eBaseProofWorktreePath, scrubbedE2eEnv, type BootConfig} from './e2e-paths.js'
 import {DefaultE2eFileOps, errText, type E2eRunDeps} from './e2e-shared.js'
@@ -143,6 +150,6 @@ export async function proveCriticals(
         }
         return {ok: true, reason: ''}
     } finally {
-        await deps.git.worktreeRemove([wtPath, '--force'])
+        await removeWorktreeBestEffort(deps.git, wtPath)
     }
 }

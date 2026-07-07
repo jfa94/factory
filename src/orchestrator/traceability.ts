@@ -20,7 +20,7 @@ import {ensureStageWorktree} from './stage-helpers.js'
 import type {StageDone, StageFailed, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {getOrThrow, nowIso} from '../shared/index.js'
-import {parseProducerStatus, TRACEABILITY_AUDITOR_AGENT_TYPE} from './deps.js'
+import {parseProducerStatus, TRACEABILITY_AUDITOR_AGENT_TYPE, removeWorktreeBestEffort} from './deps.js'
 import {SpecStore, type Config, type GitClient, type SpecManifest, type StateManager} from './deps.js'
 import {extractPrdRequirements} from '../spec/index.js'
 import type {TraceabilityVerdictRow} from '../core/state/schema.js'
@@ -194,7 +194,7 @@ export async function runTraceabilityRecord(
         })
         const unmet = rows.filter((r) => r.verdict === 'unmet')
         // Concluded either way — the worktree has no further use (no retry leg here).
-        await deps.git.worktreeRemove([worktree, '--force'])
+        await removeWorktreeBestEffort(deps.git, worktree)
 
         if (unmet.length === 0) {
             await deps.state.update(runId, (s) => ({
@@ -224,7 +224,7 @@ export async function runTraceabilityRecord(
     }
 
     if (attempts >= MAX_TRACE_ATTEMPTS) {
-        await deps.git.worktreeRemove([worktree, '--force'])
+        await removeWorktreeBestEffort(deps.git, worktree)
         await deps.state.update(runId, (s) => ({...s, traceability: marker}))
         return {kind: 'failed', run_id: runId, reason}
     }

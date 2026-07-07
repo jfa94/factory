@@ -48,6 +48,7 @@ export {
     assertBaseIsStagingTip,
     ensureOnStaging,
     removeWorktree,
+    removeWorktreeBestEffort,
     resyncTaskBranchOntoStaging,
 } from './worktree.js'
 export type {

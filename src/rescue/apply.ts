@@ -5,7 +5,7 @@
  * that acts on that classification. It resets the resettable tasks back to `pending`
  * (clearing the stale producer/reviewer/failure state) and, if the run had already
  * finalized to a terminal status, REOPENS it to `running` so the orchestrator picks the
- * reset work back up. After apply, a plain `factory run resume` (quota gate) +
+ * reset work back up. After apply, a plain `factory resume` (quota gate) +
  * re-drive carries the run forward — rescue is the missing seam between them.
  *
  * THE "without repeating dead ends" CONTRACT (WS12 acceptance), enforced here:
@@ -245,6 +245,24 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
  * explicitly-named ids skipped for already being `pending`. THROWS on an explicit
  * id that is missing or `done`. See {@link RescueApplyOptions}.
  */
+/** The run's task map with every `targets` row reset (pure — shared by both apply branches). */
+function resetTasks(run: RunState, targets: readonly string[]): Record<string, TaskState> {
+    const nextTasks: Record<string, TaskState> = {...run.tasks}
+    for (const id of targets) {
+        nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
+    }
+    return nextTasks
+}
+
+/**
+ * The status fields a reopened terminal run gets (pure — shared by both apply
+ * branches). A terminal run carries no quota checkpoint (finalize cleared it), so
+ * returning to `running` with `ended_at:null` satisfies every invariant.
+ */
+function reopenFields(reopen: boolean): Partial<RunState> {
+    return reopen ? {status: 'running' as const, ended_at: null} : {}
+}
+
 function selectTargets(run: RunState, opts: RescueApplyOptions): {targets: string[]; skipped: string[]} {
     const explicit = opts.tasks ?? []
     if (explicit.length > 0) {
@@ -338,15 +356,11 @@ export async function applyRescue(
                 self_heal_attempts: attempts + 1,
                 touched: false, // self-heal is not a human (S11)
             }
-            const nextTasks: Record<string, TaskState> = {...run.tasks}
-            for (const id of targets) {
-                nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
-            }
             return {
                 ...run,
-                tasks: nextTasks,
+                tasks: resetTasks(run, targets),
                 self_heal: {attempts: attempts + 1, last_at: opts.auto.at},
-                ...(reopen ? {status: 'running' as const, ended_at: null} : {}),
+                ...reopenFields(reopen),
             }
         }
 
@@ -383,13 +397,9 @@ export async function applyRescue(
             return run // pure no-op (update still stamps updated_at — harmless)
         }
 
-        const nextTasks: Record<string, TaskState> = {...run.tasks}
-        for (const id of targets) {
-            nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
-        }
         return {
             ...run,
-            tasks: nextTasks,
+            tasks: resetTasks(run, targets),
             // S11: a manual apply that did work IS a human touch.
             human_touches: [...run.human_touches, {kind: 'recover' as const, at: opts.at ?? nowIso()}],
             ...(e2eReset ? {e2e_phase: reopenE2ePhase(nonNull(run.e2e_phase))} : {}),
@@ -399,9 +409,7 @@ export async function applyRescue(
             // S9 (Decision 47): drop the WHOLE failed traceability marker so
             // wantsTraceability re-fires a fresh audit on the next drive.
             ...(traceReset ? {traceability: undefined} : {}),
-            // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
-            // so returning to `running` with `ended_at:null` satisfies every invariant.
-            ...(reopen ? {status: 'running' as const, ended_at: null} : {}),
+            ...reopenFields(reopen),
         }
     })
 

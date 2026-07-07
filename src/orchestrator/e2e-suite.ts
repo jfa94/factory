@@ -14,6 +14,7 @@ import {
     runE2e,
     DefaultPlaywrightTool,
     provisionWorktree,
+    removeWorktreeBestEffort,
     E2E_AUTHOR_AGENT_TYPE,
     type RunState,
     type SpecManifest,
@@ -161,7 +162,7 @@ async function failAdjudication(
     worktree: string,
     reason: string
 ): Promise<Extract<E2eAction, {kind: 'failed'}>> {
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
     await deps.state.update(runId, (s) =>
         s.e2e_phase === undefined ? s : {...s, e2e_phase: {...s.e2e_phase, adjudication: undefined}}
     )
@@ -307,7 +308,7 @@ export async function recordAdjudication(
     }
 
     await publishToStaging(deps.git, staging, adjudicateBranchName(runId))
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
 
     await deps.state.update(runId, (s) => {
         if (s.e2e_phase === undefined) {

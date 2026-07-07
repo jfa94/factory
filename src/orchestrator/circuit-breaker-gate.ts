@@ -14,10 +14,12 @@
  * derived honestly from run state (derive-don't-store — no breaker counter persisted):
  * the count of `capability-budget` failures — tasks whose producer escalation ladder
  * genuinely exhausted its budget. We deliberately EXCLUDE `blocked-environmental`
- * (dependency cascades) and `spec-defect` (wedge) failures: those are CONSEQUENCES
- * of a failure, not independent failures. Counting them would let ONE real failure
- * that cascades to two dependents masquerade as three "consecutive" failures and
- * abort still-runnable independent work — directly against the highest-quality-code
+ * (dependency cascades AND the breaker's own trip sweep in `nextTask`) and
+ * `spec-defect` (wedge) failures: those are CONSEQUENCES of a failure, not
+ * independent failures. Counting them would let ONE real failure that cascades to
+ * two dependents masquerade as three "consecutive" failures and abort still-runnable
+ * independent work — and counting the trip sweep's own output would poison the
+ * signal on any rescue-reopen re-drive — directly against the highest-quality-code
  * objective. (The signal is run-cumulative, not strictly consecutive: once N tasks
  * have GENUINELY failed, the run is pathological enough to abort in lights-out mode.)
  * The gate also supplies the task-graph size (`Object.keys(run.tasks).length`) so the

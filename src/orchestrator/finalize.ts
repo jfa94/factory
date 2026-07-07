@@ -213,10 +213,21 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
     if (terminal === 'completed') {
         const stagingBranch = run.staging_branch
         // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
-        // (no force-push) so the rollup PR is up-to-date. A conflict here is
-        // non-auto-recoverable → surfaces for rescue.
+        // (no force-push) so the rollup PR is up-to-date. A conflict is non-auto-recoverable:
+        // abort-clean (tryMergeNoForce — never leave the tree mid-merge), persist a durable
+        // `rollup {merged:false}` marker so `rescue scan` flags the run (`rollup_pending`)
+        // instead of reporting it healthy, THEN throw. The run stays non-terminal; recovery
+        // is a human resolving the staging↔develop conflict + plain `factory resume`, whose
+        // re-entered finalize re-merges and overwrites this marker with the real rollup result.
         await deps.git.fetch('origin', deps.config.git.baseBranch)
-        await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`)
+        const reconcile = await deps.git.tryMergeNoForce(stagingBranch, `origin/${deps.config.git.baseBranch}`)
+        if (!reconcile.merged) {
+            const reason = `forward-reconcile conflict merging origin/${deps.config.git.baseBranch} into ${stagingBranch}: ${reconcile.conflict}`
+            await deps.state.update(runId, (s) => ({...s, rollup: {merged: false, reason}}))
+            throw new Error(
+                `finalize: ${reason} — resolve the conflict on '${stagingBranch}', push, then \`factory resume\``
+            )
+        }
         await deps.git.push('origin', stagingBranch)
 
         rollupResult = await rollup({

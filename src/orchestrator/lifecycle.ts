@@ -367,7 +367,7 @@ export async function resolveOrCreateRun(
 // resume
 // ---------------------------------------------------------------------------
 
-/** The single JSON document `factory run resume` emits — the runner's contract. */
+/** The single JSON document `factory resume` emits — the runner's contract. */
 export type ResumeResult =
     /**
      * `cleared` (S11): true iff this resume actually cleared a park (a state write

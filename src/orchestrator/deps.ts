@@ -74,6 +74,7 @@ export type {
 export {
     createTaskWorktree,
     provisionWorktree,
+    removeWorktreeBestEffort,
     assertBaseIsStagingTip,
     resyncTaskBranchOntoStaging,
     createTaskPrIdempotent,

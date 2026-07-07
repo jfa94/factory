@@ -6870,13 +6870,13 @@ var RunStateSchema = external_exports.object({
   execution_mode: ExecutionModeEnum.default("sequential"),
   ship_mode: ShipModeEnum.default("live"),
   /**
-   * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
-   * gate). Stamped ONCE at `run create` from the launching session's
-   * `CLAUDE_CODE_SESSION_ID` (the runner/Bash env), so the Stop hook can
-   * session-scope its block: only the OWNING session is gated; an unrelated session
-   * stopping while this run is live passes through. Optional — best-effort: when the
-   * env var is absent (owner unknown), the Stop gate falls back to the unscoped
-   * behavior (degraded but safe). An immutable property, never a derived verdict.
+   * The Claude Code session id that OWNS this run. MANDATORY at `run create` —
+   * resolution (`--session-id` flag, else `CLAUDE_CODE_SESSION_ID`) failing is a
+   * UsageError, so every new run is owned. The schema keeps the field optional
+   * only for legacy persisted runs created before the requirement. The Stop hook
+   * uses it to scope a resumability HINT to the owning session (`findActiveByOwner`
+   * never matches an ownerless run) — it never blocks, and there is no unscoped
+   * fallback (see hooks/stop-gate.ts). An immutable property, never a derived verdict.
    */
   owner_session: external_exports.string().min(1).optional(),
   /**
@@ -6947,16 +6947,21 @@ var RunStateSchema = external_exports.object({
   e2e_assessment: E2eAssessmentSchema.optional(),
   /**
    * The `completed` run's staging→develop rollup outcome, persisted at finalize
-   * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
-   * "auto-armed" branch-policy fallback, D3). Absent on a merged rollup (nothing
-   * to recover) or a `failed` run (no rollup attempted). Lets `rescue scan` flag
-   * an armed-but-not-landed rollup (`rollup_pending`) without a live GitHub call —
-   * minimal-surface recovery: `rescue apply --recheck-rollup` reopens the run so a
-   * re-drive re-enters `finalizeRun`, whose rollup() resume-guard finds the
-   * now-merged PR and completes the PRD-close + branch-GC.
+   * ONLY when it did not land (`merged:false`). Two shapes: (a) an armed-but-not-
+   * landed rollup PR (`number` present — e.g. the "auto-armed" branch-policy
+   * fallback, D3; the run went terminal at step 7); (b) a forward-reconcile merge
+   * CONFLICT before any rollup PR exists (`number` absent; finalize threw, run
+   * stays NON-terminal). Absent on a merged rollup (nothing to recover) or a
+   * `failed` run (no rollup attempted). Lets `rescue scan` flag either case
+   * (`rollup_pending`) without a live GitHub call. Recovery: (a) `rescue apply
+   * --recheck-rollup` reopens the run so a re-drive re-enters `finalizeRun`,
+   * whose rollup() resume-guard finds the now-merged PR; (b) human resolves the
+   * staging↔develop conflict, then plain `factory resume` re-enters finalize,
+   * which overwrites/clears this marker with the real rollup result.
    */
   rollup: external_exports.object({
-    number: external_exports.number().int().positive(),
+    /** Rollup PR number; absent when the block precedes PR creation (reconcile conflict). */
+    number: external_exports.number().int().positive().optional(),
     merged: external_exports.boolean(),
     reason: external_exports.string().optional()
   }).optional(),
@@ -8381,7 +8386,7 @@ var DefaultGhClient = class {
   async deleteRemoteBranch(owner, repo, branch, opts) {
     const path6 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
     const r = await this.runner(["api", "--method", "DELETE", path6], this.execOpts(opts));
-    if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
+    if (r.code !== 0 && !/Reference does not exist|Not Found|HTTP 404/i.test(r.stderr)) {
       throw new Error(`gh api DELETE ${path6} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
   }
@@ -8592,6 +8597,7 @@ function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
 }
 
 // src/git/worktree.ts
+import { existsSync as existsSync5 } from "node:fs";
 var log8 = createLogger("git");
 var GIT_DEFAULTS2 = GitSchema.parse({});
 async function createTaskWorktree(args) {
@@ -8642,6 +8648,12 @@ async function resyncTaskBranchOntoStaging(args) {
     await args.git.push(remote, args.branch, opts);
   }
   return attempt;
+}
+async function removeWorktreeBestEffort(gitClient, path6) {
+  const code = await gitClient.worktreeRemove(["--force", path6]);
+  if (code !== 0 && existsSync5(path6)) {
+    log8.warn(`worktree remove --force ${path6} exited ${code ?? "null"} \u2014 worktree may be leaked`);
+  }
 }
 
 // src/git/provision.ts
@@ -9349,7 +9361,7 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 var log15 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
@@ -9429,7 +9441,7 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync5(file)) {
+    if (!existsSync6(file)) {
       log15.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
@@ -12667,7 +12679,7 @@ function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, e2eAs
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
   const assessTail = e2eAssessmentFailed ? " (e2e assessment failed \u2014 needs a fix + --reset-e2e)" : "";
   const traceTail = traceabilityFailed ? " (PRD-traceability failed \u2014 needs a fix + --reset-traceability)" : "";
-  const rollupTail = rollupPending ? " (rollup armed, not landed \u2014 re-run finalize once merged via --recheck-rollup)" : "";
+  const rollupTail = rollupPending ? status === "completed" ? " (rollup armed, not landed \u2014 re-run finalize once merged via --recheck-rollup)" : " (forward-reconcile conflict \u2014 resolve it on the staging branch, then `factory resume`)" : "";
   if (resettable === 0) {
     const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
     if (e2eFailed || e2eAssessmentFailed || traceabilityFailed || rollupPending) {
@@ -12796,6 +12808,16 @@ function resetTaskRow(task, opts = {}) {
     ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
   };
 }
+function resetTasks(run10, targets) {
+  const nextTasks = { ...run10.tasks };
+  for (const id of targets) {
+    nextTasks[id] = resetTaskRow(nonNull(run10.tasks[id]));
+  }
+  return nextTasks;
+}
+function reopenFields(reopen) {
+  return reopen ? { status: "running", ended_at: null } : {};
+}
 function selectTargets(run10, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
@@ -12863,15 +12885,11 @@ async function applyRescue(state, runId, opts = {}) {
         touched: false
         // self-heal is not a human (S11)
       };
-      const nextTasks2 = { ...run10.tasks };
-      for (const id of targets2) {
-        nextTasks2[id] = resetTaskRow(nonNull(run10.tasks[id]));
-      }
       return {
         ...run10,
-        tasks: nextTasks2,
+        tasks: resetTasks(run10, targets2),
         self_heal: { attempts: attempts + 1, last_at: opts.auto.at },
-        ...reopen2 ? { status: "running", ended_at: null } : {}
+        ...reopenFields(reopen2)
       };
     }
     const { targets, skipped } = selectTargets(run10, opts);
@@ -12893,13 +12911,9 @@ async function applyRescue(state, runId, opts = {}) {
     if (!didWork) {
       return run10;
     }
-    const nextTasks = { ...run10.tasks };
-    for (const id of targets) {
-      nextTasks[id] = resetTaskRow(nonNull(run10.tasks[id]));
-    }
     return {
       ...run10,
-      tasks: nextTasks,
+      tasks: resetTasks(run10, targets),
       // S11: a manual apply that did work IS a human touch.
       human_touches: [...run10.human_touches, { kind: "recover", at: opts.at ?? nowIso() }],
       ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run10.e2e_phase)) } : {},
@@ -12909,9 +12923,7 @@ async function applyRescue(state, runId, opts = {}) {
       // S9 (Decision 47): drop the WHOLE failed traceability marker so
       // wantsTraceability re-fires a fresh audit on the next drive.
       ...traceReset ? { traceability: void 0 } : {},
-      // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
-      // so returning to `running` with `ended_at:null` satisfies every invariant.
-      ...reopen ? { status: "running", ended_at: null } : {}
+      ...reopenFields(reopen)
     };
   });
   return { ...nonNull(result), run_status: updated.status };
@@ -12963,7 +12975,14 @@ async function finalizeRun(deps, runId) {
   if (terminal === "completed") {
     const stagingBranch = run10.staging_branch;
     await deps.git.fetch("origin", deps.config.git.baseBranch);
-    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    const reconcile = await deps.git.tryMergeNoForce(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    if (!reconcile.merged) {
+      const reason = `forward-reconcile conflict merging origin/${deps.config.git.baseBranch} into ${stagingBranch}: ${reconcile.conflict}`;
+      await deps.state.update(runId, (s) => ({ ...s, rollup: { merged: false, reason } }));
+      throw new Error(
+        `finalize: ${reason} \u2014 resolve the conflict on '${stagingBranch}', push, then \`factory resume\``
+      );
+    }
     await deps.git.push("origin", stagingBranch);
     rollupResult = await rollup({
       ghClient: deps.gh,
@@ -13146,6 +13165,34 @@ function taskExemptReader(deps, worktree) {
   });
 }
 
+// src/orchestrator/gate-context.ts
+function buildGateContext(deps, runId, taskId, baseRef) {
+  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  return {
+    runId,
+    taskId,
+    worktree,
+    baseRef,
+    config: deps.config,
+    tools: deps.tools,
+    exemptReader: taskExemptReader(deps, worktree),
+    ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
+    coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
+  };
+}
+async function appendHoldoutEvidence(deps, verdictStore, runId, taskId, evidence) {
+  const holdoutGate = await deriveHoldoutEvidence(
+    deps.holdout,
+    verdictStore,
+    runId,
+    taskId,
+    deps.config.quality.holdoutPassRate
+  );
+  if (holdoutGate !== void 0) {
+    evidence.push(holdoutGate);
+  }
+}
+
 // src/orchestrator/handlers.ts
 import { join as join13 } from "node:path";
 var PREFLIGHT_GIT_LOCK_TUNING = {
@@ -13314,28 +13361,16 @@ function makePhaseHandlers(deps) {
     async verify(ctx) {
       const task = requireTask3(ctx, "verify");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
-      const gateCtx = {
-        runId: ctx.run.run_id,
-        taskId: task.task_id,
-        worktree,
-        baseRef: ctx.run.staging_branch,
-        config: deps.config,
-        tools: deps.tools,
-        exemptReader: taskExemptReader(deps, worktree),
-        ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
-        coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, ctx.run.run_id))
-      };
+      const gateCtx = buildGateContext(deps, ctx.run.run_id, task.task_id, ctx.run.staging_branch);
       const gate = await new GateRunner().run(gateCtx);
       const dbApplicable = await touchesDatabase(deps.tools.git, gateCtx.baseRef, { cwd: worktree });
       const expectedRoster = panelRolesFor(dbApplicable);
       const panelSpawn = async () => {
         const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
         if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
-          return waitRetry(
-            "verify",
-            `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`,
-            ctx.attempt ?? 1,
-            ESCALATION_CAP + 1
+          return taskFailed(
+            "blocked-environmental",
+            `environmental blocker: cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`
           );
         }
         return spawn2(
@@ -13359,16 +13394,7 @@ function makePhaseHandlers(deps) {
         if (!hasVerdicts) {
           return panelSpawn();
         }
-        const holdoutGate = await deriveHoldoutEvidence(
-          deps.holdout,
-          verdictStore,
-          ctx.run.run_id,
-          task.task_id,
-          deps.config.quality.holdoutPassRate
-        );
-        if (holdoutGate !== void 0) {
-          fastPathEvidence.push(holdoutGate);
-        }
+        await appendHoldoutEvidence(deps, verdictStore, ctx.run.run_id, task.task_id, fastPathEvidence);
       }
       const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, fastPathEvidence);
       if (mergeGate.passed) {
@@ -13492,7 +13518,7 @@ import { readFile as readFile13 } from "node:fs/promises";
 import { sep as sep3 } from "node:path";
 
 // src/hooks/tcb.ts
-import { existsSync as existsSync6, realpathSync } from "node:fs";
+import { existsSync as existsSync7, realpathSync } from "node:fs";
 import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
 function isAtOrUnder(p, base) {
   if (p === base) {
@@ -13503,7 +13529,7 @@ function isAtOrUnder(p, base) {
 function canonicalizeAnchor(dir) {
   const normalized = normalize(resolve2(dir));
   try {
-    if (existsSync6(normalized)) {
+    if (existsSync7(normalized)) {
       return realpathSync(normalized);
     }
   } catch {
@@ -13512,7 +13538,7 @@ function canonicalizeAnchor(dir) {
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync6(ancestor)) {
+      if (existsSync7(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -13622,7 +13648,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
   const normalized = normalize(abs);
   try {
-    if (existsSync6(normalized)) {
+    if (existsSync7(normalized)) {
       return realpathSync(normalized);
     }
   } catch {
@@ -13631,7 +13657,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync6(ancestor)) {
+      if (existsSync7(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -13807,29 +13833,9 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
   const makeRunner2 = makeReplayRunnerFactory(input);
-  const gateCtx = {
-    runId,
-    taskId,
-    worktree,
-    baseRef,
-    config: deps.config,
-    tools: deps.tools,
-    exemptReader: taskExemptReader(deps, worktree),
-    ...deps.loadContract === void 0 ? {} : { loadContract: deps.loadContract },
-    coverageStore: new FsCoverageStore(runCoverageDir(deps.dataDir, runId))
-  };
-  const gate = await new GateRunner().run(gateCtx);
+  const gate = await new GateRunner().run(buildGateContext(deps, runId, taskId, baseRef));
   const gateEvidence = [...gate.evidence];
-  const holdoutGate = await deriveHoldoutEvidence(
-    deps.holdout,
-    verdictStore,
-    runId,
-    taskId,
-    deps.config.quality.holdoutPassRate
-  );
-  if (holdoutGate !== void 0) {
-    gateEvidence.push(holdoutGate);
-  }
+  await appendHoldoutEvidence(deps, verdictStore, runId, taskId, gateEvidence);
   const panel = await runPanel({
     reviews,
     source,
@@ -13862,16 +13868,27 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
-    const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
-    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
-    step = await escalateOrFail(
-      deps,
-      runId,
-      taskId,
-      classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
-      "exec"
-    );
-    await persistStepCursor(deps, runId, taskId, step);
+    if (deps.config.review.requireCrossVendor === "block" && panel.crossVendorAbsence !== void 0) {
+      step = await escalateOrFail(
+        deps,
+        runId,
+        taskId,
+        classifyFailure({ kind: "environmental", reason: panel.crossVendorAbsence.reason }),
+        "exec"
+      );
+      await persistStepCursor(deps, runId, taskId, step);
+    } else {
+      const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
+      await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
+      step = await escalateOrFail(
+        deps,
+        runId,
+        taskId,
+        classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
+        "exec"
+      );
+      await persistStepCursor(deps, runId, taskId, step);
+    }
   } else {
     throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
   }
@@ -14128,6 +14145,57 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
   const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews);
   return env.step;
 }
+async function resyncShipRetry(deps, runId, taskId, stagingBranch, reason) {
+  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  if (!await deps.git.worktreeExists(worktree)) {
+    const step = await failStep(
+      deps,
+      runId,
+      taskId,
+      "blocked-environmental",
+      `staging re-sync: task worktree missing (${worktree})`
+    );
+    return { kind: "done", step };
+  }
+  const resync = await resyncTaskBranchOntoStaging({
+    git: deps.git,
+    cwd: worktree,
+    branch: runScopedBranch(runId, taskId),
+    stagingBranch
+  });
+  if (!resync.merged) {
+    const step = await failStep(
+      deps,
+      runId,
+      taskId,
+      "blocked-environmental",
+      `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
+    );
+    return { kind: "done", step };
+  }
+  const bumpedRun = await deps.state.updateTask(runId, taskId, (t) => {
+    const merge_resyncs = t.merge_resyncs + 1;
+    if (merge_resyncs > MERGE_RESYNC_CAP) {
+      return { ...t, merge_resyncs };
+    }
+    return { ...t, merge_resyncs, phase: "exec", status: phaseToInFlightStatus("exec") };
+  });
+  const bumped = nonNull(bumpedRun.tasks[taskId], `orchestrator: task '${taskId}' vanished mid-resync`);
+  if (bumped.merge_resyncs > MERGE_RESYNC_CAP) {
+    const step = await failStep(
+      deps,
+      runId,
+      taskId,
+      "blocked-environmental",
+      `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${reason}`
+    );
+    return { kind: "done", step };
+  }
+  log26.info(
+    `task '${taskId}' merge refused (${reason}); re-routing to exec to re-sync (attempt ${bumped.merge_resyncs}/${MERGE_RESYNC_CAP})`
+  );
+  return { kind: "continue" };
+}
 function doneFromStep(runId, taskId, step) {
   if (!step.done) {
     throw new Error("orchestrator: terminal transition returned a non-terminal step");
@@ -14209,62 +14277,10 @@ async function nextAction(deps, runId, taskId, results) {
       }
       case "wait-retry": {
         if (result.phase === "ship") {
-          const resyncWorktree = taskWorktreePath(deps.dataDir, runId, taskId);
-          const stagingBranch = run10.staging_branch;
-          if (!await deps.git.worktreeExists(resyncWorktree)) {
-            const step2 = await failStep(
-              deps,
-              runId,
-              taskId,
-              "blocked-environmental",
-              `staging re-sync: task worktree missing (${resyncWorktree})`
-            );
-            return doneFromStep(runId, taskId, step2);
+          const retry = await resyncShipRetry(deps, runId, taskId, run10.staging_branch, result.reason);
+          if (retry.kind === "done") {
+            return doneFromStep(runId, taskId, retry.step);
           }
-          const resync = await resyncTaskBranchOntoStaging({
-            git: deps.git,
-            cwd: resyncWorktree,
-            branch: runScopedBranch(runId, taskId),
-            stagingBranch
-          });
-          if (!resync.merged) {
-            const step2 = await failStep(
-              deps,
-              runId,
-              taskId,
-              "blocked-environmental",
-              `staging re-sync conflict merging ${stagingBranch} into the task branch: ${resync.conflict}`
-            );
-            return doneFromStep(runId, taskId, step2);
-          }
-          let newResyncs = 0;
-          let overCap = false;
-          await deps.state.updateTask(runId, taskId, (t) => {
-            newResyncs = t.merge_resyncs + 1;
-            overCap = newResyncs > MERGE_RESYNC_CAP;
-            if (overCap) {
-              return { ...t, merge_resyncs: newResyncs };
-            }
-            return {
-              ...t,
-              merge_resyncs: newResyncs,
-              phase: "exec",
-              status: phaseToInFlightStatus("exec")
-            };
-          });
-          if (overCap) {
-            const step2 = await failStep(
-              deps,
-              runId,
-              taskId,
-              "blocked-environmental",
-              `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
-            );
-            return doneFromStep(runId, taskId, step2);
-          }
-          log26.info(
-            `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
-          );
           phase = "exec";
           cursorPersisted = true;
           continue;
@@ -14370,7 +14386,7 @@ async function runDocsRecord(deps, runId, results) {
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
     await publishToStaging(deps.git, staging, docsBranch);
-    await deps.git.worktreeRemove([worktree, "--force"]);
+    await removeWorktreeBestEffort(deps.git, worktree);
     await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
     return { kind: "done", run_id: runId };
   }
@@ -14485,7 +14501,7 @@ async function runTraceabilityRecord(deps, runId, results) {
       return { requirement, verdict: v.verdict, evidence: v.evidence };
     });
     const unmet = rows.filter((r) => r.verdict === "unmet");
-    await deps.git.worktreeRemove([worktree, "--force"]);
+    await removeWorktreeBestEffort(deps.git, worktree);
     if (unmet.length === 0) {
       await deps.state.update(runId, (s) => ({
         ...s,
@@ -14510,7 +14526,7 @@ async function runTraceabilityRecord(deps, runId, results) {
     ended_at: nowIso()
   };
   if (attempts >= MAX_TRACE_ATTEMPTS) {
-    await deps.git.worktreeRemove([worktree, "--force"]);
+    await removeWorktreeBestEffort(deps.git, worktree);
     await deps.state.update(runId, (s) => ({ ...s, traceability: marker }));
     return { kind: "failed", run_id: runId, reason };
   }
@@ -14711,7 +14727,13 @@ async function nextTask(deps, runId) {
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
-      await failTask(deps, runId, t.task_id, "capability-budget", `circuit breaker tripped: ${breaker.reason}`);
+      await failTask(
+        deps,
+        runId,
+        t.task_id,
+        "blocked-environmental",
+        `circuit breaker tripped: ${breaker.reason}`
+      );
       cascadeFailed.push(t.task_id);
     }
     run10 = await deps.state.read(runId);
@@ -14982,7 +15004,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
     }
     return { ok: true, reason: "" };
   } finally {
-    await deps.git.worktreeRemove([wtPath, "--force"]);
+    await removeWorktreeBestEffort(deps.git, wtPath);
   }
 }
 
@@ -15058,7 +15080,7 @@ async function prepareAdjudicatorSpawn(deps, run10, runId, boot) {
   };
 }
 async function failAdjudication(deps, runId, worktree, reason) {
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   await deps.state.update(
     runId,
     (s) => s.e2e_phase === void 0 ? s : { ...s, e2e_phase: { ...s.e2e_phase, adjudication: void 0 } }
@@ -15162,7 +15184,7 @@ async function recordAdjudication(deps, runId, run10, results, emit2) {
     return failAdjudication(deps, runId, worktree, `e2e adjudication re-proof: ${proof.reason}`);
   }
   await publishToStaging(deps.git, staging, adjudicateBranchName(runId));
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   await deps.state.update(runId, (s) => {
     if (s.e2e_phase === void 0) {
       return s;
@@ -15437,7 +15459,7 @@ function assertSafeSpecPath(specPath) {
   }
 }
 async function failWithCleanup(deps, runId, worktree, reason) {
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   await markFailed(deps, runId, reason);
   return { kind: "failed", run_id: runId, reason };
 }
@@ -15524,7 +15546,7 @@ async function recordAuthorResults(deps, runId, results, emit2) {
     }
     await publishToStaging(deps.git, staging, e2eBranchName(runId));
   }
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
@@ -15666,7 +15688,7 @@ function defaultAssessment() {
 }
 async function failAssessment(deps, runId, reason, attempts) {
   const worktree = assessmentWorktreePath(deps.dataDir, runId);
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   const run10 = await deps.state.read(runId);
   const open2 = Object.values(run10.tasks).filter((t) => !isTerminalTaskStatus(t.status));
   for (const t of open2) {
@@ -15740,7 +15762,7 @@ async function runAssessmentRecord(deps, runId, results) {
   if (changed.length > 0) {
     await publishToStaging(deps.git, staging, assessBranchName(runId));
   }
-  await deps.git.worktreeRemove([worktree, "--force"]);
+  await removeWorktreeBestEffort(deps.git, worktree);
   const warning = results.status === "degraded" ? results.warning ?? results.reason ?? "e2e assessment degraded (assessor gave no detail)" : void 0;
   await deps.state.update(runId, (s) => ({
     ...s,
@@ -15969,8 +15991,11 @@ async function readCurrentForCwd(state, overrides = {}) {
   let repo;
   try {
     repo = await resolveRepo({ cwd, gitClient });
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof UsageError) {
+      return null;
+    }
+    throw err;
   }
   return state.readCurrentForRepo(repo);
 }
@@ -16141,9 +16166,11 @@ RunState JSON (run_id is the top-level field).`;
 var RESUME_HELP = `factory resume \u2014 re-check quota and resume a paused/suspended run
 
 Usage:
-  factory resume [--run <id>]
+  factory resume [--run <id>] [--ignore-quota]
 
-  --run   The run to resume (defaults to runs/current).
+  --run            The run to resume (defaults to runs/current).
+  --ignore-quota   Persist ignore_quota on the run and resume regardless of the
+                   live usage reading (also skips re-suspension on later steps).
 
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              \u2014 window recovered (or already running)
@@ -16256,13 +16283,10 @@ async function runCreate(argv, overrides = {}) {
       "run create: --approve-spec is create-only and cannot combine with --resume \u2014 resuming a parked run IS the spec sign-off."
     );
   }
-  const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
-    Boolean
-  );
-  if (picked.length > 1) {
+  if ([supersede, resume, fresh].filter(Boolean).length > 1) {
     throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
   }
-  const intent = picked[0] ?? "default";
+  const intent = supersede ? "supersede" : resume ? "resume" : fresh ? "fresh" : "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
   const e2e = args.flag("e2e") === true;
   if (e2e) {
@@ -16271,7 +16295,7 @@ async function runCreate(argv, overrides = {}) {
   await assertGateContract(cwd, gitClient);
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
-  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
+  const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   const ghClient = overrides.ghClient ?? new DefaultGhClient();
@@ -17299,7 +17323,7 @@ var stateCommand = {
 
 // src/cli/subcommands/scaffold.ts
 import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname10, join as join27, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17325,7 +17349,6 @@ function injectGateEnvIntoWorkflow(text, gateEnv) {
 // src/ci/render-quality-gate.ts
 var SETUP_NODE = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0";
 var PNPM_SETUP = "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8";
-var NPM_TEST_STUB = "Error: no test specified";
 function replaceMarker(lines, marker, block) {
   const idx = lines.findIndex((l) => l.trim() === marker);
   if (idx === -1) {
@@ -17335,27 +17358,18 @@ function replaceMarker(lines, marker, block) {
   const indent = indentMatch ? indentMatch[0] : "";
   return [...lines.slice(0, idx), ...block.map((b) => b === "" ? "" : indent + b), ...lines.slice(idx + 1)];
 }
-function gateCommand(entry, opts, script, builtin) {
+function gateCommand(entry, builtin) {
   if (entry.contracted && entry.command !== void 0) {
     return entry.command;
   }
-  const pm = opts.packageManager;
-  const scriptBody = opts.scripts[script];
-  const hasScript = scriptBody !== void 0 && !(script === "test" && scriptBody.includes(NPM_TEST_STUB));
-  if (hasScript) {
-    if (pm === "pnpm") {
-      return `pnpm ${script}`;
-    }
-    return script === "test" ? "npm test" : `npm run ${script}`;
-  }
-  return pm === "pnpm" ? `pnpm exec ${builtin}` : `npx ${builtin}`;
+  return builtin;
 }
-function gateStep(id, opts, script, builtin) {
+function gateStep(id, opts, builtin) {
   const entry = opts.contract.gates[id];
   if (!entry.contracted) {
     return [`# ${id} gate uncontracted: ${entry.reason}`];
   }
-  return [`- run: ${gateCommand(entry, opts, script, builtin)}`];
+  return [`- run: ${gateCommand(entry, builtin)}`];
 }
 function setupBlock(opts) {
   if (opts.packageManager === "pnpm") {
@@ -17382,10 +17396,11 @@ function gatesBlock(opts) {
       `  run: ${pm === "pnpm" ? "pnpm next typegen" : "npx next typegen"}`
     );
   }
-  lines.push(...gateStep("type", opts, "typecheck", "tsc --noEmit"));
-  lines.push(...gateStep("lint", opts, "lint", "eslint ."));
-  lines.push(...gateStep("test", opts, "test", "vitest run"));
-  lines.push(...gateStep("build", opts, "build", "npm run build"));
+  const run10 = pm === "pnpm" ? "pnpm exec" : "npx";
+  lines.push(...gateStep("type", opts, `${run10} tsc --noEmit`));
+  lines.push(...gateStep("lint", opts, `${run10} eslint .`));
+  lines.push(...gateStep("test", opts, `${run10} vitest run`));
+  lines.push(...gateStep("build", opts, `${pm} run build`));
   lines.push(
     "  # Build-time env for CI parity with the factory's local merge gate. Managed by",
     "  # the factory: `factory scaffold` replaces the marker below with a real `env:`",
@@ -17496,7 +17511,7 @@ function renderQualityGate(template, opts) {
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
-import { existsSync as existsSync7 } from "node:fs";
+import { existsSync as existsSync8 } from "node:fs";
 import { join as join25 } from "node:path";
 var log32 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
@@ -17557,7 +17572,7 @@ function mergeTargetSettings(existing, dataDirRules) {
 async function ensureTargetSettings(opts) {
   const dir = join25(opts.targetRoot, ".claude");
   const path6 = join25(dir, "settings.json");
-  const created = !existsSync7(path6);
+  const created = !existsSync8(path6);
   let existing = {};
   if (!created) {
     const raw = await readFile15(path6, "utf8");
@@ -17579,14 +17594,14 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold-gates.ts
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname9, join as join26 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync8(join26(targetRoot, "deno.json")) || existsSync8(join26(targetRoot, "deno.jsonc"))) {
+  if (existsSync9(join26(targetRoot, "deno.json")) || existsSync9(join26(targetRoot, "deno.jsonc"))) {
     return "deno";
   }
-  if (existsSync8(join26(targetRoot, "package.json"))) {
+  if (existsSync9(join26(targetRoot, "package.json"))) {
     return "npm";
   }
   return "custom";
@@ -17606,7 +17621,7 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync8(join26(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
   const raw = await readFile16(join26(targetRoot, file), "utf8");
   let parsed;
@@ -17626,7 +17641,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync8(join26(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -17636,7 +17651,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync8(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -17658,11 +17673,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync8(join26(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync8(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -17794,7 +17809,7 @@ function resolveTemplatesDir() {
   let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     const candidate = join27(dir, "templates");
-    if (existsSync9(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    if (existsSync10(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname10(dir);
@@ -17823,7 +17838,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   const segs = entry.rel.split("/");
   const src = join27(templatesDir, ...segs);
   const dest = join27(targetRoot, ...segs);
-  if (!existsSync9(src)) {
+  if (!existsSync10(src)) {
     log33.warn(`template missing, skipping: ${src}`);
     return;
   }
@@ -17831,7 +17846,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
     const text = await readFile17(src, "utf8");
     return transform ? transform(text) : text;
   };
-  if (!existsSync9(dest)) {
+  if (!existsSync10(dest)) {
     await mkdir13(dirname10(dest), { recursive: true });
     await writeFile4(dest, await render(), "utf8");
     lists.created.push(entry.rel);
@@ -17850,7 +17865,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync9(join27(targetRoot, "pnpm-lock.yaml"));
+  const pnpm = existsSync10(join27(targetRoot, "pnpm-lock.yaml"));
   const raw = await readFile17(join27(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
@@ -17860,7 +17875,7 @@ async function readWorkflowFacts(targetRoot) {
   }
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync9(join27(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync10(join27(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
   };
@@ -17868,7 +17883,7 @@ async function readWorkflowFacts(targetRoot) {
 async function ensureGitignore(root, lists) {
   const path6 = join27(root, ".gitignore");
   const rel = relative(root, path6);
-  if (!existsSync9(path6)) {
+  if (!existsSync10(path6)) {
     await writeFile4(path6, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
@@ -17885,7 +17900,7 @@ async function ensureGitignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync9(join27(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync10(join27(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (CI_NET_RELS.includes(entry.rel)) {
       continue;
@@ -18142,7 +18157,7 @@ function repairHints(runId, scan) {
   if (scan.traceability_failed) {
     hints.push(`factory rescue apply --run ${runId} --reset-traceability`);
   }
-  if (scan.rollup_pending) {
+  if (scan.rollup_pending && scan.run_status === "completed") {
     hints.push(`factory rescue apply --run ${runId} --recheck-rollup`);
   }
   return hints;
@@ -18586,7 +18601,7 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync10 } from "node:fs";
+import { existsSync as existsSync11 } from "node:fs";
 import { readFile as readFile19 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 import { homedir as homedir3 } from "node:os";
@@ -18709,7 +18724,7 @@ function materializeMergedSettings(input) {
 }
 async function readPluginVersion(pluginRoot) {
   const path6 = join29(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync10(path6)) {
+  if (!existsSync11(path6)) {
     return void 0;
   }
   try {
@@ -18728,7 +18743,7 @@ async function runAutonomyEnsure(opts = {}) {
   const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync10(userSettingsPath)) {
+  if (existsSync11(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
       if (isObject2(parsed)) {
@@ -18777,7 +18792,7 @@ function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path6.length > 0 && existsSync10(path6),
+    mergedSettingsPresent: path6.length > 0 && existsSync11(path6),
     mergedSettingsPath: path6
   };
   if (opts.json === true) {
@@ -18801,7 +18816,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path6}` : "absen
   return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
 async function readOnDiskVersion(path6) {
-  if (!existsSync10(path6)) {
+  if (!existsSync11(path6)) {
     return void 0;
   }
   try {
@@ -18846,7 +18861,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path6 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path6.length > 0 && existsSync10(path6);
+  const mergedSettingsPresent = path6.length > 0 && existsSync11(path6);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path6) : void 0;
   const decision = decideAutonomyPreflight({

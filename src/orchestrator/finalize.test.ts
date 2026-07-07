@@ -25,6 +25,7 @@ import {FakeGhClient, FakeGitClient} from '../git/fakes.js'
 import {parseSpecManifest, type SpecManifest} from '../spec/index.js'
 import {readMetrics} from '../scoring/index.js'
 import {runReportPath} from '../core/state/paths.js'
+import {scanRun} from '../rescue/scan.js'
 import {defaultConfig} from '../config/schema.js'
 import type {ShipMode} from './types.js'
 import type {FailureClass, TaskState} from '../types/index.js'
@@ -517,23 +518,51 @@ describe('finalizeRun', () => {
         expect((await state.read(RUN_ID)).status).toBe('completed')
     })
 
-    it('completed: a forward-merge conflict surfaces (no rollup, no comment) and leaves the run non-terminal for rescue', async () => {
-        // finalize.ts step 6: the forward-reconcile (mergeFfOrCommit) can hit a
-        // non-auto-recoverable conflict. It must propagate BEFORE the rollup, and step 7
-        // (flip terminal) must NOT run — the run stays resumable for rescue.
+    it('completed: a forward-reconcile conflict persists a rollup_pending marker (scan flags it) and leaves the run non-terminal', async () => {
+        // finalize.ts step 6: the forward-reconcile (tryMergeNoForce) can hit a
+        // non-auto-recoverable conflict. It must abort-clean, persist a durable
+        // `rollup {merged:false}` marker so `rescue scan` flags the run instead of
+        // reporting it healthy, THEN throw BEFORE the rollup — and step 7 (flip
+        // terminal) must NOT run, so the run stays resumable.
         const tasks: TaskSeed[] = [
             {task_id: 't1', status: 'done', pr_number: 11},
             {task_id: 't2', status: 'done', pr_number: 12},
         ]
         await seed(tasks)
         const spec = makeSpec(tasks)
-        git.failMerge = true
+        git.failMergeNoForce = true
 
-        await expect(finalizeRun(makeDeps(spec, 'live'), RUN_ID)).rejects.toThrow(/merge conflict/)
+        await expect(finalizeRun(makeDeps(spec, 'live'), RUN_ID)).rejects.toThrow(/forward-reconcile conflict/)
 
         expect(gh.merges).toHaveLength(0) // surfaced before the rollup
         expect(gh.issueComments).toHaveLength(0)
-        expect((await state.read(RUN_ID)).status).toBe('running') // step 7 never reached
+        const run = await state.read(RUN_ID)
+        expect(run.status).toBe('running') // step 7 never reached
+        expect(run.rollup).toMatchObject({
+            merged: false,
+            reason: expect.stringMatching(/forward-reconcile conflict/) as string,
+        })
+        const scan = scanRun(run)
+        expect(scan.rollup_pending).toBe(true)
+        expect(scan.needs_rescue).toBe(true) // previously: healthy — the invisible wedge
+    })
+
+    it('completed: after the conflict is resolved, a re-entered finalize overwrites the conflict marker with the real rollup result', async () => {
+        const tasks: TaskSeed[] = [
+            {task_id: 't1', status: 'done', pr_number: 11},
+            {task_id: 't2', status: 'done', pr_number: 12},
+        ]
+        await seed(tasks)
+        const spec = makeSpec(tasks)
+        git.failMergeNoForce = true
+        await expect(finalizeRun(makeDeps(spec, 'live'), RUN_ID)).rejects.toThrow(/forward-reconcile conflict/)
+
+        git.failMergeNoForce = false // human resolved the conflict → `factory resume` re-enters
+        const result = await finalizeRun(makeDeps(spec, 'live'), RUN_ID)
+        expect(result.rollup?.merged).toBe(true)
+        const run = await state.read(RUN_ID)
+        expect(run.status).toBe('completed')
+        expect(run.rollup).toBeUndefined() // merged rollup → marker cleared, scan no longer flags
     })
 
     it('anti-spin: a non-terminal task makes finalize THROW (never advances)', async () => {

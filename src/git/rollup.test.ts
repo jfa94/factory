@@ -164,6 +164,24 @@ describe('rollup — idempotent / resume-safe', () => {
         expect(gh.merges).toHaveLength(1)
     })
 
+    it('merged while polling CI: pre-squash prView sees MERGED → success without a second squash', async () => {
+        const pr = openRollupPr(49)
+        const gh = new FakeGhClient({prs: [pr]})
+        gh.setChecks(49, 'pending', 'passing')
+        const {args} = makeArgs(gh, {
+            maxPolls: 5,
+            // someone (human / --auto arm) lands the PR while we wait on CI
+            sleep: () => {
+                pr.state = 'MERGED'
+                return Promise.resolve()
+            },
+        })
+        const r = await rollup(args)
+
+        expect(r).toMatchObject({number: 49, resumed: true, merged: true, subject: 'Rollup run-1'})
+        expect(gh.merges).toHaveLength(0) // pre-squash guard: never squashes a MERGED PR
+    })
+
     it('short-circuits when the rollup PR is already MERGED (re-create would fail)', async () => {
         const gh = new FakeGhClient({prs: [openRollupPr(48, {state: 'MERGED'})]})
         const {args} = makeArgs(gh)

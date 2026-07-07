@@ -672,7 +672,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(result.request.cross_vendor).toEqual({status: 'present', model: 'gpt-5-codex'})
     })
 
-    it('S5/C: requireCrossVendor=block + absent fails fast (wait-retry) WITHOUT spawning the panel', async () => {
+    it('S5/C: requireCrossVendor=block + absent fails TERMINAL blocked-environmental WITHOUT spawning the panel', async () => {
         const cfg = defaultConfig()
         const deps = makeDeps({
             config: {
@@ -680,19 +680,21 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
                 codex: {...cfg.codex, model: 'gpt-5-codex'},
                 review: {...cfg.review, requireCrossVendor: 'block'},
             },
-            // Probe says codex is NOT runnable — quota must not burn a 4-reviewer panel.
+            // Probe says codex is NOT runnable — quota must not burn a 4-reviewer panel,
+            // and the ladder must not burn implementer re-runs against a missing binary.
             vendorProbe: {vendor: 'codex', available: () => Promise.resolve(false)},
         })
         const handlers = makePhaseHandlers(deps)
         const ctx = await ctxFor({task_id: 't-multi', reviewers: []})
         const result = await handlers.verify(ctx)
 
-        expect(result.kind).toBe('wait-retry')
-        if (result.kind !== 'wait-retry') {
+        expect(result.kind).toBe('task-terminal')
+        if (result.kind !== 'task-terminal' || result.outcome.outcome !== 'failed') {
             throw new Error('unreachable')
         }
-        expect(result.reason).toContain('requireCrossVendor=block')
-        expect(result.reason).toContain('codex')
+        expect(result.outcome.failure_class).toBe('blocked-environmental')
+        expect(result.outcome.reason).toContain('requireCrossVendor=block')
+        expect(result.outcome.reason).toContain('codex')
     })
 
     it('verify advances to ship when gates are green and reviewers unanimously approve', async () => {

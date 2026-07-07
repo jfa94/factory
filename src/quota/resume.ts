@@ -1,5 +1,5 @@
 /**
- * WS4 — The resumable-entrypoint SEAM for human-invoked `factory run resume`
+ * WS4 — The resumable-entrypoint SEAM for human-invoked `factory resume`
  * (Decision 24, Δ F). v1 = HUMAN relaunch only; this file deliberately contains
  * NO scheduler / scheduled-wake (v2 — a v2 wake would fire the SAME
  * {@link planResume}). The orchestrator (WS10) supplies the persisted {@link RunState}

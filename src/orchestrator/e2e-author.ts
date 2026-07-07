@@ -10,6 +10,7 @@ import {ensureStageWorktree, publishToStaging, specTaskLines} from './stage-help
 import {
     parseProducerStatus,
     provisionWorktree,
+    removeWorktreeBestEffort,
     E2E_AUTHOR_AGENT_TYPE,
     type RunState,
     type SpecManifest,
@@ -151,7 +152,7 @@ async function failWithCleanup(
     worktree: string,
     reason: string
 ): Promise<Extract<E2eAction, {kind: 'failed'}>> {
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
     await markFailed(deps, runId, reason)
     return {kind: 'failed', run_id: runId, reason}
 }
@@ -306,7 +307,7 @@ export async function recordAuthorResults(
         // Proven — merge the critical specs into staging (mirrors docs' ff-merge).
         await publishToStaging(deps.git, staging, e2eBranchName(runId))
     }
-    await deps.git.worktreeRemove([worktree, '--force'])
+    await removeWorktreeBestEffort(deps.git, worktree)
 
     await deps.state.update(runId, (s) => ({
         ...s,

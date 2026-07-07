@@ -30,7 +30,8 @@ export interface CurrentRunOverrides {
 /**
  * The current run for the caller's checkout, or `null` when none. Resolves the repo
  * from `cwd`'s `origin` remote and reads that repo's pointer; an underivable repo
- * (not a checkout / no origin) means no current run. Never throws on repo resolution.
+ * (not a checkout / no origin, a `UsageError`) means no current run. Any other
+ * resolution failure (broken git env) is rethrown.
  */
 export async function readCurrentForCwd(
     state: StateManager,
@@ -41,9 +42,14 @@ export async function readCurrentForCwd(
     let repo: string
     try {
         repo = await resolveRepo({cwd, gitClient})
-    } catch {
-        // Not a checkout / no origin remote → no repo, no current run.
-        return null
+    } catch (err) {
+        // Not a checkout / no origin remote → no repo, no current run. Only the
+        // EXPECTED negatives (resolveRepo's own UsageErrors) mean that; anything
+        // else (broken git env) must surface, not masquerade as "no current run".
+        if (err instanceof UsageError) {
+            return null
+        }
+        throw err
     }
     return state.readCurrentForRepo(repo)
 }

@@ -3,7 +3,7 @@ import {ensureStageWorktree, publishToStaging} from './stage-helpers.js'
 import type {StageDone, StageSpawnBase, StageSuspend} from './stage-helpers.js'
 import {z} from 'zod'
 import {nowIso} from '../shared/index.js'
-import {parseProducerStatus, AGENT_TYPE_BY_ROLE} from './deps.js'
+import {parseProducerStatus, AGENT_TYPE_BY_ROLE, removeWorktreeBestEffort} from './deps.js'
 import {type Config, type GitClient, type StateManager} from './deps.js'
 
 export interface DocsRunDeps {
@@ -108,7 +108,7 @@ export async function runDocsRecord(
     if (outcome.status === 'done') {
         // docsBranch = staging tip (+ at most one docs commit) → ff-merge is clean.
         await publishToStaging(deps.git, staging, docsBranch)
-        await deps.git.worktreeRemove([worktree, '--force'])
+        await removeWorktreeBestEffort(deps.git, worktree)
         await deps.state.update(runId, (s) => ({...s, docs: {status: 'done', ended_at: nowIso()}}))
         return {kind: 'done', run_id: runId}
     }

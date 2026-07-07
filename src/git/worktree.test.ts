@@ -1,9 +1,13 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
+import {mkdtemp, rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {
     assertBaseIsStagingTip,
     createTaskWorktree,
     ensureOnStaging,
     removeWorktree,
+    removeWorktreeBestEffort,
     resyncTaskBranchOntoStaging,
 } from './worktree.js'
 import {FakeGitClient} from './fakes.js'
@@ -161,5 +165,48 @@ describe('removeWorktree', () => {
         const git2 = new FakeGitClient()
         git2.worktreeRemove = () => Promise.resolve(1) // both fail
         await expect(removeWorktree(git2, '/tmp/wt-8')).rejects.toThrow(/--force/)
+    })
+})
+
+describe('removeWorktreeBestEffort (best-effort teardown for cleanup paths — never throws, never silently leaks)', () => {
+    const stderrSpy = () => vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    it('non-zero exit with the path still on disk → warns (real leak, not silent)', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'wt-leak-'))
+        const git = new FakeGitClient()
+        git.worktreeRemove = () => Promise.resolve(1)
+        const spy = stderrSpy()
+        try {
+            await expect(removeWorktreeBestEffort(git, dir)).resolves.toBeUndefined() // never throws
+            expect(spy.mock.calls.map((c) => String(c[0])).join('')).toMatch(/WARN.*leaked/)
+        } finally {
+            spy.mockRestore()
+            await rm(dir, {recursive: true, force: true})
+        }
+    })
+
+    it('non-zero exit with the path already absent → silent (benign: a prior cleanup won)', async () => {
+        const git = new FakeGitClient()
+        git.worktreeRemove = () => Promise.resolve(128)
+        const spy = stderrSpy()
+        try {
+            await removeWorktreeBestEffort(git, '/tmp/definitely-absent-wt-xyz')
+            expect(spy).not.toHaveBeenCalled()
+        } finally {
+            spy.mockRestore()
+        }
+    })
+
+    it('zero exit → silent', async () => {
+        const git = new FakeGitClient({remoteHeads: {staging: 'sha-staging-1'}})
+        await createTaskWorktree({gitClient: git, runId: 'run-1', taskId: 't1', path: '/tmp/wt-9'})
+        const spy = stderrSpy()
+        try {
+            await removeWorktreeBestEffort(git, '/tmp/wt-9')
+            expect(git.worktrees.has('/tmp/wt-9')).toBe(false)
+            expect(spy).not.toHaveBeenCalled()
+        } finally {
+            spy.mockRestore()
+        }
     })
 })

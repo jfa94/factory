@@ -777,13 +777,13 @@ export const RunStateSchema = z.object({
     ship_mode: ShipModeEnum.default('live'),
 
     /**
-     * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
-     * gate). Stamped ONCE at `run create` from the launching session's
-     * `CLAUDE_CODE_SESSION_ID` (the runner/Bash env), so the Stop hook can
-     * session-scope its block: only the OWNING session is gated; an unrelated session
-     * stopping while this run is live passes through. Optional — best-effort: when the
-     * env var is absent (owner unknown), the Stop gate falls back to the unscoped
-     * behavior (degraded but safe). An immutable property, never a derived verdict.
+     * The Claude Code session id that OWNS this run. MANDATORY at `run create` —
+     * resolution (`--session-id` flag, else `CLAUDE_CODE_SESSION_ID`) failing is a
+     * UsageError, so every new run is owned. The schema keeps the field optional
+     * only for legacy persisted runs created before the requirement. The Stop hook
+     * uses it to scope a resumability HINT to the owning session (`findActiveByOwner`
+     * never matches an ownerless run) — it never blocks, and there is no unscoped
+     * fallback (see hooks/stop-gate.ts). An immutable property, never a derived verdict.
      */
     owner_session: z.string().min(1).optional(),
 
@@ -871,17 +871,22 @@ export const RunStateSchema = z.object({
 
     /**
      * The `completed` run's staging→develop rollup outcome, persisted at finalize
-     * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
-     * "auto-armed" branch-policy fallback, D3). Absent on a merged rollup (nothing
-     * to recover) or a `failed` run (no rollup attempted). Lets `rescue scan` flag
-     * an armed-but-not-landed rollup (`rollup_pending`) without a live GitHub call —
-     * minimal-surface recovery: `rescue apply --recheck-rollup` reopens the run so a
-     * re-drive re-enters `finalizeRun`, whose rollup() resume-guard finds the
-     * now-merged PR and completes the PRD-close + branch-GC.
+     * ONLY when it did not land (`merged:false`). Two shapes: (a) an armed-but-not-
+     * landed rollup PR (`number` present — e.g. the "auto-armed" branch-policy
+     * fallback, D3; the run went terminal at step 7); (b) a forward-reconcile merge
+     * CONFLICT before any rollup PR exists (`number` absent; finalize threw, run
+     * stays NON-terminal). Absent on a merged rollup (nothing to recover) or a
+     * `failed` run (no rollup attempted). Lets `rescue scan` flag either case
+     * (`rollup_pending`) without a live GitHub call. Recovery: (a) `rescue apply
+     * --recheck-rollup` reopens the run so a re-drive re-enters `finalizeRun`,
+     * whose rollup() resume-guard finds the now-merged PR; (b) human resolves the
+     * staging↔develop conflict, then plain `factory resume` re-enters finalize,
+     * which overwrites/clears this marker with the real rollup result.
      */
     rollup: z
         .object({
-            number: z.number().int().positive(),
+            /** Rollup PR number; absent when the block precedes PR creation (reconcile conflict). */
+            number: z.number().int().positive().optional(),
             merged: z.boolean(),
             reason: z.string().optional(),
         })

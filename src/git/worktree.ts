@@ -10,6 +10,8 @@
  * on drift (invariant #4), and (b) carry the `checkout -B` safety net for when
  * the knob is absent.
  */
+import {existsSync} from 'node:fs'
+
 import {createLogger} from '../shared/index.js'
 import {GitSchema} from '../config/schema.js'
 import {runScopedBranch} from './branch.js'
@@ -188,5 +190,19 @@ export async function removeWorktree(gitClient: GitClient, path: string): Promis
         if (forceCode !== 0) {
             throw new Error(`worktree remove --force ${path} failed (code=${forceCode ?? 'null'})`)
         }
+    }
+}
+
+/**
+ * BEST-EFFORT worktree teardown for cleanup paths that must never mask the
+ * original failure: never throws, but never SILENTLY leaks either. A non-zero
+ * exit with the path still on disk is a real leak → warn; already-absent is
+ * benign (a prior cleanup won the race) → silent.
+ */
+export async function removeWorktreeBestEffort(gitClient: GitClient, path: string): Promise<void> {
+    const code = await gitClient.worktreeRemove(['--force', path])
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal derived worktree path, never external input
+    if (code !== 0 && existsSync(path)) {
+        log.warn(`worktree remove --force ${path} exited ${code ?? 'null'} — worktree may be leaked`)
     }
 }

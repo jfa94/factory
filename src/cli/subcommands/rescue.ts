@@ -171,7 +171,10 @@ function repairHints(runId: string, scan: RescueScan): string[] {
     if (scan.traceability_failed) {
         hints.push(`factory rescue apply --run ${runId} --reset-traceability`)
     }
-    if (scan.rollup_pending) {
+    // --recheck-rollup targets the armed-not-landed rollup of a TERMINAL run only; the
+    // non-terminal forward-reconcile-conflict marker needs a human + `factory resume`
+    // (the scan summary says so), so no apply command is proposed for it.
+    if (scan.rollup_pending && scan.run_status === 'completed') {
         hints.push(`factory rescue apply --run ${runId} --recheck-rollup`)
     }
     return hints

@@ -762,10 +762,14 @@ Default-resettable = `stuck ∪ recoverable`. `e2e_failed` is `true` iff
 fold into `needs_rescue` so a run stuck ONLY on a failed e2e phase or assessment (every task
 `done`, `resettable` empty) still scans as needing rescue, not "nothing to do". Both are
 cleared by `apply --reset-e2e`.
-`rollup_pending` is `true` iff `run.rollup?.merged === false` — a `completed` run whose
-staging→develop rollup was **armed but never landed** (e.g. the "auto-armed" branch-policy
-fallback, D3). It also folds into `needs_rescue` (from a purely durable-state check, no live
-GitHub call) but is **never auto-recovered** — only `apply --recheck-rollup` acts on it.
+`rollup_pending` is `true` iff `run.rollup?.merged === false` — either a `completed` run
+whose staging→develop rollup was **armed but never landed** (e.g. the "auto-armed"
+branch-policy fallback, D3), or a **non-terminal** run that hit a **forward-reconcile
+conflict** in finalize (`run.rollup.number` absent). It folds into `needs_rescue` (from a
+purely durable-state check, no live GitHub call) but is **never auto-recovered**. The
+`--recheck-rollup` repair hint is proposed **only for the `completed` case** (`run_status
+=== "completed"`); the conflict case needs a human to resolve the staging↔develop merge and
+then a plain `factory resume` (the scan summary says so), so no apply command is offered.
 
 The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
 (`assessWork`, `src/rescue/assess.ts`):

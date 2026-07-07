@@ -1,7 +1,7 @@
 /**
  * WS12 — rescue SCAN (the read-only diagnostic; Decision 22, Δ S).
  *
- * A run can stop in a shape `factory run resume` cannot untangle: a crashed or
+ * A run can stop in a shape `factory resume` cannot untangle: a crashed or
  * suspended session left tasks STUCK mid-phase (status `executing`/`reviewing`/
  * `shipping`) with no determination ever reached. The orchestrator has no handler for a
  * stuck in-flight task — the run-level orchestrator (`nextTask`) THROWS "dependency cycle or deadlock" the moment
@@ -96,11 +96,13 @@ export interface RescueScan {
      */
     traceability_failed: boolean
     /**
-     * True iff `run.rollup` is present with `merged:false` — a `completed` run whose
-     * staging→develop rollup was ARMED but never landed (e.g. the "auto-armed"
-     * branch-policy fallback, finding #5). Never auto-recovered: `apply
-     * --recheck-rollup` reopens the run so a re-drive re-enters finalize, whose
-     * rollup() resume-guard picks up the now-merged PR.
+     * True iff `run.rollup` is present with `merged:false` — either a `completed` run
+     * whose staging→develop rollup was ARMED but never landed (e.g. the "auto-armed"
+     * branch-policy fallback, finding #5), or a NON-terminal run that hit a
+     * forward-reconcile conflict in finalize. Never auto-recovered: the former via
+     * `apply --recheck-rollup` (reopens the run so a re-drive re-enters finalize,
+     * whose rollup() resume-guard picks up the now-merged PR), the latter via a human
+     * resolving the conflict + plain `factory resume`.
      */
     rollup_pending: boolean
     /**
@@ -221,7 +223,9 @@ function summarize(
     const assessTail = e2eAssessmentFailed ? ' (e2e assessment failed — needs a fix + --reset-e2e)' : ''
     const traceTail = traceabilityFailed ? ' (PRD-traceability failed — needs a fix + --reset-traceability)' : ''
     const rollupTail = rollupPending
-        ? ' (rollup armed, not landed — re-run finalize once merged via --recheck-rollup)'
+        ? status === 'completed'
+            ? ' (rollup armed, not landed — re-run finalize once merged via --recheck-rollup)'
+            : ' (forward-reconcile conflict — resolve it on the staging branch, then `factory resume`)'
         : ''
     if (resettable === 0) {
         const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) — need a fix + --include-dead-ends)` : ''

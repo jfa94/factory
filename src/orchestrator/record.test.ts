@@ -846,7 +846,7 @@ describe('applyRecordReviews record', () => {
         expect(task.cross_vendor_absent).toBeUndefined()
     })
 
-    it('S5/C block mode: requireCrossVendor=block + absent → merge gate blocked with the honest policy reason', async () => {
+    it('S5/C block mode: requireCrossVendor=block + absent → terminal blocked-environmental, no rung burned', async () => {
         const cfg = defaultConfig()
         const deps: RecordDeps = {
             ...makeDeps(),
@@ -863,11 +863,22 @@ describe('applyRecordReviews record', () => {
         )
 
         expect(env.mergeGate.passed).toBe(false)
-        expect(env.step).toEqual({done: false, phase: 'exec'}) // escalate, not ship
+        // Environmental, not a producer defect: fail fast instead of burning the ladder
+        // against a process-sticky vendor absence no implementer re-run can repair.
+        expect(env.step.done).toBe(true)
+        if (!env.step.done) {
+            throw new Error('unreachable')
+        }
+        expect(env.step.outcome).toMatchObject({
+            outcome: 'failed',
+            failure_class: 'blocked-environmental',
+        })
         const quality = nonNull(env.reviewers.find((r) => r.reviewer === 'quality-reviewer'))
         expect(quality.verdict).toBe('error')
         const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
-        expect(task.escalation_rung).toBe(1)
+        expect(task.status).toBe('failed')
+        expect(task.failure_class).toBe('blocked-environmental')
+        expect(task.escalation_rung).toBe(0)
     })
 
     it('gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)', async () => {

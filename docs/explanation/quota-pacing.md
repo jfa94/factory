@@ -65,14 +65,18 @@ back-compat. The runner wires it into the run orchestrator through
 `src/orchestrator/circuit-breaker-gate.ts` (evaluated in `nextTask`, mirroring the
 `applyQuotaGate` seam). A trip — the `failures` arm, or `fail-closed` on malformed
 input — is a hard abort: every remaining non-terminal task is
-failed `capability-budget` and the run finalizes `failed`. Following derive-don't-store,
+failed `blocked-environmental` and the run finalizes `failed`. Following derive-don't-store,
 **no breaker counter is persisted** — the gate derives the signal from run state: the
 count of `capability-budget` fails, i.e.
 tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
-(dependency cascades) and `spec-defect` (wedge) fails are deliberately **excluded**:
-they are consequences of a failure, not independent failures, so one real failure
-that cascades to two dependents can never masquerade as three counted failures
-and abort still-runnable work. A quota pause can **never** trip the breaker.
+(dependency cascades **and the breaker's own trip sweep**) and `spec-defect` (wedge)
+fails are deliberately **excluded**: they are consequences of a failure, not
+independent failures, so one real failure that cascades to two dependents can never
+masquerade as three counted failures and abort still-runnable work. The trip sweep
+is failed `blocked-environmental` for exactly this reason — a `capability-budget`
+sweep would count its own output and re-trip on any rescue-reopen re-drive before an
+agent ran, and the class also makes the swept tasks rescue-**recoverable** (they never
+ran, so a default rescue may retry them). A quota pause can **never** trip the breaker.
 
 ## Decision 3 — Fail closed; absence is never permission
 

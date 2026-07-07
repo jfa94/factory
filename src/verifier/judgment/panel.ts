@@ -61,8 +61,8 @@ export function panelRolesFor(dbApplicable: boolean): readonly SpawnRole[] {
  * requires a non-empty `prompt_ref` on EVERY agent, but — UNLIKE producers, whose
  * `prompt_ref` points at a real per-run ProducerContext artifact the runner Reads
  * (handlers.ts `producerSpawn` → `putProducerContext`) — NO orchestrator reads this value
- * for a reviewer. Both runners (the session `pipeline-runner` SKILL.md panel
- * step and `scripts/factory-run-runner.js`) build the reviewer prompt INLINE
+ * for a reviewer. The ONE runner (the `skills/pipeline-runner/SKILL.md` panel
+ * step) builds the reviewer prompt INLINE
  * from the reviewer's `agents/<role>.md` definition plus the shared
  * `skills/review-protocol/SKILL.md` contract; the reviewer's lens lives in its agent
  * definition + the static protocol, so there is no per-run reviewer prompt file to
