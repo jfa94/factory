@@ -9,9 +9,15 @@
 import {describe, it, expect, beforeAll} from 'vitest'
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
-import {renderQualityGate, type RenderQualityGateOpts} from './render-quality-gate.js'
+import {
+    renderQualityGate,
+    CI_RENDERED_GATES,
+    LOCAL_ONLY_GATES,
+    type RenderQualityGateOpts,
+} from './render-quality-gate.js'
 import {injectGateEnvIntoWorkflow} from './inject-gate-env.js'
 import {resolveTemplatesDir} from '../cli/subcommands/scaffold.js'
+import {GATE_IDS, type GateId} from '../verifier/deterministic/gate-id.js'
 import type {GateContract} from '../verifier/deterministic/gate-contract.js'
 
 let template: string
@@ -82,6 +88,49 @@ describe('renderQualityGate — npm stack', () => {
         expect(out).toContain('- run: npx eslint .')
         expect(out).toContain('- run: npx vitest run')
         expect(out).toContain('- run: npm run build')
+    })
+
+    it('S2: the CI/local-only partition is a total, disjoint cover of GATE_IDS (drift alarm)', () => {
+        // The two enforcers (CI render + local GateRunner) must agree on which gate
+        // runs where. Adding a 9th GATE_ID without classifying it here fails this test —
+        // that is what kills the local-green ≠ CI-green drift class.
+        const partition = [...CI_RENDERED_GATES, ...LOCAL_ONLY_GATES]
+        expect([...partition].sort()).toEqual([...GATE_IDS].sort())
+        // Disjoint: no gate is claimed by both halves.
+        const local = new Set<GateId>(LOCAL_ONLY_GATES)
+        expect(CI_RENDERED_GATES.filter((id) => local.has(id))).toEqual([])
+    })
+
+    it('S2: a fully-contracted contract renders exactly the CI_RENDERED gates and no LOCAL_ONLY gate', () => {
+        const out = renderQualityGate(template, NPM_OPTS)
+        // Every CI-rendered gate emits its command (mutation via its own region → the job name).
+        const rendered: Record<Exclude<GateId, never>, string> = {
+            type: '- run: npx tsc --noEmit',
+            lint: '- run: npx eslint .',
+            test: '- run: npx vitest run',
+            build: '- run: npm run build',
+            mutation: 'Mutation Testing',
+            tdd: '',
+            coverage: '',
+            sast: '',
+        }
+        for (const id of CI_RENDERED_GATES) {
+            expect(out).toContain(rendered[id])
+        }
+        // No local-only gate leaks a step into the CI yaml.
+        expect(out).not.toContain('# factory:tdd')
+        expect(out).not.toMatch(/- run:.*coverage/)
+        expect(out).not.toMatch(/- run:.*(semgrep|sast)/i)
+    })
+
+    it('S2: an uncontracted CI-rendered gate degrades to its audit comment, not a step', () => {
+        // Render parity must survive an uncontracted rendered gate: comment, never a run step.
+        const out = renderQualityGate(template, {
+            ...NPM_OPTS,
+            contract: npmContract({type: {contracted: false, reason: 'no tsconfig'}}),
+        })
+        expect(out).toContain('# type gate uncontracted: no tsconfig')
+        expect(out).not.toContain('- run: npx tsc --noEmit')
     })
 
     it('IGNORES package.json scripts — the local gate never runs them, so CI must not either', () => {

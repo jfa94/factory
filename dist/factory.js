@@ -17609,6 +17609,15 @@ function injectGateEnvIntoWorkflow(text, gateEnv) {
 }
 
 // src/ci/render-quality-gate.ts
+var CI_RENDERED_GATES = ["type", "lint", "test", "build", "mutation"];
+function ciBuiltins(run10, pm) {
+  return {
+    type: `${run10} tsc --noEmit`,
+    lint: `${run10} eslint .`,
+    test: `${run10} vitest run`,
+    build: `${pm} run build`
+  };
+}
 var SETUP_NODE = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0";
 var PNPM_SETUP = "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8";
 function replaceMarker(lines, marker, block) {
@@ -17659,10 +17668,17 @@ function gatesBlock(opts) {
     );
   }
   const run10 = pm === "pnpm" ? "pnpm exec" : "npx";
-  lines.push(...gateStep("type", opts, `${run10} tsc --noEmit`));
-  lines.push(...gateStep("lint", opts, `${run10} eslint .`));
-  lines.push(...gateStep("test", opts, `${run10} vitest run`));
-  lines.push(...gateStep("build", opts, `${pm} run build`));
+  const builtins = ciBuiltins(run10, pm);
+  for (const id of CI_RENDERED_GATES) {
+    if (id === "mutation") {
+      continue;
+    }
+    const builtin = builtins[id];
+    if (builtin === void 0) {
+      throw new Error(`renderQualityGate: no builtin CI command for rendered gate '${id}'`);
+    }
+    lines.push(...gateStep(id, opts, builtin));
+  }
   lines.push(
     "  # Build-time env for CI parity with the factory's local merge gate. Managed by",
     "  # the factory: `factory scaffold` replaces the marker below with a real `env:`",

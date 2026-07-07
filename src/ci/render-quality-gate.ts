@@ -14,6 +14,41 @@
 import type {GateContract, GateContractEntry} from '../verifier/deterministic/gate-contract.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
 
+/**
+ * The GATE_IDS partition between the two enforcers, pinned so the two lists can
+ * never silently drift (the render-parity + partition cross-check test asserts
+ * `[...CI_RENDERED_GATES, ...LOCAL_ONLY_GATES]` === GATE_IDS). Adding a gate id
+ * forces a classification here or the test fails — that is the whole point.
+ *
+ * `mutation` renders via its own begin/end region, not `gatesBlock`; the other
+ * three run as plain `- run:` steps in the quality job.
+ */
+export const CI_RENDERED_GATES: readonly GateId[] = ['type', 'lint', 'test', 'build', 'mutation'] as const
+
+/**
+ * Gates the local GateRunner enforces but CI does NOT render:
+ *   - tdd:      needs the pre-squash task branch (commit ordering) — CI only ever
+ *               sees the squashed merge, so the check can't run there.
+ *   - coverage: per-tree-SHA local store keyed off the task worktree — no CI analogue.
+ *   - sast:     deliberately local for now (a plain command gate, so a future CI
+ *               step is possible — a classification choice, not a hard constraint).
+ */
+export const LOCAL_ONLY_GATES: readonly GateId[] = ['tdd', 'coverage', 'sast'] as const
+
+/**
+ * The builtin CI command for each non-mutation rendered gate (override wins via
+ * `gateCommand`). Keyed only by the gates in CI_RENDERED_GATES minus mutation — a
+ * lookup miss on any other id is an unclassified-gate bug the caller throws on.
+ */
+function ciBuiltins(run: string, pm: 'pnpm' | 'npm'): Partial<Record<GateId, string>> {
+    return {
+        type: `${run} tsc --noEmit`,
+        lint: `${run} eslint .`,
+        test: `${run} vitest run`,
+        build: `${pm} run build`,
+    }
+}
+
 export interface RenderQualityGateOpts {
     /** The repo's resolved gate contract (`.factory/gates.json`). */
     readonly contract: GateContract
@@ -98,10 +133,20 @@ function gatesBlock(opts: RenderQualityGateOpts): readonly string[] {
         )
     }
     const run = pm === 'pnpm' ? 'pnpm exec' : 'npx'
-    lines.push(...gateStep('type', opts, `${run} tsc --noEmit`))
-    lines.push(...gateStep('lint', opts, `${run} eslint .`))
-    lines.push(...gateStep('test', opts, `${run} vitest run`))
-    lines.push(...gateStep('build', opts, `${pm} run build`))
+    const builtins = ciBuiltins(run, pm)
+    // Iterate the pinned CI partition (skip mutation — its own region renders it) so a
+    // gate added to CI_RENDERED_GATES actually emits a step, and the cross-check test
+    // that compares rendered gates to the partition stays honest.
+    for (const id of CI_RENDERED_GATES) {
+        if (id === 'mutation') {
+            continue
+        }
+        const builtin = builtins[id]
+        if (builtin === undefined) {
+            throw new Error(`renderQualityGate: no builtin CI command for rendered gate '${id}'`)
+        }
+        lines.push(...gateStep(id, opts, builtin))
+    }
     lines.push(
         "  # Build-time env for CI parity with the factory's local merge gate. Managed by",
         '  # the factory: `factory scaffold` replaces the marker below with a real `env:`',
