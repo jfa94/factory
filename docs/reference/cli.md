@@ -840,9 +840,13 @@ Backed by new `GitClient.refExists`/`commitsAhead` (`src/git/git-client.ts`).
 
 ### `rescue apply`
 
-Writer. Resets the resettable tasks to `pending` and reopens a terminal run. This
-is what an approved `/factory:resume` repair plan executes — every flag is a human
-assertion an approved plan item carries.
+Writer. Adopts forward-only GitHub drift first (Decision 60 — records merged PRs `done`,
+rebinds/clears stale `pr_number`s, re-pushes still-local branches, reopens a landed
+rollup), **before** resetting the remaining resettable tasks to `pending` and reopening a
+terminal run — so a merged-but-unrecorded PR is recorded `done` rather than reset away. A
+gh outage degrades adoption to a no-op (`{ok:false}`); the reset still runs. This is what
+an approved `/factory:resume` repair plan executes — every flag is a human assertion an
+approved plan item carries.
 
 ```
 factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--reset-traceability] [--recheck-rollup]
@@ -867,19 +871,21 @@ apply that did work also clears any surviving park itself (the `resume` field, r
 
 ### `rescue auto`
 
-The runner's bounded self-heal, fired ONCE after a failed finalize (Decision 48's
-`--auto`, renamed by Decision 50). Never operator-typed.
+The runner's bounded self-heal, fired after a failed finalize (Decision 48's `--auto`,
+renamed by Decision 50; bound raised to **three** cycles by Decision 60). Never
+operator-typed.
 
 ```
 factory rescue auto [--run <id>]
 ```
 
-Resets only the _effective_ auto-safe set (resettable tasks that stay actionable
+Adopts forward-only GitHub drift first (Decision 60 — free; never spends the budget below),
+then resets only the _effective_ auto-safe set (resettable tasks that stay actionable
 post-reset — never dead-ends, e2e resets, traceability resets, rollup rechecks, or
 git drift) and stamps `self_heal {attempts, last_at}` — the sanctioned stored-event
-exception. Requires `attempts === 0`; a blocked auto (`attempts > 0`, empty
-effective set, or dead-ends only) emits `{kind:"page"}` and posts ONE deduped PRD
-comment pointing at `factory rescue scan`. Never appends a human touch.
+exception. Runs while `attempts < SELF_HEAL_MAX_ATTEMPTS` (**3**); a blocked auto
+(`attempts >= 3`, empty effective set, or dead-ends only) emits `{kind:"page"}` and posts
+ONE deduped PRD comment pointing at `factory rescue scan`. Never appends a human touch.
 
 ### `rescue gc`
 
@@ -935,25 +941,28 @@ without stripping protection first.
 
 ## `reconcile`
 
-Reporter (read-only). The **GitHub-truth** reporter (P1 read-only slice,
-[Decision 59](../explanation/decisions.md#decision-59--the-engine-sees-github-truth-read-only-reconcile)):
-`rescue scan` is pure over run state, so state↔GitHub drift — a PR merged but never
-recorded `done`, a closed-unmerged PR still counted on, a landed auto-armed rollup, a
-deleted staging branch — was invisible to the engine. `reconcile` closes that blind spot
-by probing GitHub through the single `gh` seam and classifying the drift. It **writes
-nothing** — forward-only adoption writes (record a merged PR as `done`, re-push a branch)
-are P1's next phase.
+Reporter + writer. The **GitHub-truth** reconciler (P1,
+[Decision 59](../explanation/decisions.md#decision-59--the-engine-sees-github-truth-read-only-reconcile)
+detection +
+[Decision 60](../explanation/decisions.md#decision-60--autonomous-forward-only-adoption-write-side)
+adoption): `rescue scan` is pure over run state, so state↔GitHub drift — a PR merged but
+never recorded `done`, a closed-unmerged PR still counted on, a landed auto-armed rollup, a
+deleted staging branch — was invisible to the engine. `reconcile` closes that blind spot by
+probing GitHub through the single `gh` seam and classifying the drift. **Read-only by
+default**; `--adopt` applies the forward-only repairs against the SAME report (no second
+probe).
 
 ```
-factory reconcile [--run <id>]
+factory reconcile [--run <id>] [--adopt]
 ```
 
-| Flag         | Notes                                                      |
-| ------------ | ---------------------------------------------------------- |
-| `--run <id>` | The run to reconcile. Defaults to this repo's current run. |
+| Flag         | Notes                                                                                                                                                                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run <id>` | The run to reconcile. Defaults to this repo's current run.                                                                                                                                                                             |
+| `--adopt`    | Apply the forward-only repairs (Decision 60): record merged-unrecorded PRs as `done`, rebind stale `pr_number`s, re-push a branch still present locally, reopen a run whose rollup landed. Never resets, force-pushes, or closes a PR. |
 
-Emits ONE JSON document:
-`{ kind:"reconcile", run_id, run_status, facts, drifts, rollup_landed }`.
+Emits ONE JSON document (the `adoption` field is present only under `--adopt`):
+`{ kind:"reconcile", run_id, run_status, facts, drifts, rollup_landed, adoption? }`.
 
 - `facts` — the gathered GitHub truth: `{ repo, staging:{branch, tip}, tasks:[...],
 rollup? }`. `tasks` carries one entry per **branched** task (branchless tasks have nothing
@@ -971,6 +980,16 @@ rollup? }`. `tasks` carries one entry per **branched** task (branchless tasks ha
   says `merged:false`). Each line's `detail` names its manual remedy. A `done` task is never
   classified, and an unrecorded MERGED PR on a head is **not** drift (the e2e-reopen shape).
 - `rollup_landed` — the `rollup-landed` fold, so consumers read it without scanning `drifts`.
+- `adoption` (only under `--adopt`) — `{ ok, adopted, actions, changed }`: the forward-only
+  repairs applied against this same report. `adopted` lists the task ids recorded `done`;
+  `actions` details every write (class + task/PR); `changed` is false when the report held
+  nothing adoptable. Adoptions are **free** — they never spend the self-heal budget nor log a
+  `human_touch`. `merged-unrecorded` → task `done`; `stale-pr-number` → rebind/clear the
+  recorded `pr_number`; `branch-missing` with the branch still local → plain `git push` (never
+  `--force`; skipped + surfaced if the local branch is gone); `rollup-landed` (or every task
+  now `done`) → reopen the completed run so resume can finalize. `closed-unmerged` /
+  `staging-missing` / orphan worktrees are NOT adopted —
+  they need judgment and stay [`reconcile` §4](../guides/rescue-a-stalled-run.md#4-reconcile-gitgithub-drift) / reconciler-agent territory.
 
 **Fails LOUD when gh is unavailable** — GitHub facts are this command's entire job, so any
 gh error propagates (non-zero exit). This is the deliberate contrast with

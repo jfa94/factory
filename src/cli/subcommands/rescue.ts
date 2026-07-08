@@ -24,6 +24,7 @@ import {
     gcScan,
     gcApply,
     gcApplyStale,
+    SELF_HEAL_MAX_ATTEMPTS,
     type RescueScan,
     type WorkProbe,
     type ReconcileReport,
@@ -33,9 +34,13 @@ import {StatuslineUsageSignal} from '../../quota/index.js'
 import {nowEpoch, nowIso} from '../../shared/time.js'
 import {applyResume} from '../../orchestrator/lifecycle.js'
 import {emitMetric, selfHealCommentMarker} from '../../scoring/index.js'
+import {adoptForCli, type AdoptionField} from '../adoption.js'
+import {createLogger} from '../../shared/index.js'
 import {requireAutonomousMode} from '../../autonomy/mode.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
 import type {RunState} from '../../types/index.js'
+
+const log = createLogger('rescue')
 
 const RESCUE_HELP = `factory rescue — repair plumbing behind /factory:resume
 
@@ -109,18 +114,18 @@ armed-not-landed rollup). Idempotent.
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`
 
-const AUTO_HELP = `factory rescue auto — the runner's bounded self-heal (ONE cycle per run)
+const AUTO_HELP = `factory rescue auto — the runner's bounded self-heal (up to 3 cycles per run)
 
 Usage:
   factory rescue auto [--run <id>]
 
   --run   The run to self-heal (defaults to runs/current).
 
-Fired by the runner ONCE after a failed finalize: resets the auto-safe set
+Fired by the runner after every failed finalize: resets the auto-safe set
 (stuck + recoverable tasks whose deps are clean post-reset) → {kind:"recovered"},
-or pages + posts one deduped comment on the originating PRD → {kind:"page"}.
-Never touches dead-ends, e2e verdicts, or rollups (each needs a human assertion
-the cause is fixed). Both envelopes exit 0.`
+or — once the 3-cycle budget is spent — pages + posts one deduped comment on the
+originating PRD → {kind:"page"}. Never touches dead-ends, e2e verdicts, or rollups
+(each needs a human assertion the cause is fixed). Both envelopes exit 0.`
 
 const GC_HELP = `factory rescue gc — sweep for orphaned staging branches / protection rules (D55)
 
@@ -287,7 +292,7 @@ export async function runScan(argv: string[], overrides: RescueOverrides = {}): 
     return EXIT.OK
 }
 
-export async function runApply(argv: string[], overrides: CurrentRunOverrides = {}): Promise<ExitCode> {
+export async function runApply(argv: string[], overrides: RescueOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {
         booleans: ['include-dead-ends', 'reset-e2e', 'recheck-rollup', 'reset-traceability'],
     })
@@ -303,12 +308,25 @@ export async function runApply(argv: string[], overrides: CurrentRunOverrides = 
     const recheckRollup = args.flag('recheck-rollup') === true
     const resetTraceability = args.flag('reset-traceability') === true
 
+    // Adopt merged PRs FIRST (Decision 60, the hazard fix): a merged-unrecorded task
+    // flips to `done` on the same store the reset selection below reads, so a default
+    // apply no longer resets (and clobbers) already-merged work. A gh outage is
+    // CONTAINED (proceed with a loud `adoption:{ok:false}` field) — the human ran this.
+    const git = overrides.gitClient ?? new DefaultGitClient()
+    const gh = overrides.ghClient ?? new DefaultGhClient()
+    const at = overrides.now?.() ?? nowIso()
+    const adoption = await adoptForCli({state, git, gh, dataDir}, await state.read(runId), at)
+    // An explicit `--task <id>` naming a just-adopted task is a no-op skip, not the LOUD
+    // "would un-ship" throw — it WAS just shipped (its merged PR adopted).
+    const adoptedDone = adoption.ok ? adoption.adopted : []
+
     const result = await applyRescue(state, runId, {
         ...(tasks.length > 0 ? {tasks} : {}),
         includeDeadEnds,
         resetE2e,
         recheckRollup,
         resetTraceability,
+        ...(adoptedDone.length > 0 ? {adoptedDone} : {}),
     })
     if (result.touched) {
         await emitMetric(dataDir, runId, 'human_touch', {kind: 'recover'}) // S11 mirror
@@ -325,6 +343,7 @@ export async function runApply(argv: string[], overrides: CurrentRunOverrides = 
             : undefined
     emitJson({
         ...result,
+        adoption,
         ...(resume?.kind === 'resumed' ? {run_status: resume.run.status} : {}),
         ...(resume !== undefined ? {resume} : {}),
     })
@@ -343,9 +362,59 @@ async function resumeRun(
 }
 
 /**
- * The `auto` leg: ONE bounded self-heal cycle. Success recovers; a blocked
- * apply pages AND posts one deduped comment on the originating PRD (the runner
- * is unattended — stdout alone reaches nobody).
+ * Emit the self-heal `page` envelope AND post one deduped comment on the originating
+ * PRD (the runner is unattended — stdout alone reaches nobody). The comment is
+ * BEST-EFFORT: a gh outage (the very reason a refuse-page fires) must not turn a page
+ * into a crash, so a failed post logs and still emits the page (`commented:false`).
+ */
+async function emitAutoPage(
+    gh: GhClient,
+    run: RunState,
+    scan: RescueScan,
+    reason: string,
+    adoption: AdoptionField
+): Promise<ExitCode> {
+    const marker = selfHealCommentMarker(run.run_id)
+    const target = {repo: run.spec.repo, number: run.spec.issue_number}
+    let commented = false
+    try {
+        const existing = await gh.listIssueComments(target)
+        if (!existing.some((body) => body.includes(marker))) {
+            const lines = [marker, `Factory self-heal for run \`${run.run_id}\` did not proceed — ${reason}.`]
+            if (scan.dead_ends.length > 0) {
+                lines.push('', 'Dead-end task(s) needing a human fix:')
+                for (const id of scan.dead_ends) {
+                    lines.push(`- \`${id}\``)
+                }
+            }
+            lines.push('', `Triage with \`factory rescue scan --run ${run.run_id}\`.`)
+            await gh.issueComment({...target, body: lines.join('\n')})
+            commented = true
+        }
+    } catch (err) {
+        log.warn(
+            `run '${run.run_id}': could not post self-heal page comment: ${err instanceof Error ? err.message : String(err)}`
+        )
+    }
+    emitJson({
+        kind: 'page',
+        run_id: run.run_id,
+        run_status: run.status,
+        reason,
+        dead_ends: scan.dead_ends,
+        hints: repairHints(run.run_id, scan),
+        commented,
+        adoption,
+    })
+    return EXIT.OK
+}
+
+/**
+ * The `auto` leg: adopt merged PRs, then one bounded self-heal cycle (fires every failed
+ * finalize until the {@link SELF_HEAL_MAX_ATTEMPTS}-cycle budget is spent). Success (or an
+ * adoption that healed the run on its own) recovers; a blocked apply pages. A gh outage
+ * REFUSES to reset — without GitHub truth a merged-unrecorded task is indistinguishable
+ * from a stuck one, and an autonomous reset would clobber merged work.
  */
 export async function runAuto(argv: string[], overrides: RescueOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv)
@@ -354,59 +423,66 @@ export async function runAuto(argv: string[], overrides: RescueOverrides = {}): 
     }
     requireAutonomousMode()
 
-    const {state} = openState()
+    const {dataDir, state} = openState()
     const runId = await resolveRunIdOrCurrent(state, args, 'rescue auto', overrides)
-    const current = await state.read(runId)
-    const scan = scanRun(current)
-
     const at = overrides.now?.() ?? nowIso()
-    const applied = await applyRescue(state, current.run_id, {auto: {at}})
+    const git = overrides.gitClient ?? new DefaultGitClient()
+    const gh = overrides.ghClient ?? new DefaultGhClient()
+
+    const before = await state.read(runId)
+    const adoption = await adoptForCli({state, git, gh, dataDir}, before, at)
+    if (!adoption.ok) {
+        return emitAutoPage(
+            gh,
+            before,
+            scanRun(before),
+            'github unreachable — refusing autonomous resets without GitHub truth',
+            adoption
+        )
+    }
+
+    const applied = await applyRescue(state, runId, {auto: {at}})
+    const after = await state.read(runId)
+    const scan = scanRun(after)
 
     if (applied.auto_blocked === undefined) {
+        // Per-cycle self-heal telemetry (Decision 60): one line per fired cycle carries
+        // the cumulative attempt count (1..3) + the tasks reset — the budget's audit trail.
+        await emitMetric(dataDir, runId, 'self_heal', {
+            attempts: applied.self_heal_attempts,
+            reset: applied.reset,
+        })
         emitJson({
             kind: 'recovered',
-            run_id: current.run_id,
+            run_id: runId,
             run_status: applied.run_status,
             reset: applied.reset,
             reopened: applied.reopened,
             attempts: applied.self_heal_attempts,
+            adoption,
+        })
+        return EXIT.OK
+    }
+
+    // Adoption alone healed the run (e.g. every task's PR merged, or a landed rollup
+    // reopened) and there is nothing left to reset — recovered, don't page.
+    if (adoption.changed && applied.auto_blocked === 'empty') {
+        emitJson({
+            kind: 'recovered',
+            run_id: runId,
+            run_status: after.status,
+            reset: [],
+            reopened: adoption.reopened !== false,
+            adoption,
         })
         return EXIT.OK
     }
 
     const reason =
         applied.auto_blocked === 'attempts'
-            ? 'self-heal already ran once for this run — human triage required'
+            ? `self-heal budget spent (${SELF_HEAL_MAX_ATTEMPTS} cycles ran) for this run — human triage required`
             : 'nothing auto-recoverable (dead-ends, blocked dependencies, or no resettable work) — human triage required'
-
-    const gh = overrides.ghClient ?? new DefaultGhClient()
-    const marker = selfHealCommentMarker(current.run_id)
-    const target = {repo: current.spec.repo, number: current.spec.issue_number}
-    const existing = await gh.listIssueComments(target)
-    let commented = false
-    if (!existing.some((body) => body.includes(marker))) {
-        const lines = [marker, `Factory self-heal for run \`${current.run_id}\` did not proceed — ${reason}.`]
-        if (scan.dead_ends.length > 0) {
-            lines.push('', 'Dead-end task(s) needing a human fix:')
-            for (const id of scan.dead_ends) {
-                lines.push(`- \`${id}\``)
-            }
-        }
-        lines.push('', `Triage with \`factory rescue scan --run ${current.run_id}\`.`)
-        await gh.issueComment({...target, body: lines.join('\n')})
-        commented = true
-    }
-
-    emitJson({
-        kind: 'page',
-        run_id: current.run_id,
-        run_status: current.status,
-        reason,
-        dead_ends: scan.dead_ends,
-        hints: repairHints(current.run_id, scan),
-        commented,
-    })
-    return EXIT.OK
+    return emitAutoPage(gh, after, scan, reason, adoption)
 }
 
 /**

@@ -8,8 +8,8 @@
  * probes GitHub through the single {@link GhClient} seam, `classifyDrift` (pure)
  * names the drift, and both `rescue scan` (contained: gh outage → `{ok:false}`)
  * and `factory reconcile` (loud: gh facts ARE the job) report the result.
- * Forward-only WRITES (adopt a merged PR as done, re-push a branch) are the
- * next P1 phase — nothing here mutates state or GitHub.
+ * Nothing here mutates state or GitHub — forward-only WRITES over this same
+ * report live in the sibling adopt module (`src/rescue/adopt.ts`, Decision 60).
  *
  * What is deliberately NOT probed:
  *   - Per-task remote branches in general: task branches are LOCAL until ship

@@ -20,6 +20,7 @@
  */
 import {
     classifyFailure,
+    doneTaskRow,
     ESCALATION_CAP,
     phaseToInFlightStatus,
     type ClassifyDecision,
@@ -70,20 +71,14 @@ export function markInFlight(deps: TransitionDeps, runId: string, taskId: string
     }))
 }
 
-/** Persist a task as `done` (stamping ended_at once) and end the loop. */
+/**
+ * Persist a task as `done` (stamping ended_at once) and end the loop. Delegates the
+ * row shape to {@link doneTaskRow} (shared with rescue adoption, Decision 60) so
+ * "what shipping a task clears" — spawn_in_flight, the e2e reopen feedback, a stale
+ * fix-forward record — has ONE source of truth across the live ship + adopt paths.
+ */
 export async function completeTask(deps: TransitionDeps, runId: string, taskId: string): Promise<TaskStep> {
-    await deps.state.updateTask(runId, taskId, (t) => ({
-        ...t,
-        status: 'done',
-        ended_at: t.ended_at ?? nowIso(),
-        spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
-        // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
-        // the schema's own field comment ("cleared once the task ships again").
-        e2e_feedback: undefined,
-        // D5: a stale fix-forward record from an earlier blocked rung must not
-        // outlive the task it was for.
-        fix_findings: undefined,
-    }))
+    await deps.state.updateTask(runId, taskId, (t) => doneTaskRow(t, nowIso()))
     return {done: true, outcome: {outcome: 'done'}}
 }
 

@@ -26,8 +26,9 @@
  * drift (a PR merged but not recorded, a closed-unmerged PR, a landed auto-armed rollup)
  * is DETECTED by the sibling reconcile module (`src/rescue/reconcile.ts`, P1): the scan
  * CLI embeds its report under the envelope's `github` key and `factory reconcile`
- * emits it standalone. Drift REPAIR remains manual / rescue-reconciler territory —
- * the forward-only adoption writes are P1's next phase.
+ * emits it standalone. Forward-only drift REPAIR is the sibling adopt module
+ * (`src/rescue/adopt.ts`, Decision 60) that `reconcile --adopt` / `rescue apply` drive;
+ * only LOCAL-git residue needing judgment stays rescue-reconciler territory.
  */
 import {isTerminalTaskStatus, isTerminalRunStatus} from '../types/index.js'
 import {depsSatisfied, isUnsatisfiableDep} from '../orchestrator/readiness.js'

@@ -30,7 +30,7 @@ import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {StateManager, specDir} from '../../core/state/index.js'
 import {SpecStore} from '../../spec/index.js'
 import {makeRunId, validateId} from '../../shared/index.js'
-import {nowEpoch} from '../../shared/time.js'
+import {nowEpoch, nowIso} from '../../shared/time.js'
 import {nonNull} from '../../shared/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
 import type {RunState} from '../../types/index.js'
@@ -52,6 +52,7 @@ import {
 } from '../../orchestrator/index.js'
 import {loadCliDeps, type CliDeps, openState} from '../wiring.js'
 import {emitMetric} from '../../scoring/index.js'
+import {adoptForCli} from '../adoption.js'
 import {
     DefaultGitClient,
     DefaultGhClient,
@@ -430,7 +431,14 @@ export async function runCreate(argv: string[], overrides: RunCreateOverrides = 
     return EXIT.OK
 }
 
-async function runResume(argv: string[]): Promise<ExitCode> {
+/** Test seam: git/gh clients for adoption + the clock. */
+export interface ResumeOverrides {
+    readonly gitClient?: GitClient
+    readonly ghClient?: GhClient
+    readonly now?: () => string
+}
+
+export async function runResume(argv: string[], overrides: ResumeOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['no-ship', 'ignore-quota', 'e2e']})
     if (args.flag('help') === true) {
         return emitHelp(RESUME_HELP)
@@ -459,12 +467,22 @@ async function runResume(argv: string[]): Promise<ExitCode> {
         await state.update(runId, (s) => ({...s, ignore_quota: true}))
     }
 
+    // Adopt forward-only GitHub repairs BEFORE applyResume (Decision 60). Ordering is
+    // the point: a landed auto-armed rollup (or a terminal run whose every task now
+    // merged) reopens `completed/failed → running` here, so applyResume's terminal guard
+    // passes and the runner re-enters finalize to complete the ship. A gh outage is
+    // CONTAINED (envelope `adoption:{ok:false}`) — resume proceeds exactly as today.
+    const git = overrides.gitClient ?? new DefaultGitClient()
+    const gh = overrides.ghClient ?? new DefaultGhClient()
+    const at = overrides.now?.() ?? nowIso()
+    const adoption = await adoptForCli({state, git, gh, dataDir}, await state.read(runId), at)
+
     const reading = await new StatuslineUsageSignal({dataDir}).read()
     const envelope = await applyResume(state, runId, reading, config, nowEpoch())
     if (envelope.kind === 'resumed' && envelope.cleared === true) {
         await emitMetric(dataDir, runId, 'human_touch', {kind: 'resume'}) // S11 mirror
     }
-    emitJson(envelope)
+    emitJson({...envelope, adoption})
     return EXIT.OK
 }
 

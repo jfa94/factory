@@ -829,7 +829,8 @@ export const RunStateSchema = z.object({
      * stored-EVENT exception to derive-don't-store (precedent: the retired
      * `paused_minutes`): "how many self-heal cycles already ran" is history no
      * state/git re-derivation can recover. `factory rescue auto` requires
-     * `attempts === 0`, bounding the self-heal loop to ONE cycle per run.
+     * `attempts < SELF_HEAL_MAX_ATTEMPTS`, bounding the self-heal loop to ≤3
+     * cycles per run (Decision 60; each failed finalize spends one).
      */
     self_heal: z
         .object({

@@ -158,6 +158,7 @@ first REFILL, arm ONE session-scoped recurring wake sized to the configured TTL:
 ```bash
 TTL_MIN=$(factory config-defaults | jq -r .stallTtlMinutes)   # default 20
 ```
+
 ```
 CronCreate({
   cron: "*/<TTL_MIN> * * * *", recurring: true,
@@ -180,7 +181,9 @@ REFILL (run at loop entry and after every completion):
     "done"      → go to Phase 4 (report)
     "finalize"  → factory run finalize --run <run_id>; if the finalized run's
                   status is "failed", run factory rescue auto --run <run_id>
-                  ONCE (the bounded self-heal, S10/Decision 48):
+                  (the bounded self-heal, S10/Decision 48+60). Fire it after
+                  EVERY failed finalize — the CLI enforces the ≤3-cycle budget
+                  and pages once it is spent, so the runner stays dumb:
                     kind "recovered" → REFILL (back to the top of THE LOOP)
                     kind "page"      → report its reason/dead_ends/hints, go to Phase 4
                   otherwise go to Phase 4
@@ -435,10 +438,10 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `model`, `isolation` (3b/iii: no more hardcoded `general-purpose`/`opus`/
    `"worktree"`). Render `verifier_spec.prompt_template` by substituting EXACTLY
    `verifier_spec.interpolate_fields` (today: `{reviewer, severity, claim, file, line,
-   quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier must
+quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier must
    judge the bare claim against the code, not be led by the reviewer's reasoning
    chain). Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
-   <tenv.base_ref>`) same as every other reviewer. It returns
+<tenv.base_ref>`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
     ```json

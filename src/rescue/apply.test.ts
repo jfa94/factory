@@ -608,27 +608,30 @@ describe('applyRescue', () => {
             expect(nonNull(run.tasks.dead).status).toBe('failed')
         })
 
-        it("requires attempts === 0: a second auto is a no-op flagged auto_blocked:'attempts'", async () => {
+        it("requires attempts < 3: cycles 1-3 recover, the 4th is a no-op flagged auto_blocked:'attempts' (Decision 60)", async () => {
             await seed([{task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'}], 'failed')
-            await applyRescue(state, RUN_ID, {auto: {at: AT}})
-            // The re-driven task fails again and the run re-finalizes to failed.
-            await state.update(RUN_ID, (s) => ({
-                ...s,
-                status: 'failed',
-                ended_at: '2026-07-04T01:00:00.000Z',
-                tasks: {
-                    a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'}),
-                },
-            }))
+            // Three cycles each recover + increment; between each the re-driven task
+            // fails again and the run re-finalizes to failed.
+            for (let cycle = 1; cycle <= 3; cycle++) {
+                const res = await applyRescue(state, RUN_ID, {auto: {at: `2026-07-04T0${cycle}:00:00.000Z`}})
+                expect(res.auto_blocked).toBeUndefined()
+                expect(res.self_heal_attempts).toBe(cycle)
+                await state.update(RUN_ID, (s) => ({
+                    ...s,
+                    status: 'failed',
+                    ended_at: '2026-07-04T05:00:00.000Z',
+                    tasks: {a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'})},
+                }))
+            }
 
-            const second = await applyRescue(state, RUN_ID, {auto: {at: '2026-07-04T02:00:00.000Z'}})
-            expect(second.auto_blocked).toBe('attempts')
-            expect(second.reset).toEqual([])
-            expect(second.reopened).toBe(false)
-            expect(second.run_status).toBe('failed')
+            const fourth = await applyRescue(state, RUN_ID, {auto: {at: '2026-07-04T09:00:00.000Z'}})
+            expect(fourth.auto_blocked).toBe('attempts')
+            expect(fourth.reset).toEqual([])
+            expect(fourth.reopened).toBe(false)
+            expect(fourth.run_status).toBe('failed')
 
             const run = await state.read(RUN_ID)
-            expect(run.self_heal).toEqual({attempts: 1, last_at: AT}) // NOT re-stamped
+            expect(run.self_heal).toEqual({attempts: 3, last_at: '2026-07-04T03:00:00.000Z'}) // NOT re-stamped
             expect(run.status).toBe('failed')
             expect(nonNull(run.tasks.a).status).toBe('failed')
         })

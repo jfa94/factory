@@ -60,7 +60,7 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   refuses loud (before any write) to repoint a repo whose current names a
   still-live run owned by a different known session (the new run stays
   addressable via `--run`). **Pointer-liveness tolerance ([Decision 57](../explanation/decisions.md#decision-57--runs-are-born-whole-atomic-seeding--stale-run-sweep)):**
-  inside `pointCurrentAt` **only**, an *unparseable* pointer target (old schema / corrupt
+  inside `pointCurrentAt` **only**, an _unparseable_ pointer target (old schema / corrupt
   JSON) is treated as **stale** — it warns and repoints rather than throwing, since a run
   this engine cannot parse cannot be owned by a live session and so can never prove the
   "still-live, different owner" condition the guard exists for. This mirrors `listRuns`'
@@ -84,7 +84,7 @@ lock-protected (`proper-lockfile`).
 
 **Runs are born whole ([Decision 57](../explanation/decisions.md#decision-57--runs-are-born-whole-atomic-seeding--stale-run-sweep)).**
 `StateManager.create()` accepts the seeded `tasks` map and birth-time `human_touches` in the
-*same single write*, so a run is created complete — a crash mid-create can never leave a
+_same single write_, so a run is created complete — a crash mid-create can never leave a
 `running` run with zero tasks (the class of half-created wreckage the 2026-07-07 incident
 produced). An omitted touch `at` is stamped with the birth timestamp, so the `launch` touch's
 `at === started_at` holds exactly. `createRunFromManifest` passes the seeded map in the create
@@ -182,7 +182,7 @@ one.
 | `failure_reason`          | string?                       | Human-facing fail reason; set _iff_ failed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `phase`                   | TaskPhase?                    | The `next-action` orchestrator's resume cursor (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `merge_resyncs`           | int ≥0 (default 0)            | Ship live-merge re-sync count (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn, carrying the emit-time `spawned_at` clock read by stall-TTL detection (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn, carrying the emit-time `spawned_at` clock read by stall-TTL detection (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `e2e_feedback`            | string?                       | Feedback carried from a failing e2e journey into this task's NEXT implementation pass (the e2e reopen loop, [Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)). Set by the e2e coroutine when it reopens the task (via `resetTaskRow`); injected into the producer's prior-failure context. **Transient — not a failure field; allowed on any status.**                                                                                                                                           |
 | `started_at` / `ended_at` | string?                       | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -298,12 +298,16 @@ defaults to `[]`. Neither ever holds a gate pass/fail boolean.
 ### `self_heal`
 
 `{ attempts, last_at }?` — the bounded auto-rescue ledger
-([Decision 48](../explanation/decisions.md#decision-48--factory-recover--bounded-auto-rescue-self-heal)).
+([Decision 48](../explanation/decisions.md#decision-48--factory-recover--bounded-auto-rescue-self-heal),
+bound raised by [Decision 60](../explanation/decisions.md#decision-60--autonomous-forward-only-adoption-write-side)).
 Stamped **inside the same locked `applyRescue` mutation** that performs an auto
-reset (`src/rescue/apply.ts`). `factory rescue auto` requires `attempts === 0`,
-so the self-heal loop is bounded to **ONE cycle per run** — "how many self-heal
-cycles already ran" cannot be recovered from state or git once the reset lands, so
-it must be stored.
+reset (`src/rescue/apply.ts`). `factory rescue auto` refuses once `attempts >=
+SELF_HEAL_MAX_ATTEMPTS` (**3**, flat count) and `finalizeRun` only auto-fires while
+`attempts < 3`, so the self-heal loop is bounded to **three cycles per run** — "how
+many self-heal cycles already ran" cannot be recovered from state or git once the
+reset lands, so it must be stored. Forward-only **adoption** (Decision 60) never
+touches this ledger: recording GitHub truth the engine can prove is neither a
+recovery attempt nor a stored event, so adoptions are free.
 
 ### `human_touches`
 

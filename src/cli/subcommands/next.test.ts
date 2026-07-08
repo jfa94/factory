@@ -13,13 +13,14 @@ import {join} from 'node:path'
 
 import {writeFile} from 'node:fs/promises'
 
-import {nextCommand} from './next.js'
+import {nextCommand, runNextTask} from './next.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {captureStream} from '../test-helpers.js'
 import {makeOrchestratorDeps, makePrd, makeSpec} from '../../orchestrator/orchestrator-fixtures.js'
 import {StateManager} from '../../core/state/manager.js'
 import {SpecStore} from '../../spec/index.js'
 import {usageCachePath} from '../../quota/index.js'
+import {FakeGitClient, FakeGhClient} from '../../git/index.js'
 
 describe('next arg/usage edges', () => {
     it('--help prints help and exits OK', async () => {
@@ -364,6 +365,146 @@ describe('next happy path', () => {
             } else {
                 process.env.CLAUDE_PLUGIN_DATA = saved
             }
+        }
+    })
+})
+
+describe('next-task stale-shipping adoption (Decision 60)', () => {
+    let dir: string
+    let state: StateManager
+    let savedEnv: string | undefined
+    const RUN = 'run-ship'
+    const STAGING = 'staging-run-ship'
+
+    beforeEach(async () => {
+        dir = await mkdtemp(join(tmpdir(), 'factory-next-adopt-'))
+        state = new StateManager({
+            dataDir: dir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        savedEnv = process.env.CLAUDE_PLUGIN_DATA
+        process.env.CLAUDE_PLUGIN_DATA = dir
+    })
+
+    afterEach(async () => {
+        if (savedEnv === undefined) {
+            delete process.env.CLAUDE_PLUGIN_DATA
+        } else {
+            process.env.CLAUDE_PLUGIN_DATA = savedEnv
+        }
+        await rm(dir, {recursive: true, force: true})
+    })
+
+    /** Seed a run with ONE stale in-flight task (aged spawn_in_flight) + zero-usage cache. */
+    async function seedStale(status: 'shipping' | 'executing') {
+        await state.create({
+            run_id: RUN,
+            staging_branch: STAGING,
+            spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
+        })
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {
+                T1: {
+                    task_id: 'T1',
+                    status,
+                    phase: status === 'shipping' ? 'ship' : 'exec',
+                    depends_on: [],
+                    risk_tier: 'medium',
+                    escalation_rung: 0,
+                    reviewers: [],
+                    merge_resyncs: 0,
+                    started_at: '2026-07-08T00:00:00.000Z',
+                    // shipping carries a leftover verify-phase checkpoint (only terminal
+                    // writers clear it); executing carries its own exec checkpoint. Ancient
+                    // spawned_at → past any TTL → `stale`.
+                    ...(status === 'shipping' ? {branch: `factory/${RUN}/T1`, pr_number: 101} : {}),
+                    spawn_in_flight: {
+                        phase: status === 'shipping' ? 'verify' : 'exec',
+                        rung: 0,
+                        tip_sha: 'x',
+                        spawned_at: 1000,
+                    },
+                },
+            },
+        }))
+        const spec = makeSpec([{task_id: 'T1', acceptance_criteria: ['only one']}])
+        await new SpecStore({dataDir: dir, docsRoot: join(dir, '_docs')}).write(spec, '# spec', makePrd())
+        const nowSec = Math.floor(Date.now() / 1000)
+        await writeFile(
+            usageCachePath(dir),
+            JSON.stringify({
+                captured_at: nowSec,
+                five_hour: {used_percentage: 0, resets_at: nowSec + 18_000},
+                seven_day: {used_percentage: 0, resets_at: nowSec + 604_800},
+            })
+        )
+    }
+
+    it('adopts a stale SHIPPING task whose PR merged, then recomputes past work', async () => {
+        await seedStale('shipping')
+        const gh = new FakeGhClient()
+        gh.remoteBranches.add(STAGING) // avoid staging-missing noise
+        gh.setPr({
+            number: 101,
+            headRefName: `factory/${RUN}/T1`,
+            baseRefName: STAGING,
+            state: 'MERGED',
+            mergeCommit: {oid: 'sha101'},
+            url: 'https://github.com/fake/repo/pull/101',
+        })
+
+        const stdout = captureStream(process.stdout)
+        try {
+            const code = await runNextTask(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
+            expect(code).toBe(EXIT.OK)
+            const env = JSON.parse(stdout.read()) as {kind: string; adoption?: {ok: boolean; adopted: string[]}}
+            // The merged PR was adopted as done...
+            expect(env.adoption?.ok).toBe(true)
+            expect(env.adoption?.adopted).toContain('T1')
+            // ...the task flipped to done, and the recomputed envelope left `work`.
+            expect((await state.read(RUN)).tasks.T1?.status).toBe('done')
+            expect(env.kind).not.toBe('work')
+        } finally {
+            stdout.restore()
+        }
+    })
+
+    it('degrades on a gh outage: probe returns {ok:false}, task stays shipping, envelope emitted unchanged', async () => {
+        await seedStale('shipping')
+        const gh = new FakeGhClient({truncate: true}) // every gh read throws "couldn't tell"
+
+        const stdout = captureStream(process.stdout)
+        try {
+            const code = await runNextTask(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
+            expect(code).toBe(EXIT.OK)
+            const env = JSON.parse(stdout.read()) as {kind: string; adoption?: unknown}
+            // Outage → no flip: the original work envelope is emitted with NO adoption field,
+            // and the task is untouched (the hot runner loop must never crash on a gh outage).
+            expect(env.kind).toBe('work')
+            expect(env.adoption).toBeUndefined()
+            expect((await state.read(RUN)).tasks.T1?.status).toBe('shipping')
+        } finally {
+            stdout.restore()
+        }
+    })
+
+    it('does NOT probe gh for a stale NON-shipping (executing) task', async () => {
+        await seedStale('executing')
+        const gh = new FakeGhClient()
+
+        const stdout = captureStream(process.stdout)
+        try {
+            const code = await runNextTask(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
+            expect(code).toBe(EXIT.OK)
+            const env = JSON.parse(stdout.read()) as {kind: string; stale: string[]; adoption?: unknown}
+            // T1 IS stale — proving the gate (status !== shipping), not absence of
+            // staleness, is what kept the hot loop probe-free.
+            expect(env.stale).toContain('T1')
+            expect(env.adoption).toBeUndefined()
+            expect(gh.calls.length).toBe(0)
+        } finally {
+            stdout.restore()
         }
     })
 })

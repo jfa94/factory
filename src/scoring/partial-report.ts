@@ -328,13 +328,14 @@ export function renderFailureComment(report: PartialRunReport, selfHealEligible 
         `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) failed. ` +
             `PRD left open for rescue/resume.`,
     ]
-    // S10 (Decision 48): tell the PRD reader the runner's ONE bounded self-heal
-    // cycle fires next, so a transient failure may clear itself before triage.
+    // S10 (Decision 48): tell the PRD reader the runner's bounded self-heal fires
+    // next, so a transient failure may clear itself before triage. Bounded to ≤3
+    // cycles (Decision 60) — after the budget is spent, the run pages a human.
     if (selfHealEligible) {
         lines.push(
             '',
-            '_Self-heal: the runner retries the recoverable failure(s) once via ' +
-                '`factory rescue auto` before paging a human._'
+            '_Self-heal: the runner retries the recoverable failure(s) via ' +
+                '`factory rescue auto` (up to 3 cycles) before paging a human._'
         )
     }
     if (report.e2e_failure !== undefined) {

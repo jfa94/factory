@@ -17,7 +17,15 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {runCommand, resumeCommand, runCreate, runCancel, resolveOwnerSession, type RunCancelOverrides} from './run.js'
+import {
+    runCommand,
+    resumeCommand,
+    runCreate,
+    runResume,
+    runCancel,
+    resolveOwnerSession,
+    type RunCancelOverrides,
+} from './run.js'
 import {createRun, resolveOrCreateRun} from '../../orchestrator/lifecycle.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {nonNull} from '../../shared/index.js'
@@ -1443,8 +1451,16 @@ describe('runResume (factory resume)', () => {
         }))
     }
 
-    /** Run `factory resume <argv>`; capture the JSON envelope + exit code. */
-    async function resume(argv: string[]): Promise<{env: Record<string, unknown>; code: number; stderr: string}> {
+    /**
+     * Run `factory resume <argv>`; capture the JSON envelope + exit code. With
+     * `overrides` (fake git/gh), drives `runResume` directly so adoption's GitHub probe
+     * hits the fakes; without them (usage-edge tests), goes through `resumeCommand` for
+     * the withUsageGuard EXIT.USAGE mapping.
+     */
+    async function resume(
+        argv: string[],
+        overrides?: {gitClient: FakeGitClient; ghClient: FakeGhClient}
+    ): Promise<{env: Record<string, unknown>; code: number; stderr: string}> {
         const chunks: string[] = []
         const errChunks: string[] = []
         const out = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
@@ -1457,7 +1473,7 @@ describe('runResume (factory resume)', () => {
         })
         let code: number
         try {
-            code = await resumeCommand.run(argv)
+            code = overrides !== undefined ? await runResume(argv, overrides) : await resumeCommand.run(argv)
         } finally {
             out.mockRestore()
             err.mockRestore()
@@ -1473,7 +1489,10 @@ describe('runResume (factory resume)', () => {
         await seedSuspended('run-iq')
         // No usage-cache.json in the temp data dir → the reading is `unavailable`,
         // which without the flag fail-closed pauses (proven by the test below).
-        const {env, code} = await resume(['--run', 'run-iq', '--ignore-quota'])
+        const {env, code} = await resume(['--run', 'run-iq', '--ignore-quota'], {
+            gitClient: new FakeGitClient(),
+            ghClient: new FakeGhClient(),
+        })
         expect(code).toBe(EXIT.OK)
         expect(env.kind).toBe('resumed')
         const run = await state.read('run-iq')
@@ -1484,7 +1503,10 @@ describe('runResume (factory resume)', () => {
 
     it('plain resume on the same parked run fail-closed pauses and leaves state untouched', async () => {
         await seedSuspended('run-park')
-        const {env, code} = await resume(['--run', 'run-park'])
+        const {env, code} = await resume(['--run', 'run-park'], {
+            gitClient: new FakeGitClient(),
+            ghClient: new FakeGhClient(),
+        })
         expect(code).toBe(EXIT.OK)
         expect(env.kind).toBe('pause')
         const run = await state.read('run-park')
@@ -1495,7 +1517,10 @@ describe('runResume (factory resume)', () => {
 
     it("a resume that clears the checkpoint mirrors the S11 human_touch 'resume' metric", async () => {
         await seedSuspended('run-touch')
-        await resume(['--run', 'run-touch', '--ignore-quota'])
+        await resume(['--run', 'run-touch', '--ignore-quota'], {
+            gitClient: new FakeGitClient(),
+            ghClient: new FakeGhClient(),
+        })
         const metrics = await readMetrics(dataDir, 'run-touch')
         const touches = metrics.filter((m) => m.event === 'human_touch')
         expect(touches.map((m) => (m.data as {kind: string}).kind)).toContain('resume')
@@ -1506,5 +1531,46 @@ describe('runResume (factory resume)', () => {
         const {code, stderr} = await resume(['--run', 'run-flags', '--e2e'])
         expect(code).toBe(EXIT.USAGE)
         expect(stderr).toMatch(/--no-ship\/--e2e are not valid on resume/)
+    })
+
+    it('a GitHub outage degrades: adoption returns {ok:false} but resume still proceeds (Decision 60)', async () => {
+        await seedSuspended('run-outage')
+        // A task branch forces gatherRunFacts to call prList, which THROWS under truncate.
+        await state.update('run-outage', (s) => ({
+            ...s,
+            tasks: {t1: {...nonNull(s.tasks.t1), branch: 'factory/run-outage/t1', pr_number: 9}},
+        }))
+        const gh = new FakeGhClient({truncate: true}) // gh down — prList rejects
+        const {env, code} = await resume(['--run', 'run-outage', '--ignore-quota'], {
+            gitClient: new FakeGitClient(),
+            ghClient: gh,
+        })
+        expect(code).toBe(EXIT.OK)
+        expect(env.kind).toBe('resumed') // the outage never blocks resume
+        expect((env.adoption as {ok: boolean; error: string}).ok).toBe(false)
+        expect((env.adoption as {error: string}).error).toMatch(/TRUNCATED/)
+        expect((await state.read('run-outage')).status).toBe('running')
+    })
+
+    it('a landed auto-armed rollup reopens the completed run so resume proceeds (Decision 60)', async () => {
+        const runId = 'run-rollup'
+        await createRun(state, store, {repo: REPO, issue: 42, runId, ownerSession: 'sess-rollup'})
+        const staging = (await state.read(runId)).staging_branch
+        // A completed run whose rollup ARMED (--auto) but state still records merged:false.
+        await state.update(runId, (s) => ({
+            ...s,
+            status: 'completed' as const,
+            ended_at: '2026-07-04T00:00:00.000Z',
+            tasks: {t1: {...nonNull(s.tasks.t1), status: 'done' as const, ended_at: '2026-07-04T00:00:00.000Z'}},
+            rollup: {number: 55, merged: false, reason: 'branch policy: merge queued (--auto)'},
+        }))
+        // GitHub truth: the rollup PR landed.
+        const gh = new FakeGhClient()
+        gh.setPr({number: 55, headRefName: staging, baseRefName: 'main', state: 'MERGED', mergeCommit: {oid: 'rsha'}})
+        const {env, code} = await resume(['--run', runId], {gitClient: new FakeGitClient(), ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        expect(env.kind).toBe('resumed') // adoption reopened it BEFORE applyResume's terminal guard
+        expect((env.adoption as {ok: boolean; reopened: unknown}).reopened).toBe('rollup')
+        expect((await state.read(runId)).status).toBe('running')
     })
 })

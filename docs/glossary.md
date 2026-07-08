@@ -124,21 +124,37 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **examples**:
     - A Run gave up after one Task repeatedly failed; Rescue reopens it, clears the wedged Task, and continues.
     - A Task's work in fact landed but the Run's record missed it; Rescue reconciles the record and carries on.
-- **relationships**: repairs and then continues a Run; the escalation beyond Resume; bounded by the Circuit Breaker's notion of an unsafe Run.
+- **relationships**: repairs and then continues a Run; the escalation beyond Resume; runs Adoption (forward-only GitHub-truth repair) before any reset; bounded by the Circuit Breaker's notion of an unsafe Run.
 - **synonyms**: recovery.
+
+### Adoption
+
+- **type**: Operation (on a Run)
+- **status**: draft
+- **definition**: Recording into a Run's state the outcomes GitHub can already prove — autonomously and forward-only. When a Task's pull request has merged but the Run's record missed it, adoption records that Task delivered; it likewise rebinds or clears a stale pull-request pointer, re-pushes a branch that still exists locally, and reopens a terminal Run whose final merge actually landed. Adoption only ever moves a Run's record forward to match reality; it never resets work, force-pushes, closes a pull request, or discards anything — those remain Rescue's consent-gated territory. Because it runs before any reset, work that has already merged is recorded delivered before recovery could clobber it.
+- **invariants**:
+    - Forward-only: adoption records only outcomes GitHub already shows; anything destructive or ambiguous (a pull request closed without merging, a branch gone everywhere) is surfaced for a person, never adopted.
+    - Free: adoption never spends a Run's self-heal budget and is never recorded as a human intervention — proving truth from GitHub is neither a recovery attempt nor a human touch.
+    - Runs before any reset, so already-merged work can never be reset away.
+- **examples**:
+    - A Task's pull request merged on GitHub while the Run still recorded it as shipping; adoption records the Task delivered before rescue computes what to reset.
+    - Counter-example: a pull request closed without merging — adoption refuses it and surfaces it for a person, because deciding what to do needs judgment.
+- **relationships**: a forward-only part of Rescue and of the reconcile operation; runs before Rescue's reset; complements Resume; never spends the self-heal budget.
+- **synonyms**: —
+- **code anchor**: `src/rescue/adopt.ts`
 
 ### Recover
 
 - **type**: Operation (on a Run)
 - **status**: orphaned (Decision 50 removed the `factory recover` command; its self-routing front-door role moved into `/factory:resume` and its unattended self-heal into `factory rescue auto` — entry retained for domain-expert review)
-- **definition**: The single self-routing front door for an unfinished Run: it inspects the Run and does whatever the Run actually needs — nothing (already healthy or already delivered), Resume it (a benign park clears), Rescue it (there is resettable work to repair), or page a person (only a human fix remains). Recover is not a fourth choice alongside Resume/Rescue/Supersede — it is the router that picks the right one of them, so an operator does not have to diagnose the Run first. It also has a bounded, unattended self-heal mode used by the runner: after a Run fails to finalize, it attempts exactly ONE automatic repair-and-continue cycle, and if that cannot make progress it pages the person on the PRD rather than looping.
+- **definition**: The single self-routing front door for an unfinished Run: it inspects the Run and does whatever the Run actually needs — nothing (already healthy or already delivered), Resume it (a benign park clears), Rescue it (there is resettable work to repair), or page a person (only a human fix remains). Recover is not a fourth choice alongside Resume/Rescue/Supersede — it is the router that picks the right one of them, so an operator does not have to diagnose the Run first. It also has a bounded, unattended self-heal mode used by the runner: after a Run fails to finalize, it attempts up to three automatic repair-and-continue cycles (Decision 60 raised the bound from one), and once that budget is spent without progress it pages the person on the PRD rather than looping.
 - **invariants**:
     - Recover only routes to existing operations (Resume, Rescue); it introduces no repair power of its own.
-    - The unattended self-heal runs at most once per Run, and never performs a repair reserved for human consent (discarding work, resetting end-to-end verdicts, rechecking a rollup, reconciling outside-world drift).
+    - The unattended self-heal runs at most three times per Run, and never performs a repair reserved for human consent (discarding work, resetting end-to-end verdicts, rechecking a rollup, reconciling outside-world drift).
     - The self-heal is not a human intervention — it is never recorded as one.
 - **examples**:
     - An operator runs Recover on a stalled Run without knowing why it stalled; Recover clears a capacity park by resuming it.
-    - A Run fails to finalize because one Task wedged; the runner's one self-heal cycle reopens and continues it, no person involved.
+    - A Run fails to finalize because one Task wedged; a runner self-heal cycle reopens and continues it, no person involved.
     - Counter-example: the only remaining problem is a dead-end Task needing a human fix — Recover pages the person instead of burning capacity on a repair that cannot succeed.
 - **relationships**: routes to Resume or Rescue; escalates to a human page when neither can help; the runner's post-finalize safety net; superseded by Resume as the operator front door (Decision 50).
 - **synonyms**: —

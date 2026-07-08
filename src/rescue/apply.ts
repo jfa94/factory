@@ -24,7 +24,7 @@
  * writer cannot race the scan against the write.
  */
 import {scanRun} from './scan.js'
-import {effectiveAutoResets} from './auto.js'
+import {effectiveAutoResets, SELF_HEAL_MAX_ATTEMPTS} from './auto.js'
 import type {StateManager} from '../core/state/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
 import {nowIso} from '../shared/time.js'
@@ -144,6 +144,15 @@ export interface RescueApplyOptions {
      * that actually does work appends (S11). Defaults to {@link nowIso}; tests pin it.
      */
     at?: string
+    /**
+     * Task ids the SAME invocation's adoption pass just flipped to `done` (Decision 60).
+     * An explicit `--task <id>` naming one of these is a no-op `skipped` instead of the
+     * LOUD "would un-ship" throw — the task WAS just shipped (its merged PR adopted), so
+     * "un-ship" is the wrong framing. Any OTHER `done` id still throws (a genuine
+     * un-ship). The default (no `--task`) path needs nothing: `selectTargets` runs on the
+     * locked snapshot, which already sees the adopted rows as `done` → not resettable.
+     */
+    adoptedDone?: readonly string[]
 }
 
 /** What a `rescue apply` did. */
@@ -158,9 +167,9 @@ export interface RescueApplyResult {
     /** Explicitly-named ids that were no-ops because already `pending`. */
     skipped: string[]
     /**
-     * Why an `auto` apply refused to reset: the one self-heal cycle already ran
-     * (`attempts`) or nothing is effectively resettable (`empty`). Absent on a
-     * successful auto and on every non-auto apply.
+     * Why an `auto` apply refused to reset: the self-heal budget is spent
+     * (`attempts` ≥ {@link SELF_HEAL_MAX_ATTEMPTS}) or nothing is effectively
+     * resettable (`empty`). Absent on a successful auto and on every non-auto apply.
      */
     auto_blocked?: 'attempts' | 'empty'
     /** `self_heal.attempts` AFTER a successful auto apply; absent otherwise. */
@@ -209,6 +218,38 @@ export interface ResetTaskRowOpts {
  * fresh `e2eFeedback` string via `opts` to overwrite it — one source of truth for
  * "what a reset clears/keeps", shared by both call sites. Exported for that reuse.
  */
+/**
+ * Flip one task row to a clean `done` state (the mirror of {@link resetTaskRow} for
+ * the adoption path, Decision 60). Stamps `ended_at` once and drops the same
+ * transient in-flight cruft {@link completeTask} clears — `spawn_in_flight` (no spawn
+ * outlives a terminal task), `e2e_feedback` (a shipped task's reopen complaint is
+ * resolved), and `fix_findings` (a stale fix-forward record must not outlive its task).
+ * Also drops `failure_class`/`failure_reason`: adoption reaches this for a `failed`
+ * task whose recorded PR merged (reconcile classifies it `merged-unrecorded` — only
+ * `done` is exempt), and the schema forbids those fields on any non-failed status
+ * ("set IFF failed", schema.ts refineTaskCrossFields) — keeping them would throw at
+ * `parseRunState` and abort the whole adoption write, reopening the clobber hazard.
+ * A no-op for the `completeTask` caller (a shipping task never carries them).
+ * PRESERVES identity, dependency edges, the risk dial, and the git/PR pointers (the
+ * adopted PR IS this task's shipped PR).
+ *
+ * Extracted so {@link completeTask} (orchestrator/transitions.ts) and rescue adoption
+ * share ONE source of truth for "what shipping a task clears"; import direction is
+ * orchestrator→rescue (via orchestrator/deps.ts), never the reverse (would cycle).
+ */
+export function doneTaskRow(task: TaskState, at: string): TaskState {
+    return {
+        ...task,
+        status: 'done',
+        ended_at: task.ended_at ?? at,
+        spawn_in_flight: undefined,
+        e2e_feedback: undefined,
+        fix_findings: undefined,
+        failure_class: undefined,
+        failure_reason: undefined,
+    }
+}
+
 export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): TaskState {
     // Destructure OUT the fields a reset must clear; keep the rest verbatim.
     const {
@@ -274,6 +315,10 @@ function selectTargets(run: RunState, opts: RescueApplyOptions): {targets: strin
                 throw new Error(`rescue: run '${run.run_id}' has no task '${id}'`)
             }
             if (task.status === 'done') {
+                if (opts.adoptedDone?.includes(id) === true) {
+                    skipped.push(id) // just adopted this invocation — not an un-ship
+                    continue
+                }
                 throw new Error(
                     `rescue: refusing to reset shipped task '${id}' (status 'done') — would un-ship merged work`
                 )
@@ -338,8 +383,8 @@ export async function applyRescue(
                 }
                 return run
             }
-            if (attempts > 0) {
-                return noop('attempts')
+            if (attempts >= SELF_HEAL_MAX_ATTEMPTS) {
+                return noop('attempts') // budget spent (≤3 cycles) — page for a human
             }
             const targets = effectiveAutoResets(run, scanRun(run))
             if (targets.length === 0) {

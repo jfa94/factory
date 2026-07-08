@@ -118,15 +118,23 @@ consent prompt. Never edit `state.json` by hand.
     executes `--task <id>`. - **Clear failed e2e verdict** (`e2e_failed` / `e2e_assessment_failed`) — approving
     asserts the underlying cause no longer applies; executes `--reset-e2e`. - **Clear failed traceability audit** (`traceability_failed`) — approving asserts the
     unmet PRD intent is addressed; executes `--reset-traceability`. - **Recheck armed rollup** (`rollup_pending`) — approving asserts the queued merge
-    landed; executes `--recheck-rollup`. - **Reconcile git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
-    (step 5); forward-only fixes are autonomous, anything destructive prompts again. - **Cancel half-created run** (`empty_task_map`, D57) — zero tasks means creation
+    landed; executes `--recheck-rollup`. - **Reconcile LOCAL git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
+    (step 5) for the residue the engine can't decide (branch behind base, a branch gone both
+    locally and remotely, an unresolvable staging base). Forward-only fixes are autonomous,
+    anything destructive prompts again. - **Resolve a GitHub drift the engine can't auto-fix** —
+    ONE item per destructive `github.drifts` entry (closed-unmerged, an unrecorded open PR, an
+    unresolvable staging branch), each using the drift's `detail` as its description; approving
+    means you perform that manual remedy after apply. Do NOT propose the forward-only classes
+    (merged-unrecorded, stale-pr-number, a re-pushable branch, a landed rollup) — apply's
+    autonomous adoption (Decision 60) repairs those in step 4. - **Cancel half-created run**
+    (`empty_task_map`, D57) — zero tasks means creation
     crashed before seeding; nothing is repairable. Executes `factory run cancel
 --run <id> --cleanup`, then re-run `factory run create`.
 
-            A question holds at most 4 options — split the items across up to 4 multiSelect
-            questions in the same call when there are more. The human approves any subset (or
-            none). **Declined everything** → report the skipped items with their `hints` commands
-            and STOP.
+                    A question holds at most 4 options — split the items across up to 4 multiSelect
+                    questions in the same call when there are more. The human approves any subset (or
+                    none). **Declined everything** → report the skipped items with their `hints` commands
+                    and STOP.
 
 4.  **Apply the approved subset — ONE call.** Combine the approved items' flags/ids into a
     single `factory rescue apply [--run <id>] [--task <id>]... [--reset-e2e]
@@ -136,25 +144,29 @@ consent prompt. Never edit `state.json` by hand.
 skipped: [...], resume? }` — apply also reopens a terminal run and clears any surviving
     park itself (ONE `recover` touch covers the whole approved plan, Decision 49).
 
-5.  **Reconcile git/GitHub drift (if approved).** Run state is now repaired, but the remote
-    may still disagree with it. Re-run `factory rescue scan` for the fresh post-apply
-    picture, then spawn the **`rescue-reconciler`** agent (one `Agent()`) passing the run id,
-    that scan JSON — including its `github` section (`github.drifts` is the classified
-    state↔GitHub drift; each line's `detail` names the manual remedy) — and the repo context — `target_root`, `owner`, `name`,
-    `staging_branch: staging-<run-id>`, and `base_branch` (`config.git.baseBranch`). The
-    agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
-    run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or
-    discards. Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked,
-evidence }`): - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
-    missing source SHA). Report `evidence` and STOP — do not hand off to resume. - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve /
+5.  **Reconcile LOCAL git drift (only when needed).** Apply's autonomous adoption already
+    forward-repaired the GitHub side (merged PRs recorded done, stale `pr_number`s rebound,
+    re-pushable branches pushed, a landed rollup reopened), and step 3 surfaced the destructive
+    GitHub drifts for the human. What can remain is the LOCAL-git residue: a run branch behind
+    `origin/<base>`, a branch gone both locally and remotely, an unresolvable staging base.
+    **Skip this step entirely unless the post-apply scan has `reconcile: true`** — re-run
+    `factory rescue scan`; if `reconcile` is false, go straight to step 6. When it IS true,
+    spawn the **`rescue-reconciler`** agent (one `Agent()`) passing the run id, that scan JSON,
+    and the repo context — `target_root`, `owner`, `name`, `staging_branch: staging-<run-id>`,
+    and `base_branch` (`config.git.baseBranch`). The agent is forward-only: it autonomously
+    fetches and forward-merges `origin/<base>` into the run branch, but it NEVER force-pushes,
+    deletes, or discards. Harvest its verdict JSON (`{ reconciled, actions, needs_prompt,
+blocked, evidence }`): - `blocked: true` → the run cannot be made resumable automatically (a
+    merge conflict, a missing source SHA/base). Report `evidence` and STOP — do not hand off to
+    resume. - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve /
     skip) before anything destructive happens. On **approve**, you (holding the authority
     the read-mostly agent lacks) perform that single op yourself; on **skip**, leave it.
     Never force-push to satisfy a prompt; if reconciliation genuinely requires a force,
     that is a STOP, not a fix. - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift cleared; proceed.
 
-                    Then report the outcome: what was applied, what was skipped (with each skipped item's
-                    exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
-                    with `develop` untouched — Decision 34, the correct loud outcome).
+                            Then report the outcome: what was applied, what was skipped (with each skipped item's
+                            exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
+                            with `develop` untouched — Decision 34, the correct loud outcome).
 
 6.  **Hand off to resume.** Invoke the orchestrator skill directly (no human round-trip):
 

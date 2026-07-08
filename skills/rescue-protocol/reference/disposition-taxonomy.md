@@ -69,20 +69,22 @@ classifies state↔GitHub drift; the scan envelope embeds its report under `gith
 GitHub — each drift line's `detail` names the manual remedy. The old bash issue-taxonomy
 (`I-01`..`I-16`) remains **reference, not a port**:
 
-| Drift (old issue id)                                   | Status                                                   | Remedy (manual until the P1 write phase)                                         |
-| ------------------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| PR merged but state not `done` (`I-03`)                | detected — `merged-unrecorded`                           | Confirm on GitHub, then re-run the task's ship stage / record manually.          |
-| PR exists but `pr_url`/`pr_number` unrecorded (`I-04`) | detected — `stale-pr-number` / `pr-unrecorded`           | The next attempt's idempotent create re-discovers the PR by head branch.         |
-| Stale CI status (`I-05`)                               | deferred                                                 | Re-running ship re-derives CI; verdicts are derive-don't-store anyway.           |
-| PR merge conflict with base (`I-07`/`I-13`)            | deferred                                                 | Rebase the task branch by hand, or reset the task to redo it from staging tip.   |
-| PR closed unmerged (`I-08`)                            | detected — `closed-unmerged`                             | Reset the task with `--task <id>` to reopen the work.                            |
-| Orphan branch / worktree (`I-02`/`I-14`)               | local: `work` survey; staging gone: `staging-missing`    | `git worktree remove` / `git branch -D` by hand after confirming no unique work. |
-| Duplicate PRs for one branch (`I-15`)                  | visible in `github.facts` (raw `prs` per head); no class | Close the extras on GitHub; idempotent create won't make new ones.               |
-| Landed auto-armed rollup                               | detected — `rollup-landed`                               | `apply --recheck-rollup` (asserts the queued merge landed).                      |
-| Deleted head of a recorded OPEN PR                     | detected — `branch-missing`                              | Re-push the branch (rescue-reconciler's forward-only territory) before resume.   |
-| Stale state lock (`I-01`)                              | n/a                                                      | `proper-lockfile` is self-healing; no manual lock-dir cleanup needed.            |
-| Archived-run rehydration                               | removed                                                  | Runs are not archived/rehydrated; scan/apply target a live run dir.              |
+| Drift (old issue id)                                   | Status                                                   | Remedy                                                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| PR merged but state not `done` (`I-03`)                | detected — `merged-unrecorded`                           | **Adopted** (Decision 60): recorded `done` autonomously — no reset can clobber it.         |
+| PR exists but `pr_url`/`pr_number` unrecorded (`I-04`) | detected — `stale-pr-number` / `pr-unrecorded`           | **Adopted**: `stale-pr-number` rebinds/clears; `pr-unrecorded` left for idempotent create. |
+| Stale CI status (`I-05`)                               | deferred                                                 | Re-running ship re-derives CI; verdicts are derive-don't-store anyway.                     |
+| PR merge conflict with base (`I-07`/`I-13`)            | deferred                                                 | Rebase the task branch by hand, or reset the task to redo it from staging tip.             |
+| PR closed unmerged (`I-08`)                            | detected — `closed-unmerged`                             | NOT adopted (needs judgment). Reset the task with `--task <id>` to reopen the work.        |
+| Orphan branch / worktree (`I-02`/`I-14`)               | local: `work` survey; staging gone: `staging-missing`    | `git worktree remove` / `git branch -D` by hand after confirming no unique work.           |
+| Duplicate PRs for one branch (`I-15`)                  | visible in `github.facts` (raw `prs` per head); no class | Close the extras on GitHub; idempotent create won't make new ones.                         |
+| Landed auto-armed rollup                               | detected — `rollup-landed`                               | **Adopted**: reopens the completed run so resume finalizes.                                |
+| Deleted head of a recorded OPEN PR                     | detected — `branch-missing`                              | **Adopted** when the branch still exists locally (plain re-push); else surfaced.           |
+| Stale state lock (`I-01`)                              | n/a                                                      | `proper-lockfile` is self-healing; no manual lock-dir cleanup needed.                      |
+| Archived-run rehydration                               | removed                                                  | Runs are not archived/rehydrated; scan/apply target a live run dir.                        |
 
-The forward-only adoption WRITES (mark merged work `done`, re-push a gone branch) are P1's
-next phase — see `src/rescue/reconcile.ts`'s module header and `src/rescue/scan.ts`'s
-SCOPE note.
+The forward-only adoption WRITES landed in
+[Decision 60](../../../docs/explanation/decisions.md#decision-60--autonomous-forward-only-adoption-write-side):
+`reconcile --adopt` / `rescue apply` / `next-task` mark merged work `done`, rebind stale
+`pr_number`s, re-push a still-local branch, and reopen a landed rollup — all forward-only, free
+(no self-heal spend), and degrading on a gh outage. See `src/rescue/adopt.ts`.

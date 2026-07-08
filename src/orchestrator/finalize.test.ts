@@ -420,7 +420,7 @@ describe('finalizeRun', () => {
 
     it('failed + self-heal ELIGIBLE (S10, Decision 48): recoverable task, attempts=0 → PRD comment carries the self-heal sentence', async () => {
         // blocked-environmental → recoverable → resettable; no deps → clean closure;
-        // self_heal unset (attempts defaults 0): the ONE bounded `rescue auto` fires next.
+        // self_heal unset (attempts defaults 0): the bounded `rescue auto` fires next.
         const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
         await seed(tasks)
 
@@ -430,10 +430,21 @@ describe('finalizeRun', () => {
         expect(at(gh.issueComments, 0).body).toContain('Self-heal:')
     })
 
-    it('failed + self-heal INELIGIBLE — cycle already burned (attempts>0): recoverable task, no self-heal sentence', async () => {
+    it('failed + self-heal ELIGIBLE at the budget boundary (attempts=2 < 3, Decision 60): self-heal sentence still present', async () => {
         const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
         await seed(tasks)
-        await state.update(RUN_ID, (s) => ({...s, self_heal: {attempts: 1, last_at: NOW}}))
+        await state.update(RUN_ID, (s) => ({...s, self_heal: {attempts: 2, last_at: NOW}}))
+
+        await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(gh.issueComments).toHaveLength(1)
+        expect(at(gh.issueComments, 0).body).toContain('Self-heal:')
+    })
+
+    it('failed + self-heal INELIGIBLE — budget spent (attempts=3): recoverable task, no self-heal sentence', async () => {
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'blocked-environmental'}]
+        await seed(tasks)
+        await state.update(RUN_ID, (s) => ({...s, self_heal: {attempts: 3, last_at: NOW}}))
 
         await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
 

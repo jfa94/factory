@@ -1,7 +1,7 @@
 /**
  * S10 — effectiveAutoResets (Decision 48): the auto-safe filter behind
- * `factory rescue auto`, the ONE bounded self-heal cycle the runner fires
- * after a failed finalize.
+ * `factory rescue auto`, the bounded self-heal the runner fires after every
+ * failed finalize (up to {@link SELF_HEAL_MAX_ATTEMPTS} cycles, Decision 60).
  *
  * The auto-safe candidate set is `scan.resettable` (stuck ∪ recoverable) — the
  * same set a default human `rescue apply` resets. Dead-ends, e2e resets, rollup
@@ -23,6 +23,15 @@
 import type {RunState} from '../types/index.js'
 import type {RescueScan} from './scan.js'
 import {nonNull} from '../shared/index.js'
+
+/**
+ * How many bounded self-heal cycles a run may spend before the auto path gives up
+ * and pages a human (Decision 60, Session 5). Both gates read this: `applyRescue`'s
+ * `auto` branch refuses once `self_heal.attempts >= this` (apply.ts), and
+ * `finalizeRun` only auto-fires self-heal while `attempts < this` (finalize.ts).
+ * Adoptions are FREE — they never spend an attempt. Was `1` (a single cycle).
+ */
+export const SELF_HEAL_MAX_ATTEMPTS = 3
 
 /** The subset of `scan.resettable` worth auto-resetting (in scan order). */
 export function effectiveAutoResets(run: RunState, scan: RescueScan): string[] {

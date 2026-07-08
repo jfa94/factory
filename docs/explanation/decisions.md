@@ -1618,6 +1618,9 @@ human typed the rescue incantation, even when the engine knew the reset was safe
   `paused_minutes`): "how many self-heal cycles already ran" is history no
   state/git re-derivation can recover. `--auto` requires `attempts === 0`,
   bounding the loop to ONE cycle; a blocked auto never spends the cycle.
+  ([Decision 60](#decision-60--autonomous-forward-only-adoption-write-side) later
+  raises this bound to three cycles — `attempts < SELF_HEAL_MAX_ATTEMPTS` — once
+  forward-only adoption removes the merged-work-loss hazard.)
 - **Loud page.** A blocked `--auto` posts ONE comment on the originating PRD
   (deduped via `selfHealCommentMarker`, same contract as the failure comment) —
   the runner is unattended, stdout reaches nobody. The finalize failure comment
@@ -2174,7 +2177,8 @@ GitHub while the run's marker still reads `merged:false` (the auto-armed branch-
 fallback, Decision 40 D3). The reconciler agent had to rediscover all of this by hand
 every time. The design review (`docs/proposals/design-review-2026-07-07.md` §P1) called for
 the engine to gather GitHub truth itself. This is the **read-only slice** — detection and
-classification only; forward-only adoption writes are P1's next phase.
+classification only; the forward-only adoption writes land in
+[Decision 60](#decision-60--autonomous-forward-only-adoption-write-side).
 
 **Decision (three parts):**
 
@@ -2206,10 +2210,74 @@ branch)` → `sha | null` (404 → `null`, truncation / other errors throw); `br
 **Consequences:** The scan's classification stays state-pure — GitHub truth arrives in its
 own `github` section and never changes a task disposition. The reconciler agent now consumes
 `github.drifts` as pre-classified evidence instead of rediscovering drift by hand. Repair
-remains manual (or the reconciler's forward-only autonomous fixes); the forward-only
-adoption writes — record a merged PR as `done`, re-push a missing branch, recheck a landed
-rollup automatically — are the next P1 phase and will grow behind the `reconcile` command,
-not in `rescue apply`.
+remains manual in this slice; the forward-only adoption writes — record a merged PR as `done`,
+re-push a missing branch, recheck a landed rollup automatically — land in
+[Decision 60](#decision-60--autonomous-forward-only-adoption-write-side), behind the same
+`reconcile` module, not in `rescue apply`'s reset logic.
+
+---
+
+## Decision 60 — Autonomous Forward-Only Adoption (Write Side)
+
+**Date:** 2026-07-08
+
+**Context:** [Decision 59](#decision-59--the-engine-sees-github-truth-read-only-reconcile)
+gave the engine EYES on GitHub truth but no HANDS: every repair — recording a merged-but-lost
+PR as `done`, re-pushing a branch the remote dropped, reopening a run whose rollup landed under
+an armed `merged:false` marker — still needed a human or the `rescue-reconciler` agent. Worse,
+one of those drifts was actively **dangerous**: a task whose PR is MERGED on GitHub but whose
+state still reads `executing`/`reviewing`/`shipping`/`failed` classifies as `resettable`, so a
+default `rescue apply`/`auto` would reset it to `pending` and **clobber already-merged work**.
+The design review (`docs/proposals/design-review-2026-07-07.md` §P1b/P3) called for the engine
+to close the loop itself: forward-only, autonomous, no agent round-trip.
+
+**Decision (five parts):**
+
+1. **An adoption module** (`src/rescue/adopt.ts`): `planAdoption(run, report)` is **pure** over
+   a Decision-59 `ReconcileReport` — it names only forward-only, non-destructive repairs
+   (`merged-unrecorded` → `done`; `stale-pr-number` → rebind or clear `pr_number`;
+   `branch-missing` → re-push a branch that still exists locally; `rollup-landed` **or** every
+   task now `done` → reopen the completed run). `adoptRun`/`adoptFromReport` execute the plan
+   under the state lock, **re-verifying each write on the locked snapshot** (a raced-away
+   condition just leaves the field untouched — forward-only, finalize recomputes either way).
+   Re-pushes run OUTSIDE the lock via a plain `git push` — **never** `--force`; a branch gone
+   locally is skipped and `surfaced` for a human, not reconstructed.
+
+2. **The hazard is closed at the source.** Adoption runs BEFORE any reset path can fire:
+   `rescue apply`/`auto` adopt first, so a merged-unrecorded task is recorded `done` and is no
+   longer `resettable` by the time reset logic runs. A merged PR can never again be reset to
+   `pending`.
+
+3. **Adoptions are FREE.** They never spend the `self_heal.attempts` budget and never append a
+   `human_touch` — recording truth the engine can prove from GitHub is not a recovery attempt
+   and not human intervention. Only genuine resets/re-attempts spend the budget.
+
+4. **Three auto-invocation sites**, each with its own gh-outage policy:
+    - **`rescue apply` / `rescue auto`** — adopt, then reset the (now smaller) resettable set.
+    - **`next-task`** — when the ready result carries a **stale `shipping`** task (a crashed ship
+      retains its `verify`-phase `spawn_in_flight`, so it can go stale), probe gh and adopt
+      before handing the runner a spurious "work" verdict. Non-shipping stale tasks never trigger
+      a probe (no gh cost on the hot path).
+    - **`reconcile --adopt`** — apply the forward-only repairs against the SAME report the read
+      pass produced (no second probe).
+      Every site **degrades** on a gh outage: adoption returns `{ok:false, error}` and the caller
+      proceeds (resume still resumes, next-task still reports) — adoption is additive, never a gate.
+      `reconcile --adopt` alone stays loud (its whole job is GitHub).
+
+5. **The self-heal bound rises to `< 3`** (`SELF_HEAL_MAX_ATTEMPTS = 3`, flat count). With
+   merged-work loss removed, the runner can retry a recoverable failure up to three cycles
+   before paging a human, instead of once. Both gates read the one constant:
+   `finalize` stays eligible while `attempts < 3`; `rescue apply`'s `auto` refuses at `>= 3`.
+
+**Consequences:** The `rescue-reconciler` agent is **demoted** to LOCAL-git residue only —
+a run branch behind its base needing a forward-merge (conflict → blocked), a branch gone BOTH
+locally and remotely, orphan worktrees, an unresolvable staging base. PR↔state agreement and
+re-pushing a still-local branch are now engine adoption, so the agent is spawned only when a
+post-apply scan still reports `reconcile: true`. `reconcile` is now a **reporter + writer**
+(read-only without `--adopt`). Adoption telemetry emits one `adoption` metric event per action;
+self-heal cycles emit `self_heal`. The write surface stays deliberately forward-only: nothing
+here resets, force-pushes, closes a PR, or deletes a branch — those remain consent-gated
+(`/factory:resume`) or agent-surfaced.
 
 ---
 

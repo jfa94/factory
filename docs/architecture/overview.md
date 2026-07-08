@@ -77,9 +77,11 @@ The CLI is a **reporter + orchestrator + writer**, not a runner:
   task's deterministic phases, emit a spawn request, and via `--results` record the
   agents' output into ONE state step). This is the only control-flow seam.
 - **Reporter** subcommands (`spec`, `score`, `rescue scan`, `reconcile`, `state`) emit one
-  JSON envelope and write nothing.
-- **Writer** subcommands (`spec` store, `rescue apply`, `scaffold`, `configure`,
-  `run create`/`finalize`) record a result or an operator decision into state.
+  JSON envelope and write nothing. `reconcile` is read-only by default (its `--adopt` flag
+  makes it a writer — see below).
+- **Writer** subcommands (`spec` store, `rescue apply`, `reconcile --adopt`, `scaffold`,
+  `configure`, `run create`/`finalize`) record a result or an operator decision into state.
+  `reconcile --adopt` applies the forward-only GitHub adoption repairs (Decision 60).
 
 The six retired single-step writers (`run-task`, `advance`, `fail`,
 `record-producer`, `record-holdout`, `record-reviews`) collapsed into the orchestrator.

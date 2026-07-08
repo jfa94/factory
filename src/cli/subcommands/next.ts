@@ -10,7 +10,20 @@ import {nextTask} from '../../orchestrator/index.js'
 import {StateManager} from '../../core/state/index.js'
 import type {RunState} from '../../core/state/index.js'
 import {resolveDataDir} from '../../config/index.js'
+import {adoptForCli} from '../adoption.js'
+import {nowIso} from '../../shared/time.js'
+import {createLogger} from '../../shared/index.js'
+import type {GitClient, GhClient} from '../../git/index.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
+
+const log = createLogger('next-task')
+
+/** Test seam: git/gh clients for the stale-shipping adoption probe + the clock. */
+export interface NextOverrides {
+    readonly gitClient?: GitClient
+    readonly ghClient?: GhClient
+    readonly now?: () => string
+}
 
 const HELP = `factory next-task — one run-loop step: quota gate, cascade-fail, ready set
 
@@ -66,7 +79,7 @@ function assertCurrentOwner(current: RunState, assertOwner: string | boolean | u
     }
 }
 
-async function run(argv: string[]): Promise<ExitCode> {
+export async function runNextTask(argv: string[], overrides: NextOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: []})
     if (args.flag('help') === true) {
         return emitHelp(HELP)
@@ -86,11 +99,36 @@ async function run(argv: string[]): Promise<ExitCode> {
     }
 
     const deps = await loadOrchestratorDeps({runId})
-    emitJson(await nextTask(deps, runId))
+    const result = await nextTask(deps, runId)
+
+    // Adopt a stale SHIPPING task (Decision 60): the "PR merged, crashed before
+    // completeTask" wedge. The gate keeps the hot runner loop probe-free — a gh probe
+    // fires ONLY when work remains AND a stale in-flight task is actually `shipping`
+    // (self-quiets on the first hit, since the flip drops it out of `stale`). A gh
+    // outage logs and emits unchanged; a real flip recomputes (may free dependents or
+    // make the run finalize-ready) and attaches the adoption report.
+    if (result.kind === 'work') {
+        const run = await deps.state.read(runId)
+        const staleShipping = result.stale.some((id) => run.tasks[id]?.status === 'shipping')
+        if (staleShipping) {
+            const git = overrides.gitClient ?? deps.git
+            const gh = overrides.ghClient ?? deps.gh
+            const at = overrides.now?.() ?? nowIso()
+            const adoption = await adoptForCli({state: deps.state, git, gh, dataDir: deps.dataDir}, run, at)
+            if (!adoption.ok) {
+                log.warn(`adoption probe failed for run '${runId}': ${adoption.error} — emitting unchanged`)
+            } else if (adoption.changed) {
+                emitJson({...(await nextTask(deps, runId)), adoption})
+                return EXIT.OK
+            }
+        }
+    }
+
+    emitJson(result)
     return EXIT.OK
 }
 
 export const nextCommand: Subcommand = {
     describe: 'One run-loop step: quota gate, cascade-fail, emit the ready set',
-    run: withUsageGuard('next-task', run),
+    run: withUsageGuard('next-task', runNextTask),
 }

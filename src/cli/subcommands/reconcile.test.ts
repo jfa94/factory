@@ -95,6 +95,34 @@ describe('factory reconcile (read-only GitHub-truth reporter)', () => {
         expect((await state.read(RUN)).status).toBe('running') // read-only
     })
 
+    it('--adopt applies the forward-only repairs against the same report (records the merged PR done)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {
+                a: task({task_id: 'a', status: 'shipping', branch: `factory/${RUN}/a`, pr_number: 101}),
+            },
+        }))
+        const gh = new FakeGhClient()
+        gh.remoteBranches.add(`staging-${RUN}`)
+        gh.branchTips.set(`staging-${RUN}`, 'stagsha')
+        gh.setPr({
+            number: 101,
+            headRefName: `factory/${RUN}/a`,
+            baseRefName: `staging-${RUN}`,
+            state: 'MERGED',
+            mergeCommit: {oid: 'mergedsha'},
+        })
+        const code = await runReconcile(['--run', RUN, '--adopt'], {ghClient: gh, gitClient: new FakeGitClient()})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        // The same drift is still reported...
+        expect(env.drifts).toEqual([expect.objectContaining({class: 'merged-unrecorded', task_id: 'a'})])
+        // ...AND the adoption field carries what was applied.
+        expect(env.adoption).toMatchObject({ok: true, adopted: ['a'], changed: true})
+        // The write actually landed (unlike the read-only path).
+        expect((await state.read(RUN)).tasks.a?.status).toBe('done')
+    })
+
     it('fails LOUD on a gh failure (facts are the whole job — no contained {ok:false} arm)', async () => {
         await state.update(RUN, (s) => ({
             ...s,

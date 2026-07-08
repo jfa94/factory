@@ -43,6 +43,7 @@ import {
     recordRunFinalized,
     scanRun,
     effectiveAutoResets,
+    SELF_HEAL_MAX_ATTEMPTS,
     type Config,
     type GhClient,
     type GitClient,
@@ -152,10 +153,11 @@ async function commentFailuresOnPrd(deps: FinalizeRunDeps, run: RunState, report
         return false
     }
 
-    // S10 (Decision 48): tell the PRD reader whether the runner's ONE bounded
-    // self-heal cycle (`factory rescue auto`) fires next — eligible iff it has
-    // not already run and the auto-safe reset set is non-empty.
-    const selfHealEligible = (run.self_heal?.attempts ?? 0) === 0 && effectiveAutoResets(run, scanRun(run)).length > 0
+    // S10 (Decision 48): tell the PRD reader whether the runner's bounded self-heal
+    // (`factory rescue auto`) fires next — eligible iff the ≤3-cycle budget still has
+    // room and the auto-safe reset set is non-empty.
+    const selfHealEligible =
+        (run.self_heal?.attempts ?? 0) < SELF_HEAL_MAX_ATTEMPTS && effectiveAutoResets(run, scanRun(run)).length > 0
 
     await deps.gh.issueComment({
         repo: report.repo,

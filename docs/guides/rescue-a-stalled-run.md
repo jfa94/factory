@@ -16,15 +16,17 @@ re-drive would deadlock), or a terminal `failed` run has **recoverable** fails
 worth retrying, rescue resets the resettable tasks, reopens a terminal run,
 reconciles git/GitHub drift, then hands off to resume.
 
-**Rescue repairs run state, then git/GitHub drift.** `rescue scan`/`apply` repair
-RUN STATE (stuck/recoverable tasks, reopen a terminal run). The `rescue-reconciler`
-agent then repairs **remote** drift that run state cannot see — a `staging-<run-id>`
-branch missing or behind `develop`, a PR whose merged/closed status disagrees with
-state, an orphan branch/worktree. Reconciliation is **forward-only and autonomous**
-(fetch, forward-merge `origin/develop` into the run branch, re-push a missing
-branch); anything **destructive** (a force-push, a branch/PR deletion, discarding
-commits, an unresolved merge conflict) is **surfaced for a prompt**, never
-auto-done. See `skills/rescue-protocol/SKILL.md` and its `reference/` dir.
+**Rescue repairs run state, adopts GitHub truth, then reconciles local-git residue.**
+`rescue scan`/`apply` repair RUN STATE (stuck/recoverable tasks, reopen a terminal run) and
+**adopt** forward-only GitHub drift the engine can prove — a merged-but-unrecorded PR recorded
+`done`, a stale `pr_number` rebound, a still-local branch re-pushed, a landed rollup reopened
+(Decision 60), all before any reset runs so merged work is never clobbered. The
+`rescue-reconciler` agent then handles only the **local-git residue** adoption can't decide —
+a `staging-<run-id>` branch **behind** its base needing a forward-merge, a branch gone **both**
+locally and remotely, an orphan worktree, an unresolvable base. Its repairs are **forward-only
+and autonomous** (fetch, forward-merge, re-push); anything **destructive** (a force-push, a
+branch/PR deletion, discarding commits, an unresolved merge conflict) is **surfaced for a
+prompt**, never auto-done. See `skills/rescue-protocol/SKILL.md` and its `reference/` dir.
 
 ## 1. Scan first (read-only)
 
@@ -151,26 +153,33 @@ and overwrites the marker with the real rollup result.
 
 ## 4. Reconcile git/GitHub drift
 
-Before resuming, reconcile any **remote** drift run state cannot see (a run branch
-missing or behind `develop`, a PR/state mismatch, an orphan branch). This is the
-`rescue-reconciler` agent's job — driven by `/factory:resume`, not a
-standalone CLI subcommand. It acts only on **forward-only, non-destructive** repairs
-autonomously and surfaces anything destructive for a confirmation prompt. Run it via
-the command (below) rather than by hand.
+Most state↔GitHub drift now **repairs itself**. Since [Decision 60](../explanation/decisions.md#decision-60--autonomous-forward-only-adoption-write-side),
+the engine **adopts** the forward-only fixes autonomously — no agent, no prompt:
+`merged-unrecorded` → task recorded `done` (so a reset can never clobber merged work),
+`stale-pr-number` → `pr_number` rebound/cleared, `branch-missing` (still-local) → re-pushed,
+`rollup-landed` → the completed run reopened so resume finalizes. Adoption fires inside
+`rescue apply`/`auto`, inside `next-task` (for a stale `shipping` task), and on demand via
+[`factory reconcile --adopt`](../reference/cli.md#reconcile) — always forward-only (never a
+reset, force-push, or PR close) and degrading quietly on a gh outage.
 
-**The scan already carries the evidence.** Since the P1 read-only reconcile slice
-(Decision 59), `rescue scan` probes GitHub and embeds a `github` section — `{ok:true,
-facts, drifts, rollup_landed}` — classifying state↔GitHub drift the reconciler acts on
-(`merged-unrecorded`, `closed-unmerged`, `stale-pr-number`, `pr-unrecorded`,
-`branch-missing`, `staging-missing`, `rollup-landed`; each `detail` names a manual remedy).
-A gh outage degrades that section to `{ok:false, error}` **without failing the scan**, so
-the repair entry point still works offline. Detection only — the reconcile slice writes
-nothing; repairs stay manual (or the reconciler's forward-only autonomous ones).
+**What still needs judgment** is the `rescue-reconciler` agent's job (driven by
+`/factory:resume`, not a standalone subcommand): **LOCAL-git residue** adoption can't decide —
+a run branch **behind** its base needing a forward-merge (conflict → blocked), a branch gone
+**both** locally and remotely, an orphan worktree, an unresolvable staging base. It acts only
+on forward-only, non-destructive repairs and surfaces anything destructive for a confirmation
+prompt. It is spawned only when a post-apply scan still reports `reconcile: true`.
 
-For a standalone, GitHub-facts-only survey — outside the rescue flow, failing **loud** if
-gh is down — run [`factory reconcile [--run <id>]`](../reference/cli.md#reconcile). It emits
-the same `facts`/`drifts`/`rollup_landed` as the scan's `github` section, but as its own
-`{kind:"reconcile"}` document.
+**The scan already carries the evidence.** Since the P1 reconcile slice (Decision 59),
+`rescue scan` probes GitHub and embeds a `github` section — `{ok:true, facts, drifts,
+rollup_landed}` — classifying state↔GitHub drift (`merged-unrecorded`, `closed-unmerged`,
+`stale-pr-number`, `pr-unrecorded`, `branch-missing`, `staging-missing`, `rollup-landed`; each
+`detail` names its remedy). A gh outage degrades that section to `{ok:false, error}` **without
+failing the scan**, so the repair entry point still works offline.
+
+For a standalone survey — outside the rescue flow, failing **loud** if gh is down — run
+[`factory reconcile [--run <id>]`](../reference/cli.md#reconcile) (add `--adopt` to apply the
+forward-only fixes). It emits the same `facts`/`drifts`/`rollup_landed` as the scan's `github`
+section, but as its own `{kind:"reconcile"}` document.
 
 ## 5. Resume
 
@@ -192,8 +201,10 @@ never swallowed — it rethrows.
 `/factory:resume` wraps this whole flow (scan → resume directly if clean → for
 ambiguous dead-ends, consult the read-only `rescue-diagnostic` agents → present
 the proposed plan for approval (one multiSelect prompt, any subset) → apply the
-approved subset in ONE `rescue apply` → spawn `rescue-reconciler` to clear
-git/GitHub drift, prompting before anything destructive → hand off to resume):
+approved subset in ONE `rescue apply` (which adopts forward-only GitHub drift first,
+then resets) → spawn `rescue-reconciler` ONLY if a post-apply scan still reports
+`reconcile: true` (local-git residue), prompting before anything destructive → hand
+off to resume):
 
 ```
 /factory:resume [--run <id>] [--ignore-quota] [--dry-run]

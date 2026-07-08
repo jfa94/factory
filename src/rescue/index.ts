@@ -17,10 +17,13 @@ export type {WorkProbe, WorkAssessment, TaskWork} from './assess.js'
 export {gatherRunFacts, classifyDrift, reconcileRun} from './reconcile.js'
 export type {PrFact, TaskFacts, RunFacts, DriftClass, Drift, ReconcileReport} from './reconcile.js'
 
-export {applyRescue, resetTaskRow} from './apply.js'
+export {applyRescue, resetTaskRow, doneTaskRow} from './apply.js'
 export type {RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts} from './apply.js'
 
-export {effectiveAutoResets} from './auto.js'
+export {planAdoptions, applyAdoptions, adoptFromReport, adoptRun, summarizeAdoption} from './adopt.js'
+export type {AdoptionPlan, AdoptionAction, AdoptionReport} from './adopt.js'
+
+export {effectiveAutoResets, SELF_HEAL_MAX_ATTEMPTS} from './auto.js'
 
 export {gcScan, gcApply, gcApplyStale} from './gc.js'
 export type {GcFinding, GcSuspendedLine, GcStaleLine, GcReport, GcCleaned, GcStaleCleaned} from './gc.js'

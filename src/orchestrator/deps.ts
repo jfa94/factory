@@ -202,5 +202,5 @@ export {runE2e, DefaultPlaywrightTool} from '../verifier/e2e/index.js'
 export type {E2eRunOpts, E2eResults, E2eSpecResult, PlaywrightTool} from '../verifier/e2e/index.js'
 
 // --- rescue reset primitive (src/rescue) — reused by the e2e reopen loop ----
-export {resetTaskRow, scanRun, effectiveAutoResets} from '../rescue/index.js'
+export {resetTaskRow, doneTaskRow, scanRun, effectiveAutoResets, SELF_HEAL_MAX_ATTEMPTS} from '../rescue/index.js'
 export type {ResetTaskRowOpts} from '../rescue/index.js'

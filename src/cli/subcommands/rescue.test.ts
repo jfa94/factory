@@ -16,7 +16,7 @@ import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {rescueCommand, runScan, runAuto, runGc, deriveAwaiting, chooseRoute} from './rescue.js'
+import {rescueCommand, runScan, runApply, runAuto, runGc, deriveAwaiting, chooseRoute} from './rescue.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {at, nonNull} from '../../shared/index.js'
 import {StateManager} from '../../core/state/index.js'
@@ -111,6 +111,10 @@ describe('rescue scan/apply/auto', () => {
     })
 
     const out = () => JSON.parse(stdout.join('')) as Record<string, unknown>
+
+    // apply/auto now adopt merged PRs first (Decision 60), a real GitHub dependency —
+    // inject empty fakes so a no-op adoption runs without spawning real `gh`/`git`.
+    const fakes = () => ({gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
 
     /** The mixed fixture: one stuck, one recoverable, one dead-end. */
     async function seedMixed(): Promise<void> {
@@ -362,7 +366,7 @@ describe('rescue scan/apply/auto', () => {
 
     it('apply (default) resets stuck+recoverable, leaving the dead-end', async () => {
         await seedMixed()
-        const code = await rescueCommand.run(['apply', '--run', RUN])
+        const code = await runApply(['--run', RUN], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reset).toEqual(['a', 'b'])
 
@@ -374,7 +378,7 @@ describe('rescue scan/apply/auto', () => {
 
     it('apply --include-dead-ends also resets the dead-end', async () => {
         await seedMixed()
-        const code = await rescueCommand.run(['apply', '--run', RUN, '--include-dead-ends'])
+        const code = await runApply(['--run', RUN, '--include-dead-ends'], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reset).toEqual(['a', 'b', 'c'])
         expect(nonNull((await state.read(RUN)).tasks.c).status).toBe('pending')
@@ -393,7 +397,7 @@ describe('rescue scan/apply/auto', () => {
                 reopen_counts: {},
             },
         }))
-        const code = await rescueCommand.run(['apply', '--run', RUN, '--reset-e2e'])
+        const code = await runApply(['--run', RUN, '--reset-e2e'], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reopened).toBe(true)
         const run = await state.read(RUN)
@@ -410,7 +414,7 @@ describe('rescue scan/apply/auto', () => {
             tasks: {a: task({task_id: 'a', status: 'done'})},
             rollup: {number: 42, merged: false, reason: 'branch policy: merge queued (--auto)'},
         }))
-        const code = await rescueCommand.run(['apply', '--run', RUN, '--recheck-rollup'])
+        const code = await runApply(['--run', RUN, '--recheck-rollup'], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reopened).toBe(true)
         const run = await state.read(RUN)
@@ -438,7 +442,7 @@ describe('rescue scan/apply/auto', () => {
                 reopen_counts: {},
             },
         }))
-        const code = await rescueCommand.run(['apply', '--run', RUN, '--reset-e2e'])
+        const code = await runApply(['--run', RUN, '--reset-e2e'], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reopened).toBe(false) // nothing terminal to reopen — but the phase clears
         const run = await state.read(RUN)
@@ -449,7 +453,7 @@ describe('rescue scan/apply/auto', () => {
 
     it('apply --task selects exactly the named tasks (repeatable)', async () => {
         await seedMixed()
-        const code = await rescueCommand.run(['apply', '--run', RUN, '--task', 'a', '--task', 'c'])
+        const code = await runApply(['--run', RUN, '--task', 'a', '--task', 'c'], fakes())
         expect(code).toBe(EXIT.OK)
         expect(out().reset).toEqual(['a', 'c']) // explicit dead-end included
 
@@ -468,7 +472,7 @@ describe('rescue scan/apply/auto', () => {
             status: 'suspended',
             tasks: {a: task({task_id: 'a', status: 'executing'})},
         }))
-        const code = await rescueCommand.run(['apply', '--run', RUN])
+        const code = await runApply(['--run', RUN], fakes())
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.reset).toEqual(['a'])
@@ -493,7 +497,7 @@ describe('rescue scan/apply/auto', () => {
                 b: task({task_id: 'b', status: 'failed', failure_class: 'spec-defect'}),
             },
         }))
-        const code = await runAuto(['--run', RUN], {now: () => AT})
+        const code = await runAuto(['--run', RUN], {...fakes(), now: () => AT})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.kind).toBe('recovered')
@@ -504,12 +508,46 @@ describe('rescue scan/apply/auto', () => {
         expect(run.status).toBe('running')
     })
 
+    it('auto self-heal is bounded to 3 cycles: recovered at attempts 0/1/2, blocked at 3 (Decision 60)', async () => {
+        // attempts 0 → 1 → 2 each recover + increment; each fires ONE self_heal metric.
+        for (const priorAttempts of [0, 1, 2]) {
+            await state.update(RUN, (s) => ({
+                ...s,
+                status: 'failed',
+                ended_at: AT,
+                ...(priorAttempts > 0 ? {self_heal: {attempts: priorAttempts, last_at: AT}} : {}),
+                tasks: {a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'})},
+            }))
+            stdout.length = 0
+            expect(await runAuto(['--run', RUN], {...fakes(), now: () => AT})).toBe(EXIT.OK)
+            const env = out()
+            expect(env.kind).toBe('recovered')
+            expect(env.attempts).toBe(priorAttempts + 1)
+            expect((await state.read(RUN)).self_heal).toEqual({attempts: priorAttempts + 1, last_at: AT})
+        }
+        // A per-cycle self_heal metric was emitted on each of the 3 recoveries.
+        const selfHeal = (await readMetrics(dataDir, RUN)).filter((m) => m.event === 'self_heal')
+        expect(selfHeal.map((m) => (m.data as {attempts: number}).attempts)).toEqual([1, 2, 3])
+
+        // attempts 3 → the budget is spent → blocked (no 4th reset).
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'})},
+        }))
+        stdout.length = 0
+        expect(await runAuto(['--run', RUN], {...fakes(), now: () => AT})).toBe(EXIT.OK)
+        expect(out().kind).toBe('page')
+        expect((await state.read(RUN)).self_heal).toEqual({attempts: 3, last_at: AT}) // never spent a 4th
+    })
+
     it('auto pages (blocked: attempts) and posts ONE deduped PRD comment', async () => {
         await state.update(RUN, (s) => ({
             ...s,
             status: 'failed',
             ended_at: AT,
-            self_heal: {attempts: 1, last_at: AT}, // the one cycle already ran
+            self_heal: {attempts: 3, last_at: AT}, // the 3-cycle budget is spent
             tasks: {
                 a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'}),
             },
@@ -519,7 +557,7 @@ describe('rescue scan/apply/auto', () => {
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.kind).toBe('page')
-        expect(env.reason).toContain('already ran once')
+        expect(env.reason).toContain('budget spent')
         expect(env.commented).toBe(true)
         expect(gh.issueComments).toHaveLength(1)
         expect(at(gh.issueComments, 0).number).toBe(7)
@@ -564,11 +602,150 @@ describe('rescue scan/apply/auto', () => {
                 a: task({task_id: 'a', status: 'failed', failure_class: 'blocked-environmental'}),
             },
         }))
-        const code = await runAuto(['--run', RUN], {now: () => AT})
+        const code = await runAuto(['--run', RUN], {...fakes(), now: () => AT})
         expect(code).toBe(EXIT.OK)
         expect(out().kind).toBe('recovered')
         expect((await state.read(RUN)).human_touches).toEqual([])
         expect((await readMetrics(dataDir, RUN)).filter((m) => m.event === 'human_touch')).toHaveLength(0)
+    })
+
+    // ————— adoption: forward-only GitHub repair before reset (Decision 60) —————
+
+    /** A merged-but-unrecorded PR on task `taskId`, based on THIS run's staging branch. */
+    function ghWithMergedPr(taskId = 'a', pr = 101): FakeGhClient {
+        const gh = new FakeGhClient()
+        gh.remoteBranches.add(`staging-${RUN}`)
+        gh.setPr({
+            number: pr,
+            headRefName: `factory/${RUN}/${taskId}`,
+            baseRefName: `staging-${RUN}`,
+            state: 'MERGED',
+            mergeCommit: {oid: 'mergedsha'},
+        })
+        return gh
+    }
+
+    it('HEADLINE: a shipping task whose PR MERGED is adopted done, NOT reset (default apply)', async () => {
+        // The hazard: a merged-unrecorded task classifies as stuck ⇒ a default apply would
+        // reset it to pending and clobber the merged ship. Adoption flips it done first.
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {a: task({task_id: 'a', status: 'shipping', branch: `factory/${RUN}/a`, pr_number: 101})},
+        }))
+        const code = await runApply(['--run', RUN], {
+            gitClient: new FakeGitClient(),
+            ghClient: ghWithMergedPr(),
+            now: () => AT,
+        })
+        expect(code).toBe(EXIT.OK)
+        expect(out().reset).toEqual([]) // NOT reset — the merged work is preserved
+        const run = await state.read(RUN)
+        const a = nonNull(run.tasks.a)
+        expect(a.status).toBe('done') // adopted
+        expect(a.ended_at).toBe(AT) // stamped by the adoption flip
+        expect(run.human_touches).toEqual([]) // adoption is FREE — never a human touch (D49)
+        // Exactly ONE adoption metric line for the flip (a running run does not reopen).
+        const adopts = (await readMetrics(dataDir, RUN)).filter((m) => m.event === 'adoption')
+        expect(adopts.map((m) => m.data)).toEqual([
+            {class: 'merged-unrecorded', action: 'done', task_id: 'a', pr_number: 101},
+        ])
+    })
+
+    it('auto: a terminal run whose only task merged is adopted + reopened, recovered (no reset, no self_heal)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {a: task({task_id: 'a', status: 'shipping', branch: `factory/${RUN}/a`, pr_number: 101})},
+        }))
+        const code = await runAuto(['--run', RUN], {
+            gitClient: new FakeGitClient(),
+            ghClient: ghWithMergedPr(),
+            now: () => AT,
+        })
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.kind).toBe('recovered')
+        expect(env.reset).toEqual([]) // healed by adoption, not by a reset
+        expect(env.reopened).toBe(true)
+        const run = await state.read(RUN)
+        expect(nonNull(run.tasks.a).status).toBe('done')
+        expect(run.status).toBe('running') // reopened so finalize re-enters
+        expect(run.self_heal).toBeUndefined() // adoption never spends a self-heal cycle
+    })
+
+    it('auto REFUSES to reset on a gh outage — no GitHub truth means a merged task is indistinguishable from a stuck one', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {
+                a: task({
+                    task_id: 'a',
+                    status: 'failed',
+                    failure_class: 'blocked-environmental',
+                    branch: `factory/${RUN}/a`,
+                }),
+            },
+        }))
+        const gh = new FakeGhClient({truncate: true}) // the reconcile probe throws
+        const code = await runAuto(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh, now: () => AT})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.kind).toBe('page')
+        expect(env.reason).toContain('github unreachable')
+        expect((env.adoption as {ok: boolean}).ok).toBe(false)
+        const run = await state.read(RUN)
+        expect(nonNull(run.tasks.a).status).toBe('failed') // NOT reset — refused without truth
+        expect(run.self_heal).toBeUndefined()
+        expect(run.status).toBe('failed')
+    })
+
+    it('apply PROCEEDS through a gh outage (a human ran it) with adoption ok:false and the reset intact', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {
+                a: task({
+                    task_id: 'a',
+                    status: 'failed',
+                    failure_class: 'blocked-environmental',
+                    branch: `factory/${RUN}/a`,
+                }),
+            },
+        }))
+        const gh = new FakeGhClient({truncate: true})
+        const code = await runApply(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh, now: () => AT})
+        expect(code).toBe(EXIT.OK)
+        expect(out().reset).toEqual(['a']) // proceeds — the human is present to judge
+        expect((out().adoption as {ok: boolean}).ok).toBe(false)
+        expect(nonNull((await state.read(RUN)).tasks.a).status).toBe('pending')
+    })
+
+    it('apply --task naming a task just adopted this invocation SKIPS it, not the un-ship throw', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {a: task({task_id: 'a', status: 'shipping', branch: `factory/${RUN}/a`, pr_number: 101})},
+        }))
+        const code = await runApply(['--run', RUN, '--task', 'a'], {
+            gitClient: new FakeGitClient(),
+            ghClient: ghWithMergedPr(),
+            now: () => AT,
+        })
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.reset).toEqual([]) // adopted, not reset
+        expect(env.skipped).toEqual(['a']) // folded into skipped — no throw
+        expect(nonNull((await state.read(RUN)).tasks.a).status).toBe('done')
+    })
+
+    it('apply --task naming a PRE-EXISTING done task still throws the loud un-ship (never adopted)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {d: task({task_id: 'd', status: 'done'})},
+        }))
+        await expect(runApply(['--run', RUN, '--task', 'd'], fakes())).rejects.toThrow(/un-ship/)
     })
 
     // ————— gc: the orphaned staging-branch/protection sweep (D55) —————
