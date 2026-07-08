@@ -142,15 +142,15 @@ describe('loadConfig', () => {
     it('returns all defaults when config.json is absent', () => {
         const dd = join(home, 'data')
         const cfg = loadConfig({dataDir: dd})
-        expect(cfg.quota.sleepCapSec).toBe(540)
+        expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90])
     })
 
     it('merges a present config.json over defaults', () => {
         const dd = join(home, 'data')
         mkdirSync(dd, {recursive: true})
-        writeFileSync(configPath(dd), JSON.stringify({quota: {sleepCapSec: 120}}))
+        writeFileSync(configPath(dd), JSON.stringify({stallTtlMinutes: 45}))
         const cfg = loadConfig({dataDir: dd})
-        expect(cfg.quota.sleepCapSec).toBe(120)
+        expect(cfg.stallTtlMinutes).toBe(45)
         expect(cfg.quality.holdoutPercent).toBe(20) // untouched default
     })
 
@@ -164,7 +164,7 @@ describe('loadConfig', () => {
     it('throws on a schema-invalid config.json', () => {
         const dd = join(home, 'data')
         mkdirSync(dd, {recursive: true})
-        writeFileSync(configPath(dd), JSON.stringify({quota: {sleepCapSec: -5}}))
+        writeFileSync(configPath(dd), JSON.stringify({stallTtlMinutes: -5}))
         expect(() => loadConfig({dataDir: dd})).toThrow()
     })
 })

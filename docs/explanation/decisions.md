@@ -2353,6 +2353,44 @@ operational gates rather than shipped blind.
 
 ---
 
+## Decision 62 — In-Session 5h Quota Wait
+
+**Date:** 2026-07-08
+
+**Context:** [Decision 42](#decision-42--one-runner-workflow-mode-deleted-runquota-presence-is-the-suspend-discriminant)'s
+runner rewrite made the in-session loop "zero pipeline logic, no sleep." A side effect:
+the runner began to STOP the session on **any** quota pause — including a 5h pause the
+pacer explicitly models as recoverable in place (`pause-5h` → "self-heals in-session as
+curve rises"). A launchd **sentinel** spike (waking fresh interactive sessions on an
+interval to fire `/factory:resume --auto`) tried to restore unattended progress but was
+heavy and fragile (plist + `osascript` Terminal, GUI-login requirement, an `auto_wake`
+ledger, a watchdog, a `--auto` machine-resume path, manual-only validation) for little
+benefit — it was dropped in favor of simply waiting in-session.
+
+**Decision:** A `scope "5h"` pause **waits in-session** instead of stopping. The runner's
+PAUSE CONVERGENCE (`skills/pipeline-runner/SKILL.md`) routes by scope: `"5h"` → TaskStop
+in-flight agents, report once, then WAIT (end the turn). The **already-armed heartbeat**
+(`CronCreate`, every `stallTtlMinutes`) re-enters Phase 3 REFILL, and `factory next-task`'s
+quota gate re-runs and **self-clears `paused`→`running` on a fresh proceed**
+(`src/orchestrator/next.ts`). `"7d"` and `"unavailable"` still STOP — a 7d recovery
+horizon is days, not hours, and an unobservable reading fails closed. No new engine code,
+timer, config, or ledger: the wait is **self-bounded** (a 5h window fully resets by
+`resets_at_epoch`, ≤5h, so recovery is guaranteed), and the heartbeat interval (default
+20 min) stays under the 3600s usage-cache staleness ceiling, so the statusline-refreshed
+cache never goes stale mid-wait.
+
+**Consequences:** Restores the pre-Decision-42 posture — a 5h pause waits and
+self-continues; only a 7d suspend (or unavailable halt) exits the session for a human
+`/factory:resume`. This is purely a runner-protocol (SKILL.md) change; the engine seams
+it rides (next-task's clear-on-recovery, the pacer's rising 5h curve) already existed. The
+scheduled-wake sentinel and its apparatus are dropped, so a **dead** session (process
+gone) returns to needing a human `/factory:resume` — the pre-sentinel behavior. Three
+vestigial wait-config keys (`sleepCapSec`/`maxWaitCycles`/`wallBudgetMin`) are pruned: the
+self-bounded wait needs no knobs. Scope is the main PAUSE CONVERGENCE path; run-level
+e2e/traceability/docs stage suspends still STOP.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

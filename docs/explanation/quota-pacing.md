@@ -160,8 +160,12 @@ A suspended (or paused) run resumes via `factory resume`, which calls
 
 This is the dividing line between resume and [rescue](../guides/rescue-a-stalled-run.md):
 resume re-checks the quota gate and nothing else; rescue resets stuck task state.
-v1 is human-relaunch only — there is no scheduled wake — but the seam is built so a
-future scheduler would fire the same `planResume`.
+
+A **5h pause needs no relaunch** — the in-session runner waits it out on its heartbeat
+and re-drives `factory next-task`, whose gate self-clears `paused`→`running` once the
+rising curve lifts the cap (Decision 62). `factory resume` is for a **7d suspend** (or an
+`unavailable` halt): its recovery horizon is days, not hours, so the run exits the session
+and a human relaunches after the window resets. There is no scheduled/background wake.
 
 ## The single producer dial
 

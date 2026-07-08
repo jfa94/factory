@@ -126,7 +126,6 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 
 ### Quota pacer (`quota.*`)
 
-`sleepCapSec` (540), `maxWaitCycles` (60), `wallBudgetMin` (75),
 `hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([20,40,60,80,95,95,95]), and the
 producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by risk tier).
 

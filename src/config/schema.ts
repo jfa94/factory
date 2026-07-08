@@ -84,12 +84,6 @@ function nonDecreasing(xs: readonly number[]): boolean {
  */
 export const QuotaSchema = z
     .object({
-        /** Max single sleep chunk per gate call, seconds. */
-        sleepCapSec: z.number().int().positive().default(540),
-        /** Max wait cycles before the gate ends a wait, count. */
-        maxWaitCycles: z.number().int().positive().default(60),
-        /** Accumulated wall-clock wait budget across cycles, minutes. */
-        wallBudgetMin: z.number().int().positive().default(75),
         /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
         hourlyThresholds: z
             .array(z.number().min(0).max(100))

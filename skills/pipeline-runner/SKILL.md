@@ -164,7 +164,8 @@ CronCreate({
   cron: "*/<TTL_MIN> * * * *", recurring: true,
   prompt: "Heartbeat for factory run <run_id>: re-enter skills/pipeline-runner/SKILL.md
     Phase 3 REFILL. If the run is now terminal or this session no longer has an
-    in-flight table for it, CronDelete this job and do nothing else."
+    in-flight table for it, CronDelete this job and do nothing else. A run that is
+    `paused` mid-5h-quota-wait is NOT terminal — keep firing so REFILL re-checks the gate."
 })
 ```
 
@@ -254,14 +255,31 @@ ON AGENT COMPLETION (a background agent finishes):
     then REFILL (a finished task may unblock dependents or free a slot).
 
 PAUSE CONVERGENCE (any kind:"pause", whether from next-task or next-action):
-  Hard stop. Spawn NOTHING new. TaskStop every in-flight agent in the table (safe:
-  the quota gate precedes recordResults, and the spawn_in_flight reset makes abandoned
-  spawns resume-clean). Then:
+  Spawn NOTHING new. TaskStop every in-flight agent in the table (safe: the quota gate
+  precedes recordResults, and the spawn_in_flight reset makes abandoned spawns
+  resume-clean). Then route by scope:
+    scope "5h" → IN-SESSION WAIT — do NOT stop the session. A 5h breach self-heals as
+        the rising curve lifts the cap (it fully resets by resets_at_epoch, ≤5h, so
+        recovery is guaranteed — no cycle cap or wall-budget needed). Report ONCE ("5h
+        quota over curve — pausing in-session; window resets at <resets_at_epoch>, the
+        rising curve may clear it sooner; the heartbeat re-checks every <TTL>min, no
+        action needed"), ensure the heartbeat is armed (CronList; arm per the heartbeat
+        block if missing), then WAIT: end the turn. On the next heartbeat (or any
+        re-entry) go to REFILL as normal — `factory next-task` re-runs the gate and the
+        orchestrator self-clears paused→running on a fresh proceed:
+          non-"pause" envelope → recovered; resume THE LOOP (emit one line: "quota
+              recovered, resuming").
+          "pause" scope "5h"   → WAIT again SILENTLY (do NOT re-report).
+          "pause" scope "7d"/"unavailable" → escalate per those branches below.
+        The run stays "paused" (a LIVE wait, not terminal) throughout, so the heartbeat
+        keeps firing. (The <TTL>min heartbeat stays under the 3600s usage-cache staleness
+        ceiling, so the cache never goes stale mid-wait; an operator stallTtlMinutes > 60
+        would break that — keep it under.)
+    scope "7d" → report scope/reason/resets_at_epoch; STOP — a 7d breach cannot be waited
+        out in-session; tell the user to re-run `/factory:resume` after the window resets.
     scope "unavailable" → run `factory resume` ONCE (this turn's own traffic refreshes
         the usage cache): "resumed" → clear the table and REFILL; anything else →
         report + STOP.
-    any other scope → report scope/reason/resets_at_epoch; tell the user to re-run
-        `/factory:resume` after the window resets; STOP.
 ```
 
 If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
@@ -475,9 +493,10 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
 
 ## Phase 4 — Report
 
-- A `pause` stop is NOT a quality outcome — never finalize it; report the
-  reset horizon and stop (resume re-enters Phase 3 via `factory resume`, which
-  clears a recovered checkpoint, then THE LOOP).
+- A `pause` stop is NOT a quality outcome — never finalize it. A `scope "5h"` pause
+  does not reach here (it waits in-session — see PAUSE CONVERGENCE); a `scope "7d"`/
+  `"unavailable"` pause reports the reset horizon and stops (resume re-enters Phase 3
+  via `factory resume`, which clears a recovered checkpoint, then THE LOOP).
 - After `run finalize`: `factory score --run <run_id>` +
   `factory state <run_id> --summary`. Surface the run
   status (`completed | failed`), the rollup PR, filed issues, and every

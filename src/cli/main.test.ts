@@ -31,7 +31,6 @@ describe('cli dispatch', () => {
         }
         const parsed = JSON.parse(chunks.join('')) as ConfigDefaultsShape
         // The full schema shape must be present (every block defaults).
-        expect(parsed).toHaveProperty('quota.sleepCapSec')
         expect(parsed).toHaveProperty('quality.holdoutPercent')
         expect(Array.isArray(parsed.quota.hourlyThresholds)).toBe(true)
         expect(parsed.quota.hourlyThresholds).toHaveLength(5)

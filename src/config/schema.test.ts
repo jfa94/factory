@@ -10,10 +10,7 @@ describe('ConfigSchema', () => {
         expect(cfg.quality.mutationScoreTarget).toBe(80)
         expect(cfg.quality.coverageRegressionTolerancePct).toBe(0.5)
         expect(cfg.quality.securityRedactFindings).toBe(true)
-        // Quota defaults (verbatim from pipeline-lib.sh).
-        expect(cfg.quota.sleepCapSec).toBe(540)
-        expect(cfg.quota.maxWaitCycles).toBe(60)
-        expect(cfg.quota.wallBudgetMin).toBe(75)
+        // Quota defaults.
         expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90])
         expect(cfg.quota.dailyThresholds).toEqual([20, 40, 60, 80, 95, 95, 95])
         // Top-level.
@@ -85,12 +82,12 @@ describe('ConfigSchema', () => {
         // sibling keys still default
         expect(cfg.quality.holdoutPassRate).toBe(80)
         // other blocks still default
-        expect(cfg.quota.sleepCapSec).toBe(540)
+        expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90])
     })
 
     it('rejects out-of-range values (loud, not silent)', () => {
         expect(() => ConfigSchema.parse({quality: {holdoutPercent: 150}})).toThrow()
-        expect(() => ConfigSchema.parse({quota: {sleepCapSec: -1}})).toThrow()
+        expect(() => ConfigSchema.parse({stallTtlMinutes: -1})).toThrow()
         // maxParallelTasks: min 1 (N4) — 0 and negatives reject.
         expect(() => ConfigSchema.parse({maxParallelTasks: 0})).toThrow()
         expect(() => ConfigSchema.parse({maxParallelTasks: -1})).toThrow()

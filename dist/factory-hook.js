@@ -6560,12 +6560,6 @@ function nonDecreasing(xs) {
   return xs.every((x, i) => i === 0 || x >= at(xs, i - 1));
 }
 var QuotaSchema = external_exports.object({
-  /** Max single sleep chunk per gate call, seconds. */
-  sleepCapSec: external_exports.number().int().positive().default(540),
-  /** Max wait cycles before the gate ends a wait, count. */
-  maxWaitCycles: external_exports.number().int().positive().default(60),
-  /** Accumulated wall-clock wait budget across cycles, minutes. */
-  wallBudgetMin: external_exports.number().int().positive().default(75),
   /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
   hourlyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(5).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 90]),
   /** 7d-window utilization checkpoints by day 1..7 (% caps, non-decreasing). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
