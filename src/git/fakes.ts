@@ -386,6 +386,8 @@ export class FakeGhClient implements GhClient {
     readonly deletedBranches: string[] = []
     /** Remote branches branchExists answers true for (seed directly; deleteRemoteBranch removes). */
     readonly remoteBranches = new Set<string>()
+    /** Optional per-branch tip shas branchTip reports (else a fixed placeholder). */
+    readonly branchTips = new Map<string, string>()
     /** Branches whose protection was removed via deleteProtection. */
     readonly protectionDeletes: string[] = []
     /** Records each issueComment call (PRD delivered comment + failure comment). */
@@ -593,6 +595,14 @@ export class FakeGhClient implements GhClient {
     branchExists(_owner: string, _repo: string, branch: string, _opts?: GhOpts): Promise<boolean> {
         this.calls.push(`api branch ${branch}`)
         return Promise.resolve(this.remoteBranches.has(branch))
+    }
+
+    branchTip(_owner: string, _repo: string, branch: string, _opts?: GhOpts): Promise<string | null> {
+        this.calls.push(`api branch ${branch}`)
+        if (!this.remoteBranches.has(branch)) {
+            return Promise.resolve(null)
+        }
+        return Promise.resolve(this.branchTips.get(branch) ?? 'fake-tip-sha')
     }
 
     deleteProtection(_owner: string, _repo: string, branch: string, _opts?: GhOpts): Promise<void> {

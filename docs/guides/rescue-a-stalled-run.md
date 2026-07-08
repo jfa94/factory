@@ -158,6 +158,20 @@ standalone CLI subcommand. It acts only on **forward-only, non-destructive** rep
 autonomously and surfaces anything destructive for a confirmation prompt. Run it via
 the command (below) rather than by hand.
 
+**The scan already carries the evidence.** Since the P1 read-only reconcile slice
+(Decision 59), `rescue scan` probes GitHub and embeds a `github` section — `{ok:true,
+facts, drifts, rollup_landed}` — classifying state↔GitHub drift the reconciler acts on
+(`merged-unrecorded`, `closed-unmerged`, `stale-pr-number`, `pr-unrecorded`,
+`branch-missing`, `staging-missing`, `rollup-landed`; each `detail` names a manual remedy).
+A gh outage degrades that section to `{ok:false, error}` **without failing the scan**, so
+the repair entry point still works offline. Detection only — the reconcile slice writes
+nothing; repairs stay manual (or the reconciler's forward-only autonomous ones).
+
+For a standalone, GitHub-facts-only survey — outside the rescue flow, failing **loud** if
+gh is down — run [`factory reconcile [--run <id>]`](../reference/cli.md#reconcile). It emits
+the same `facts`/`drifts`/`rollup_landed` as the scan's `github` section, but as its own
+`{kind:"reconcile"}` document.
+
 ## 5. Resume
 
 After applying and reconciling, continue the run:
@@ -220,7 +234,7 @@ pinned staging branch on GitHub and emits `{ kind:"gc", findings, suspended, sta
 - `stale` — run dirs this engine **cannot parse** (Decision 57): an old schema version or
   corrupt JSON. A stale `current` pointer at one of these is what crashes `run create`, so
   sweep them. Each carries `{ run_id, reason, staging_branch?, branch_exists?,
-  protection_live?, hint }` (GitHub is probed only when `staging_branch` + repo were
+protection_live?, hint }` (GitHub is probed only when `staging_branch` + repo were
   raw-extractable); the `hint` is the same `factory rescue gc --apply --run <id>` command.
 
 ### 2. Tear down a terminal run's leftovers

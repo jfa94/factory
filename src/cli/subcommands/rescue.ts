@@ -20,11 +20,13 @@ import {
     scanRun,
     applyRescue,
     assessWork,
+    reconcileRun,
     gcScan,
     gcApply,
     gcApplyStale,
     type RescueScan,
     type WorkProbe,
+    type ReconcileReport,
 } from '../../rescue/index.js'
 import {DefaultGitClient, DefaultGhClient, type GhClient} from '../../git/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
@@ -61,10 +63,14 @@ the RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
 traceability_failed, rollup_pending, would_deadlock, summary, per-task lines)
 + the recoverable-work survey (\`work\`) + the chosen \`route\`
 (nothing | resume | repair) + \`reconcile\` (git drift: recorded branch missing /
-staging base gone → spawn rescue-reconciler) + \`hints\` (one exact
-\`rescue apply\` command per proposable repair) + \`awaiting\` (what a parked run
-waits on: quota|e2e|traceability|docs|spec-approval). Writes nothing. A missing
-run is a routed {kind:"nothing"} answer, not a usage error — safe to fire blind.`
+staging base gone → spawn rescue-reconciler) + \`github\` (P1 GitHub truth:
+{ok:true, facts, drifts, rollup_landed} — drift classes merged-unrecorded |
+closed-unmerged | stale-pr-number | pr-unrecorded | branch-missing |
+staging-missing | rollup-landed; a gh outage degrades to {ok:false, error}
+without failing the scan) + \`hints\` (one exact \`rescue apply\` command per
+proposable repair) + \`awaiting\` (what a parked run waits on:
+quota|e2e|traceability|docs|spec-approval). Writes nothing. A missing run is
+a routed {kind:"nothing"} answer, not a usage error — safe to fire blind.`
 
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
@@ -257,12 +263,24 @@ export async function runScan(argv: string[], overrides: RescueOverrides = {}): 
     // staging base unresolvable. /factory:resume routes reconcile:true to the
     // rescue-reconciler agent; this CLI never spawns it (Model A).
     const reconcile = !work.base_resolved || work.tasks.some((t) => !t.branch_exists)
+    // P1 GitHub truth, CONTAINED: scan is the repair entry point and must keep
+    // working when gh is down/unauthenticated — the outage is surfaced verbatim
+    // in the envelope ({ok:false, error}), never silently dropped. The dedicated
+    // `factory reconcile` reporter is the loud arm (gh facts ARE its job).
+    const gh = overrides.ghClient ?? new DefaultGhClient()
+    let github: ({ok: true} & ReconcileReport) | {ok: false; error: string}
+    try {
+        github = {ok: true, ...(await reconcileRun(current, gh))}
+    } catch (err) {
+        github = {ok: false, error: err instanceof Error ? err.message : String(err)}
+    }
     const parked = current.status === 'paused' || current.status === 'suspended'
     emitJson({
         ...scan,
         work,
         route,
         reconcile,
+        github,
         hints: repairHints(current.run_id, scan),
         ...(parked ? {awaiting: deriveAwaiting(current)} : {}),
     })

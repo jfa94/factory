@@ -35,9 +35,12 @@ consent prompt. Never edit `state.json` by hand.
 6. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
 7. **`rescue-diagnostic` is read-only and advisory.** Its decision shapes the plan; it
    mutates nothing itself.
-8. **v1 reconciles RUN STATE only.** GitHub-side drift (merged-not-recorded PR, orphan
-   branch/worktree, merge conflict, duplicate/closed-unmerged PR) is **out of scope** —
-   surface it, do not pretend it is fixed. See `reference/disposition-taxonomy.md`.
+8. **GitHub-side drift is DETECTED, never auto-repaired.** The scan envelope's `github`
+   section (the reconcile module, P1) classifies it — merged-unrecorded, closed-unmerged,
+   stale-pr-number, pr-unrecorded, branch-missing, staging-missing, rollup-landed — but
+   MUTATING GitHub or state to resolve it stays out of `apply`'s scope: surface it, feed
+   it to the rescue-reconciler as evidence (step 5), do not pretend it is fixed. See
+   `reference/disposition-taxonomy.md`.
    Exception (D55): leftover staging branches / protection rules of TERMINAL runs have
    their own sweep — `factory rescue gc` lists them read-only with exact hints;
    `factory rescue gc --apply --run <id>` (consent-gated, terminal runs only) tears them
@@ -80,6 +83,14 @@ consent prompt. Never edit `state.json` by hand.
       "work": {
         "base_ref", "base_resolved",
         "tasks": [ { "task_id", "branch", "branch_exists", "commits_ahead", "pr_number?" }, ... ]
+      },
+      // GitHub truth vs recorded state (reconcile module, P1) — read-only EVIDENCE.
+      // gh down → { "ok": false, "error" }: scan still works, rest of envelope unaffected.
+      "github": {
+        "ok": true,
+        "facts": { "repo", "staging": { "branch", "tip" }, "tasks": [...], "rollup?" },
+        "drifts": [ { "class", "task_id?", "pr_number?", "merge_sha?", "detail" }, ... ],
+        "rollup_landed"
       }
     }
     ```
@@ -102,27 +113,20 @@ consent prompt. Never edit `state.json` by hand.
     errors or returns unparseable JSON → treat as `no-action`; never propose on a guess.
 
 3.  **Propose the plan — ONE consent prompt.** Assemble every proposable repair as an
-    `AskUserQuestion` **multiSelect** item, each with what it does + why it is needed:
-    - **Safe resets** — one item covering `scan.resettable` (list the ids); executes the
-      default `factory rescue apply`.
-    - **One item per diagnostic-recommended dead-end** — the id + the diagnostic's reason;
-      executes `--task <id>`.
-    - **Clear failed e2e verdict** (`e2e_failed` / `e2e_assessment_failed`) — approving
-      asserts the underlying cause no longer applies; executes `--reset-e2e`.
-    - **Clear failed traceability audit** (`traceability_failed`) — approving asserts the
-      unmet PRD intent is addressed; executes `--reset-traceability`.
-    - **Recheck armed rollup** (`rollup_pending`) — approving asserts the queued merge
-      landed; executes `--recheck-rollup`.
-    - **Reconcile git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
-      (step 5); forward-only fixes are autonomous, anything destructive prompts again.
-    - **Cancel half-created run** (`empty_task_map`, D57) — zero tasks means creation
-      crashed before seeding; nothing is repairable. Executes `factory run cancel
-      --run <id> --cleanup`, then re-run `factory run create`.
+    `AskUserQuestion` **multiSelect** item, each with what it does + why it is needed: - **Safe resets** — one item covering `scan.resettable` (list the ids); executes the
+    default `factory rescue apply`. - **One item per diagnostic-recommended dead-end** — the id + the diagnostic's reason;
+    executes `--task <id>`. - **Clear failed e2e verdict** (`e2e_failed` / `e2e_assessment_failed`) — approving
+    asserts the underlying cause no longer applies; executes `--reset-e2e`. - **Clear failed traceability audit** (`traceability_failed`) — approving asserts the
+    unmet PRD intent is addressed; executes `--reset-traceability`. - **Recheck armed rollup** (`rollup_pending`) — approving asserts the queued merge
+    landed; executes `--recheck-rollup`. - **Reconcile git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
+    (step 5); forward-only fixes are autonomous, anything destructive prompts again. - **Cancel half-created run** (`empty_task_map`, D57) — zero tasks means creation
+    crashed before seeding; nothing is repairable. Executes `factory run cancel
+--run <id> --cleanup`, then re-run `factory run create`.
 
-    A question holds at most 4 options — split the items across up to 4 multiSelect
-    questions in the same call when there are more. The human approves any subset (or
-    none). **Declined everything** → report the skipped items with their `hints` commands
-    and STOP.
+            A question holds at most 4 options — split the items across up to 4 multiSelect
+            questions in the same call when there are more. The human approves any subset (or
+            none). **Declined everything** → report the skipped items with their `hints` commands
+            and STOP.
 
 4.  **Apply the approved subset — ONE call.** Combine the approved items' flags/ids into a
     single `factory rescue apply [--run <id>] [--task <id>]... [--reset-e2e]
@@ -135,7 +139,8 @@ skipped: [...], resume? }` — apply also reopens a terminal run and clears any 
 5.  **Reconcile git/GitHub drift (if approved).** Run state is now repaired, but the remote
     may still disagree with it. Re-run `factory rescue scan` for the fresh post-apply
     picture, then spawn the **`rescue-reconciler`** agent (one `Agent()`) passing the run id,
-    that scan JSON, and the repo context — `target_root`, `owner`, `name`,
+    that scan JSON — including its `github` section (`github.drifts` is the classified
+    state↔GitHub drift; each line's `detail` names the manual remedy) — and the repo context — `target_root`, `owner`, `name`,
     `staging_branch: staging-<run-id>`, and `base_branch` (`config.git.baseBranch`). The
     agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
     run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or
@@ -147,9 +152,9 @@ evidence }`): - `blocked: true` → the run cannot be made resumable automatical
     Never force-push to satisfy a prompt; if reconciliation genuinely requires a force,
     that is a STOP, not a fix. - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift cleared; proceed.
 
-        Then report the outcome: what was applied, what was skipped (with each skipped item's
-        exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
-        with `develop` untouched — Decision 34, the correct loud outcome).
+                    Then report the outcome: what was applied, what was skipped (with each skipped item's
+                    exact `hints` command), and any `leave-dropped` dead-ends (the run finalizes `failed`
+                    with `develop` untouched — Decision 34, the correct loud outcome).
 
 6.  **Hand off to resume.** Invoke the orchestrator skill directly (no human round-trip):
 

@@ -41,6 +41,32 @@ describe('gh truncation safety (reuses ExecResult.truncated seam)', () => {
         expect(prs[0]?.number).toBe(5)
     })
 
+    it('prList emits --repo when given and parses mergeCommit (reconcile facts)', async () => {
+        let captured: readonly string[] = []
+        const runner: GhRunner = (args) => {
+            captured = args
+            return Promise.resolve(
+                result({
+                    stdout: JSON.stringify([
+                        {
+                            number: 7,
+                            headRefName: 'factory/run-1/t1',
+                            baseRefName: 'staging-run-1',
+                            state: 'MERGED',
+                            mergeCommit: {oid: 'deadbeef'},
+                        },
+                    ]),
+                })
+            )
+        }
+        const gh = new DefaultGhClient(runner)
+        const prs = await gh.prList({head: 'factory/run-1/t1', state: 'all', repo: 'acme/widgets'})
+        expect(captured).toContain('--repo')
+        expect(captured).toContain('acme/widgets')
+        expect(captured.some((a) => a.includes('mergeCommit'))).toBe(true)
+        expect(prs[0]?.mergeCommit?.oid).toBe('deadbeef')
+    })
+
     it('repoProtection maps a 404 to enabled:false (a normal answer, not an error)', async () => {
         const runner: GhRunner = (args) => {
             // protection endpoint → 404; rulesets endpoint → also absent
@@ -277,26 +303,40 @@ describe('putProtection (the --provision PUT body)', () => {
     })
 })
 
-describe('branchExists (read-only remote-branch probe for rescue gc, D55)', () => {
-    it('returns true on a 200', async () => {
+describe('branchExists / branchTip (read-only remote-branch probe: rescue gc D55, reconcile P1)', () => {
+    it('branchExists returns true on a 200', async () => {
         const runner: GhRunner = (args) => {
             expect(args).toEqual(['api', 'repos/acme/widgets/branches/staging-run-x'])
-            return Promise.resolve(result({stdout: '{"name":"staging-run-x"}'}))
+            return Promise.resolve(result({stdout: '{"name":"staging-run-x","commit":{"sha":"abc123def"}}'}))
         }
         const gh = new DefaultGhClient(runner)
         await expect(gh.branchExists('acme', 'widgets', 'staging-run-x')).resolves.toBe(true)
     })
 
-    it('returns false on a 404 (a missing branch is the answer, not an error)', async () => {
+    it('branchTip returns the tip sha on a 200', async () => {
+        const runner: GhRunner = () =>
+            Promise.resolve(result({stdout: '{"name":"staging-run-x","commit":{"sha":"abc123def"}}'}))
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.branchTip('acme', 'widgets', 'staging-run-x')).resolves.toBe('abc123def')
+    })
+
+    it('branchTip returns null on a 404 (a missing branch is the answer, not an error)', async () => {
         const runner: GhRunner = () => Promise.resolve(result({code: 1, stderr: 'HTTP 404: Branch not found'}))
         const gh = new DefaultGhClient(runner)
+        await expect(gh.branchTip('acme', 'widgets', 'gone')).resolves.toBeNull()
         await expect(gh.branchExists('acme', 'widgets', 'gone')).resolves.toBe(false)
     })
 
-    it("throws on a non-404 failure (auth/network is NOT silently 'missing')", async () => {
+    it("branchTip throws on a non-404 failure (auth/network is NOT silently 'missing')", async () => {
         const runner: GhRunner = () => Promise.resolve(result({code: 1, stderr: 'HTTP 401: Bad credentials'}))
         const gh = new DefaultGhClient(runner)
         await expect(gh.branchExists('acme', 'widgets', 'b')).rejects.toThrow(/401|failed/i)
+    })
+
+    it('branchTip throws on a truncated 200 body (never parses a clipped payload)', async () => {
+        const runner: GhRunner = () => Promise.resolve(result({stdout: '{"commit":{"sha":"a', truncated: true}))
+        const gh = new DefaultGhClient(runner)
+        await expect(gh.branchTip('acme', 'widgets', 'b')).rejects.toThrow(/truncated/i)
     })
 })
 

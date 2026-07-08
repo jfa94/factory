@@ -22,11 +22,12 @@
  *     determined failure, so a default rescue LEAVES it failed. It is reset only when
  *     a human explicitly asserts the root cause is fixed (`apply --include-dead-ends`).
  *
- * SCOPE (v1): rescue reconciles RUN STATE only. GitHub-side drift (a PR merged but not
- * recorded, an orphan worktree, a closed-unmerged PR) is NOT reconciled here — the old
- * bash issue-taxonomy is reference, not a port. This module is pure over {@link RunState}
- * so it stays trivially testable; gh reconciliation is a deferred enhancement, not a
- * silent omission.
+ * SCOPE: this module stays PURE over {@link RunState} (trivially testable). GitHub-side
+ * drift (a PR merged but not recorded, a closed-unmerged PR, a landed auto-armed rollup)
+ * is DETECTED by the sibling reconcile module (`src/rescue/reconcile.ts`, P1): the scan
+ * CLI embeds its report under the envelope's `github` key and `factory reconcile`
+ * emits it standalone. Drift REPAIR remains manual / rescue-reconciler territory —
+ * the forward-only adoption writes are P1's next phase.
  */
 import {isTerminalTaskStatus, isTerminalRunStatus} from '../types/index.js'
 import {depsSatisfied, isUnsatisfiableDep} from '../orchestrator/readiness.js'

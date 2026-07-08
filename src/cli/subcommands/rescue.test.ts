@@ -129,7 +129,7 @@ describe('rescue scan/apply/auto', () => {
     it("scan routes 'nothing' when no current run resolves (safe to fire blind)", async () => {
         const git = new FakeGitClient()
         git.setRemoteUrl('origin', 'git@github.com:acme/other-repo.git') // no run for this repo
-        const code = await runScan([], {gitClient: git, cwd: '/x'})
+        const code = await runScan([], {gitClient: git, ghClient: new FakeGhClient(), cwd: '/x'})
         expect(code).toBe(EXIT.OK)
         expect(out()).toEqual({kind: 'nothing', reason: 'no-run', route: 'nothing'})
     })
@@ -142,7 +142,7 @@ describe('rescue scan/apply/auto', () => {
             tasks: {a: task({task_id: 'a', status: 'done'})},
             rollup: {number: 42, merged: false, reason: 'branch policy: merge queued (--auto)'},
         }))
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('nothing')
@@ -157,7 +157,7 @@ describe('rescue scan/apply/auto', () => {
             status: 'suspended',
             tasks: {a: task({task_id: 'a', status: 'pending'})},
         }))
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('resume')
@@ -173,7 +173,7 @@ describe('rescue scan/apply/auto', () => {
             quota: {resets_at_epoch: 4102444800, binding_window: '5h' as const},
             tasks: {a: task({task_id: 'a', status: 'pending'})},
         }))
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('resume')
@@ -185,7 +185,7 @@ describe('rescue scan/apply/auto', () => {
             ...s,
             tasks: {a: task({task_id: 'a', status: 'pending'})},
         }))
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('resume')
@@ -196,7 +196,7 @@ describe('rescue scan/apply/auto', () => {
         await seedMixed()
         await state.update(RUN, (s) => ({...s, status: 'failed', ended_at: AT}))
         // No staging base, no task branch in the fake ⇒ drift.
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('repair')
@@ -222,7 +222,7 @@ describe('rescue scan/apply/auto', () => {
             localBranches: {[`factory/${RUN}/a`]: {sha: 'sha-a'}},
         })
         git.setCommitsAhead(`factory/${RUN}/a`, 2)
-        const code = await runScan(['--run', RUN], {gitClient: git})
+        const code = await runScan(['--run', RUN], {gitClient: git, ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         expect(out().reconcile).toBe(false)
     })
@@ -235,7 +235,7 @@ describe('rescue scan/apply/auto', () => {
             tasks: {a: task({task_id: 'a', status: 'done'})},
             traceability: {status: 'failed', reason: 'PRD requirement 3 unmet', verdicts: [], ended_at: AT},
         }))
-        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient()})
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const env = out()
         expect(env.route).toBe('repair')
@@ -255,7 +255,7 @@ describe('rescue scan/apply/auto', () => {
         })
         git.setCommitsAhead(`factory/${RUN}/a`, 4)
 
-        const code = await runScan(['--run', RUN], {gitClient: git})
+        const code = await runScan(['--run', RUN], {gitClient: git, ghClient: new FakeGhClient()})
         expect(code).toBe(EXIT.OK)
         const scan = out()
         expect(scan.run_id).toBe(RUN)
@@ -266,11 +266,59 @@ describe('rescue scan/apply/auto', () => {
         expect(work.tasks).toEqual([{task_id: 'a', branch: `factory/${RUN}/a`, branch_exists: true, commits_ahead: 4}])
     })
 
+    it('scan embeds GitHub truth (github.ok:true) with classified drift (P1)', async () => {
+        // A crash after the PR merged but before state recorded `done`.
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {
+                a: task({task_id: 'a', status: 'shipping', branch: `factory/${RUN}/a`, pr_number: 101}),
+            },
+        }))
+        const gh = new FakeGhClient()
+        gh.remoteBranches.add(`staging-${RUN}`)
+        gh.setPr({
+            number: 101,
+            headRefName: `factory/${RUN}/a`,
+            baseRefName: `staging-${RUN}`,
+            state: 'MERGED',
+            mergeCommit: {oid: 'mergedsha'},
+        })
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        const github = out().github as {ok: boolean; drifts: {class: string; merge_sha?: string}[]}
+        expect(github.ok).toBe(true)
+        expect(github.drifts).toHaveLength(1)
+        expect(github.drifts[0]).toMatchObject({class: 'merged-unrecorded', merge_sha: 'mergedsha'})
+    })
+
+    it('scan CONTAINS a gh outage: github.ok:false with the error verbatim, everything else intact', async () => {
+        await seedMixed()
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {...s.tasks, a: {...nonNull(s.tasks.a), branch: `factory/${RUN}/a`}},
+        }))
+        const gh = new FakeGhClient({truncate: true})
+        gh.remoteBranches.add(`staging-${RUN}`)
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.github).toMatchObject({ok: false, error: expect.stringMatching(/TRUNCATED/) as unknown})
+        // The state-side plan is unaffected by the gh outage (no-regression).
+        expect(env.route).toBe('repair')
+        expect(env.resettable).toEqual(['a', 'b'])
+        expect(env.hints).toEqual([
+            `factory rescue apply --run ${RUN}`,
+            `factory rescue apply --run ${RUN} --task c --include-dead-ends`,
+        ])
+    })
+
     it('scan defaults to the current run when --run is omitted (resolved per-repo from cwd)', async () => {
         await seedMixed()
         const git = new FakeGitClient()
         git.setRemoteUrl('origin', 'git@github.com:acme/widgets.git')
-        const code = await runScan([], {gitClient: git, cwd: '/x'})
+        const code = await runScan([], {gitClient: git, ghClient: new FakeGhClient(), cwd: '/x'})
         expect(code).toBe(EXIT.OK)
         expect(out().run_id).toBe(RUN)
     })

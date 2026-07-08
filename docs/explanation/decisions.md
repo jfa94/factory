@@ -2079,7 +2079,7 @@ accepts `tasks` + `human_touches` (an omitted touch `at` is stamped with the
 birth timestamp, so `at === started_at` holds exactly); `createRunFromManifest`
 passes the seeded map in the create payload and the follow-up `update()` is
 deleted — one write births a complete run. (b) **Pointer-liveness tolerance** —
-in `pointCurrentAt` only, an unparseable pointer target is *stale* (warn +
+in `pointCurrentAt` only, an unparseable pointer target is _stale_ (warn +
 repoint), mirroring `listRuns`' tolerate-loudly precedent; every targeted read
 keeps its loud contract. (c) **Empty-set guard** — `next-task` on a `running`
 run with zero tasks throws a `UsageError` naming it half-created (the third and
@@ -2096,7 +2096,7 @@ all; an empty run can never pass anything. The incident is a regression test
 (`lifecycle.test.ts`), create is provably single-write, and the v2 wreckage
 class that caused B1 is now visible and sweepable. Deliberately skipped: a
 parse-level "running ⇒ tasks non-empty" schema invariant — it would brick
-*reading* (thus cancelling) existing wreckage.
+_reading_ (thus cancelling) existing wreckage.
 
 ---
 
@@ -2134,7 +2134,7 @@ trust boundary.
 
 - **S3 — gates-in-force enumeration.** New pure helper `enumerateGatesInForce(contract)`
   (`src/verifier/deterministic/gate-contract.ts`) returns `{contracted, skipped,
-  warnings}`. `run create` warns on stderr per dropped floor gate and carries `gates`
+warnings}`. `run create` warns on stderr per dropped floor gate and carries `gates`
   on the created/superseded envelope; the finalize report re-derives the same
   enumeration from the committed contract (derive-don't-store) into a **Gates in force**
   section, rendered loudly if the contract is absent/invalid at finalize. `DEFAULT_GATES`
@@ -2157,6 +2157,59 @@ trust boundary.
 a stale holdout verdict, a CI/local gate-set drift, a hand-edited dropped floor gate, and
 a Playwright suite outside the write-guard. No trust boundary widened — S1/S4 in particular
 keep their literal/confined invariants and close the window earlier instead.
+
+---
+
+## Decision 59 — The Engine Sees GitHub Truth (Read-Only Reconcile)
+
+**Date:** 2026-07-08
+
+**Context:** `rescue scan` (and the whole rescue surface) is **pure over run state** — it
+reasons only about `state.json` and never calls GitHub. That left a class of drift the
+engine was structurally blind to: a PR merged on GitHub but never recorded `done` (state
+lost the ship), a PR closed without merging while its task still counts on it, a recorded
+`pr_number` that matches no PR on the head, a staging branch deleted out-of-band under a
+still-running run, and — the recurring one — a `staging→develop` rollup that **landed** on
+GitHub while the run's marker still reads `merged:false` (the auto-armed branch-policy
+fallback, Decision 40 D3). The reconciler agent had to rediscover all of this by hand
+every time. The design review (`docs/proposals/design-review-2026-07-07.md` §P1) called for
+the engine to gather GitHub truth itself. This is the **read-only slice** — detection and
+classification only; forward-only adoption writes are P1's next phase.
+
+**Decision (three parts):**
+
+1. **A GitHub-truth module** (`src/rescue/reconcile.ts`). `gatherRunFacts(run, gh)` probes
+   through the single `GhClient` seam (staging `branchTip`, `prList {state:'all'}` per
+   branched task, a remote-head `branchTip` only when the recorded PR is found OPEN, and the
+   rollup `prList` only when the marker says `merged:false`); `classifyDrift(run, facts)` is
+   **pure**, naming seven drift classes (`merged-unrecorded`, `closed-unmerged`,
+   `stale-pr-number`, `pr-unrecorded`, `branch-missing`, `staging-missing`, `rollup-landed`),
+   each carrying a `detail` with its manual remedy. Fact-gathering is **all-or-nothing**:
+   any gh failure propagates — no partial facts. `done` tasks are never classified, and an
+   unrecorded MERGED PR on a task head is **not** drift (the e2e-reopen shape, where a
+   deterministic branch is reused after `clearShippedPr`).
+
+2. **Two reporters over the same module, with opposite gh-failure semantics.**
+   [`factory reconcile [--run <id>]`](../reference/cli.md#reconcile) is the dedicated,
+   read-only reporter — GitHub facts ARE its job, so it **fails loud** on any gh error.
+   [`rescue scan`](../reference/cli.md#rescue-scan) embeds the same result in a new `github`
+   envelope section but **contains** a gh outage (`{ok:false, error}`) — the scan is the
+   repair entry point and must keep working offline. Detection only: neither writes state or
+   GitHub, and `rescue apply`'s scope is unchanged.
+
+3. **Seam extensions** (`src/git/gh-client.ts`). New `GhClient.branchTip(owner, repo,
+branch)` → `sha | null` (404 → `null`, truncation / other errors throw); `branchExists`
+   now delegates to it. `PrListArgs.repo?` emits an explicit `--repo owner/name` so probes
+   work when the CLI runs outside the target checkout, and `PullRequest.mergeCommit?.oid`
+   surfaces the squash-merge SHA (the merged-SHA fact).
+
+**Consequences:** The scan's classification stays state-pure — GitHub truth arrives in its
+own `github` section and never changes a task disposition. The reconciler agent now consumes
+`github.drifts` as pre-classified evidence instead of rediscovering drift by hand. Repair
+remains manual (or the reconciler's forward-only autonomous fixes); the forward-only
+adoption writes — record a merged PR as `done`, re-push a missing branch, recheck a landed
+rollup automatically — are the next P1 phase and will grow behind the `reconcile` command,
+not in `rescue apply`.
 
 ---
 

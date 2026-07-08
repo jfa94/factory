@@ -8409,6 +8409,7 @@ var PullRequestSchema = external_exports.object({
   state: external_exports.enum(["OPEN", "CLOSED", "MERGED"]),
   mergeable: external_exports.string().optional(),
   mergeStateStatus: external_exports.string().optional(),
+  mergeCommit: external_exports.object({ oid: external_exports.string() }).nullish(),
   url: external_exports.string().optional()
 });
 var REQUIRED_VIEW_FIELDS = Object.entries(PullRequestSchema.shape).filter(([, schema]) => !schema.isOptional()).map(([key]) => key);
@@ -8460,10 +8461,13 @@ var DefaultGhClient = class {
       "--state",
       args.state ?? "open",
       "--json",
-      "number,headRefName,baseRefName,state,mergeable,mergeStateStatus,url"
+      "number,headRefName,baseRefName,state,mergeable,mergeStateStatus,mergeCommit,url"
     ];
     if (args.base != null && args.base.length > 0) {
       argv.push("--base", args.base);
+    }
+    if (args.repo != null && args.repo.length > 0) {
+      argv.push("--repo", args.repo);
     }
     const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
     return parseGhJson(r, external_exports.array(PullRequestSchema), "gh pr list");
@@ -8534,13 +8538,20 @@ var DefaultGhClient = class {
     }
   }
   async branchExists(owner, repo, branch, opts) {
+    return await this.branchTip(owner, repo, branch, opts) !== null;
+  }
+  async branchTip(owner, repo, branch, opts) {
     const path7 = `repos/${owner}/${repo}/branches/${branch}`;
     const r = await this.runner(["api", path7], this.execOpts(opts));
     if (r.code === 0) {
-      return true;
+      if (r.truncated) {
+        throw new Error(`gh api ${path7}: output truncated \u2014 refusing to parse clipped branch JSON`);
+      }
+      const parsed = external_exports.object({ commit: external_exports.object({ sha: external_exports.string() }) }).parse(parseJson(r.stdout, path7));
+      return parsed.commit.sha;
     }
     if (/404|Not Found|Branch not found/i.test(r.stderr)) {
-      return false;
+      return null;
     }
     throw ghApiFailure(path7, r);
   }
@@ -13033,6 +13044,148 @@ async function assessWork(run10, probe) {
     }
   }
   return { base_ref: baseRef, base_resolved: baseResolved, tasks };
+}
+
+// src/rescue/reconcile.ts
+function toPrFact(pr) {
+  const oid = pr.mergeCommit?.oid;
+  return {
+    number: pr.number,
+    state: pr.state,
+    baseRefName: pr.baseRefName,
+    ...oid !== void 0 ? { merge_sha: oid } : {},
+    ...pr.url !== void 0 ? { url: pr.url } : {}
+  };
+}
+async function gatherRunFacts(run10, gh) {
+  const slug = run10.spec.repo;
+  const { owner, repo } = splitRepoSlug(slug);
+  const stagingTip = await gh.branchTip(owner, repo, run10.staging_branch);
+  const tasks = [];
+  for (const t of Object.values(run10.tasks)) {
+    if (t.branch === void 0) {
+      continue;
+    }
+    const prs = (await gh.prList({ head: t.branch, state: "all", repo: slug })).map(toPrFact);
+    const hit = t.pr_number !== void 0 ? prs.find((p) => p.number === t.pr_number) : void 0;
+    const branchTip = hit?.state === "OPEN" ? await gh.branchTip(owner, repo, t.branch) : void 0;
+    tasks.push({
+      task_id: t.task_id,
+      branch: t.branch,
+      recorded_status: t.status,
+      ...t.pr_number !== void 0 ? { recorded_pr_number: t.pr_number } : {},
+      prs,
+      ...branchTip !== void 0 ? { branch_tip: branchTip } : {}
+    });
+  }
+  const rollup2 = run10.rollup?.merged === false ? {
+    ...run10.rollup.number !== void 0 ? { recorded_number: run10.rollup.number } : {},
+    prs: (await gh.prList({ head: run10.staging_branch, state: "all", repo: slug })).map(toPrFact)
+  } : void 0;
+  return {
+    repo: slug,
+    staging: { branch: run10.staging_branch, tip: stagingTip },
+    tasks,
+    ...rollup2 !== void 0 ? { rollup: rollup2 } : {}
+  };
+}
+var CLOSED_DRIFT_STATUSES = ["pending", "executing", "reviewing", "shipping"];
+function classifyTask(t, f) {
+  if (t.status === "done") {
+    return [];
+  }
+  const base = { task_id: f.task_id, branch: f.branch };
+  const drifts = [];
+  if (f.recorded_pr_number !== void 0) {
+    const hit = f.prs.find((p) => p.number === f.recorded_pr_number);
+    if (hit === void 0) {
+      drifts.push({
+        class: "stale-pr-number",
+        ...base,
+        recorded_pr_number: f.recorded_pr_number,
+        detail: `recorded pr_number #${f.recorded_pr_number} matches no PR on head '${f.branch}' (head has: ${f.prs.length > 0 ? f.prs.map((p) => `#${p.number} ${p.state}`).join(", ") : "none"}); the next ship's idempotent create will rebind \u2014 or clear the pointer manually`
+      });
+    } else if (hit.state === "MERGED") {
+      drifts.push({
+        class: "merged-unrecorded",
+        ...base,
+        recorded_pr_number: f.recorded_pr_number,
+        pr_number: hit.number,
+        pr_state: hit.state,
+        ...hit.merge_sha !== void 0 ? { merge_sha: hit.merge_sha } : {},
+        ...hit.url !== void 0 ? { url: hit.url } : {},
+        detail: `PR #${hit.number} is MERGED on GitHub but the task is '${t.status}' \u2014 state lost the ship; verify the merge commit is on staging, then record it manually`
+      });
+    } else if (hit.state === "CLOSED" && CLOSED_DRIFT_STATUSES.includes(t.status)) {
+      drifts.push({
+        class: "closed-unmerged",
+        ...base,
+        recorded_pr_number: f.recorded_pr_number,
+        pr_number: hit.number,
+        pr_state: hit.state,
+        ...hit.url !== void 0 ? { url: hit.url } : {},
+        detail: `PR #${hit.number} was CLOSED without merging while the task is '${t.status}' \u2014 reopen the PR or let the next ship open a fresh one`
+      });
+    } else if (hit.state === "OPEN" && f.branch_tip === null) {
+      drifts.push({
+        class: "branch-missing",
+        ...base,
+        recorded_pr_number: f.recorded_pr_number,
+        pr_number: hit.number,
+        pr_state: hit.state,
+        ...hit.url !== void 0 ? { url: hit.url } : {},
+        detail: `PR #${hit.number} is OPEN but its head branch '${f.branch}' is gone on GitHub \u2014 re-push the local branch before resuming`
+      });
+    }
+  } else {
+    const open2 = f.prs.find((p) => p.state === "OPEN");
+    if (open2 !== void 0) {
+      drifts.push({
+        class: "pr-unrecorded",
+        ...base,
+        pr_number: open2.number,
+        pr_state: open2.state,
+        ...open2.url !== void 0 ? { url: open2.url } : {},
+        detail: `OPEN PR #${open2.number} exists on head '${f.branch}' but state records no pr_number \u2014 informational: the next ship's idempotent create rediscovers it`
+      });
+    }
+  }
+  return drifts;
+}
+function classifyDrift(run10, facts) {
+  const drifts = [];
+  for (const f of facts.tasks) {
+    const t = run10.tasks[f.task_id];
+    if (t !== void 0) {
+      drifts.push(...classifyTask(t, f));
+    }
+  }
+  if (!isTerminalRunStatus(run10.status) && facts.staging.tip === null) {
+    drifts.push({
+      class: "staging-missing",
+      branch: facts.staging.branch,
+      detail: `staging branch '${facts.staging.branch}' is gone on GitHub while the run is '${run10.status}' \u2014 re-push it from a local clone (or cancel the run) before resuming`
+    });
+  }
+  if (facts.rollup !== void 0) {
+    const landed = facts.rollup.recorded_number !== void 0 ? facts.rollup.prs.find((p) => p.number === facts.rollup?.recorded_number && p.state === "MERGED") : facts.rollup.prs.find((p) => p.state === "MERGED");
+    if (landed !== void 0) {
+      drifts.push({
+        class: "rollup-landed",
+        pr_number: landed.number,
+        pr_state: landed.state,
+        ...landed.merge_sha !== void 0 ? { merge_sha: landed.merge_sha } : {},
+        ...landed.url !== void 0 ? { url: landed.url } : {},
+        detail: `rollup PR #${landed.number} IS merged on GitHub but the run's marker says merged:false (a landed auto-arm) \u2014 \`factory rescue apply --run ${run10.run_id} --recheck-rollup\``
+      });
+    }
+  }
+  return drifts;
+}
+async function reconcileRun(run10, gh) {
+  const facts = await gatherRunFacts(run10, gh);
+  const drifts = classifyDrift(run10, facts);
+  return { facts, drifts, rollup_landed: drifts.some((d) => d.class === "rollup-landed") };
 }
 
 // src/rescue/auto.ts
@@ -18542,10 +18695,14 @@ the RescueScan (counts, resettable, dead_ends, needs_rescue, e2e_failed,
 traceability_failed, rollup_pending, would_deadlock, summary, per-task lines)
 + the recoverable-work survey (\`work\`) + the chosen \`route\`
 (nothing | resume | repair) + \`reconcile\` (git drift: recorded branch missing /
-staging base gone \u2192 spawn rescue-reconciler) + \`hints\` (one exact
-\`rescue apply\` command per proposable repair) + \`awaiting\` (what a parked run
-waits on: quota|e2e|traceability|docs|spec-approval). Writes nothing. A missing
-run is a routed {kind:"nothing"} answer, not a usage error \u2014 safe to fire blind.`;
+staging base gone \u2192 spawn rescue-reconciler) + \`github\` (P1 GitHub truth:
+{ok:true, facts, drifts, rollup_landed} \u2014 drift classes merged-unrecorded |
+closed-unmerged | stale-pr-number | pr-unrecorded | branch-missing |
+staging-missing | rollup-landed; a gh outage degrades to {ok:false, error}
+without failing the scan) + \`hints\` (one exact \`rescue apply\` command per
+proposable repair) + \`awaiting\` (what a parked run waits on:
+quota|e2e|traceability|docs|spec-approval). Writes nothing. A missing run is
+a routed {kind:"nothing"} answer, not a usage error \u2014 safe to fire blind.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
@@ -18690,12 +18847,20 @@ async function runScan(argv, overrides = {}) {
   const route = chooseRoute(current, scan);
   const work = await assessWork(current, probeFrom(overrides));
   const reconcile = !work.base_resolved || work.tasks.some((t) => !t.branch_exists);
+  const gh = overrides.ghClient ?? new DefaultGhClient();
+  let github;
+  try {
+    github = { ok: true, ...await reconcileRun(current, gh) };
+  } catch (err) {
+    github = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
   const parked = current.status === "paused" || current.status === "suspended";
   emitJson({
     ...scan,
     work,
     route,
     reconcile,
+    github,
     hints: repairHints(current.run_id, scan),
     ...parked ? { awaiting: deriveAwaiting(current) } : {}
   });
@@ -18849,8 +19014,45 @@ var rescueCommand = {
   run: withUsageGuard("rescue", run6)
 };
 
+// src/cli/subcommands/reconcile.ts
+var HELP4 = `factory reconcile \u2014 report GitHub truth vs recorded run state (read-only)
+
+Usage:
+  factory reconcile [--run <id>]
+
+  --run   The run to reconcile (defaults to runs/current).
+
+Probes GitHub through the gh seam and classifies state\u2194GitHub drift:
+  merged-unrecorded | closed-unmerged | stale-pr-number | pr-unrecorded |
+  branch-missing | staging-missing | rollup-landed
+
+Emits ONE JSON document:
+  { kind:"reconcile", run_id, run_status, facts, drifts, rollup_landed }
+
+Writes nothing (drift remedies stay manual for now \u2014 each drift line carries
+one). Fails loud when gh is unavailable: GitHub facts are this command's whole
+job. For a gh-outage-tolerant survey use \`factory rescue scan\` (its \`github\`
+section degrades to {ok:false, error}).`;
+async function runReconcile(argv, overrides = {}) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    return emitHelp(HELP4);
+  }
+  const { state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "reconcile", overrides);
+  const run10 = await state.read(runId);
+  const gh = overrides.ghClient ?? new DefaultGhClient();
+  const report = await reconcileRun(run10, gh);
+  emitJson({ kind: "reconcile", run_id: run10.run_id, run_status: run10.status, ...report });
+  return EXIT.OK;
+}
+var reconcileCommand = {
+  describe: "Report GitHub truth vs recorded run state \u2014 facts + classified drift (read-only)",
+  run: withUsageGuard("reconcile", runReconcile)
+};
+
 // src/cli/subcommands/score.ts
-var HELP4 = `factory score \u2014 report a run's outcome summary (read-only)
+var HELP5 = `factory score \u2014 report a run's outcome summary (read-only)
 
 Usage:
   factory score [--run <id>]
@@ -18881,7 +19083,7 @@ async function runFleet(state) {
 async function runScore(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["fleet"] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP4);
+    return emitHelp(HELP5);
   }
   const { dataDir, state } = openState();
   if (args.flag("fleet") === true) {
@@ -18905,7 +19107,7 @@ var scoreCommand = {
 };
 
 // src/cli/subcommands/drive.ts
-var HELP5 = `factory next-action \u2014 step one task until it needs agents or is terminal
+var HELP6 = `factory next-action \u2014 step one task until it needs agents or is terminal
 
 Usage:
   factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
@@ -18928,7 +19130,7 @@ Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP5);
+    return emitHelp(HELP6);
   }
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
@@ -18948,7 +19150,7 @@ var driveCommand = {
 };
 
 // src/cli/subcommands/next.ts
-var HELP6 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
+var HELP7 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
   factory next-task [--run <id>]      (defaults to runs/current)
@@ -18983,7 +19185,7 @@ function assertCurrentOwner(current, assertOwner) {
 async function run8(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP6);
+    return emitHelp(HELP7);
   }
   const explicit = args.flag("run");
   let runId;
@@ -19022,7 +19224,7 @@ async function readStdin(stream = process.stdin) {
 
 // src/cli/subcommands/statusline.ts
 var log34 = createLogger("cli:statusline");
-var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
+var HELP8 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
 reads the piped JSON payload, writes \`rate_limits + {captured_at}\` to
@@ -19118,7 +19320,7 @@ async function passthrough(payload, deps) {
 async function runStatusline(argv = [], deps = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    return emitHelp(HELP7);
+    return emitHelp(HELP8);
   }
   const payload = deps.readStdin ? await deps.readStdin() : await readStdin(deps.stdin);
   let parsed;
@@ -19147,7 +19349,7 @@ import { readFile as readFile19 } from "node:fs/promises";
 import { join as join28 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log35 = createLogger("autonomy");
-var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
+var HELP9 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
 is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
@@ -19440,7 +19642,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 async function run9(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP8);
+    return emitHelp(HELP9);
   }
   const verb = args.positionals[0];
   if (verb === "status") {
@@ -19482,6 +19684,7 @@ var cliRegistry = {
   run: runCommand,
   spec: specCommand,
   rescue: rescueCommand,
+  reconcile: reconcileCommand,
   score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,

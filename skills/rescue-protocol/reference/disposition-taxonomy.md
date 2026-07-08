@@ -1,8 +1,9 @@
 # Rescue Disposition Taxonomy
 
-`factory rescue scan` is **pure over run state**: it classifies every task into one of five
-dispositions and reports whether a re-drive would deadlock. There are no tiers, no
-issue-IDs, and no GitHub probing — the scan reasons only about `state.json`.
+`factory rescue scan` classifies every task into one of five dispositions (pure over run
+state) and reports whether a re-drive would deadlock. There are no tiers and no issue-IDs;
+GitHub truth arrives separately in the envelope's `github` section (the reconcile module —
+see the last section) and never changes a disposition.
 
 ## The five dispositions
 
@@ -60,24 +61,28 @@ identity, dependency edges, the spec-time risk dial, and the git/PR pointers —
 branch/PR is reused on the next attempt (idempotent create, Δ P). Apply is idempotent: a second
 run finds nothing resettable and is a no-op with `reopened: false`.
 
-## Out of scope in v1 — GitHub-side drift (deferred, NOT silently omitted)
+## GitHub-side drift — DETECTED by the reconcile module (repair still manual)
 
-v1 rescue reconciles **run state only**. The old bash issue-taxonomy (`I-01`..`I-16`) is
-**reference, not a port**. The following GitHub-side drifts are **not** detected or repaired
-here — surface them to the user; do not pretend they are handled:
+The reconcile module (`src/rescue/reconcile.ts`, P1) probes GitHub through the gh seam and
+classifies state↔GitHub drift; the scan envelope embeds its report under `github` and
+`factory reconcile` emits it standalone. Detection ≠ repair: `apply` still never mutates
+GitHub — each drift line's `detail` names the manual remedy. The old bash issue-taxonomy
+(`I-01`..`I-16`) remains **reference, not a port**:
 
-| Drift (old issue id)                                   | v1 status | Manual workaround until v2                                                       |
-| ------------------------------------------------------ | --------- | -------------------------------------------------------------------------------- |
-| PR merged but state not `done` (`I-03`)                | deferred  | Confirm on GitHub, then re-run the task's ship stage / record manually.          |
-| PR exists but `pr_url`/`pr_number` unrecorded (`I-04`) | deferred  | The next attempt's idempotent create re-discovers the PR by head branch.         |
-| Stale CI status (`I-05`)                               | deferred  | Re-running ship re-derives CI; verdicts are derive-don't-store anyway.           |
-| PR merge conflict with base (`I-07`/`I-13`)            | deferred  | Rebase the task branch by hand, or reset the task to redo it from staging tip.   |
-| PR closed unmerged (`I-08`)                            | deferred  | Reset the task with `--task <id>` to reopen the work.                            |
-| Orphan branch / worktree (`I-02`/`I-14`)               | deferred  | `git worktree remove` / `git branch -D` by hand after confirming no unique work. |
-| Duplicate PRs for one branch (`I-15`)                  | deferred  | Close the extras on GitHub; idempotent create won't make new ones.               |
-| Stale state lock (`I-01`)                              | n/a       | `proper-lockfile` is self-healing; no manual lock-dir cleanup needed.            |
-| Archived-run rehydration                               | removed   | Runs are not archived/rehydrated in v1; scan/apply target a live run dir.        |
+| Drift (old issue id)                                   | Status                                                   | Remedy (manual until the P1 write phase)                                         |
+| ------------------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| PR merged but state not `done` (`I-03`)                | detected — `merged-unrecorded`                           | Confirm on GitHub, then re-run the task's ship stage / record manually.          |
+| PR exists but `pr_url`/`pr_number` unrecorded (`I-04`) | detected — `stale-pr-number` / `pr-unrecorded`           | The next attempt's idempotent create re-discovers the PR by head branch.         |
+| Stale CI status (`I-05`)                               | deferred                                                 | Re-running ship re-derives CI; verdicts are derive-don't-store anyway.           |
+| PR merge conflict with base (`I-07`/`I-13`)            | deferred                                                 | Rebase the task branch by hand, or reset the task to redo it from staging tip.   |
+| PR closed unmerged (`I-08`)                            | detected — `closed-unmerged`                             | Reset the task with `--task <id>` to reopen the work.                            |
+| Orphan branch / worktree (`I-02`/`I-14`)               | local: `work` survey; staging gone: `staging-missing`    | `git worktree remove` / `git branch -D` by hand after confirming no unique work. |
+| Duplicate PRs for one branch (`I-15`)                  | visible in `github.facts` (raw `prs` per head); no class | Close the extras on GitHub; idempotent create won't make new ones.               |
+| Landed auto-armed rollup                               | detected — `rollup-landed`                               | `apply --recheck-rollup` (asserts the queued merge landed).                      |
+| Deleted head of a recorded OPEN PR                     | detected — `branch-missing`                              | Re-push the branch (rescue-reconciler's forward-only territory) before resume.   |
+| Stale state lock (`I-01`)                              | n/a                                                      | `proper-lockfile` is self-healing; no manual lock-dir cleanup needed.            |
+| Archived-run rehydration                               | removed                                                  | Runs are not archived/rehydrated; scan/apply target a live run dir.              |
 
-GitHub-side reconciliation (a probe layer over `gh`) is a deferred enhancement behind the
-WS3 git/PR seam, not part of v1 rescue. See `docs/explanation/decisions.md` and the rewrite
-plan's v1 scope note (`src/rescue/scan.ts` module header).
+The forward-only adoption WRITES (mark merged work `done`, re-push a gone branch) are P1's
+next phase — see `src/rescue/reconcile.ts`'s module header and `src/rescue/scan.ts`'s
+SCOPE note.

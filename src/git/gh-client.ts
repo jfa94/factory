@@ -25,6 +25,8 @@ export interface PullRequest {
     mergeable?: string | undefined
     /** Merge-state status (CLEAN | BEHIND | BLOCKED | DIRTY | ...), if requested. */
     mergeStateStatus?: string | undefined
+    /** Squash/merge commit (`null` until merged), if requested — the merged-SHA fact. */
+    mergeCommit?: {oid: string} | null | undefined
     url?: string | undefined
 }
 
@@ -58,6 +60,12 @@ export interface PrListArgs {
     head: string
     base?: string
     state?: 'open' | 'closed' | 'merged' | 'all'
+    /**
+     * Explicit `--repo owner/name`. Without it `gh pr list` resolves the repo from
+     * the process cwd — wrong (or a confusing failure) when the CLI runs outside the
+     * target checkout (e.g. `rescue scan --run <id>` from elsewhere).
+     */
+    repo?: string
 }
 
 /** Args for {@link GhClient.prCreate}. */
@@ -117,6 +125,8 @@ export interface GhClient {
     deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>
     /** Read-only remote-branch probe (`gh api …/branches/<branch>`). 404 → false; other failures throw. */
     branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>
+    /** Remote branch tip sha via the same probe. 404 → null (branch gone); other failures throw. */
+    branchTip(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<string | null>
     /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered + failure comments). */
     issueComment(args: {repo: string; number: number; body: string}, opts?: GhOpts): Promise<void>
     /**
@@ -145,6 +155,7 @@ const PullRequestSchema = z.object({
     state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
     mergeable: z.string().optional(),
     mergeStateStatus: z.string().optional(),
+    mergeCommit: z.object({oid: z.string()}).nullish(),
     url: z.string().optional(),
 })
 
@@ -235,10 +246,13 @@ export class DefaultGhClient implements GhClient {
             '--state',
             args.state ?? 'open',
             '--json',
-            'number,headRefName,baseRefName,state,mergeable,mergeStateStatus,url',
+            'number,headRefName,baseRefName,state,mergeable,mergeStateStatus,mergeCommit,url',
         ]
         if (args.base != null && args.base.length > 0) {
             argv.push('--base', args.base)
+        }
+        if (args.repo != null && args.repo.length > 0) {
+            argv.push('--repo', args.repo)
         }
         const r = await runOrThrow('gh', this.runner, argv, this.execOpts(opts))
         return parseGhJson(r, z.array(PullRequestSchema), 'gh pr list')
@@ -328,15 +342,23 @@ export class DefaultGhClient implements GhClient {
     }
 
     async branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean> {
+        return (await this.branchTip(owner, repo, branch, opts)) !== null
+    }
+
+    async branchTip(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<string | null> {
         const path = `repos/${owner}/${repo}/branches/${branch}`
         const r = await this.runner(['api', path], this.execOpts(opts))
         if (r.code === 0) {
-            return true
+            if (r.truncated) {
+                throw new Error(`gh api ${path}: output truncated — refusing to parse clipped branch JSON`)
+            }
+            const parsed = z.object({commit: z.object({sha: z.string()})}).parse(parseJson(r.stdout, path))
+            return parsed.commit.sha
         }
         // A 404 is the ANSWER (branch gone). Any other non-zero (auth, network) throws —
         // never silently reported as "missing" (mirrors repoProtection).
         if (/404|Not Found|Branch not found/i.test(r.stderr)) {
-            return false
+            return null
         }
         throw ghApiFailure(path, r)
     }
