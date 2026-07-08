@@ -136,22 +136,29 @@ land independently, and the prerequisite for Sessions 5 and 6.
 
 ---
 
-## Session 6 — Scheduled wake & sentinel (P2)
+## Session 6 — Scheduled wake & sentinel (P2) — DROPPED, replaced by the in-session 5h wait (Decision 62, v1.33.0)
 
-**Theme: parked is a state the system leaves by itself.**
+**Original theme: parked is a state the system leaves by itself.**
 
-- **6a** Spike first: verify scheduled/cron Claude Code sessions on the Max plan at
-  this site (determines shape; fallback = `launchd` timer opening a session).
-- **6b** Park-armed wake: every park (quota suspend, docs suspend, 5h pause) arms a
-  scheduled session at `resets_at_epoch`/TTL that runs `/factory:resume` — firing
-  the existing promptless clean-park resume (D50) + `planResume` (the v2 the code
-  already names in `quota/resume.ts`).
-- **6c** Sentinel heartbeat: recurring session (30–60 min while any run is
-  non-terminal) running resume-if-parked + reconcile; also refreshes the statusline
-  usage cache quota decisions depend on. This is the watchdog for dead runner
-  sessions.
-- **6d** Ledger semantics: auto-resume/auto-reconcile never count as
-  `human_touches`.
+The launchd-sentinel spike below (6a–6d: scheduled/cron session, park-armed wake,
+sentinel heartbeat, `--auto`/`auto_wake` ledger) was built then judged "way too janky
+and unnecessarily complex" and reverted whole. It is **replaced by an in-session 5h
+quota wait** (Decision 62): the pre-Decision-42 behavior, restored as a runner-protocol
+change only. A `scope "5h"` pause TaskStops in-flight agents and WAITs (ends the turn
+without stopping the session); the runner's existing heartbeat (`CronCreate`, every
+`stallTtlMinutes`) re-drives REFILL, and `factory next-task` self-clears `paused`→`running`
+on a fresh proceed. Self-bounded (a 5h window resets by `resets_at_epoch` ≤5h). `7d`
+suspends and `unavailable` halts still STOP → a human `/factory:resume`. No engine
+code/timer/config/ledger. This covers the _live-session_ case only; a DEAD session
+(process gone) still needs a human relaunch — the sentinel was the watchdog for that,
+and that gap is accepted as the price of dropping the apparatus.
+
+The retired sub-steps, for the record:
+
+- ~~**6a** Spike scheduled/cron Claude Code sessions (fallback `launchd` timer).~~
+- ~~**6b** Park-armed wake at `resets_at_epoch`/TTL running `/factory:resume`.~~
+- ~~**6c** Sentinel heartbeat (30–60 min) — watchdog for dead runner sessions.~~
+- ~~**6d** Ledger: auto-resume/auto-reconcile never count as `human_touches`.~~
 
 ---
 

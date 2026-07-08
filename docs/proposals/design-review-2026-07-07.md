@@ -157,6 +157,16 @@ behind `gh-client.ts`, consumed at three existing call sites.
 
 ### P2 — Scheduled wake / auto-resume ⟶ kills 3b, halves 3c
 
+> **Superseded — DROPPED, replaced by the in-session 5h quota wait (Decision 62,
+> v1.33.0).** The two-layer sentinel below (park-armed wake + heartbeat) was built as the
+> Session 6 spike, judged "way too janky and unnecessarily complex", and reverted whole.
+> The replacement restores the pre-D42 behavior as a runner-protocol change only: a
+> `scope "5h"` pause WAITs in-session (TaskStop agents, end the turn) and the existing
+> `CronCreate` heartbeat re-drives REFILL, with `factory next-task` self-clearing
+> `paused`→`running` on a fresh proceed. This covers a _live_ session; a **dead** session
+> (the "watchdog for 3c" role below) still needs a human `/factory:resume` — that gap is
+> the accepted price of dropping the sentinel. `7d`/`unavailable` still STOP.
+
 Build the v2 the code already names. Two layers:
 
 1. **Park-armed wake**: whenever the engine parks a run (quota suspend, docs suspend,
