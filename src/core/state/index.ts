@@ -32,6 +32,7 @@ export {
     FixFindingSchema,
     TaskStateSchema,
     QuotaCheckpointSchema,
+    MissSchema,
     RunStateSchema,
     // e2e phase (Decision 39)
     E2eSpecKindEnum,
@@ -58,6 +59,7 @@ export type {
     FixFinding,
     TaskState,
     QuotaCheckpoint,
+    Miss,
     RunState,
     E2eSpecKind,
     E2eManifestEntry,
@@ -104,7 +106,6 @@ export {
     runDir,
     runStatePath,
     runCoverageDir,
-    currentLinkPath,
     currentRepoRoot,
     currentRepoLinkPath,
     specsRoot,

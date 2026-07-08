@@ -1,42 +1,34 @@
 /**
  * WS9 — active-run context resolution for the guards.
  *
- * Ports the bash `runs/current` symlink resolution from
- * `pretooluse-pipeline-guards.sh` / `subagent-stop-transcript.sh` onto the WS1
- * seam. Distinguishes three cases (the bash hooks got this subtly right and it
- * must be preserved):
- *   - NO symlink            → no active run; guards pass through (`null`).
- *   - DANGLING symlink      → run state corrupted; FAIL CLOSED (throw) so the
- *                             caller denies rather than masking corruption.
- *   - VALID symlink         → parse RunState via StateManager; LOUD on a corrupt
- *                             state.json (never silently treated as "no run").
+ * {@link loadOwnerScopedRun} resolves the run a hook invocation belongs to via a
+ * 3-tier order (Decision 61 — the global `runs/current` pointer is retired, so there is no
+ * repo-less fallback to race):
+ *   1. OWNER SESSION — `CLAUDE_CODE_SESSION_ID` set → the run that session owns
+ *      (`findActiveByOwner`), never leaking a concurrent run owned by another session.
+ *   2. CWD REPO — no session id but a cwd → the cwd repo's per-repo current pointer
+ *      (`resolveRepo` → `readCurrentForRepo`); an underivable repo (UsageError) falls
+ *      through, any other resolution failure surfaces LOUD.
+ *   3. SCAN — neither → the newest non-terminal run in the store.
+ * A permission/IO failure at any tier propagates (guards fail closed); only genuine
+ * absence resolves to `null` (guards pass through).
  *
  * The data dir is resolved via `resolveDataDir` (the Config seam) — that is PATH
  * RESOLUTION, not policy, so it does NOT taint the hardcoded TCB denylist (Δ W):
  * tcb.ts never imports config; this module only uses config to find WHERE the
  * data dir is, which is the same thing StateManager already does.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- read-only path resolution (exists/lstat/readlink) for the hook's own decision; no writes, paths are internal derived paths under evaluation */
-import {existsSync} from 'node:fs'
-import {isEnoent} from '../shared/fs-errors.js'
-import {lstat, readlink} from 'node:fs/promises'
 import {isAbsolute, relative, sep} from 'node:path'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
-import {StateManager} from '../core/state/index.js'
-import {currentLinkPath, worktreesRoot} from '../core/state/index.js'
+import {StateManager, isTerminalRunStatus} from '../core/state/index.js'
+import {worktreesRoot} from '../core/state/index.js'
+import {resolveRepo, DefaultGitClient, type GitClient} from '../git/index.js'
+import {UsageError} from '../shared/usage-error.js'
 import {isValidId} from '../shared/ids.js'
 import {at} from '../shared/index.js'
 import {canonicalizePath} from './tcb.js'
 import {TaskPhaseEnum, type TaskPhase} from '../core/phase-machine/index.js'
 import type {RunState, TaskState} from '../types/index.js'
-
-/** Thrown when `runs/current` is a dangling symlink (corrupt run state). */
-export class BrokenRunStateError extends Error {
-    constructor(public readonly target: string) {
-        super(`runs/current symlink is broken (target: ${target}); failing closed`)
-        this.name = 'BrokenRunStateError'
-    }
-}
 
 /** The resolved active run + the data dir it lives under. */
 export interface ActiveRun {
@@ -46,84 +38,34 @@ export interface ActiveRun {
     readonly run: RunState
 }
 
-/**
- * Resolve the active run, or `null` when there is no active run.
- *
- * @throws BrokenRunStateError when `runs/current` is a dangling symlink.
- * @throws ZodError/JsonParseError when state.json is corrupt (loud — never null).
- *
- * The data dir is resolved with `opts` (tests inject `dataDir`); if no data dir
- * can be resolved at all, there is no active run → `null`.
- */
-export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRun | null> {
-    let dataDir: string
-    try {
-        dataDir = resolveDataDir(opts)
-    } catch {
-        // No resolvable data dir (bare dev shell) — no active run to guard.
-        return null
-    }
-
-    const link = currentLinkPath(dataDir)
-    // No symlink at all → no active run (pass through). lstat-based so we can tell
-    // a dangling symlink (the link entry exists) from genuine absence.
-    let isLink = false
-    try {
-        const st = await lstat(link)
-        isLink = st.isSymbolicLink() || st.isDirectory()
-    } catch (err) {
-        // Only genuine absence means "no active run". Anything else (EACCES, EIO, …)
-        // is an unreadable data dir → rethrow, which the guard pipeline maps to a
-        // fail-closed deny rather than a silent allow.
-        if (isEnoent(err)) {
-            return null
-        }
-        throw err
-    }
-    if (!isLink) {
-        return null
-    }
-
-    // A symlink that does not resolve (existsSync follows it) is DANGLING → fail
-    // closed. This is the corruption case the bash guard denies on.
-    if (!existsSync(link)) {
-        let target = '<unreadable>'
-        try {
-            target = await readlink(link)
-        } catch {
-            /* keep the placeholder */
-        }
-        throw new BrokenRunStateError(target)
-    }
-
-    // Valid symlink → parse the current run (LOUD on a corrupt state.json).
-    const manager = new StateManager({...opts, dataDir})
-    const run = await manager.readCurrent()
-    if (run === null) {
-        return null
-    }
-    return {dataDir, run}
+/** Options for {@link loadOwnerScopedRun}: the data-dir seam + the cwd/git seam. */
+export interface OwnerScopedRunOptions extends DataDirOptions {
+    /** The invoking session's cwd (CC pipes it in the hook payload) — the repo anchor. */
+    readonly cwd?: string
+    /** Test seam for repo resolution; defaults to {@link DefaultGitClient}. */
+    readonly gitClient?: GitClient
 }
 
 /**
- * Resolve the active run OWNED BY THE CURRENT SESSION, for the session-scoped Bash
- * guards (run-isolation L1.3). The owning session is read from
- * `CLAUDE_CODE_SESSION_ID` (the value `owner_session` was stamped from at run
- * create); the matching non-terminal run is found via {@link StateManager.findActiveByOwner}.
+ * Resolve the active run for the guards (run-isolation L1.3), in a strict order so
+ * the global repo-less `runs/current` pointer is never needed (Decision 61):
  *
- * Fail-SAFE: when no session id is present in the environment, fall back to the
- * global repo-less `runs/current` resolution ({@link loadActiveRun}) so behavior is
- * unchanged (and never MORE permissive) where the env signal is unavailable. A
- * session id that owns no run → `null` (pass through), so a concurrent run owned by
- * another session is never inherited.
+ *   (a) session present (`CLAUDE_CODE_SESSION_ID`) → the run THIS session owns
+ *       ({@link StateManager.findActiveByOwner}); `null` if none, so a concurrent
+ *       run owned by another session is never inherited.
+ *   (b) no session but a `cwd` → this repo's current run (the per-repo pointer,
+ *       {@link StateManager.readCurrentForRepo}). A repo with no current pointer, or
+ *       an underivable repo (not a checkout / no origin) falls through to (c).
+ *   (c) no session, no usable cwd → the newest NON-TERMINAL run via
+ *       {@link StateManager.listRuns}. NOT null: the deny arms only need "a run is
+ *       active", and returning null in a degraded env would silently re-open the
+ *       nested-shell / ship gates.
+ *
+ * Corruption stays LOUD: a dangling per-repo pointer (deleted run) is genuine
+ * absence → falls through; a corrupt state.json behind a live pointer throws via
+ * `readCurrentForRepo`, which the guard pipeline maps to a fail-closed deny.
  */
-export async function loadOwnerScopedRun(opts: DataDirOptions = {}): Promise<ActiveRun | null> {
-    const env = opts.env ?? process.env
-    const session = (env.CLAUDE_CODE_SESSION_ID ?? '').trim()
-    if (session.length === 0) {
-        // No owner signal → preserve today's global behavior (fail-safe, no regression).
-        return loadActiveRun(opts)
-    }
+export async function loadOwnerScopedRun(opts: OwnerScopedRunOptions = {}): Promise<ActiveRun | null> {
     let dataDir: string
     try {
         dataDir = resolveDataDir(opts)
@@ -131,8 +73,39 @@ export async function loadOwnerScopedRun(opts: DataDirOptions = {}): Promise<Act
         return null // bare dev shell — no run store to scope
     }
     const manager = new StateManager({...opts, dataDir})
-    const run = await manager.findActiveByOwner(session)
-    return run === null ? null : {dataDir, run}
+
+    // (a) session-scoped — the run this session owns (never a foreign run).
+    const env = opts.env ?? process.env
+    const session = (env.CLAUDE_CODE_SESSION_ID ?? '').trim()
+    if (session.length > 0) {
+        const run = await manager.findActiveByOwner(session)
+        return run === null ? null : {dataDir, run}
+    }
+
+    // (b) no session but a cwd → this repo's current run (per-repo pointer).
+    if (opts.cwd !== undefined && opts.cwd.length > 0) {
+        const gitClient = opts.gitClient ?? new DefaultGitClient()
+        try {
+            const repo = await resolveRepo({cwd: opts.cwd, gitClient})
+            const run = await manager.readCurrentForRepo(repo)
+            if (run !== null) {
+                return {dataDir, run}
+            }
+            // repo has no current pointer yet → fall through to the scan
+        } catch (err) {
+            // Only the EXPECTED negative (not a checkout / no origin) falls through;
+            // a broken git env must surface (guards fail closed), not masquerade.
+            if (!(err instanceof UsageError)) {
+                throw err
+            }
+        }
+    }
+
+    // (c) no session, no usable cwd → newest non-terminal run (never null in a
+    //     degraded env — the deny arms only need "a run is active").
+    const runs = await manager.listRuns()
+    const active = runs.find((r) => !isTerminalRunStatus(r.status))
+    return active === undefined ? null : {dataDir, run: active}
 }
 
 /** A run+task ownership reference derived from a producer write path. */

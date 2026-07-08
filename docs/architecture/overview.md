@@ -80,8 +80,9 @@ The CLI is a **reporter + orchestrator + writer**, not a runner:
   JSON envelope and write nothing. `reconcile` is read-only by default (its `--adopt` flag
   makes it a writer — see below).
 - **Writer** subcommands (`spec` store, `rescue apply`, `reconcile --adopt`, `scaffold`,
-  `configure`, `run create`/`finalize`) record a result or an operator decision into state.
-  `reconcile --adopt` applies the forward-only GitHub adoption repairs (Decision 60).
+  `configure`, `miss`, `run create`/`finalize`) record a result or an operator decision into state.
+  `reconcile --adopt` applies the forward-only GitHub adoption repairs (Decision 60); `miss`
+  appends a post-merge defect to the run's review-miss ledger (Decision 61).
 
 The six retired single-step writers (`run-task`, `advance`, `fail`,
 `record-producer`, `record-holdout`, `record-reviews`) collapsed into the orchestrator.
@@ -210,9 +211,11 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. Reused across runs: re-running a
   `reviews/` subdirs.
 - **Per-repo current pointer** — a `current/<repo-key>` symlink names the active
   run _for that repo_, so concurrent runs against different repos never collide on
-  one global pointer. It is CLI-ergonomics only: the human reporters resolve "the
-  current run" from the caller's checkout, and no hook ever reads it. A legacy
-  global `runs/current` pointer is still written for repo-less "most recent".
+  one global pointer. It is CLI-ergonomics only: the reporters resolve "the
+  current run" from the caller's checkout. This is the **only** current pointer:
+  the legacy global `runs/current` was retired (Decision 61), so nothing writes or
+  reads a repo-less "most recent"; the no-cwd consumers resolve via a 3-tier order
+  (owner session → cwd repo pointer → newest non-terminal scan).
 - **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`.
   Because the path encodes `(run-id, task-id)`, a guard derives a write's run
   ownership straight from its target path rather than from any shared pointer (see

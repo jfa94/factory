@@ -1,10 +1,10 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {mkdtemp, mkdir, rm, readFile, symlink} from 'node:fs/promises'
+import {mkdtemp, mkdir, rm, readFile, symlink, lstat} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {StateManager} from './manager.js'
-import {runStatePath, runsRoot, specDir, currentLinkPath} from './paths.js'
+import {runStatePath, runsRoot, specDir} from './paths.js'
 import {parseRunState, type SpecPointer} from './schema.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
 import {deriveMergeGateVerdict} from './derive.js'
@@ -85,10 +85,10 @@ describe('lifecycle: create / read / update / finalize', () => {
         expect(run.debug).toBe(false)
     })
 
-    it('readCurrent resolves the active run', async () => {
+    it('readCurrentForRepo resolves the active run', async () => {
         const m = mgr()
         await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec})
-        const cur = await m.readCurrent()
+        const cur = await m.readCurrentForRepo(spec.repo)
         expect(cur?.run_id).toBe('run-1')
     })
 
@@ -663,21 +663,22 @@ describe('D57: born whole — birth-write seeding + stale-pointer tolerance + st
         await m.deleteRun('run-old')
         expect(existsSync(join(runsRoot(dataDir), 'run-old'))).toBe(false)
         expect(existsSync(join(dataDir, 'current', 'acme-widgets'))).toBe(false)
-        // The unrelated repo's pointer + global pointer (naming run-keep) survive.
+        // The unrelated repo's per-repo pointer (naming run-keep) survives.
         expect(await m.readCurrentForRepo('acme/other')).toMatchObject({run_id: 'run-keep'})
     })
 
-    it('deleteRun drops the GLOBAL runs/current pointer when it names the deleted run (P4)', async () => {
-        // create() points BOTH the per-repo AND the legacy global pointer at the new
-        // run — this exercises the `basename(target) === runId` global-link branch
-        // that the sibling test above never hits (its run-old is planted via
-        // plantV2Run, which only ever touches the per-repo tree).
+    it('create() never writes the retired global runs/current pointer, and sweeps a legacy one (Decision 61)', async () => {
+        // The global `runs/current` symlink is RETIRED (Decision 61). create() must not
+        // write it, and best-effort-rms any leftover from an older engine.
+        const globalLink = join(runsRoot(dataDir), 'current')
+        await mkdir(runsRoot(dataDir), {recursive: true})
+        await symlink(join(runsRoot(dataDir), 'ghost'), globalLink) // legacy dangling leftover
+
         const m = mgr()
         await m.create({run_id: 'run-old', staging_branch: 'staging-run-old', spec})
-        expect(existsSync(currentLinkPath(dataDir))).toBe(true)
-
-        await m.deleteRun('run-old')
-        expect(existsSync(currentLinkPath(dataDir))).toBe(false)
+        // The legacy link file was swept and no new global pointer was written (lstat
+        // does not follow the link, so it sees the link file itself is gone).
+        await expect(lstat(globalLink)).rejects.toMatchObject({code: 'ENOENT'})
     })
 })
 

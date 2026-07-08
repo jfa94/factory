@@ -733,3 +733,48 @@ describe('terminal ⇔ ended_at cross-check', () => {
         expect(() => parseRunState(minimalRun({status: 'running', ended_at: NOW}))).toThrow(/non-terminal/)
     })
 })
+
+describe('misses ledger (Decision 61)', () => {
+    const miss = (over: Record<string, unknown> = {}) => ({
+        task_id: 't1',
+        at: NOW,
+        note: 'null-deref in shipped checkout total',
+        ...over,
+    })
+
+    it('legacy state (no misses field) defaults to []', () => {
+        expect(parseRunState(minimalRun()).misses).toEqual([])
+    })
+
+    it('round-trips a miss (with and without lens)', () => {
+        const run = parseRunState(
+            minimalRun({tasks: {t1: minimalTask()}, misses: [miss(), miss({lens: 'quality-reviewer'})]})
+        )
+        expect(run.misses).toHaveLength(2)
+        expect(at(run.misses, 0).note).toMatch(/null-deref/)
+        expect(at(run.misses, 1).lens).toBe('quality-reviewer')
+        expect(parseRunState(JSON.parse(JSON.stringify(run))).misses).toEqual(run.misses)
+    })
+
+    it('rejects a miss with no note (a description-less miss is noise)', () => {
+        expect(() => parseRunState(minimalRun({tasks: {t1: minimalTask()}, misses: [miss({note: ''})]}))).toThrow()
+    })
+
+    it('rejects a dangling miss whose task_id is not in run.tasks (F3)', () => {
+        expect(() =>
+            parseRunState(minimalRun({tasks: {t1: minimalTask()}, misses: [miss({task_id: 'ghost'})]}))
+        ).toThrow(/miss-ledger references task 'ghost'/)
+    })
+
+    it('appends on a TERMINAL run (misses are recorded after finalize)', () => {
+        const run = parseRunState(
+            minimalRun({
+                status: 'completed',
+                ended_at: NOW,
+                tasks: {t1: minimalTask({status: 'done'})},
+                misses: [miss()],
+            })
+        )
+        expect(run.misses).toHaveLength(1)
+    })
+})

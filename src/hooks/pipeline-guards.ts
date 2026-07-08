@@ -21,7 +21,7 @@
  *       agent-initiated attempt, which the boundary simply refuses — there is no
  *       merge gate to re-derive here.
  *
- * A dangling runs/current symlink fails CLOSED (deny) — corruption is never
+ * A corrupt run state (or broken git env) fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
  */
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
@@ -33,8 +33,8 @@ import {
     resolveActiveTask,
     isTestWriterPhase,
     runTaskForPath,
-    BrokenRunStateError,
     type ActiveRun,
+    type OwnerScopedRunOptions,
 } from './hook-context.js'
 import {isNestedShellOrHookBypass} from './shell-bypass.js'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
@@ -57,7 +57,7 @@ import {
 export interface PipelineGuardsDeps extends DataDirOptions {
     cwd?: string
     /** Override the active-run loader for the Bash arms (tests). */
-    loadRun?: (opts: DataDirOptions) => Promise<ActiveRun | null>
+    loadRun?: (opts: OwnerScopedRunOptions) => Promise<ActiveRun | null>
     /**
      * Override the per-run-id loader for the path-anchored write-scope arm (tests).
      * Defaults to `StateManager.read` under the resolved data dir; THROWS (ENOENT /
@@ -100,8 +100,8 @@ function isGhPrMerge(cmd: string): boolean {
  * when nothing in scope warrants a deny (no worktree match, or not the RED phase).
  *
  * Fail-closed: a target inside a worktree whose run state is missing/corrupt denies
- * (mirrors the {@link BrokenRunStateError} contract — corruption is never silently
- * allowed). A target outside every worktree is not a producer write → no scope.
+ * (corruption is never silently allowed). A target outside every worktree is not a
+ * producer write → no scope.
  */
 async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDeps): Promise<HookDecision | null> {
     const targets = filePathsOf(input)
@@ -151,9 +151,9 @@ async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDep
 
 /**
  * Decide the pipeline-invariant verdict for a hook input. The write-scope arm is
- * path-anchored (per-run read); the Bash arms resolve the active run. Throwing
- * loaders (BrokenRunStateError) are mapped to a fail-closed deny by the caller —
- * but this function rethrows so the run-level loud failure is visible;
+ * path-anchored (per-run read); the Bash arms resolve the active run. A throwing
+ * loader (corrupt state.json, broken git env) is mapped to a fail-closed deny by
+ * the caller — this function rethrows so the loud failure is visible;
  * {@link runPipelineGuards} catches it.
  */
 export async function decidePipelineGuards(
@@ -174,16 +174,18 @@ export async function decidePipelineGuards(
         } // deny; null = no worktree scope, fall through
     }
 
-    // (b)+(c) Bash arms still resolve the run owning THIS session (global pointer for
-    // now — re-scoped to owner-session in L1.3). No Bash command → nothing to gate.
+    // (b)+(c) Bash arms resolve the run owning THIS session. No Bash command → nothing to gate.
     if (cmd.length === 0) {
         return allow()
     }
 
-    // Resolve the run owned by THIS session (env-scoped); fail-safe to the global
-    // pointer when the session id is unavailable (see loadOwnerScopedRun).
+    // Resolve the run owned by THIS session (env-scoped); when the session id is
+    // unavailable, fall back to the invoking cwd's per-repo current run, else the
+    // newest non-terminal run (see loadOwnerScopedRun's 3-tier order). The cwd comes
+    // from deps or the hook payload CC pipes in.
     const loadRun = deps.loadRun ?? loadOwnerScopedRun
-    const active = await loadRun(deps)
+    const cwd = deps.cwd ?? input?.cwd
+    const active = await loadRun({...deps, ...(cwd !== undefined ? {cwd} : {})})
     if (active === null) {
         return allow()
     } // no run owned by this session → pass through
@@ -216,8 +218,8 @@ export async function decidePipelineGuards(
 }
 
 /**
- * Run the pipeline-invariant guard end-to-end. A broken runs/current symlink or
- * malformed stdin fails CLOSED (deny). Injectable `readRaw` for tests.
+ * Run the pipeline-invariant guard end-to-end. A corrupt run state or malformed
+ * stdin fails CLOSED (deny). Injectable `readRaw` for tests.
  */
 export async function runPipelineGuards(
     _argv: string[] = [],
@@ -236,12 +238,9 @@ export async function runPipelineGuards(
     try {
         decision = await decidePipelineGuards(input, deps)
     } catch (err) {
-        if (err instanceof BrokenRunStateError) {
-            decision = deny('broken_pipeline_state', err.message)
-        } else {
-            // Corrupt state.json or any other loud failure → fail closed.
-            decision = deny('pipeline_guard_error', (err as Error).message)
-        }
+        // Corrupt state.json behind a live pointer, a broken git env, or any other
+        // loud failure → fail closed (deny).
+        decision = deny('pipeline_guard_error', (err as Error).message)
         emitPermissionDecision(decision)
         return EXIT.ERROR
     }

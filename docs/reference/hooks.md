@@ -11,15 +11,15 @@ exits `2`.
 
 ## The guards
 
-| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                                                                                                    |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                                                                                          |
-| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)).                                                                      |
-| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                         |
-| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                   |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                            |
-| `stop-gate`         | Stop                                        | Pass-through + resumability hint. NEVER finalizes and performs NO state mutation; an owned, all-terminal run is left `running` (with a log hint) so the next `factory resume` routes it through the real `finalizeRun`. Blocks ONLY on an inaccessible data directory. Never blocks a session end with pending work — the run stays resumable via `factory resume`. |
+| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                                                                                                                                                           |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                                                                                                                                                 |
+| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)).                                                                                                                             |
+| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                                                                                |
+| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                                                                          |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                                                                                   |
+| `stop-gate`         | Stop                                        | Pass-through + resumability hint. NEVER finalizes and performs NO state mutation; an owned, all-terminal run is left `running` (with a log hint) so the next `factory resume` routes it through the real `finalizeRun`. Blocks ONLY on an inaccessible data directory. Never blocks a session end with pending work — the run stays resumable via `factory resume`.                                                        |
 | `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`. A mid-run **compaction** can drop the runner's protocol from conversation context; this emits an `additionalContext` reminder so a compacted session never loses the pointer. Reads no state (the reminder is static). **Registered but not yet wired** — see [SessionStart wiring is pending](#sessionstart-wiring-is-pending). |
 
 ## `hooks.json` wiring
@@ -77,19 +77,23 @@ scope into it.
 
 ## Run ownership
 
-No hook reads the shared mutable pointer (`runs/current`). Each guard **derives
-the run it belongs to from the signal it already holds** (Decision 30), so runs
-across different repos run concurrently without cross-contamination:
+No hook reads a shared mutable global pointer — none exists (the global
+`runs/current` was retired, [Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)).
+Each guard **derives the run it belongs to from the signal it already holds**
+(Decision 30), so runs across different repos run concurrently without
+cross-contamination:
 
 - **Write-scope arm** (`pipeline-guards`, `Edit\|Write\|MultiEdit`): derives
   `{run_id, task_id}` from the **absolute target path**. A producer writes into
   `<dataDir>/worktrees/<run_id>/<task_id>/…`, so the path encodes both ids. A
   target under no worktree is not a producer write → pass through; a target under
   a worktree whose run/task state is missing or corrupt → deny (fail closed).
-- **Bash arms** (nested-shell, ship): resolve the live run whose `owner_session`
-  equals `CLAUDE_CODE_SESSION_ID`. No owning run → pass through; env id absent →
-  retain prior behavior (these arms are lower-stakes — the nested-shell arm is a
-  rail, the ship arm is dormant in production).
+- **Bash arms** (nested-shell, ship): resolve the active run via
+  [`loadOwnerScopedRun`](#active-run-resolution) — the owning session's run when
+  `CLAUDE_CODE_SESSION_ID` is set, else the cwd repo's current run, else the
+  newest non-terminal run. No active run → pass through (these arms are
+  lower-stakes — the nested-shell arm is a rail, the ship arm is dormant in
+  production).
 - **`stop-gate`**: resolves the run owned by the **stopping session**
   (`findActiveByOwner`) rather than the global pointer, so a clobber can't make it
   attribute the hint to the wrong run. When the stopping session owns no single active
@@ -114,6 +118,30 @@ The write-scope arm is a **rail**, not the boundary: the authoritative TDD
 enforcement is the deterministic commit-order gate on the task branch
 (`src/verifier/deterministic/strategies/tdd.ts`), so a path-anchor miss (e.g. a
 producer write issued via `Bash`) does not weaken enforcement.
+
+### Active run resolution
+
+The Bash arms (and the statusline tick) resolve "which run is active" via
+`loadOwnerScopedRun` (`src/hooks/hook-context.ts`) in a strict 3-tier order. The
+global repo-less `runs/current` pointer is **retired**
+([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)),
+so there is no last-writer-wins fallback to race:
+
+1. **Owner session** — `CLAUDE_CODE_SESSION_ID` set → the run THAT session owns
+   (`findActiveByOwner`); `null` if none, so a concurrent run owned by another
+   session is never inherited.
+2. **CWD repo** — no session id but a cwd → the cwd repo's per-repo current
+   pointer (`resolveRepo` → `readCurrentForRepo`). An underivable repo (not a
+   checkout / no `origin`, a `UsageError`) falls through; any other resolution
+   failure surfaces LOUD.
+3. **Scan** — neither → the newest non-terminal run (`listRuns`). Deliberately
+   broader than the old global pointer: the deny arms only need "a run is
+   active", and returning `null` in a degraded env would silently re-open the
+   ship / nested-shell gates.
+
+Corruption stays loud at every tier — a corrupt `state.json` behind a live
+pointer throws (the guard pipeline maps it to a fail-closed deny); only genuine
+absence resolves to `null`.
 
 ## write-protection (TCB)
 

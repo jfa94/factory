@@ -38,4 +38,5 @@ export {parseGitInvocation} from './git-args.js'
 export type {GitInvocation} from './git-args.js'
 
 // Active-run context resolution.
-export {loadActiveRun, resolveActiveTask, isTestWriterPhase, BrokenRunStateError} from './hook-context.js'
+export {loadOwnerScopedRun, resolveActiveTask, isTestWriterPhase} from './hook-context.js'
+export type {ActiveRun, OwnerScopedRunOptions} from './hook-context.js'

@@ -1,95 +1,33 @@
 /**
- * WS9 — active-run resolution tests. The three runs/current cases the bash hooks
- * got right are preserved: NO symlink → null (pass through), DANGLING symlink →
- * BrokenRunStateError (fail closed), VALID symlink → parsed run. Plus the pure
- * task/phase resolution (persisted phase cursor preferred; status derivation is
- * the legacy fallback). Uses a real on-disk run store so the symlink walk is
- * genuinely exercised.
+ * WS9 — active-run resolution tests for {@link loadOwnerScopedRun}, the 3-tier
+ * resolver (Decision 61, global `runs/current` retired): (1) owner session id → the run that
+ * session owns; (2) no session but a cwd → the cwd's per-repo current pointer;
+ * (3) neither → scan for the newest non-terminal run. Plus the pure task/phase
+ * resolution (persisted phase cursor preferred; status derivation is the legacy
+ * fallback). Uses a real on-disk run store so resolution is genuinely exercised.
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtempSync, rmSync, symlinkSync, mkdirSync, chmodSync} from 'node:fs'
+import {mkdtempSync, rmSync, chmodSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {StateManager} from '../core/state/index.js'
-import {currentLinkPath} from '../core/state/index.js'
-import {
-    loadActiveRun,
-    loadOwnerScopedRun,
-    resolveActiveTask,
-    isTestWriterPhase,
-    runTaskForPath,
-    BrokenRunStateError,
-} from './hook-context.js'
+import {FakeGitClient} from '../git/index.js'
+import {loadOwnerScopedRun, resolveActiveTask, isTestWriterPhase, runTaskForPath} from './hook-context.js'
 import {worktreesRoot} from '../core/state/index.js'
-import {nonNull} from '../shared/index.js'
 import type {RunState, TaskState} from '../types/index.js'
 
 const SPEC = {repo: 'o/n', spec_id: '1-x', issue_number: 1} as const
 
-describe('loadActiveRun — runs/current resolution', () => {
-    let dataDir: string
-    const origTaskId = process.env.FACTORY_TASK_ID
+/** A FakeGitClient whose origin resolves to `slug` (or no origin when slug is null). */
+function git(slug: string | null): FakeGitClient {
+    const g = new FakeGitClient()
+    if (slug !== null) {
+        g.setRemoteUrl('origin', `git@github.com:${slug}.git`)
+    }
+    return g
+}
 
-    beforeEach(() => {
-        dataDir = mkdtempSync(join(tmpdir(), 'hc-'))
-        delete process.env.FACTORY_TASK_ID
-    })
-    afterEach(() => {
-        rmSync(dataDir, {recursive: true, force: true})
-        if (origTaskId === undefined) {
-            delete process.env.FACTORY_TASK_ID
-        } else {
-            process.env.FACTORY_TASK_ID = origTaskId
-        }
-    })
-
-    it('NO symlink → null (no active run; guards pass through)', async () => {
-        const active = await loadActiveRun({dataDir})
-        expect(active).toBeNull()
-    })
-
-    it('VALID symlink → parsed ActiveRun', async () => {
-        const mgr = new StateManager({dataDir})
-        await mgr.create({run_id: 'run-20260101-000000', staging_branch: 'staging-run-20260101-000000', spec: SPEC})
-        const active = await loadActiveRun({dataDir})
-        expect(active).not.toBeNull()
-        expect(nonNull(active).dataDir).toBe(dataDir)
-        expect(nonNull(active).run.run_id).toBe('run-20260101-000000')
-    })
-
-    it('DANGLING symlink → BrokenRunStateError (fail closed)', async () => {
-        // Point runs/current at a run dir that does not exist.
-        mkdirSync(join(dataDir, 'runs'), {recursive: true})
-        symlinkSync(join(dataDir, 'runs', 'ghost'), currentLinkPath(dataDir))
-        await expect(loadActiveRun({dataDir})).rejects.toBeInstanceOf(BrokenRunStateError)
-    })
-
-    it('UNREADABLE runs dir (EACCES) → rethrows (guards fail closed), never a silent null', async () => {
-        // A permission failure is NOT "no active run": swallowing it would let every
-        // guard silently allow while a run may be active. Only ENOENT means absence.
-        mkdirSync(join(dataDir, 'runs'), {recursive: true})
-        chmodSync(join(dataDir, 'runs'), 0o000)
-        try {
-            await expect(loadActiveRun({dataDir})).rejects.toMatchObject({code: 'EACCES'})
-        } finally {
-            chmodSync(join(dataDir, 'runs'), 0o755)
-        }
-    })
-
-    it('unresolvable data dir → null (bare dev shell, no active run)', async () => {
-        // resolveDataDir throws when nothing identifies a data dir; loadActiveRun
-        // swallows THAT (path resolution) into null — distinct from a dangling link.
-        // HERMETIC: pass `env: {}` so resolution does NOT read the ambient
-        // CLAUDE_PLUGIN_DATA. Without this, a foreign CLAUDE_PLUGIN_DATA in the dev
-        // shell is canonicalized to the real factory data dir, and if THAT has an
-        // active `runs/current` (e.g. a live run on this machine) the call resolves
-        // to it instead of throwing — the test would then read shared external state.
-        const active = await loadActiveRun({dataDir: '', env: {}})
-        expect(active).toBeNull()
-    })
-})
-
-describe('loadOwnerScopedRun — session-scoped active run (run-isolation L1.3)', () => {
+describe('loadOwnerScopedRun — 3-tier active-run resolution (Decision 61)', () => {
     let dataDir: string
     beforeEach(() => {
         dataDir = mkdtempSync(join(tmpdir(), 'hc-owner-'))
@@ -98,6 +36,7 @@ describe('loadOwnerScopedRun — session-scoped active run (run-isolation L1.3)'
         rmSync(dataDir, {recursive: true, force: true})
     })
 
+    // --- tier 1: owner session id ---
     it('with CLAUDE_CODE_SESSION_ID set → resolves the run THAT session owns', async () => {
         const mgr = new StateManager({dataDir})
         await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-A'})
@@ -106,21 +45,69 @@ describe('loadOwnerScopedRun — session-scoped active run (run-isolation L1.3)'
         expect(active?.dataDir).toBe(dataDir)
     })
 
-    it('with a session id that owns NO run → null, even though runs/current points elsewhere', async () => {
-        // A concurrent run owned by another session is the `current` target; an
-        // unrelated session must NOT inherit it (the cross-session leak this fixes).
+    it('with a session id that owns NO run → null, even though another session has a live run', async () => {
+        // A concurrent run owned by another session must NOT leak to an unrelated
+        // session — tier 1 does not fall through to the cwd/scan tiers.
         const mgr = new StateManager({dataDir})
         await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-B'})
         const active = await loadOwnerScopedRun({dataDir, env: {CLAUDE_CODE_SESSION_ID: 'sess-A'}})
         expect(active).toBeNull()
     })
 
-    it("with NO session id in env → falls back to today's global runs/current behavior", async () => {
+    // --- tier 2: no session, cwd → per-repo current pointer ---
+    it("with NO session but a cwd → resolves the cwd repo's current run, never another repo's", async () => {
+        const mgr = new StateManager({dataDir})
+        // Older run in o/n; newer run in other/repo. The scan tier would pick the newer;
+        // the cwd tier must pick o/n's per-repo pointer instead.
+        await mgr.create({run_id: 'run-20260101-000000', staging_branch: 'staging-a', spec: SPEC})
+        await mgr.create({
+            run_id: 'run-20260102-000000',
+            staging_branch: 'staging-b',
+            spec: {repo: 'other/repo', spec_id: '2-y', issue_number: 2},
+        })
+        const active = await loadOwnerScopedRun({dataDir, env: {}, cwd: '/x', gitClient: git('o/n')})
+        expect(active?.run.run_id).toBe('run-20260101-000000')
+    })
+
+    it('with a cwd whose repo is undeterminable (no origin) → falls through to the scan tier', async () => {
+        const mgr = new StateManager({dataDir})
+        await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC})
+        // resolveRepo throws UsageError → swallowed → tier 3 scan still finds the run.
+        const active = await loadOwnerScopedRun({dataDir, env: {}, cwd: '/x', gitClient: git(null)})
+        expect(active?.run.run_id).toBe('run-1')
+    })
+
+    // --- tier 3: no session, no cwd → newest non-terminal scan ---
+    it('with neither a session nor a cwd → scans for the newest non-terminal run', async () => {
         const mgr = new StateManager({dataDir})
         await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC, owner_session: 'sess-B'})
-        // env carries no CLAUDE_CODE_SESSION_ID → fail-safe to the global pointer.
         const active = await loadOwnerScopedRun({dataDir, env: {}})
         expect(active?.run.run_id).toBe('run-1')
+    })
+
+    it('no run at all → null (guards pass through)', async () => {
+        const active = await loadOwnerScopedRun({dataDir, env: {}})
+        expect(active).toBeNull()
+    })
+
+    it('UNREADABLE runs dir (EACCES) on the scan tier → rethrows (guards fail closed), never a silent null', async () => {
+        // A permission failure is NOT "no active run": swallowing it would let every
+        // guard silently allow while a run may be active. Only ENOENT means absence.
+        const mgr = new StateManager({dataDir})
+        await mgr.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: SPEC})
+        chmodSync(join(dataDir, 'runs'), 0o000)
+        try {
+            await expect(loadOwnerScopedRun({dataDir, env: {}})).rejects.toMatchObject({code: 'EACCES'})
+        } finally {
+            chmodSync(join(dataDir, 'runs'), 0o755)
+        }
+    })
+
+    it('unresolvable data dir → null (bare dev shell, no active run)', async () => {
+        // resolveDataDir throws when nothing identifies a data dir; loadOwnerScopedRun
+        // swallows THAT (path resolution) into null.
+        const active = await loadOwnerScopedRun({dataDir: '', env: {}})
+        expect(active).toBeNull()
     })
 })
 
@@ -150,6 +137,7 @@ function run(tasks: Record<string, TaskState>): RunState {
         ship_mode: 'live',
         ignore_quota: false,
         human_touches: [],
+        misses: [],
         e2e: false,
         debug: false,
         started_at: 't',

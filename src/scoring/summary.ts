@@ -67,6 +67,10 @@ export interface RunSummary {
      * lights-out run (launch only) scores exactly 1.0. Null when touches is 0.
      */
     touch_metric: number | null
+    /** 7a — the review-miss ledger count (`run.misses`). */
+    misses: number
+    /** 7a — misses bucketed by the lens that should have caught them (`'none'` = un-lensed). */
+    misses_by_lens: Record<string, number>
 }
 
 /** Options for {@link buildRunSummary}. */
@@ -105,6 +109,16 @@ export function touchMetricOf(run: {status: string; human_touches: readonly unkn
         return null
     }
     return (run.status === 'completed' ? 1 : 0) / touches
+}
+
+/** 7a — bucket a run's misses by the lens that should have caught them (`'none'` = un-lensed). Derived, never stored. */
+export function missesByLensOf(run: {misses: readonly {lens?: string | undefined}[]}): Record<string, number> {
+    const byLens: Record<string, number> = {}
+    for (const e of run.misses) {
+        const key = e.lens ?? 'none'
+        byLens[key] = (byLens[key] ?? 0) + 1
+    }
+    return byLens
 }
 
 export function buildRunSummary(
@@ -157,6 +171,8 @@ export function buildRunSummary(
         tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0,
         touches,
         touch_metric: touchMetric,
+        misses: run.misses.length,
+        misses_by_lens: missesByLensOf(run),
     }
 }
 
@@ -212,6 +228,13 @@ export function renderRunSummaryMarkdown(summary: RunSummary): string {
     )
     const metric = summary.touch_metric === null ? 'n/a' : summary.touch_metric.toFixed(2)
     out.push(`**Human touches:** ${summary.touches} · touch metric ${metric}`)
+    // 7a — misses line, omitted when 0 (matches the failures line above).
+    if (summary.misses > 0) {
+        const byLens = Object.entries(summary.misses_by_lens)
+            .map(([lens, n]) => `${lens} ×${n}`)
+            .join(' · ')
+        out.push(`**Misses:** ${summary.misses} (${byLens})`)
+    }
     if (summary.tasks_without_cross_vendor > 0) {
         out.push(
             `**Review independence:** ${summary.tasks_without_cross_vendor} task(s) reviewed ` +

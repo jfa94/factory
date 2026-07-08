@@ -1763,6 +1763,22 @@ function exec(command, args = [], opts = {}) {
     }
   });
 }
+var ExecError = class extends Error {
+  result;
+  command;
+  args;
+  constructor(command, args, result) {
+    const where = [command, ...args].join(" ");
+    super(
+      `command failed (code=${result.code ?? "null"}` + (result.signal ? `, signal=${result.signal}` : "") + `): ${where}
+${result.stderr.trim()}`
+    );
+    this.name = "ExecError";
+    this.command = command;
+    this.args = args;
+    this.result = result;
+  }
+};
 
 // src/shared/atomic-write.ts
 import { mkdir, open, rename, unlink } from "node:fs/promises";
@@ -7794,6 +7810,21 @@ var E2eAssessmentSchema = openPhaseMarker(
 );
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
+var MissSchema = external_exports.object({
+  /** The task whose shipped code the miss traces to (∈ run.tasks — refined below). */
+  task_id: external_exports.string().min(1),
+  /** ISO-8601 record time, stamped by the CLI. */
+  at: external_exports.string(),
+  /** REQUIRED human description — a miss without one is noise. */
+  note: external_exports.string().min(1),
+  /**
+   * Human judgment: which reviewer lens SHOULD have caught it (a panel role), or
+   * 'none' when no lens could have. Stays a bare string here — a frozen state schema
+   * must not import the verifier's panel roster; the `factory miss` CLI validates
+   * it against `panelRolesFor(true) ∪ {'none'}`.
+   */
+  lens: external_exports.string().min(1).optional()
+});
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
   schema_version: external_exports.literal(3).default(3),
@@ -7865,6 +7896,15 @@ var RunStateSchema = external_exports.object({
       at: external_exports.string()
     })
   ).default([]),
+  /**
+   * review-miss ledger (Decision 61): one entry per human-reported defect in
+   * shipped factory-produced code, post-merge. The THIRD sanctioned stored-EVENT
+   * exception to derive-don't-store (with `self_heal` + `human_touches`) — "a human
+   * found this in shipped code" is history nothing can re-derive. Appended by
+   * `factory miss`; `factory score` derives the miss metrics from it. Default []:
+   * legacy runs (no field) carry no misses.
+   */
+  misses: external_exports.array(MissSchema).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -8008,6 +8048,15 @@ function refineRunCrossFields(run, ctx) {
       });
     }
   }
+  run.misses.forEach((e, i) => {
+    if (run.tasks[e.task_id] === void 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["misses", i, "task_id"],
+        message: `miss-ledger references task '${e.task_id}' which is not in run '${run.run_id}'`
+      });
+    }
+  });
 }
 var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
 function parseRunState(raw) {
@@ -8049,9 +8098,6 @@ function runDir(dataDir, runId) {
 }
 function runStatePath(dataDir, runId) {
   return join3(runDir(dataDir, runId), STATE_FILE);
-}
-function currentLinkPath(dataDir) {
-  return join3(runsRoot(dataDir), CURRENT_LINK);
 }
 function currentRepoRoot(dataDir) {
   return join3(dataDir, CURRENT_DIR);
@@ -8205,18 +8251,6 @@ var StateManager = class _StateManager {
     return existsSync4(this.statePath(runId));
   }
   /**
-   * Read the run currently pointed at by `runs/current`, or null if there is no
-   * current run. `current` is a directory symlink; we read `state.json` *through*
-   * it (the OS follows the symlink during the path walk), so no separate readlink
-   * is needed. LOUD on a corrupt/invalid current state.json — only genuine
-   * ABSENCE (missing/dangling symlink → ENOENT) maps to null, matching read()'s
-   * loud-on-corruption contract. Swallowing a ZodError/JSON error here would make
-   * a corrupt active run indistinguishable from "no current run".
-   */
-  async readCurrent() {
-    return this.readThroughLink(currentLinkPath(this.dataDir));
-  }
-  /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
    * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
    * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
@@ -8353,7 +8387,7 @@ var StateManager = class _StateManager {
    */
   async deleteRun(runId) {
     await rm(runDir(this.dataDir, runId), { recursive: true, force: true });
-    const links = [currentLinkPath(this.dataDir)];
+    const links = [];
     try {
       const repoLinks = await readdir(currentRepoRoot(this.dataDir), { withFileTypes: true });
       links.push(...repoLinks.map((e) => join4(currentRepoRoot(this.dataDir), e.name)));
@@ -8527,7 +8561,8 @@ var StateManager = class _StateManager {
       );
     }
     await this.repointSymlink(currentRepoLinkPath(this.dataDir, repo), join4("..", RUNS_DIR, state.run_id));
-    await this.repointSymlink(currentLinkPath(this.dataDir), join4(state.run_id));
+    await rm(join4(runsRoot(this.dataDir), CURRENT_LINK), { force: true }).catch(() => {
+    });
   }
   /**
    * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
@@ -8615,58 +8650,300 @@ var SpawnRequestSchema = external_exports.object({
 });
 
 // src/hooks/hook-context.ts
-import { existsSync as existsSync5 } from "node:fs";
-import { lstat, readlink as readlink2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
-var BrokenRunStateError = class extends Error {
-  constructor(target) {
-    super(`runs/current symlink is broken (target: ${target}); failing closed`);
-    this.target = target;
-    this.name = "BrokenRunStateError";
+
+// src/git/exec-tools.ts
+function makeRunner(command) {
+  return (args, opts) => exec(command, args, opts);
+}
+var defaultGitRunner = makeRunner("git");
+var defaultGhRunner = makeRunner("gh");
+async function runOrThrow(command, runner, args, opts) {
+  const result = await runner(args, opts);
+  if (result.code !== 0) {
+    throw new ExecError(command, args, result);
   }
-};
-async function loadActiveRun(opts = {}) {
-  let dataDir;
-  try {
-    dataDir = resolveDataDir(opts);
-  } catch {
-    return null;
+  return result;
+}
+
+// src/git/git-client.ts
+var log8 = createLogger("git");
+var DefaultGitClient = class {
+  runner;
+  constructor(runner = defaultGitRunner) {
+    this.runner = runner;
   }
-  const link = currentLinkPath(dataDir);
-  let isLink = false;
-  try {
-    const st = await lstat(link);
-    isLink = st.isSymbolicLink() || st.isDirectory();
-  } catch (err) {
-    if (isEnoent(err)) {
+  toExecOpts(opts) {
+    return opts?.cwd != null && opts.cwd.length > 0 ? { cwd: opts.cwd } : {};
+  }
+  exec(args, opts) {
+    return this.runner(args, this.toExecOpts(opts));
+  }
+  execOrThrow(args, opts) {
+    return runOrThrow("git", this.runner, args, this.toExecOpts(opts));
+  }
+  async fetch(remote, ref, opts) {
+    await this.execOrThrow(["fetch", remote, ref], opts);
+  }
+  async revParse(ref, opts) {
+    const r = await this.execOrThrow(["rev-parse", ref], opts);
+    return r.stdout.trim();
+  }
+  async branchExists(ref, opts) {
+    const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+    const r = await this.exec(["show-ref", "--verify", "--quiet", fullRef], opts);
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
+    throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async refExists(ref, opts) {
+    const r = await this.exec(["rev-parse", "--verify", "--quiet", ref], opts);
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
+    throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async isTracked(relPath, opts) {
+    const r = await this.exec(["ls-files", "--error-unmatch", "--", relPath], opts);
+    if (r.code === 0) {
+      return true;
+    }
+    if (r.code === 1) {
+      return false;
+    }
+    throw new Error(`git ls-files failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async commitsAhead(base, branch, opts) {
+    const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
+    const n = Number.parseInt(r.stdout.trim(), 10);
+    if (!Number.isFinite(n)) {
+      throw new Error(`git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`);
+    }
+    return n;
+  }
+  async checkoutB(branch, startPoint, opts) {
+    log8.debug(`checkout -B ${branch} ${startPoint}`);
+    await this.execOrThrow(["checkout", "-B", branch, startPoint], opts);
+  }
+  async currentBranch(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
+    return r.stdout.trim();
+  }
+  async showToplevel(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--show-toplevel"], opts);
+    return r.stdout.trim();
+  }
+  async remoteUrl(remote, opts) {
+    const r = await this.exec(["remote", "get-url", remote], opts);
+    if (r.code !== 0) {
       return null;
     }
-    throw err;
+    const url = r.stdout.trim();
+    return url.length > 0 ? url : null;
   }
-  if (!isLink) {
-    return null;
-  }
-  if (!existsSync5(link)) {
-    let target = "<unreadable>";
-    try {
-      target = await readlink2(link);
-    } catch {
+  async lsRemoteHeads(remote, branch, opts) {
+    const r = await this.execOrThrow(["ls-remote", "--heads", remote, branch], opts);
+    const line = r.stdout.trim();
+    if (line.length === 0) {
+      return null;
     }
-    throw new BrokenRunStateError(target);
+    const sha = line.split(/\s+/)[0];
+    return sha != null && sha.length > 0 ? sha : null;
   }
-  const manager = new StateManager({ ...opts, dataDir });
-  const run = await manager.readCurrent();
-  if (run === null) {
+  async mergeBase(a, b, opts) {
+    const r = await this.execOrThrow(["merge-base", a, b], opts);
+    return r.stdout.trim();
+  }
+  async worktreeAdd(args, opts) {
+    await this.execOrThrow(["worktree", "add", ...args], opts);
+  }
+  async worktreeExists(path, opts) {
+    const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path}`);
+  }
+  async worktreeRemove(args, opts) {
+    const r = await this.exec(["worktree", "remove", ...args], opts);
+    return r.code;
+  }
+  async push(remote, branch, opts) {
+    const args = ["push"];
+    if (opts?.setUpstream === true) {
+      args.push("-u");
+    }
+    args.push(remote, branch);
+    await this.execOrThrow(args, opts);
+  }
+  async mergeFfOrCommit(branch, ref, opts) {
+    log8.debug(`merge --no-edit ${ref} into ${branch}`);
+    await this.execOrThrow(["checkout", branch], opts);
+    await this.execOrThrow(["merge", "--no-edit", ref], opts);
+  }
+  async tryMergeNoForce(branch, ref, opts) {
+    log8.debug(`tryMerge --no-edit ${ref} into ${branch}`);
+    await this.execOrThrow(["checkout", branch], opts);
+    const r = await this.exec(["merge", "--no-edit", ref], opts);
+    if (r.code === 0) {
+      return { merged: true };
+    }
+    const conflict = (r.stderr.trim().length > 0 ? r.stderr : r.stdout).trim() || `git merge exited ${r.code ?? "null"}`;
+    await this.exec(["merge", "--abort"], opts);
+    return { merged: false, conflict };
+  }
+  async resetHardClean(ref, opts) {
+    log8.debug(`reset --hard ${ref} && clean -fd`);
+    await this.execOrThrow(["reset", "--hard", ref], opts);
+    await this.execOrThrow(["clean", "-fd"], opts);
+  }
+  async diffNames(base, ref, opts) {
+    const r = await this.execOrThrow(["diff", "--name-only", `${base}...${ref}`], opts);
+    return r.stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  }
+};
+
+// src/git/repo.ts
+function parseRemoteUrl(url) {
+  const trimmed = url.trim();
+  if (trimmed.length === 0) {
     return null;
   }
-  return { dataDir, run };
-}
-async function loadOwnerScopedRun(opts = {}) {
-  const env = opts.env ?? process.env;
-  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
-  if (session.length === 0) {
-    return loadActiveRun(opts);
+  let path;
+  const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
+  if (scp && !trimmed.includes("://")) {
+    path = scp[1];
+  } else {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
+    if (withScheme) {
+      const afterScheme = nonNull(withScheme[1]);
+      const firstSlash = afterScheme.indexOf("/");
+      if (firstSlash >= 0) {
+        path = afterScheme.slice(firstSlash + 1);
+      }
+    }
   }
+  if (path === void 0) {
+    return null;
+  }
+  let p = path.replace(/\/+$/, "");
+  p = p.replace(/\.git$/i, "");
+  const segments = p.split("/").filter((s) => s.length > 0);
+  if (segments.length < 2) {
+    return null;
+  }
+  const name = at(segments, segments.length - 1);
+  const owner = at(segments, segments.length - 2);
+  if (owner.length === 0 || name.length === 0) {
+    return null;
+  }
+  return `${owner}/${name}`;
+}
+var REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+function isValidRepoSlug(slug) {
+  const parts = slug.split("/");
+  return parts.length === 2 && parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== "." && seg !== "..");
+}
+function validateRepoSlug(slug) {
+  if (!isValidRepoSlug(slug)) {
+    throw new UsageError(
+      `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not '.'/'..' (no slashes, spaces, or other characters), got '${slug}'`
+    );
+  }
+  return slug;
+}
+async function resolveRepo(args) {
+  const remote = args.remote ?? "origin";
+  const explicit = typeof args.explicit === "string" && args.explicit.length > 0 ? validateRepoSlug(args.explicit) : void 0;
+  const derived = await deriveRepo(args.gitClient, remote, args.cwd);
+  if (explicit !== void 0) {
+    if (derived === null) {
+      return explicit;
+    }
+    if (explicit.toLowerCase() === derived.toLowerCase()) {
+      return derived;
+    }
+    throw new UsageError(
+      `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); omit --repo to use the remote, or fix the value`
+    );
+  }
+  if (derived === null) {
+    throw new UsageError(
+      `--repo is required: could not derive it from the '${remote}' remote (run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`
+    );
+  }
+  return validateRepoSlug(derived);
+}
+async function deriveRepo(gitClient, remote, cwd) {
+  const url = await gitClient.remoteUrl(remote, { cwd });
+  if (url === null) {
+    return null;
+  }
+  return parseRemoteUrl(url);
+}
+
+// src/git/gh-client.ts
+var log9 = createLogger("gh");
+var PullRequestSchema = external_exports.object({
+  number: external_exports.number().int(),
+  headRefName: external_exports.string(),
+  baseRefName: external_exports.string(),
+  state: external_exports.enum(["OPEN", "CLOSED", "MERGED"]),
+  mergeable: external_exports.string().optional(),
+  mergeStateStatus: external_exports.string().optional(),
+  mergeCommit: external_exports.object({ oid: external_exports.string() }).nullish(),
+  url: external_exports.string().optional()
+});
+var REQUIRED_VIEW_FIELDS = Object.entries(PullRequestSchema.shape).filter(([, schema]) => !schema.isOptional()).map(([key]) => key);
+var GhChecksSchema = external_exports.array(external_exports.object({ bucket: external_exports.string().optional() }));
+var GhProtectionSchema = external_exports.object({
+  required_status_checks: external_exports.object({ strict: external_exports.boolean().optional(), contexts: external_exports.array(external_exports.string()).optional() }).nullish()
+});
+var GhRulesSchema = external_exports.array(external_exports.object({ type: external_exports.string().optional() }));
+
+// src/git/rollup.ts
+var log10 = createLogger("git");
+var GIT_DEFAULTS = GitSchema.parse({});
+
+// src/git/branch.ts
+var DEFAULT_PREFIX = GitSchema.parse({}).branchPrefix;
+
+// src/git/worktree.ts
+var log11 = createLogger("git");
+var GIT_DEFAULTS2 = GitSchema.parse({});
+
+// src/git/provision.ts
+var log12 = createLogger("provision");
+
+// src/git/pr.ts
+var log13 = createLogger("git");
+var GIT_DEFAULTS3 = GitSchema.parse({});
+
+// src/git/serial-writer.ts
+var log14 = createLogger("git");
+var GIT_DEFAULTS4 = GitSchema.parse({});
+var MERGE_LOCK_DEFAULTS = {
+  ...DEFAULT_FILE_LOCK_TUNING,
+  stale: 3e4,
+  retries: 100,
+  retryMinTimeout: 25,
+  retryMaxTimeout: 1e3
+};
+
+// src/git/protection.ts
+var log15 = createLogger("git");
+var GIT_DEFAULTS5 = GitSchema.parse({});
+
+// src/git/staging.ts
+var log16 = createLogger("git");
+var GIT_DEFAULTS6 = GitSchema.parse({});
+
+// src/hooks/hook-context.ts
+async function loadOwnerScopedRun(opts = {}) {
   let dataDir;
   try {
     dataDir = resolveDataDir(opts);
@@ -8674,8 +8951,29 @@ async function loadOwnerScopedRun(opts = {}) {
     return null;
   }
   const manager = new StateManager({ ...opts, dataDir });
-  const run = await manager.findActiveByOwner(session);
-  return run === null ? null : { dataDir, run };
+  const env = opts.env ?? process.env;
+  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
+  if (session.length > 0) {
+    const run = await manager.findActiveByOwner(session);
+    return run === null ? null : { dataDir, run };
+  }
+  if (opts.cwd !== void 0 && opts.cwd.length > 0) {
+    const gitClient = opts.gitClient ?? new DefaultGitClient();
+    try {
+      const repo = await resolveRepo({ cwd: opts.cwd, gitClient });
+      const run = await manager.readCurrentForRepo(repo);
+      if (run !== null) {
+        return { dataDir, run };
+      }
+    } catch (err) {
+      if (!(err instanceof UsageError)) {
+        throw err;
+      }
+    }
+  }
+  const runs = await manager.listRuns();
+  const active = runs.find((r) => !isTerminalRunStatus(r.status));
+  return active === void 0 ? null : { dataDir, run: active };
 }
 function runTaskForPath(dataDir, absPath) {
   if (dataDir.length === 0 || absPath.length === 0) {
@@ -8794,7 +9092,8 @@ async function decidePipelineGuards(input, deps = {}) {
     return allow();
   }
   const loadRun = deps.loadRun ?? loadOwnerScopedRun;
-  const active = await loadRun(deps);
+  const cwd = deps.cwd ?? input?.cwd;
+  const active = await loadRun({ ...deps, ...cwd !== void 0 ? { cwd } : {} });
   if (active === null) {
     return allow();
   }
@@ -8827,11 +9126,7 @@ async function runPipelineGuards(_argv = [], deps = {}) {
   try {
     decision = await decidePipelineGuards(input, deps);
   } catch (err) {
-    if (err instanceof BrokenRunStateError) {
-      decision = deny("broken_pipeline_state", err.message);
-    } else {
-      decision = deny("pipeline_guard_error", err.message);
-    }
+    decision = deny("pipeline_guard_error", err.message);
     emitPermissionDecision(decision);
     return EXIT.ERROR;
   }
@@ -8840,7 +9135,7 @@ async function runPipelineGuards(_argv = [], deps = {}) {
 }
 
 // src/hooks/subagent-stop.ts
-var log8 = createLogger("hook:subagent-stop");
+var log17 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -8891,7 +9186,7 @@ async function handleSubagentStop(input, deps = {}) {
   const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
     if (sessionId !== void 0) {
-      log8.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
+      log17.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
     }
     return null;
   }
@@ -8903,7 +9198,7 @@ async function handleSubagentStop(input, deps = {}) {
       try {
         transcriptText = await deps.readTranscript(transcriptPath);
       } catch (err) {
-        log8.warn(
+        log17.warn(
           `could not read transcript '${transcriptPath}': ${err.message} \u2014 falling back to last_assistant_message / single-reviewing-task resolution`
         );
         transcriptText = void 0;
@@ -8921,17 +9216,17 @@ async function handleSubagentStop(input, deps = {}) {
     }
   }
   if (taskId.length === 0) {
-    log8.error(
+    log17.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 orchestrator record is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log8.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
+    log17.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log8.info(
+  log17.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 orchestrator records reviews via the drive --results record)`
   );
   return null;
@@ -8942,19 +9237,19 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch (err) {
-    log8.error(`malformed SubagentStop input: ${err.message}`);
+    log17.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log8.error(`SubagentStop handler error: ${err.message}`);
+    log17.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
 
 // src/hooks/stop-gate.ts
-var log9 = createLogger("hook:stop-gate");
+var log18 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, stoppingSession) {
   if (run === null) {
@@ -8985,25 +9280,25 @@ async function runStopGate(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     stoppingSession = sessionIdOf(parseHookInput(raw));
   } catch (err) {
-    log9.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log18.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
   try {
     run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
     if (run === null && stoppingSession !== void 0) {
-      log9.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
+      log18.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
     }
   } catch (err) {
     const rawMsg = err.message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
     const reason = `could not enumerate run state: ${rawMsg}. Investigate the factory data directory before stopping.`;
-    log9.error(reason);
+    log18.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
   const action = decideStop(run, stoppingSession);
   if (action.kind === "allow-unfinalized") {
-    log9.info(
+    log18.info(
       `run ${action.run_id}: all tasks terminal but the run is not finalized \u2014 left running; \`factory resume\` will run the real finalize`
     );
   }

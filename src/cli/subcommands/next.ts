@@ -9,6 +9,7 @@ import {loadOrchestratorDeps} from '../wiring.js'
 import {nextTask} from '../../orchestrator/index.js'
 import {StateManager} from '../../core/state/index.js'
 import type {RunState} from '../../core/state/index.js'
+import {readCurrentForCwd} from '../current.js'
 import {resolveDataDir} from '../../config/index.js'
 import {adoptForCli} from '../adoption.js'
 import {nowIso} from '../../shared/time.js'
@@ -28,7 +29,7 @@ export interface NextOverrides {
 const HELP = `factory next-task — one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
-  factory next-task [--run <id>]      (defaults to runs/current)
+  factory next-task [--run <id>]      (defaults to this repo's current run)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context — run_id, data_dir (canonical), ship_mode — so the runner adopts them
@@ -38,16 +39,16 @@ from the first \`next-task\`:
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
-  factory next-task --assert-owner <session>          (loud-assert runs/current ownership)
+  factory next-task --assert-owner <session>          (loud-assert current-run ownership)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`
 
 /**
- * Loud-assert that the runs/current run is the one the caller expects, by owning
- * session. The runner's FIRST `next-task` omits `--run` and adopts
- * runs/current — but `run create` overwrites that pointer (`pointCurrentAt`), so a
- * concurrent create in another session can redirect the runner onto the WRONG
+ * Loud-assert that this repo's current run is the one the caller expects, by owning
+ * session. The runner's FIRST `next-task` omits `--run` and adopts the per-repo
+ * current pointer — but `run create` overwrites that pointer (`pointCurrentAt`), so a
+ * concurrent create in the SAME checkout can redirect the runner onto the WRONG
  * run (Codex CP3 finding); in live mode that opens/merges PRs for a foreign run.
  * When the runner passes `--assert-owner "$CLAUDE_CODE_SESSION_ID"`, a mismatch
  * against the resolved run's persisted `owner_session` FAILS LOUD here instead of
@@ -59,7 +60,7 @@ Throws LOUD on a dependency deadlock.`
  * session-scoped and constant across the agent tree (verified — a sub-agent's Bash
  * sees the SAME value as the launching session), so an agent's
  * `"$CLAUDE_CODE_SESSION_ID"` equals the runner-stamped `owner_session` on the
- * happy path. A throw means runs/current genuinely points at a foreign run.
+ * happy path. A throw means the current pointer genuinely points at a foreign run.
  */
 function assertCurrentOwner(current: RunState, assertOwner: string | boolean | undefined): void {
     const expected = typeof assertOwner === 'string' ? assertOwner.trim() : ''
@@ -72,9 +73,9 @@ function assertCurrentOwner(current: RunState, assertOwner: string | boolean | u
     } // run owner unknown → cannot assert (degrade safe)
     if (actual !== expected) {
         throw new Error(
-            `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', ` +
+            `next-task: this repo's current run '${current.run_id}' is owned by session '${actual}', ` +
                 `but --assert-owner expected '${expected}' — a concurrent 'run create' moved ` +
-                `runs/current onto a foreign run. Pass --run <id> explicitly.`
+                `the current pointer onto a foreign run. Pass --run <id> explicitly.`
         )
     }
 }
@@ -90,7 +91,10 @@ export async function runNextTask(argv: string[], overrides: NextOverrides = {})
         runId = explicit
     } else {
         const dataDir = resolveDataDir({})
-        const current = await new StateManager({dataDir}).readCurrent()
+        const state = new StateManager({dataDir})
+        const current = await readCurrentForCwd(state, {
+            ...(overrides.gitClient !== undefined ? {gitClient: overrides.gitClient} : {}),
+        })
         if (current === null) {
             throw new UsageError('no --run given and no current run')
         }

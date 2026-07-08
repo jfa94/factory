@@ -53,6 +53,21 @@ const MANIFEST: SpecManifest = {
     ],
 }
 
+function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['status']}): TaskState {
+    const base = {
+        depends_on: [],
+        risk_tier: 'medium' as const,
+        escalation_rung: 0,
+        reviewers: [],
+        merge_resyncs: 0,
+        ...seed,
+    }
+    if (seed.status === 'failed') {
+        return {failure_class: 'spec-defect' as const, failure_reason: 'x', ...base}
+    }
+    return base
+}
+
 describe('score arg/usage edges', () => {
     it('--help prints help and exits OK', async () => {
         expect(await scoreCommand.run(['--help'])).toBe(EXIT.OK)
@@ -63,21 +78,6 @@ describe('score happy paths', () => {
     let dataDir: string
     let prevEnv: string | undefined
     let stdout: string[]
-
-    function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['status']}): TaskState {
-        const base = {
-            depends_on: [],
-            risk_tier: 'medium' as const,
-            escalation_rung: 0,
-            reviewers: [],
-            merge_resyncs: 0,
-            ...seed,
-        }
-        if (seed.status === 'failed') {
-            return {failure_class: 'spec-defect' as const, failure_reason: 'x', ...base}
-        }
-        return base
-    }
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-score-cli-'))
@@ -215,12 +215,14 @@ describe('score --fleet (S11 — the store-wide touch-metric roll-up)', () => {
             status: 'completed',
             touches: 2,
             metric: 0.5,
+            misses: 0,
         })
         expect(runs.find((r) => r.run_id === 'run-c')).toEqual({
             run_id: 'run-c',
             status: 'completed',
             touches: 0,
             metric: null,
+            misses: 0,
         })
         // aggregate = sum(completed with ledger) / sum(touches with ledger) = 1 / 3
         expect(env.aggregate).toBeCloseTo(1 / 3)
@@ -242,6 +244,122 @@ describe('score --fleet (S11 — the store-wide touch-metric roll-up)', () => {
     it('an empty store aggregates to null (no fabricated 0)', async () => {
         const code = await scoreCommand.run(['--fleet'])
         expect(code).toBe(EXIT.OK)
-        expect(out()).toEqual({kind: 'fleet-score', runs: [], aggregate: null})
+        expect(out()).toEqual({
+            kind: 'fleet-score',
+            runs: [],
+            aggregate: null,
+            total_misses: 0,
+            misses_per_run: null,
+            misses_by_lens: {},
+        })
+    })
+
+    it('7a — rolls up misses: total, per-terminal-run rate, by-lens buckets', async () => {
+        await seedRun('run-a', 'completed', 1)
+        await seedRun('run-b', 'failed', 1)
+        const state = new StateManager({dataDir})
+        // run-a: 2 misses (quality-reviewer, un-lensed); run-b: 1 miss (quality-reviewer)
+        await state.update('run-a', (s) => ({
+            ...s,
+            misses: [
+                {task_id: 't', at: '2026-06-01T00:00:00.000Z', note: 'x', lens: 'quality-reviewer'},
+                {task_id: 't', at: '2026-06-01T00:00:00.000Z', note: 'y'},
+            ],
+            tasks: {t: task({task_id: 't', status: 'done'})},
+        }))
+        await state.update('run-b', (s) => ({
+            ...s,
+            misses: [{task_id: 't', at: '2026-06-01T00:00:00.000Z', note: 'z', lens: 'quality-reviewer'}],
+            tasks: {t: task({task_id: 't', status: 'done'})},
+        }))
+
+        const code = await scoreCommand.run(['--fleet'])
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.total_misses).toBe(3)
+        expect(env.misses_per_run).toBeCloseTo(3 / 2) // 3 misses / 2 terminal runs
+        expect(env.misses_by_lens).toEqual({'quality-reviewer': 2, none: 1})
+        const runs = env.runs as Record<string, unknown>[]
+        expect(runs.find((r) => r.run_id === 'run-a')?.misses).toBe(2)
+    })
+
+    it('7a — misses_per_run is null when no run is terminal (no fabricated rate)', async () => {
+        const state = new StateManager({dataDir})
+        await state.create({run_id: 'run-live', staging_branch: 'staging-run-live', spec: SPEC})
+        await state.update('run-live', (s) => ({
+            ...s,
+            misses: [{task_id: 't', at: '2026-06-01T00:00:00.000Z', note: 'x'}],
+            tasks: {t: task({task_id: 't', status: 'done'})},
+        }))
+
+        const code = await scoreCommand.run(['--fleet'])
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.total_misses).toBe(1)
+        expect(env.misses_per_run).toBeNull()
+    })
+})
+
+describe('score --reviewers (Decision 61 — per-lens review value)', () => {
+    let dataDir: string
+    let prevEnv: string | undefined
+    let stdout: string[]
+
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'factory-score-reviewers-'))
+        prevEnv = process.env.CLAUDE_PLUGIN_DATA
+        process.env.CLAUDE_PLUGIN_DATA = dataDir
+        stdout = []
+        vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+            stdout.push(String(c))
+            return true
+        })
+    })
+
+    afterEach(async () => {
+        vi.restoreAllMocks()
+        if (prevEnv === undefined) {
+            delete process.env.CLAUDE_PLUGIN_DATA
+        } else {
+            process.env.CLAUDE_PLUGIN_DATA = prevEnv
+        }
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    const out = () => JSON.parse(stdout.join('')) as Record<string, unknown>
+
+    it('joins review.round telemetry with the miss ledger into a reviewer-score envelope', async () => {
+        const {emitMetric} = await import('../../scoring/index.js')
+        const state = new StateManager({dataDir})
+        await state.create({run_id: 'run-r', staging_branch: 'staging-run-r', spec: SPEC})
+        await state.update('run-r', (s) => ({
+            ...s,
+            tasks: {t: task({task_id: 't', status: 'done'})},
+            misses: [{task_id: 't', at: '2026-07-01T00:00:00.000Z', note: 'x', lens: 'quality-reviewer'}],
+        }))
+        await emitMetric(dataDir, 'run-r', 'review.round', {
+            task_id: 't',
+            rung: 0,
+            outcome: 'send-back',
+            reviewers: [{reviewer: 'quality-reviewer', verdict: 'block', confirmed_blockers: 2}],
+        })
+
+        // A second run with NO telemetry — proves backfill honesty.
+        await state.create({run_id: 'run-pre', staging_branch: 'staging-run-pre', spec: SPEC})
+
+        const code = await scoreCommand.run(['--reviewers'])
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        expect(env.kind).toBe('reviewer-score')
+        expect(env.runs_covered).toBe(1)
+        expect(env.runs_without_events).toBe(1)
+        const lenses = env.lenses as Record<string, unknown>[]
+        expect(lenses.find((l) => l.lens === 'quality-reviewer')).toMatchObject({
+            rounds: 1,
+            confirmed_blockers: 2,
+            yield: 2,
+            send_back_rate: 1,
+            misses: 1,
+        })
     })
 })

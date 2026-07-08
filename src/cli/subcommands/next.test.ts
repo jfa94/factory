@@ -3,7 +3,7 @@
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via nextCommand;
- *   2. --run resolution falls back to runs/current;
+ *   2. --run resolution falls back to the caller-repo's current pointer (Decision 61);
  *   3. happy-path JSON envelope passthrough via a seeded tmp run.
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
@@ -21,6 +21,17 @@ import {StateManager} from '../../core/state/manager.js'
 import {SpecStore} from '../../spec/index.js'
 import {usageCachePath} from '../../quota/index.js'
 import {FakeGitClient, FakeGhClient} from '../../git/index.js'
+
+/**
+ * A FakeGitClient whose origin resolves to `slug` — the cwd→repo anchor the current
+ * pointer keys off (Decision 61). The no-`--run` fallback resolves THIS repo's pointer, so the
+ * seam must match the seeded run's `spec.repo`.
+ */
+function git(slug: string): FakeGitClient {
+    const g = new FakeGitClient()
+    g.setRemoteUrl('origin', `git@github.com:${slug}.git`)
+    return g
+}
 
 describe('next arg/usage edges', () => {
     it('--help prints help and exits OK', async () => {
@@ -60,7 +71,7 @@ describe('next arg/usage edges', () => {
     })
 })
 
-describe('next --run resolution falls back to runs/current', () => {
+describe('next --run resolution falls back to the caller-repo current pointer', () => {
     let dir: string
     let state: StateManager
     let savedEnv: string | undefined
@@ -84,7 +95,7 @@ describe('next --run resolution falls back to runs/current', () => {
         await rm(dir, {recursive: true, force: true})
     })
 
-    it('resolves run_id from runs/current when --run is omitted', async () => {
+    it('resolves run_id from the caller-repo current pointer when --run is omitted', async () => {
         // Create a run so it becomes current.
         await state.create({
             run_id: 'run-current',
@@ -123,12 +134,12 @@ describe('next --run resolution falls back to runs/current', () => {
 
         const stdout = captureStream(process.stdout)
         try {
-            const code = await nextCommand.run([]) // no --run
+            const code = await runNextTask([], {gitClient: git('acme/widgets')}) // no --run
             expect(code).toBe(EXIT.OK)
             const envelope = JSON.parse(stdout.read()) as unknown
             // The envelope self-carries the run context the runner adopts (run_id from
-            // runs/current, the canonical data_dir, and the persisted ship_mode
-            // default — now `live`).
+            // the caller-repo's current pointer, the canonical data_dir, and the
+            // persisted ship_mode default — now `live`).
             expect(envelope).toMatchObject({
                 kind: 'work',
                 run_id: 'run-current',
@@ -141,7 +152,7 @@ describe('next --run resolution falls back to runs/current', () => {
     })
 })
 
-describe('next runs/current guards (--assert-owner)', () => {
+describe('next current-pointer guards (--assert-owner)', () => {
     let dir: string
     let state: StateManager
     let savedEnv: string | undefined
@@ -200,9 +211,9 @@ describe('next runs/current guards (--assert-owner)', () => {
         )
     }
 
-    it('throws LOUD when runs/current is owned by a different session', async () => {
+    it('throws LOUD when the current run is owned by a different session', async () => {
         await seedReadyCurrent('sess-A')
-        await expect(nextCommand.run(['--assert-owner', 'sess-B'])).rejects.toThrow(
+        await expect(runNextTask(['--assert-owner', 'sess-B'], {gitClient: git('acme/widgets')})).rejects.toThrow(
             /owned by session 'sess-A'.*expected 'sess-B'/s
         )
     })
@@ -211,7 +222,7 @@ describe('next runs/current guards (--assert-owner)', () => {
         await seedReadyCurrent('sess-A')
         const stdout = captureStream(process.stdout)
         try {
-            const code = await nextCommand.run(['--assert-owner', 'sess-A'])
+            const code = await runNextTask(['--assert-owner', 'sess-A'], {gitClient: git('acme/widgets')})
             expect(code).toBe(EXIT.OK)
             expect(JSON.parse(stdout.read())).toMatchObject({
                 kind: 'work',
@@ -226,7 +237,7 @@ describe('next runs/current guards (--assert-owner)', () => {
         await seedReadyCurrent() // owner unknown → cannot assert
         const stdout = captureStream(process.stdout)
         try {
-            expect(await nextCommand.run(['--assert-owner', 'sess-B'])).toBe(EXIT.OK)
+            expect(await runNextTask(['--assert-owner', 'sess-B'], {gitClient: git('acme/widgets')})).toBe(EXIT.OK)
         } finally {
             stdout.restore()
         }
@@ -236,13 +247,13 @@ describe('next runs/current guards (--assert-owner)', () => {
         await seedReadyCurrent('sess-A')
         const stdout = captureStream(process.stdout)
         try {
-            expect(await nextCommand.run(['--assert-owner', ''])).toBe(EXIT.OK)
+            expect(await runNextTask(['--assert-owner', ''], {gitClient: git('acme/widgets')})).toBe(EXIT.OK)
         } finally {
             stdout.restore()
         }
     })
 
-    it('never asserts on the explicit --run path (bypasses runs/current)', async () => {
+    it('never asserts on the explicit --run path (bypasses the current pointer)', async () => {
         await seedReadyCurrent('sess-A')
         const stdout = captureStream(process.stdout)
         try {
@@ -253,26 +264,28 @@ describe('next runs/current guards (--assert-owner)', () => {
         }
     })
 
-    it('C1 regression: a concurrent create that moved runs/current to a foreign run fails loud, never drives it', async () => {
-        // Run A: this session's intended run.
+    it('C1 (per-repo): a concurrent foreign-owned create in the SAME repo is refused, never silently repointed (Decision 61)', async () => {
+        // Run A: this session's intended run, now this repo's current pointer.
         await state.create({
             run_id: 'run-A',
             staging_branch: 'staging-run-A',
             spec: {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42},
             owner_session: 'sess-A',
         })
-        // A concurrent create of run B in another session moves runs/current → B.
-        await state.create({
-            run_id: 'run-B',
-            staging_branch: 'staging-run-B',
-            spec: {repo: 'acme/other', spec_id: '7-thing', issue_number: 7},
-            owner_session: 'sess-B',
-        })
-        // The runner for A bootstraps with its own session; must fail loud,
-        // never silently drive run-B.
-        await expect(nextCommand.run(['--assert-owner', 'sess-A'])).rejects.toThrow(
-            /owned by session 'sess-B'.*expected 'sess-A'/s
-        )
+        // A concurrent create of run B (SAME repo, different session) while A is live
+        // must be REFUSED — the per-repo pointer's live-owner guard replaces the retired
+        // global pointer's last-writer-wins race (Decision 61). The old global-pointer variant
+        // (B in a DIFFERENT repo) can no longer move A's pointer at all.
+        await expect(
+            state.create({
+                run_id: 'run-B',
+                staging_branch: 'staging-run-B',
+                spec: {repo: 'acme/widgets', spec_id: '7-thing', issue_number: 7},
+                owner_session: 'sess-B',
+            })
+        ).rejects.toThrow(/refusing to repoint current for repo 'acme\/widgets'/)
+        // The pointer stays on run-A; the runner for A resolves A, never B.
+        expect((await state.readCurrentForRepo('acme/widgets'))?.run_id).toBe('run-A')
     })
 })
 

@@ -1,21 +1,17 @@
 /**
  * Resolve the run that is "current" FOR THE REPO OF THE CALLER'S CHECKOUT
- * (run-isolation L2.8). The human-facing read commands (`state`, `score`, `rescue`,
- * `run resume`/`finalize`) default to this when no `--run` is given, so two runs
- * live in two different checkouts each resolve their OWN run — never whichever one
- * happened to repoint the global pointer last.
+ * (run-isolation L2.8). Every default-to-current command — the human-facing reads
+ * (`state`, `score`, `rescue`, `run resume`/`finalize`) AND the machine-driven
+ * `factory next-task` — resolves through here when no `--run` is given, so two runs
+ * living in two different checkouts each resolve their OWN run. This is now the ONLY
+ * current-run resolution path: the global repo-less `runs/current` pointer was
+ * retired (Decision 61), so there is no last-writer-wins global fallback to race.
  *
  * Repo resolution mirrors `run create`'s {@link RunCreateOverrides} seam exactly:
  * derive `owner/name` from the `origin` remote of `cwd` via {@link resolveRepo}, with
  * the git client + cwd injectable for tests. When the repo is NOT derivable (invoked
  * outside any checkout / no `origin`), there is no current run for the caller —
- * resolve to null and let the command's own "no current run" handling speak. The
- * global repo-less `runs/current` pointer stays for no-cwd consumers (statusline
- * ticks, hook-context) — it is just never a fallback here.
- *
- * NOTE this is intentionally NOT used by `factory next-task`: that command is machine-driven
- * (the runner bootstrap), always passes `--run` on the hot path, and its
- * no-`--run` fallback is guarded against a foreign run by `--assert-owner`.
+ * resolve to null and let the command's own "no current run" handling speak.
  */
 import {DefaultGitClient, resolveRepo, type GitClient} from '../git/index.js'
 import {optionalString, UsageError, type ParsedArgs} from './args.js'

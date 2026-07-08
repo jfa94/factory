@@ -19,8 +19,11 @@ export type {
     BuildPartialReportOptions,
 } from './partial-report.js'
 
-export {buildRunSummary, renderRunSummaryMarkdown, touchMetricOf} from './summary.js'
+export {buildRunSummary, renderRunSummaryMarkdown, touchMetricOf, missesByLensOf} from './summary.js'
 export type {RunSummary, RunEffort, ShippedPr, BuildRunSummaryOptions} from './summary.js'
 
 export {emitMetric, readMetrics, recordRunFinalized} from './telemetry.js'
 export type {MetricRecord, EmitOptions} from './telemetry.js'
+
+export {aggregateReviewerValue, parseReviewRounds} from './reviewer-value.js'
+export type {ReviewerValueReport, ReviewerValueRun, LensValue, ReviewRound} from './reviewer-value.js'

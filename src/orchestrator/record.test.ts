@@ -30,6 +30,7 @@ import {contractedLoader, makeFakeTools, FakeGitProbe, commit} from '../verifier
 import {InMemoryHoldoutStore, InMemoryHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
 import {ESCALATION_CAP} from '../producer/index.js'
 import {captureStream} from '../cli/test-helpers.js'
+import {readMetrics} from '../scoring/telemetry.js'
 import type {TaskState} from '../types/index.js'
 import {nonNull} from '../shared/index.js'
 
@@ -338,6 +339,36 @@ describe('applyRecordReviews record', () => {
         const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
         expect(task.reviewers.map((r) => r.verdict)).toEqual(PANEL_ROLES.map(() => 'approve'))
         expect(task.status).toBe('shipping') // markInFlight(ship)
+    })
+
+    // 7b — one review.round telemetry line per verify round.
+    it('emits ONE review.round metric (outcome advance) with the panel roster + rung', async () => {
+        const deps = makeDeps()
+        const input: RecordReviewsInput = {reviews: fullPanel(), verifications: []}
+
+        await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)
+
+        const rounds = (await readMetrics(dataDir, RUN_ID)).filter((m) => m.event === 'review.round')
+        expect(rounds).toHaveLength(1)
+        expect(rounds[0]?.data).toMatchObject({task_id: TASK_ID, rung: 0, outcome: 'advance'})
+        const reviewers = rounds[0]?.data?.reviewers as {reviewer: string; verdict: string}[]
+        expect(reviewers.map((r) => r.reviewer)).toEqual([...PANEL_ROLES])
+        expect(reviewers.every((r) => r.verdict === 'approve')).toBe(true)
+        expect(rounds[0]?.data?.cross_vendor_absent).toBeUndefined()
+    })
+
+    it('emits a review.round metric with outcome send-back when the merge gate blocks', async () => {
+        const deps = makeDeps()
+        const input: RecordReviewsInput = {
+            reviews: [approve('implementation-reviewer'), approve('silent-failure-hunter')],
+            verifications: [],
+        }
+
+        await captureWarnings(() => applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input))
+
+        const rounds = (await readMetrics(dataDir, RUN_ID)).filter((m) => m.event === 'review.round')
+        expect(rounds).toHaveLength(1)
+        expect(rounds[0]?.data).toMatchObject({outcome: 'send-back', rung: 0})
     })
 
     it('roster enforcement: an all-approve SUBSET of the panel FAILS the merge gate', async () => {

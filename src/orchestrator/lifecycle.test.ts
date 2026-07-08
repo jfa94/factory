@@ -174,7 +174,7 @@ describe('createRun', () => {
 
         // The seeded run is the current run and round-trips through a fresh read.
         expect(nonNull((await state.read('run-a')).tasks.t2).depends_on).toEqual(['t1'])
-        expect(nonNull(await state.readCurrent()).run_id).toBe('run-a')
+        expect(nonNull(await state.readCurrentForRepo(REPO)).run_id).toBe('run-a')
     })
 
     it('pins the per-run staging branch on the run row (Decision 33 hardening)', async () => {

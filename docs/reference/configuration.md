@@ -152,6 +152,14 @@ spawn manifest and the runner executes the quality-reviewer via `codex exec` whe
 Codex is present. `requireCrossVendor` only sets the policy for when it is **absent**.
 See [verifier.md](../explanation/verifier.md).
 
+> **Recommendation (Decision 61).** The default stays `warn`. Flip to `block` **only
+> once Codex is reliably provisioned in the run environment AND autonomous repair is
+> live** (self-heal recovers environmental blocks) — under `block`, a missing Codex
+> fails the task _environmental_ (not merge-gate-blocked), which is rescue-recoverable
+> but becomes a stall source without self-repair. Set it per-maintainer via
+> `factory configure --set review.requireCrossVendor=block` (writes
+> `$CLAUDE_PLUGIN_DATA/config.json`, not the repo).
+
 ## `testWriter`
 
 | Key        | Type   | Default | Meaning                         |
@@ -224,11 +232,11 @@ factory configure --set e2e.baseURL="http://localhost:3000"
 
 ## Root keys
 
-| Key                      | Type   | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------ | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `maxConsecutiveFailures` | int >0 | `3`     | **Floor** of the circuit-breaker threshold: the run aborts when cumulative genuine `capability-budget` failures (cascade/wedge fails excluded) reach `max(floor, ceil(0.15 × total tasks))` — big task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3; 30 → 5, 40 → 6). The ratio is a module constant, not config. The key keeps its historical name for back-compat. |
-| `maxParallelTasks`       | int >0 | `3`     | Max tasks the runner drives in flight at once; emitted to the runner as `max_parallel` on the `work` envelope (the runner reads the envelope, never this file). `1` = sequential.                                                                                                                                                                                                                |
-| `stallTtlMinutes`        | int >0 | `20`    | Minutes an in-flight spawn (`spawn_in_flight.spawned_at`) may age before `next-task` flags its task in the `work` envelope's `stale` list. Advisory — a silently-dead agent inside a live session is otherwise never re-driven. The flag tells the runner to abandon the stale spawn and re-drive via `next-action` (see [cli.md](./cli.md#next-task) and [state-model.md](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)).                                                                             |
+| Key                      | Type   | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------ | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxConsecutiveFailures` | int >0 | `3`     | **Floor** of the circuit-breaker threshold: the run aborts when cumulative genuine `capability-budget` failures (cascade/wedge fails excluded) reach `max(floor, ceil(0.15 × total tasks))` — big task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3; 30 → 5, 40 → 6). The ratio is a module constant, not config. The key keeps its historical name for back-compat.                                               |
+| `maxParallelTasks`       | int >0 | `3`     | Max tasks the runner drives in flight at once; emitted to the runner as `max_parallel` on the `work` envelope (the runner reads the envelope, never this file). `1` = sequential.                                                                                                                                                                                                                                                              |
+| `stallTtlMinutes`        | int >0 | `20`    | Minutes an in-flight spawn (`spawn_in_flight.spawned_at`) may age before `next-task` flags its task in the `work` envelope's `stale` list. Advisory — a silently-dead agent inside a live session is otherwise never re-driven. The flag tells the runner to abandon the stale spawn and re-drive via `next-action` (see [cli.md](./cli.md#next-task) and [state-model.md](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)). |
 
 ## Retired keys
 

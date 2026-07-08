@@ -44,6 +44,7 @@ function mkRun(
         started_at?: string
         ended_at?: string | null
         human_touches?: RunState['human_touches']
+        misses?: RunState['misses']
     } = {}
 ): RunState {
     const status = opts.status ?? 'failed'
@@ -55,6 +56,7 @@ function mkRun(
         spec: {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7},
         tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
         ...(opts.human_touches !== undefined ? {human_touches: opts.human_touches} : {}),
+        ...(opts.misses !== undefined ? {misses: opts.misses} : {}),
         started_at: opts.started_at ?? '2026-06-08T00:00:00.000Z',
         ...(opts.ended_at !== undefined
             ? {ended_at: opts.ended_at}
@@ -374,3 +376,47 @@ describe('touch metric (S11 — derived, never stored)', () => {
         expect(renderRunSummaryMarkdown(summary)).toContain('**Human touches:** 0 · touch metric n/a')
     })
 })
+
+describe('misses ledger (Decision 61 — derived count + by-lens)', () => {
+    const esc = (over: Partial<RunState['misses'][number]> = {}) => ({
+        task_id: 'a',
+        at: '2026-06-08T00:00:00.000Z',
+        note: 'x',
+        ...over,
+    })
+
+    it('counts misses and buckets them by lens (un-lensed → "none")', () => {
+        const summary = buildRunSummary(
+            mkRun([{task_id: 'a', status: 'done'}], {
+                status: 'completed',
+                misses: [
+                    esc({lens: 'quality-reviewer'}),
+                    esc({lens: 'quality-reviewer'}),
+                    esc(), // un-lensed
+                ],
+            }),
+            report({run_status: 'completed'}),
+            {now: NOW}
+        )
+        expect(summary.misses).toBe(3)
+        expect(summary.misses_by_lens).toEqual({'quality-reviewer': 2, none: 1})
+    })
+
+    it('renders an Misses markdown line only when there is at least one', () => {
+        const withMisses = buildRunSummary(
+            mkRun([{task_id: 'a', status: 'done'}], {misses: [esc({lens: 'silent-failure-hunter'})]}),
+            report(),
+            {now: NOW}
+        )
+        expect(renderRunSummaryMarkdown(withMisses)).toContain('**Misses:** 1 (silent-failure-hunter ×1)')
+
+        const noMisses = buildRunSummary(mkRun([{task_id: 'a', status: 'done'}]), report(), {now: NOW})
+        expect(summaryHasMissLine(renderRunSummaryMarkdown(noMisses))).toBe(false)
+        expect(noMisses.misses).toBe(0)
+        expect(noMisses.misses_by_lens).toEqual({})
+    })
+})
+
+function summaryHasMissLine(md: string): boolean {
+    return md.split('\n').some((l) => l.startsWith('**Misses:**'))
+}

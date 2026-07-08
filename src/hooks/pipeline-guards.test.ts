@@ -6,13 +6,13 @@
  * opens and merges PRs from inside `factory next-action` (a child_process gh call that
  * never transits this Bash-tool hook), so any ship command reaching the hook is an
  * agent-initiated attempt. Also covers: no active run → pass through; test-writer
- * phase write-scope; nested-shell denial while a run is active; dangling-symlink
- * fail closed via runPipelineGuards.
+ * phase write-scope; nested-shell denial while a run is active; a throwing loader
+ * (corrupt state / broken git env) fails closed via runPipelineGuards.
  */
 import {describe, it, expect} from 'vitest'
 import {join} from 'node:path'
 import {decidePipelineGuards, runPipelineGuards} from './pipeline-guards.js'
-import {BrokenRunStateError, type ActiveRun} from './hook-context.js'
+import {type ActiveRun} from './hook-context.js'
 import {parseHookInput, isDeny} from './hook-io.js'
 import {EXIT} from '../shared/exit-codes.js'
 import type {RunState, TaskState} from '../types/index.js'
@@ -43,6 +43,7 @@ function runState(tasks: Record<string, TaskState>): RunState {
         ship_mode: 'live',
         ignore_quota: false,
         human_touches: [],
+        misses: [],
         e2e: false,
         debug: false,
         started_at: 't',
@@ -221,11 +222,11 @@ describe('pipeline-guards — nested shell denied while run active', () => {
 })
 
 describe('pipeline-guards — runPipelineGuards fail-closed', () => {
-    it('a BrokenRunStateError from the loader → ERROR (deny)', async () => {
+    it('a throwing loader (corrupt state / broken git env) → ERROR (deny)', async () => {
         const code = await runPipelineGuards([], {
             readRaw: () => Promise.resolve(JSON.stringify({tool_name: 'Bash', tool_input: {command: 'gh pr create'}})),
             loadRun: () => {
-                throw new BrokenRunStateError('runs/ghost')
+                throw new Error('state: corrupt run behind pointer')
             },
         })
         expect(code).toBe(EXIT.ERROR)

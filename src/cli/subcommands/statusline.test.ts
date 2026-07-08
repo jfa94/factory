@@ -15,8 +15,16 @@ import {runStatusline} from './statusline.js'
 import {usageCachePath, StatuslineUsageSignal} from '../../quota/usage-source.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {StateManager} from '../../core/state/index.js'
-import {currentLinkPath, STATE_FILE} from '../../core/state/paths.js'
+import {currentRepoLinkPath, STATE_FILE} from '../../core/state/paths.js'
+import {FakeGitClient} from '../../git/index.js'
 import type {SpecPointer, TaskState} from '../../types/index.js'
+
+/** A FakeGitClient whose origin resolves to `slug` (the payload-cwd repo anchor, Decision 61). */
+function git(slug: string): FakeGitClient {
+    const g = new FakeGitClient()
+    g.setRemoteUrl('origin', `git@github.com:${slug}.git`)
+    return g
+}
 
 /** A representative Claude Code statusline payload with rate_limits. */
 function ccPayload(overrides: Record<string, unknown> = {}): string {
@@ -296,14 +304,19 @@ describe('runStatusline (run-progress suffix, S11)', () => {
         }
     }
 
-    /** Run the statusline with a captured display and no passthrough/cache noise. */
+    /**
+     * Run the statusline with a captured display and no passthrough/cache noise. The
+     * progress suffix keys off the payload's cwd → per-repo current pointer (Decision 61), so
+     * feed a payload carrying `workspace.current_dir` and a git seam resolving to SPEC.
+     */
     async function display(env: NodeJS.ProcessEnv = {}, now = FIXED_NOW): Promise<string> {
         let displayed = ''
         const code = await runStatusline([], {
             dataDirOptions: {dataDir},
             now: () => now,
-            readStdin: () => Promise.resolve(''),
+            readStdin: () => Promise.resolve(JSON.stringify({workspace: {current_dir: '/repo'}})),
             env,
+            gitClient: git(SPEC.repo),
             writeStdout: (s) => {
                 displayed += s
             },
@@ -340,7 +353,7 @@ describe('runStatusline (run-progress suffix, S11)', () => {
     })
 
     it('degrades to no suffix on a torn/truncated state.json (never throws)', async () => {
-        writeFileSync(join(currentLinkPath(dataDir), STATE_FILE), '{"run_id":"tor')
+        writeFileSync(join(currentRepoLinkPath(dataDir, SPEC.repo), STATE_FILE), '{"run_id":"tor')
         expect(await display()).toBe('')
     })
 
@@ -362,18 +375,22 @@ describe('runStatusline (run-progress suffix, S11)', () => {
     })
 
     it('composes with the passthrough display (suffix after original stdout)', async () => {
+        // The payload must carry a cwd (Decision 61) so the progress suffix resolves; `cat`
+        // echoes it back as the passthrough text, and the suffix follows it.
+        const payload = JSON.stringify({workspace: {current_dir: '/repo'}})
         let displayed = ''
         const code = await runStatusline([], {
             dataDirOptions: {dataDir},
             now: () => FIXED_NOW,
-            readStdin: () => Promise.resolve('hello-statusline'),
+            readStdin: () => Promise.resolve(payload),
             originalStatusline: 'cat',
             env: {},
+            gitClient: git(SPEC.repo),
             writeStdout: (s) => {
                 displayed += s
             },
         })
         expect(code).toBe(EXIT.OK)
-        expect(displayed).toBe(`hello-statusline [factory 1/3 exec ${RUN} running]`)
+        expect(displayed).toBe(`${payload} [factory 1/3 exec ${RUN} running]`)
     })
 })

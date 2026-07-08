@@ -54,6 +54,7 @@ import {
     type HoldoutCheckResult,
 } from '../verifier/holdout/index.js'
 import {createLogger, UsageError} from '../shared/index.js'
+import {emitMetric} from '../scoring/telemetry.js'
 import type {GateEvidence, GateVerdict, ReviewerResult, ProducerRole, TaskPhase, FixFinding} from '../types/index.js'
 import type {HandlerDeps} from './types.js'
 import type {StateManager} from './deps.js'
@@ -500,6 +501,7 @@ export async function applyRecordReviews(
     // today's behavior; it can never leak stale reviewer state.)
 
     let step: TaskStep
+    let outcome: 'advance' | 'send-back' | 'environmental'
     if (panel.result.kind === 'advance') {
         // Persist reviewers + stamp the cursor in ONE locked write (advance branch only).
         // phaseToInFlightStatus is the same mapping markInFlight would apply.
@@ -516,6 +518,7 @@ export async function applyRecordReviews(
             cross_vendor_absent: panel.crossVendorAbsence,
         }))
         step = {done: false, phase: nextPhaseVal}
+        outcome = 'advance'
     } else if (panel.result.kind === 'wait-retry') {
         // Block-mode cross-vendor absence is ENVIRONMENTAL, not a producer defect:
         // the probe is process-sticky, so no implementer re-run can repair a missing
@@ -531,6 +534,7 @@ export async function applyRecordReviews(
                 'exec'
             )
             await persistStepCursor(deps, runId, taskId, step)
+            outcome = 'environmental'
         } else {
             // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
             // escalating — the same "separate write ahead of the ladder transition"
@@ -546,10 +550,28 @@ export async function applyRecordReviews(
                 'exec'
             )
             await persistStepCursor(deps, runId, taskId, step)
+            outcome = 'send-back'
         }
     } else {
         throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`)
     }
+
+    // 7b — ONE telemetry line per verify round (observability, not state; emitMetric
+    // swallows IO errors so it can never break the record). `rung` is the rung this
+    // round RAN at (pre-escalation). Feeds `factory score --reviewers`.
+    await emitMetric(deps.dataDir, runId, 'review.round', {
+        task_id: taskId,
+        rung: task.escalation_rung,
+        outcome,
+        // Per-lens {reviewer, verdict, confirmed_blockers} so `score --reviewers` can
+        // compute each lens's yield + send-back rate without re-reading state.
+        reviewers: panel.reviewerResults.map((r) => ({
+            reviewer: r.reviewer,
+            verdict: r.verdict,
+            confirmed_blockers: r.confirmed_blockers,
+        })),
+        ...(panel.crossVendorAbsence !== undefined ? {cross_vendor_absent: true} : {}),
+    })
 
     return {
         run_id: runId,

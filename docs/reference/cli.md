@@ -503,7 +503,7 @@ factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 | Flag                | Notes                                                                                                                                                                                  |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--run <id>`        | The run to cancel. Default: the active run THIS session owns (`findActiveByOwner`, robust to a detached `runs/current`), then the current run for the checkout. Loud if none resolves. |
+| `--run <id>`        | The run to cancel. Default: the active run THIS session owns (`findActiveByOwner`), then the current run for the checkout. Loud if none resolves.                                      |
 | `--cleanup`         | Also tear down the run's PINNED `staging-<run-id>` branch + its task PRs (protection first, then the branch — GitHub blocks deleting a protected ref). **Default (omit): leave them.** |
 | `--session-id <id>` | Owning session id used to locate the run when `--run` is omitted. Defaults to `$CLAUDE_CODE_SESSION_ID`.                                                                               |
 
@@ -556,27 +556,26 @@ No current run is not an error: prints `{"current": null}` (or `no current run`
 with `--summary`) and exits `0`. State corruption is loud.
 
 With no `<run-id>`, the current run is resolved **per repo** from the caller's
-checkout — see below. `score`, `rescue`, and `resume` resolve the same way.
+checkout — see below. `score`, `rescue`, `resume`, and `next-task` resolve the
+same way.
 
 ### Per-repo current run resolution
 
-The human reporters/actions that default to "the current run" (`state`, `score`,
-`rescue`, `resume`) resolve it **per repo** from the shell's cwd, so two runs
-in two different checkouts don't shadow each other:
+The global repo-less `runs/current` pointer is **retired** ([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)).
+Every command that defaults to "the current run" (`state`, `score`, `rescue`,
+`resume`, and the machine-driven `next-task`) resolves it **per repo** from the
+shell's cwd, so two runs in two different checkouts never shadow each other:
 
 1. derive the repo from the checkout's `origin` remote;
 2. read `<dataDir>/current/<repoKey>` → that repo's current run;
 3. if the repo can't be derived (no `origin`), there is no current run (`null`,
-   never an error). The global repo-less `runs/current` pointer still exists, but
-   it serves the **no-cwd consumers** (statusline ticks, `hook-context`,
-   `next-task`) — the cwd-based reporters never fall back to it.
+   never an error — a broken git env, versus a plain missing remote, still
+   surfaces loud).
 
 `--run <id>` always wins over this resolution; `next-action` ignores it entirely
-(always requires `--run`). `next-task` is the one exception — it stays on the global
-`runs/current` + `--assert-owner` mechanism (see [`next-task`](#the-orchestrator-next-task--next-action)),
-because the runner always passes `--run` to it explicitly. This is CLI ergonomics
-only: the hooks no longer read the global pointer at all (Decision 30), so
-concurrency-correctness does not depend on it.
+(always requires `--run`). The only consumers with **no cwd** — the hook guards
+and statusline ticks — resolve via a 3-tier order (owner session → cwd repo
+pointer → newest non-terminal scan); see [hooks.md](hooks.md#active-run-resolution).
 
 ## The orchestrator (`next-task` + `next-action`)
 
@@ -602,17 +601,17 @@ then the ready set. Writes only on a quota breach or a cascade-fail; otherwise
 read-only. Throws LOUD on a dependency deadlock.
 
 ```
-factory next-task [--run <id>]                          # defaults to runs/current
-factory next-task --assert-owner <session>              # loud-assert runs/current ownership
+factory next-task [--run <id>]                          # defaults to the caller-repo current run
+factory next-task --assert-owner <session>              # loud-assert current-run ownership
 ```
 
-`--assert-owner <session>` is an opt-in guard for a `next-task` that adopts
-`runs/current` rather than passing `--run`, defending against a concurrent
-`run create` having redirected `runs/current` onto a foreign run: it throws loud
-if the resolved run's persisted `owner_session` disagrees with `<session>`.
-Degrades safe (no assertion) when either side is unknown.
+`--assert-owner <session>` is an opt-in guard for a `next-task` that adopts the
+per-repo current run rather than passing `--run`, defending against a concurrent
+`run create` having repointed that repo's current pointer onto a foreign run: it
+throws loud if the resolved run's persisted `owner_session` disagrees with
+`<session>`. Degrades safe (no assertion) when either side is unknown.
 
-Manual `factory next-task` never needs it. It runs only on the `runs/current` path;
+Manual `factory next-task` never needs it. It runs only on the current-run path;
 the explicit `--run <id>` path bypasses it.
 
 Every envelope also carries the self-resolved run context (`run_id`, canonical
@@ -732,18 +731,57 @@ emits the compact `RunSummary`.
 ```
 factory score [--run <id>]
 factory score --fleet
+factory score --reviewers
 ```
 
 Emits `{ kind:"score", summary }`. The summary carries the S11 touch metric:
 `touches` (length of the run's `human_touches` ledger) and `touch_metric`
 (derived, never stored: `(completed ? 1 : 0) / touches` — `launch` counts, so a
 clean lights-out run scores exactly `1.0`). A run with an empty ledger reports
-`touches: 0` and `touch_metric: null` (the 0-division guard).
+`touches: 0` and `touch_metric: null` (the 0-division guard). The summary also
+carries the outer-loop review-miss roll-up ([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)):
+`misses` (the run's `misses[]` count) and `misses_by_lens` (bucketed by the
+reviewer lens that should have caught each, `'none'` = un-lensed). Both are
+derived from `run.misses`, never stored a second time.
 
-`--fleet` reports the metric across **every** run in the store: emits
-`{ kind:"fleet-score", runs:[{run_id, status, touches, metric}], aggregate }`
-where `aggregate = sum(completed) / sum(touches)` over runs carrying the ledger
-(`null` when none do). Malformed run dirs warn + skip (tolerant `listRuns`).
+`--fleet` reports the metrics across **every** run in the store: emits
+`{ kind:"fleet-score", runs:[{run_id, status, touches, metric, misses}], aggregate, total_misses, misses_per_run, misses_by_lens }`.
+`aggregate = sum(completed) / sum(touches)` over runs carrying the touch ledger
+(`null` when none do); `misses_per_run` divides `total_misses` by the
+**terminal**-run count (`null` when zero terminal runs — a live run is a moving
+denominator, never a fabricated rate); `misses_by_lens` sums every run's
+per-lens buckets. Malformed run dirs warn + skip (tolerant `listRuns`).
+
+`--reviewers` derives per-lens review VALUE from the `review.round` telemetry
+([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)),
+joined with misses attributed to each lens. Emits
+`{ kind:"reviewer-score", lenses:[{lens, rounds, confirmed_blockers, yield, send_back_rate, misses}], runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses }`.
+`yield`/`send_back_rate` are `null` when a lens has zero rounds (no fabricated
+rate). It is **honest about coverage**: `runs_without_events` counts runs whose
+`review.round` metrics are absent (telemetry is lossy — `emitMetric` swallows IO
+errors), so a metrics-less run is never silently scored as clean.
+
+## `miss`
+
+Writer. Records a **review miss** — a defect found in shipped factory-produced
+code, post-merge — into the run's `misses[]` ledger ([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)).
+This is the outer quality loop's only human-authored input: the engine cannot
+re-derive "a bug shipped", so a miss is one of the three sanctioned
+stored-EVENT exceptions to derive-don't-store (beside `self_heal` and
+`human_touches`).
+
+```
+factory miss [--run <id>] --task <id> --note <text> [--lens <reviewer|none>]
+```
+
+| Flag     | Meaning                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--run`  | The run whose shipped code the defect traces to. Defaults to the caller-repo current run — so a miss found the day after finalize records fine from the repo checkout.                                 |
+| `--task` | REQUIRED. The task carrying the defect; **must** ∈ the run's tasks (a `superRefine` rejects a dangling id).                                                                                            |
+| `--note` | REQUIRED human description — a miss without one is noise.                                                                                                                                              |
+| `--lens` | Optional. Which reviewer lens _should_ have caught it (`quality-reviewer`, `silent-failure-hunter`, …), or `none`. Buckets the miss in `score`'s `misses_by_lens` and the `--reviewers` per-lens join. |
+
+Appends `{task_id, at, note, lens?}` and emits `{ kind:"miss", run_id, task_id, misses:<new total> }`.
 
 ## `rescue <scan|apply|auto|gc>`
 
@@ -1110,15 +1148,18 @@ quota cache is visible.
 **Run-progress suffix (S11, [Decision 49](../explanation/decisions.md#decision-49--observability-touch-metric--statusline-progress--score---fleet)).**
 When a current run exists, the displayed text gains a suffix
 ` [factory <done>/<total> <phase> <run_id> <status>]` — shipped/total task counts,
-the first in-flight task's phase, the run id, and the run status. It reads the
-global `runs/current` symlink straight through to `state.json` with a plain
-`JSON.parse` (never `parseRunState`): a torn concurrent write, schema mismatch, or
-missing pointer degrades to **no suffix**, never a throw. Terminal runs
+the first in-flight task's phase, the run id, and the run status. It resolves the
+repo from the payload's `workspace.current_dir` and reads THAT repo's per-repo
+current pointer (Decision 61 — no global `runs/current` to read) straight through
+to `state.json` with a plain `JSON.parse` (never `parseRunState`): a torn
+concurrent write, schema mismatch, missing pointer, or a cwd outside any checkout
+degrades to **no suffix**, never a throw. Terminal runs
 (`completed`/`failed`/`superseded`) linger for **30 minutes** past `ended_at`, then
 the suffix disappears. Set `FACTORY_STATUSLINE_PROGRESS=0` to suppress the suffix
-entirely (the usage-cache write is unaffected). Known limit: under two concurrent
-runs in different repos the global pointer shows the most recent writer (a
-statusline tick has no cwd to key a per-repo pointer from).
+entirely (the usage-cache write is unaffected). Because it keys off the payload's
+`workspace.current_dir`, two concurrent runs in different repos each show their
+OWN run's suffix; a tick with no usable cwd (or outside any checkout) simply shows
+no suffix.
 
 ## `debug <start|review|spec|seed|finalize>`
 

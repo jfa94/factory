@@ -5935,6 +5935,31 @@ async function appendJsonl(path7, record) {
   await mkdir2(dirname2(path7), { recursive: true });
   await appendFile(path7, JSON.stringify(record) + "\n", "utf8");
 }
+async function readJsonl(path7) {
+  let text;
+  try {
+    text = await readFile2(path7, "utf8");
+  } catch (err) {
+    if (isEnoent(err)) {
+      return [];
+    }
+    throw err;
+  }
+  const out = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = at(lines, i).trim();
+    if (line.length === 0) {
+      continue;
+    }
+    try {
+      out.push(JSON.parse(line));
+    } catch (cause) {
+      throw new JsonParseError(`invalid JSONL at ${path7}:${i + 1}: ${cause.message}`, path7, cause);
+    }
+  }
+  return out;
+}
 
 // src/shared/time.ts
 function nowIso() {
@@ -6875,6 +6900,21 @@ var E2eAssessmentSchema = openPhaseMarker(
 );
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
+var MissSchema = external_exports.object({
+  /** The task whose shipped code the miss traces to (∈ run.tasks — refined below). */
+  task_id: external_exports.string().min(1),
+  /** ISO-8601 record time, stamped by the CLI. */
+  at: external_exports.string(),
+  /** REQUIRED human description — a miss without one is noise. */
+  note: external_exports.string().min(1),
+  /**
+   * Human judgment: which reviewer lens SHOULD have caught it (a panel role), or
+   * 'none' when no lens could have. Stays a bare string here — a frozen state schema
+   * must not import the verifier's panel roster; the `factory miss` CLI validates
+   * it against `panelRolesFor(true) ∪ {'none'}`.
+   */
+  lens: external_exports.string().min(1).optional()
+});
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
   schema_version: external_exports.literal(3).default(3),
@@ -6946,6 +6986,15 @@ var RunStateSchema = external_exports.object({
       at: external_exports.string()
     })
   ).default([]),
+  /**
+   * review-miss ledger (Decision 61): one entry per human-reported defect in
+   * shipped factory-produced code, post-merge. The THIRD sanctioned stored-EVENT
+   * exception to derive-don't-store (with `self_heal` + `human_touches`) — "a human
+   * found this in shipped code" is history nothing can re-derive. Appended by
+   * `factory miss`; `factory score` derives the miss metrics from it. Default []:
+   * legacy runs (no field) carry no misses.
+   */
+  misses: external_exports.array(MissSchema).default([]),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /** PRD-traceability phase marker (S9); absent until the phase runs. */
@@ -7089,6 +7138,15 @@ function refineRunCrossFields(run9, ctx) {
       });
     }
   }
+  run9.misses.forEach((e, i) => {
+    if (run9.tasks[e.task_id] === void 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["misses", i, "task_id"],
+        message: `miss-ledger references task '${e.task_id}' which is not in run '${run9.run_id}'`
+      });
+    }
+  });
 }
 var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
 function parseRunState(raw) {
@@ -7253,9 +7311,6 @@ function runReportPath(dataDir, runId) {
 }
 function runCoverageDir(dataDir, runId) {
   return join3(runDir(dataDir, runId), "coverage");
-}
-function currentLinkPath(dataDir) {
-  return join3(runsRoot(dataDir), CURRENT_LINK);
 }
 function currentRepoRoot(dataDir) {
   return join3(dataDir, CURRENT_DIR);
@@ -7426,18 +7481,6 @@ var StateManager = class _StateManager {
     return existsSync4(this.statePath(runId));
   }
   /**
-   * Read the run currently pointed at by `runs/current`, or null if there is no
-   * current run. `current` is a directory symlink; we read `state.json` *through*
-   * it (the OS follows the symlink during the path walk), so no separate readlink
-   * is needed. LOUD on a corrupt/invalid current state.json — only genuine
-   * ABSENCE (missing/dangling symlink → ENOENT) maps to null, matching read()'s
-   * loud-on-corruption contract. Swallowing a ZodError/JSON error here would make
-   * a corrupt active run indistinguishable from "no current run".
-   */
-  async readCurrent() {
-    return this.readThroughLink(currentLinkPath(this.dataDir));
-  }
-  /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
    * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
    * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
@@ -7574,7 +7617,7 @@ var StateManager = class _StateManager {
    */
   async deleteRun(runId) {
     await rm(runDir(this.dataDir, runId), { recursive: true, force: true });
-    const links = [currentLinkPath(this.dataDir)];
+    const links = [];
     try {
       const repoLinks = await readdir(currentRepoRoot(this.dataDir), { withFileTypes: true });
       links.push(...repoLinks.map((e) => join4(currentRepoRoot(this.dataDir), e.name)));
@@ -7748,7 +7791,8 @@ var StateManager = class _StateManager {
       );
     }
     await this.repointSymlink(currentRepoLinkPath(this.dataDir, repo), join4("..", RUNS_DIR, state.run_id));
-    await this.repointSymlink(currentLinkPath(this.dataDir), join4(state.run_id));
+    await rm(join4(runsRoot(this.dataDir), CURRENT_LINK), { force: true }).catch(() => {
+    });
   }
   /**
    * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
@@ -9455,6 +9499,14 @@ function touchMetricOf(run9) {
   }
   return (run9.status === "completed" ? 1 : 0) / touches;
 }
+function missesByLensOf(run9) {
+  const byLens = {};
+  for (const e of run9.misses) {
+    const key = e.lens ?? "none";
+    byLens[key] = (byLens[key] ?? 0) + 1;
+  }
+  return byLens;
+}
 function buildRunSummary(run9, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
@@ -9491,7 +9543,9 @@ function buildRunSummary(run9, report, opts = {}) {
     shipped_prs,
     tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0,
     touches,
-    touch_metric: touchMetric
+    touch_metric: touchMetric,
+    misses: run9.misses.length,
+    misses_by_lens: missesByLensOf(run9)
   };
 }
 
@@ -9514,6 +9568,9 @@ async function writeMetric(dataDir, runId, event, data, opts) {
 }
 async function emitMetric(dataDir, runId, event, data, opts = {}) {
   return (await writeMetric(dataDir, runId, event, data, opts)).record;
+}
+async function readMetrics(dataDir, runId) {
+  return readJsonl(runMetricsPath(dataDir, runId));
 }
 async function recordRunFinalized(dataDir, report, opts = {}) {
   const now = opts.now ?? nowIso();
@@ -9551,6 +9608,88 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
     );
     await writeMetric(dataDir, report.run_id, "telemetry.writes_dropped", { dropped }, { now });
   }
+}
+
+// src/scoring/reviewer-value.ts
+var ReviewRoundDataSchema = external_exports.object({
+  outcome: external_exports.enum(["advance", "send-back", "environmental"]),
+  reviewers: external_exports.array(
+    external_exports.object({
+      reviewer: external_exports.string().min(1),
+      confirmed_blockers: external_exports.number().int().min(0).default(0)
+    })
+  ).default([]),
+  cross_vendor_absent: external_exports.boolean().optional()
+});
+function parseReviewRounds(metrics) {
+  const out = [];
+  for (const m of metrics) {
+    if (m.event !== "review.round") {
+      continue;
+    }
+    const parsed = ReviewRoundDataSchema.safeParse(m.data);
+    if (parsed.success) {
+      out.push(parsed.data);
+    }
+  }
+  return out;
+}
+function aggregateReviewerValue(runs) {
+  const byLens = /* @__PURE__ */ new Map();
+  const acc = (lens) => {
+    let a = byLens.get(lens);
+    if (a === void 0) {
+      a = { rounds: 0, confirmed_blockers: 0, send_back_blocker_rounds: 0, misses: 0 };
+      byLens.set(lens, a);
+    }
+    return a;
+  };
+  let runsCovered = 0;
+  let runsWithoutEvents = 0;
+  let crossVendorAbsentRounds = 0;
+  let unattributedMisses = 0;
+  for (const run9 of runs) {
+    if (run9.rounds.length > 0) {
+      runsCovered += 1;
+    } else {
+      runsWithoutEvents += 1;
+    }
+    for (const round of run9.rounds) {
+      if (round.cross_vendor_absent === true) {
+        crossVendorAbsentRounds += 1;
+      }
+      for (const r of round.reviewers) {
+        const a = acc(r.reviewer);
+        a.rounds += 1;
+        a.confirmed_blockers += r.confirmed_blockers;
+        if (r.confirmed_blockers > 0 && round.outcome === "send-back") {
+          a.send_back_blocker_rounds += 1;
+        }
+      }
+    }
+    for (const e of run9.misses) {
+      if (e.lens !== void 0 && e.lens !== "none") {
+        acc(e.lens).misses += 1;
+      } else {
+        unattributedMisses += 1;
+      }
+    }
+  }
+  const lenses = [...byLens.entries()].map(([lens, a]) => ({
+    lens,
+    rounds: a.rounds,
+    confirmed_blockers: a.confirmed_blockers,
+    yield: a.rounds > 0 ? a.confirmed_blockers / a.rounds : null,
+    send_back_rate: a.rounds > 0 ? a.send_back_blocker_rounds / a.rounds : null,
+    misses: a.misses
+  })).sort((x, y) => (y.yield ?? -1) - (x.yield ?? -1) || x.lens.localeCompare(y.lens));
+  return {
+    lenses,
+    runs_covered: runsCovered,
+    runs_without_events: runsWithoutEvents,
+    cross_vendor_absent_rounds: crossVendorAbsentRounds,
+    unattributed_misses: unattributedMisses
+  };
 }
 
 // src/quota/usage-source.ts
@@ -14579,6 +14718,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     );
   }
   let step;
+  let outcome;
   if (panel.result.kind === "advance") {
     const nextPhaseVal = panel.result.to;
     const nextStatus = phaseToInFlightStatus(nextPhaseVal);
@@ -14593,6 +14733,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       cross_vendor_absent: panel.crossVendorAbsence
     }));
     step = { done: false, phase: nextPhaseVal };
+    outcome = "advance";
   } else if (panel.result.kind === "wait-retry") {
     if (deps.config.review.requireCrossVendor === "block" && panel.crossVendorAbsence !== void 0) {
       step = await escalateOrFail(
@@ -14603,6 +14744,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
         "exec"
       );
       await persistStepCursor(deps, runId, taskId, step);
+      outcome = "environmental";
     } else {
       const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
       await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
@@ -14614,10 +14756,24 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
         "exec"
       );
       await persistStepCursor(deps, runId, taskId, step);
+      outcome = "send-back";
     }
   } else {
     throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
   }
+  await emitMetric(deps.dataDir, runId, "review.round", {
+    task_id: taskId,
+    rung: task.escalation_rung,
+    outcome,
+    // Per-lens {reviewer, verdict, confirmed_blockers} so `score --reviewers` can
+    // compute each lens's yield + send-back rate without re-reading state.
+    reviewers: panel.reviewerResults.map((r) => ({
+      reviewer: r.reviewer,
+      verdict: r.verdict,
+      confirmed_blockers: r.confirmed_blockers
+    })),
+    ...panel.crossVendorAbsence !== void 0 ? { cross_vendor_absent: true } : {}
+  });
   return {
     run_id: runId,
     task_id: taskId,
@@ -19321,37 +19477,77 @@ var HELP5 = `factory score \u2014 report a run's outcome summary (read-only)
 Usage:
   factory score [--run <id>]
   factory score --fleet
+  factory score --reviewers
 
-  --run            The run to score (defaults to runs/current).
-  --fleet          Report the touch metric across EVERY run in the store (S11):
-                   per-run touches + metric, and the fleet aggregate
-                   sum(completed) / sum(touches) over runs carrying the ledger.
+  --run            The run to score (defaults to this repo's current run).
+  --fleet          Report the touch metric + misses across EVERY run in the store:
+                   per-run touches + metric + misses, the fleet touch aggregate
+                   sum(completed) / sum(touches), and the miss roll-up
+                   (total_misses, misses_per_run over terminal runs, misses_by_lens).
+  --reviewers      Report per-lens review value from the review.round telemetry
+                   joined with the miss ledger: rounds, confirmed blockers, yield,
+                   send-back rate, and misses attributed to each lens. Honest about
+                   coverage (runs_covered vs runs_without_events).
 
 Emits ONE JSON document:
-  { kind:"score", summary }  |  { kind:"fleet-score", runs, aggregate }`;
+  { kind:"score", summary }
+  { kind:"fleet-score", runs, aggregate, total_misses, misses_per_run, misses_by_lens }
+  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses }`;
 async function runFleet(state) {
   const all = await state.listRuns();
   const runs = all.map((r) => ({
     run_id: r.run_id,
     status: r.status,
     touches: r.human_touches.length,
-    metric: touchMetricOf(r)
+    metric: touchMetricOf(r),
+    misses: r.misses.length
   }));
   const withLedger = all.filter((r) => r.human_touches.length > 0);
   const totalTouches = withLedger.reduce((n, r) => n + r.human_touches.length, 0);
   const completed = withLedger.filter((r) => r.status === "completed").length;
   const aggregate = totalTouches === 0 ? null : completed / totalTouches;
-  emitJson({ kind: "fleet-score", runs, aggregate });
+  const totalMisses = all.reduce((n, r) => n + r.misses.length, 0);
+  const terminalRuns = all.filter((r) => isTerminalRunStatus(r.status)).length;
+  const missesPerRun = terminalRuns === 0 ? null : totalMisses / terminalRuns;
+  const missesByLens = {};
+  for (const r of all) {
+    for (const [lens, n] of Object.entries(missesByLensOf(r))) {
+      missesByLens[lens] = (missesByLens[lens] ?? 0) + n;
+    }
+  }
+  emitJson({
+    kind: "fleet-score",
+    runs,
+    aggregate,
+    total_misses: totalMisses,
+    misses_per_run: missesPerRun,
+    misses_by_lens: missesByLens
+  });
+  return EXIT.OK;
+}
+async function runReviewers(state, dataDir) {
+  const all = await state.listRuns();
+  const perRun = await Promise.all(
+    all.map(async (r) => ({
+      run_id: r.run_id,
+      misses: r.misses,
+      rounds: parseReviewRounds(await readMetrics(dataDir, r.run_id))
+    }))
+  );
+  emitJson({ kind: "reviewer-score", ...aggregateReviewerValue(perRun) });
   return EXIT.OK;
 }
 async function runScore(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["fleet"] });
+  const args = parseArgs(argv, { booleans: ["fleet", "reviewers"] });
   if (args.flag("help") === true) {
     return emitHelp(HELP5);
   }
   const { dataDir, state } = openState();
   if (args.flag("fleet") === true) {
     return runFleet(state);
+  }
+  if (args.flag("reviewers") === true) {
+    return runReviewers(state, dataDir);
   }
   const explicitRun = optionalString(args.flag("run"));
   const runState2 = explicitRun !== void 0 ? await state.read(explicitRun) : await readCurrentForCwd(state, overrides);
@@ -19370,8 +19566,74 @@ var scoreCommand = {
   run: withUsageGuard("score", runScore)
 };
 
+// src/cli/subcommands/miss.ts
+var HELP6 = `factory miss \u2014 record a defect the review panel missed post-merge (Decision 61)
+
+Usage:
+  factory miss [--run <id>] --task <id> --note <text> [--lens <reviewer|none>]
+
+  --run     The run whose shipped code the defect traces to (defaults to this
+            repo's current run \u2014 the per-repo pointer keeps naming the last run
+            after finalize, so recording a miss days later works).
+  --task    The task (\u2208 the run's tasks) whose code carries the defect.
+  --note    REQUIRED human description of the defect (a miss without one is noise).
+  --lens    Which reviewer lens SHOULD have caught it, or 'none'. Optional.
+
+It is a LEDGER \u2014 repeats append (dedup is a human judgment call), and a not-yet-done
+task still records (misses can surface via rollup/partial runs).
+
+Emits ONE JSON document:
+  { kind:"miss", run_id, task_id, misses:<new total> }`;
+function validLenses() {
+  return [...panelRolesFor(true), "none"];
+}
+async function runMiss(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    return emitHelp(HELP6);
+  }
+  const { state } = openState();
+  const runId = await resolveRunIdOrCurrent(state, args, "miss", overrides);
+  const run9 = await state.read(runId);
+  const taskId = optionalString(args.flag("task"));
+  if (taskId === void 0) {
+    throw new UsageError("miss requires --task <id>");
+  }
+  if (run9.tasks[taskId] === void 0) {
+    const ids = Object.keys(run9.tasks);
+    throw new UsageError(
+      `unknown --task '${taskId}' in run '${runId}'; valid task ids: ${ids.length > 0 ? ids.join(", ") : "(none)"}`
+    );
+  }
+  const note = optionalString(args.flag("note"));
+  if (note === void 0) {
+    throw new UsageError("miss requires --note <text> (a miss without a description is noise)");
+  }
+  const lens = optionalString(args.flag("lens"));
+  if (lens !== void 0 && !validLenses().includes(lens)) {
+    throw new UsageError(`unknown --lens '${lens}'; valid: ${validLenses().join(", ")}`);
+  }
+  const taskStatus = run9.tasks[taskId].status;
+  if (taskStatus !== "done") {
+    emitError(
+      `miss: task '${taskId}' is not 'done' (status '${taskStatus}') \u2014 recording anyway; verify the miss traces to this task's shipped code`
+    );
+  }
+  const at2 = nowIso();
+  const updated = await state.update(runId, (s) => ({
+    ...s,
+    misses: [...s.misses, { task_id: taskId, at: at2, note, ...lens !== void 0 ? { lens } : {} }]
+  }));
+  emitJson({ kind: "miss", run_id: runId, task_id: taskId, misses: updated.misses.length });
+  return EXIT.OK;
+}
+var missCommand = {
+  describe: "Record a defect the review panel missed post-merge (Decision 61)",
+  run: withUsageGuard("miss", runMiss)
+};
+
 // src/cli/subcommands/drive.ts
-var HELP6 = `factory next-action \u2014 step one task until it needs agents or is terminal
+var HELP7 = `factory next-action \u2014 step one task until it needs agents or is terminal
 
 Usage:
   factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
@@ -19394,7 +19656,7 @@ Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP6);
+    return emitHelp(HELP7);
   }
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
@@ -19415,10 +19677,10 @@ var driveCommand = {
 
 // src/cli/subcommands/next.ts
 var log36 = createLogger("next-task");
-var HELP7 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
+var HELP8 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
-  factory next-task [--run <id>]      (defaults to runs/current)
+  factory next-task [--run <id>]      (defaults to this repo's current run)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the runner adopts them
@@ -19428,7 +19690,7 @@ from the first \`next-task\`:
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
-  factory next-task --assert-owner <session>          (loud-assert runs/current ownership)
+  factory next-task --assert-owner <session>          (loud-assert current-run ownership)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
@@ -19443,14 +19705,14 @@ function assertCurrentOwner(current, assertOwner) {
   }
   if (actual !== expected) {
     throw new Error(
-      `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Pass --run <id> explicitly.`
+      `next-task: this repo's current run '${current.run_id}' is owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved the current pointer onto a foreign run. Pass --run <id> explicitly.`
     );
   }
 }
 async function runNextTask(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP7);
+    return emitHelp(HELP8);
   }
   const explicit = args.flag("run");
   let runId;
@@ -19458,7 +19720,10 @@ async function runNextTask(argv, overrides = {}) {
     runId = explicit;
   } else {
     const dataDir = resolveDataDir({});
-    const current = await new StateManager({ dataDir }).readCurrent();
+    const state = new StateManager({ dataDir });
+    const current = await readCurrentForCwd(state, {
+      ...overrides.gitClient !== void 0 ? { gitClient: overrides.gitClient } : {}
+    });
     if (current === null) {
       throw new UsageError("no --run given and no current run");
     }
@@ -19506,7 +19771,7 @@ async function readStdin(stream = process.stdin) {
 
 // src/cli/subcommands/statusline.ts
 var log37 = createLogger("cli:statusline");
-var HELP8 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
+var HELP9 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
 reads the piped JSON payload, writes \`rate_limits + {captured_at}\` to
@@ -19519,17 +19784,34 @@ Usage:
 
 This is a side-effecting passthrough, not a machine subcommand: stdout is the
 displayed statusline text, NOT a JSON envelope.`;
+function cwdOf(payload) {
+  if (typeof payload !== "object" || payload === null) {
+    return void 0;
+  }
+  const p = payload;
+  const fromWorkspace = p.workspace?.current_dir;
+  if (typeof fromWorkspace === "string" && fromWorkspace.length > 0) {
+    return fromWorkspace;
+  }
+  return typeof p.cwd === "string" && p.cwd.length > 0 ? p.cwd : void 0;
+}
 function progressEnabled(env = process.env) {
   return env.FACTORY_STATUSLINE_PROGRESS !== "0";
 }
 var TERMINAL_LINGER_SEC = 30 * 60;
-async function renderProgress(deps) {
+async function renderProgress(deps, payload) {
   try {
     if (!progressEnabled(deps.env ?? process.env)) {
       return "";
     }
+    const cwd = cwdOf(payload);
+    if (cwd === void 0) {
+      return "";
+    }
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
-    const raw = await readFile18(join27(currentLinkPath(dataDir), STATE_FILE), "utf8");
+    const gitClient = deps.gitClient ?? new DefaultGitClient();
+    const repo = await resolveRepo({ cwd, gitClient });
+    const raw = await readFile18(join27(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run9 = JSON.parse(raw);
     if (typeof run9.run_id !== "string" || typeof run9.status !== "string") {
       return "";
@@ -19602,7 +19884,7 @@ async function passthrough(payload, deps) {
 async function runStatusline(argv = [], deps = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
-    return emitHelp(HELP8);
+    return emitHelp(HELP9);
   }
   const payload = deps.readStdin ? await deps.readStdin() : await readStdin(deps.stdin);
   let parsed;
@@ -19614,7 +19896,7 @@ async function runStatusline(argv = [], deps = {}) {
   const rateLimits = rateLimitsOf(parsed);
   const cacheFailure = rateLimits !== null ? await writeCache(rateLimits, deps) : null;
   const displayed = await passthrough(payload, deps);
-  const progress = await renderProgress(deps);
+  const progress = await renderProgress(deps, parsed);
   const write = deps.writeStdout ?? ((text) => process.stdout.write(text));
   const base = cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`;
   write(`${base}${progress}`.trimStart());
@@ -19631,7 +19913,7 @@ import { readFile as readFile19 } from "node:fs/promises";
 import { join as join28 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log38 = createLogger("autonomy");
-var HELP9 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
+var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
 is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
@@ -19924,7 +20206,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 async function run8(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
-    return emitHelp(HELP9);
+    return emitHelp(HELP10);
   }
   const verb = args.positionals[0];
   if (verb === "status") {
@@ -19968,6 +20250,7 @@ var cliRegistry = {
   rescue: rescueCommand,
   reconcile: reconcileCommand,
   score: scoreCommand,
+  miss: missCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
   "next-action": driveCommand,

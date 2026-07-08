@@ -2281,6 +2281,78 @@ here resets, force-pushes, closes a PR, or deletes a branch — those remain con
 
 ---
 
+## Decision 61 — Closing the Outer Quality Loop (Review Misses, Reviewer Value, Single Pointer)
+
+**Date:** 2026-07-08
+
+**Context:** The INNER quality loop is closed (risk-invariant panel, verify-then-fix, deterministic
+gates). The OUTER loop was not: nothing measured whether a defect the review panel MISSED reached
+shipped code, nothing told us which reviewer lenses earned their tokens, and two legacies lingered —
+the `warn`-mode cross-vendor policy and the global `runs/current` pointer (the B1 hazard class where
+a stale pointer outlives schema versions and silently drives the wrong run).
+
+> **Terminology (chosen 2026-07-08).** The concept is a **review miss** — a defect the panel should
+> have caught but didn't, found post-merge. We rejected "escape" (the textbook QA term "defect
+> escape") because the codebase already overloads "escape" three ways (path-traversal escape,
+> string escaping, escape-hatch). "Miss" also reads cleanly next to the reviewer-lens attribution
+> ("which lens missed it").
+
+**Decision (five parts):**
+
+1. **Review-miss ledger — a third sanctioned stored-EVENT exception.** A **miss** = a defect the
+   review panel missed, found in shipped factory-produced code post-merge. It is recorded as
+   `misses: MissSchema[]` on `RunState` (`{task_id, at, note, lens?}`), beside `self_heal` ([Decision 48](#decision-48--in-session-self-heal-for-transient-failures))
+   and `human_touches` ([Decision 49](#decision-49--human-touch-ledger)) — the three deliberate
+   breaks from derive-don't-store, because a miss is irrecoverable human-reported history the
+   engine cannot re-derive. **Not** `metrics.jsonl` (`emitMetric` swallows IO errors — wrong tier
+   for history that must not be lost) and **not** gh labels (net-new write surface for zero
+   derivational value). A schema `superRefine` rejects a dangling `misses[].task_id` (must exist
+   in `run.tasks`). The `factory miss [--run] --task --note [--lens]` verb stamps the entry;
+   `--run` defaults through the per-repo current pointer so "record a miss the day after" works
+   from the repo checkout. `score` derives the miss count + `misses_by_lens` from state (no
+   mirror), and `--fleet` aggregates `total_misses` / `misses_per_run` / `misses_by_lens`.
+
+2. **`review.round` telemetry.** `applyRecordReviews` emits ONE `review.round` metric per verify
+   round (`{task_id, rung, outcome: advance|send-back|environmental, reviewers[], cross_vendor_absent?}`).
+   This is telemetry (`emitMetric`), NOT state — a lossy analytics signal, correctly on the swallow-IO
+   tier. `factory score --reviewers` aggregates it (over the pure `src/scoring/reviewer-value.ts`)
+   into per-lens yield / send-back-rate, joins misses by lens, and reports backfill honesty
+   (`runs_covered` / `runs_without_events`) so a metrics-less run is never silently counted as clean.
+
+3. **The global `runs/current` pointer is RETIRED.** Every consumer now resolves the PER-REPO
+   current pointer (`current/<repo-key>`, keyed by `spec.repo`): `next-task` via `readCurrentForCwd`,
+   statusline via the payload cwd → `resolveRepo` → per-repo link, and the hook guard's
+   `loadOwnerScopedRun` via a strict 3-tier order — (a) owner `CLAUDE_CODE_SESSION_ID`, (b) the
+   invoking cwd's per-repo pointer, (c) a newest-non-terminal `listRuns` scan (deliberately broader
+   than the old global pointer, because the deny arms only need "a run is active" and null-in-a-degraded-env
+   would re-open the ship/nested-shell gates). `pointCurrentAt` no longer writes the global link and
+   best-effort `rm`s any legacy leftover; `deleteRun` sweeps only the per-repo family; `readCurrent()`,
+   `currentLinkPath`, and `BrokenRunStateError` are deleted. A corrupt state.json behind a live
+   per-repo pointer still throws LOUD (fail-closed deny); only genuine absence resolves to null.
+
+4. **Cross-vendor `block` recommended, default stays `warn` (deferred flip).** Under `block`, a
+   missing Codex fails the task ENVIRONMENTAL (rescue-recoverable) — a stall source without
+   autonomous repair. The recommendation (documented in
+   [configuration.md](../reference/configuration.md)): flip to `block` only once Codex is reliably
+   provisioned AND self-heal is live ([Decision 48](#decision-48--in-session-self-heal-for-transient-failures)).
+   The flip is a per-maintainer `factory configure` action, not a repo-committed default.
+
+5. **e2e default-on is DEFERRED (recorded open decision).** Flipping `--e2e` from opt-in to
+   default-on (probe a git-tracked `playwright.config.ts`; `e2e = noE2e ? false : explicitE2e || probe.ok`)
+   is gated on operational evidence: **≥3 consecutive `--e2e` opt-in runs with the e2e phase
+   concluding `done`, zero e2e-caused rescues, and self-heal live.** Those are live-operational facts
+   not derivable from the repo and unmet at authoring time, so the default-on code was NOT landed —
+   e2e stays opt-in. Revisit once the soak holds.
+
+**Consequences:** The outer loop is now measurable: misses are recorded and joined to reviewer
+lenses, so `score --reviewers` answers "which lens earns its tokens" and `score`/`--fleet` answer
+"how many misses shipped." The single-pointer story removes a whole hazard class — no global pointer can
+outlive a schema version and drive the wrong run; two concurrent runs in two checkouts each resolve
+their OWN run. Two flips (cross-vendor `block`, e2e default-on) remain deliberately deferred behind
+operational gates rather than shipped blind.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

@@ -28,7 +28,8 @@ import {parseArgs} from '../args.js'
 import {emitHelp} from '../io.js'
 import {readStdin} from '../../shared/stdin.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/index.js'
-import {currentLinkPath, STATE_FILE} from '../../core/state/paths.js'
+import {currentRepoLinkPath, STATE_FILE} from '../../core/state/paths.js'
+import {resolveRepo, DefaultGitClient, type GitClient} from '../../git/index.js'
 import {usageCachePath} from '../../quota/usage-source.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
 import {stringifyJson} from '../../shared/json.js'
@@ -75,6 +76,25 @@ export interface StatuslineDeps {
     exec?: typeof exec
     /** Env override for the progress kill-switch (defaults to process.env). */
     env?: NodeJS.ProcessEnv
+    /** Test seam for repo resolution in the progress suffix; defaults to {@link DefaultGitClient}. */
+    gitClient?: GitClient
+}
+
+/**
+ * The invoking session's cwd from the CC statusline payload — the repo anchor for
+ * the per-repo current pointer. CC pipes `workspace.current_dir` (with a bare `cwd`
+ * as an older/simpler fallback). Undefined when neither is present.
+ */
+function cwdOf(payload: unknown): string | undefined {
+    if (typeof payload !== 'object' || payload === null) {
+        return undefined
+    }
+    const p = payload as {workspace?: {current_dir?: unknown}; cwd?: unknown}
+    const fromWorkspace = p.workspace?.current_dir
+    if (typeof fromWorkspace === 'string' && fromWorkspace.length > 0) {
+        return fromWorkspace
+    }
+    return typeof p.cwd === 'string' && p.cwd.length > 0 ? p.cwd : undefined
 }
 
 /** S11 kill-switch: `FACTORY_STATUSLINE_PROGRESS=0` hides the progress suffix. */
@@ -91,22 +111,31 @@ const TERMINAL_LINGER_SEC = 30 * 60
  * in-flight task's phase, run id, run status). Terminal runs show only for
  * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
  *
- * DELIBERATELY raw reads: the GLOBAL repo-less `runs/current` symlink dereferenced
+ * The run is keyed off the PER-REPO current pointer, resolved from the payload's
+ * cwd (Decision 61) — so two concurrent runs in different checkouts each show their OWN run,
+ * not whichever wrote a global pointer last. No cwd in the payload → no suffix.
+ *
+ * DELIBERATELY raw reads: the per-repo `current/<repo>` symlink dereferenced
  * straight to `state.json` + a plain `JSON.parse` — never `parseRunState`. A
  * torn/partial concurrent write, a schema mismatch, or a missing pointer must
  * degrade to "no suffix", not a Zod throw: the statusline NEVER breaks.
- * ponytail: accepted limit — under two concurrent runs in different repos the
- * global pointer shows the most recent writer (a statusline tick has no cwd to
- * key the per-repo pointer from).
+ * ponytail: one `git remote get-url` per tick, uncached — cache if it ever shows
+ * up on the statusline latency budget.
  */
-async function renderProgress(deps: StatuslineDeps): Promise<string> {
+async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<string> {
     try {
         if (!progressEnabled(deps.env ?? process.env)) {
             return ''
         }
+        const cwd = cwdOf(payload)
+        if (cwd === undefined) {
+            return '' // no cwd → cannot key the per-repo pointer.
+        }
         const dataDir = resolveDataDir(deps.dataDirOptions ?? {})
+        const gitClient = deps.gitClient ?? new DefaultGitClient()
+        const repo = await resolveRepo({cwd, gitClient}) // throws (→ "") outside a checkout
         // Read THROUGH the symlink — no readlink dance, a dangling pointer just throws.
-        const raw = await readFile(join(currentLinkPath(dataDir), STATE_FILE), 'utf8')
+        const raw = await readFile(join(currentRepoLinkPath(dataDir, repo), STATE_FILE), 'utf8')
         const run = JSON.parse(raw) as {
             run_id?: unknown
             status?: unknown
@@ -245,7 +274,7 @@ export async function runStatusline(argv: string[] = [], deps: StatuslineDeps = 
     //    cache failure IN the visible text — the quota pacer is silently reading a
     //    stale cache until this is fixed, so the operator must actually see it.
     const displayed = await passthrough(payload, deps)
-    const progress = await renderProgress(deps) // S11: "" unless a current run exists
+    const progress = await renderProgress(deps, parsed) // S11: "" unless a current run exists
     const write = deps.writeStdout ?? ((text: string) => process.stdout.write(text))
     const base = cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`
     write(`${base}${progress}`.trimStart())

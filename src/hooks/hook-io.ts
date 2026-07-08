@@ -46,6 +46,9 @@ export interface HookInput {
     agent_transcript_path?: string
     transcript_path?: string
     session_id?: string
+    /** The invoking session's cwd (CC pipes it in every hook payload) — the repo
+     * anchor for run resolution when no owner session id is present (Decision 61). */
+    cwd?: string
     [k: string]: unknown
 }
 

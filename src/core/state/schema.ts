@@ -762,6 +762,33 @@ export const ShipModeEnum = z.enum(['no-merge', 'live'])
 export type ShipMode = z.infer<typeof ShipModeEnum>
 
 /**
+ * One MISS (Decision 61): a defect found in shipped factory-produced code
+ * POST-MERGE — the outer-loop signal the inner quality loop can't see. Recorded by
+ * hand via `factory miss`, so it is the THIRD sanctioned stored-EVENT exception to
+ * derive-don't-store (with `self_heal` D48 and `human_touches` D49): "a human found
+ * this bug in shipped code" is history nothing in state or git can re-derive. NOT
+ * metrics.jsonl (emitMetric swallows IO errors — the wrong tier for irrecoverable
+ * human-reported history) and NOT a gh label (net-new write surface for zero
+ * derivational value).
+ */
+export const MissSchema = z.object({
+    /** The task whose shipped code the miss traces to (∈ run.tasks — refined below). */
+    task_id: z.string().min(1),
+    /** ISO-8601 record time, stamped by the CLI. */
+    at: z.string(),
+    /** REQUIRED human description — a miss without one is noise. */
+    note: z.string().min(1),
+    /**
+     * Human judgment: which reviewer lens SHOULD have caught it (a panel role), or
+     * 'none' when no lens could have. Stays a bare string here — a frozen state schema
+     * must not import the verifier's panel roster; the `factory miss` CLI validates
+     * it against `panelRolesFor(true) ∪ {'none'}`.
+     */
+    lens: z.string().min(1).optional(),
+})
+export type Miss = z.infer<typeof MissSchema>
+
+/**
  * The whole run. Owns the per-task state map + the spec POINTER (not the spec).
  * `schema_version` is a state-schema version for forward migration; bump only on a
  * breaking schema change.
@@ -857,6 +884,16 @@ export const RunStateSchema = z.object({
             })
         )
         .default([]),
+
+    /**
+     * review-miss ledger (Decision 61): one entry per human-reported defect in
+     * shipped factory-produced code, post-merge. The THIRD sanctioned stored-EVENT
+     * exception to derive-don't-store (with `self_heal` + `human_touches`) — "a human
+     * found this in shipped code" is history nothing can re-derive. Appended by
+     * `factory miss`; `factory score` derives the miss metrics from it. Default []:
+     * legacy runs (no field) carry no misses.
+     */
+    misses: z.array(MissSchema).default([]),
 
     /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
     docs: DocsPhaseSchema.optional(),
@@ -1057,6 +1094,19 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
             })
         }
     }
+
+    // F3: every miss must reference a task that exists in this run (Decision 61) — a dangling
+    // miss (typo'd task_id) is a serialization bug; reject at parse time so it never
+    // persists (mirrors F2 + the reviewers[] coherence refine).
+    run.misses.forEach((e, i) => {
+        if (run.tasks[e.task_id] === undefined) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['misses', i, 'task_id'],
+                message: `miss-ledger references task '${e.task_id}' which is not in run '${run.run_id}'`,
+            })
+        }
+    })
 }
 
 /** {@link RunStateSchema} + run-level cross-field checks — the validating form the seam parses. */

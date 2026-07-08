@@ -5,7 +5,6 @@ import {
     specDir,
     runDir,
     runStatePath,
-    currentLinkPath,
     currentRepoRoot,
     currentRepoLinkPath,
     docsFactoryDir,
@@ -47,7 +46,6 @@ describe('two-store layout', () => {
     it('run store is keyed by run id', () => {
         expect(runDir(data, 'run-1')).toBe(join(data, 'runs', 'run-1'))
         expect(runStatePath(data, 'run-1')).toBe(join(data, 'runs', 'run-1', 'state.json'))
-        expect(currentLinkPath(data)).toBe(join(data, 'runs', 'current'))
     })
     it('worktrees root is a sibling of runs/ and specs/ (per-task worktrees live here)', () => {
         expect(worktreesRoot(data)).toBe(join(data, 'worktrees'))

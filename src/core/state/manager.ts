@@ -37,7 +37,7 @@ import {nowIso} from '../../shared/time.js'
 import {createLogger} from '../../shared/logging.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/load.js'
 import {
-    currentLinkPath,
+    CURRENT_LINK,
     currentRepoLinkPath,
     currentRepoRoot,
     runDir,
@@ -288,19 +288,6 @@ export class StateManager {
     }
 
     /**
-     * Read the run currently pointed at by `runs/current`, or null if there is no
-     * current run. `current` is a directory symlink; we read `state.json` *through*
-     * it (the OS follows the symlink during the path walk), so no separate readlink
-     * is needed. LOUD on a corrupt/invalid current state.json — only genuine
-     * ABSENCE (missing/dangling symlink → ENOENT) maps to null, matching read()'s
-     * loud-on-corruption contract. Swallowing a ZodError/JSON error here would make
-     * a corrupt active run indistinguishable from "no current run".
-     */
-    async readCurrent(): Promise<RunState | null> {
-        return this.readThroughLink(currentLinkPath(this.dataDir))
-    }
-
-    /**
      * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
      * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
      * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
@@ -442,9 +429,12 @@ export class StateManager {
      */
     async deleteRun(runId: string): Promise<void> {
         await rm(runDir(this.dataDir, runId), {recursive: true, force: true})
-        // Sweep both pointer families: dropping a dangling pointer here is what stops
-        // the stale target from ever tripping create()'s pointer read again.
-        const links = [currentLinkPath(this.dataDir)]
+        // Sweep the per-repo pointer family (`current/<repo-key>`): dropping a dangling
+        // pointer here is what stops the stale target from ever tripping create()'s
+        // pointer read again. The retired global `runs/current` link (Decision 61) is no longer
+        // written or read, so it needs no sweep — pointCurrentAt best-effort-rms any
+        // legacy leftover on the next create.
+        const links: string[] = []
         try {
             const repoLinks = await readdir(currentRepoRoot(this.dataDir), {withFileTypes: true})
             links.push(...repoLinks.map((e) => join(currentRepoRoot(this.dataDir), e.name)))
@@ -652,8 +642,11 @@ export class StateManager {
         }
         // Per-repo pointer lives one level under <dataDir>/current, so it targets ../runs/<id>.
         await this.repointSymlink(currentRepoLinkPath(this.dataDir, repo), join('..', RUNS_DIR, state.run_id))
-        // Legacy global pointer lives under runs/, so it targets the bare <id>.
-        await this.repointSymlink(currentLinkPath(this.dataDir), join(state.run_id))
+        // The global `runs/current` link is RETIRED (Decision 61) — no consumer reads it. Best-effort
+        // rm any legacy leftover from an older engine so it can't dangle indefinitely.
+        await rm(join(runsRoot(this.dataDir), CURRENT_LINK), {force: true}).catch(() => {
+            /* best-effort legacy sweep — nothing reads the global pointer anymore */
+        })
     }
 
     /**

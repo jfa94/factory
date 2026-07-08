@@ -134,11 +134,6 @@ export function runCoverageDir(dataDir: string, runId: string): string {
     return join(runDir(dataDir, runId), 'coverage')
 }
 
-/** `<dataDir>/runs/current` symlink path — the GLOBAL repo-less pointer (no-cwd consumers: statusline ticks, hook-context). */
-export function currentLinkPath(dataDir: string): string {
-    return join(runsRoot(dataDir), CURRENT_LINK)
-}
-
 /** `<dataDir>/current` — the per-repo pointer tree (sibling of `runs/`, L2.7). */
 export function currentRepoRoot(dataDir: string): string {
     return join(dataDir, CURRENT_DIR)

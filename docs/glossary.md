@@ -190,6 +190,21 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - Counter-example: skipping the silent-failure-hunter on a "routine" Task — the panel does not shrink with perceived risk.
 - **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Automated Gates and Holdout Validation.
 - **synonyms**: —
+
+### Review Miss
+
+- **type**: Domain Event (a defect that outlived the merge gate)
+- **status**: accepted
+- **definition**: A defect found in shipped factory-produced code after it merged — the one thing the quality panel exists to prevent, observed happening. A Miss is the outer quality loop's only human-authored input: the engine can prove a Task passed Review, but only a person can report that a passed Task shipped a bug. Each Miss names the Task it traces to and, optionally, the reviewer lens that _should_ have caught it, so misses attribute back to the panel and answer "which lens earns its tokens" (Decision 61).
+- **invariants**:
+    - A Miss is recorded, never derived — a shipped bug is history no state or git re-derivation can recover, so it is one of the three sanctioned stored-event exceptions to derive-don't-store (beside the self-heal and human-touch ledgers).
+    - Every Miss traces to a Task that exists in its Run; a dangling reference is rejected.
+    - Recording a Miss is an observation, not a repair — it never reopens or mutates the Run's work.
+- **examples**:
+    - A merged auth Task ships a token that never expires; a week later a maintainer records the Miss against that Task with `--lens quality-reviewer`, and `score --reviewers` docks that lens's yield.
+    - Counter-example: a bug caught _during_ Review and sent back to the Implementer — that is a blocker, not a Miss; nothing shipped.
+- **relationships**: the outer-loop counterpart to Review (a Miss is what Review missed); attributed by reviewer lens; surfaced by `factory score` / `score --fleet` / `score --reviewers`; recorded by `factory miss`.
+- **synonyms**: review miss, defect escape.
 - **code anchor**: `src/verifier/judgment/panel-run.ts`
 
 ### Automated Gate

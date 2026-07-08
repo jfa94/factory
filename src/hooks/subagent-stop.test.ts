@@ -43,6 +43,7 @@ function run(tasks: Record<string, TaskState>): RunState {
         ship_mode: 'live',
         ignore_quota: false,
         human_touches: [],
+        misses: [],
         e2e: false,
         debug: false,
         started_at: 't',
