@@ -4,7 +4,7 @@ import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {StateManager} from './manager.js'
-import {runStatePath, runsRoot, specDir} from './paths.js'
+import {runStatePath, runsRoot, specDir, currentLinkPath} from './paths.js'
 import {parseRunState, type SpecPointer} from './schema.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
 import {deriveMergeGateVerdict} from './derive.js'
@@ -615,6 +615,16 @@ describe('D57: born whole — birth-write seeding + stale-pointer tolerance + st
         await expect(mgr().readCurrentForRepo('acme/widgets')).rejects.toThrow(/schema v2/)
     })
 
+    it('a non-parse read error (EACCES) on the current pointer makes create() refuse, not repoint (P3)', async () => {
+        // The D57 tolerance is scoped to unparseable/old-schema targets. A transient
+        // read failure (permissions, I/O) on a genuinely live pointer must NOT be
+        // treated as stale — repointing over it would hide a live run.
+        const m = mgr()
+        const eacces = Object.assign(new Error('EACCES: permission denied'), {code: 'EACCES'})
+        vi.spyOn(m, 'readCurrentForRepo').mockRejectedValueOnce(eacces)
+        await expect(m.create({run_id: 'run-new', staging_branch: 'staging-run-new', spec})).rejects.toBe(eacces)
+    })
+
     it('listStaleRunDirs: old-schema + corrupt-json reported, v3 + mid-creation dirs skipped', async () => {
         const m = mgr()
         await m.create({run_id: 'run-v3', staging_branch: 'staging-run-v3', spec})
@@ -623,9 +633,13 @@ describe('D57: born whole — birth-write seeding + stale-pointer tolerance + st
         await mkdir(join(runsRoot(dataDir), 'run-corrupt'), {recursive: true})
         await atomicWriteFile(runStatePath(dataDir, 'run-corrupt'), 'not json {')
         await mkdir(join(runsRoot(dataDir), 'run-midcreate'), {recursive: true}) // no state.json → skip
+        // Valid JSON with NO schema_version at all (not even an old numeric stamp) —
+        // the v === undefined path, distinct from the numeric-old-schema branch above.
+        await mkdir(join(runsRoot(dataDir), 'run-unstamped'), {recursive: true})
+        await atomicWriteFile(runStatePath(dataDir, 'run-unstamped'), JSON.stringify({run_id: 'run-unstamped'}))
 
         const stale = await m.listStaleRunDirs()
-        expect(stale.map((s) => s.run_id)).toEqual(['run-v2-bare', 'run-v2', 'run-corrupt'])
+        expect(stale.map((s) => s.run_id)).toEqual(['run-v2-bare', 'run-v2', 'run-unstamped', 'run-corrupt'])
         expect(stale.find((s) => s.run_id === 'run-v2')).toEqual({
             run_id: 'run-v2',
             reason: 'schema-v2',
@@ -633,6 +647,10 @@ describe('D57: born whole — birth-write seeding + stale-pointer tolerance + st
             repo: 'acme/widgets',
         })
         expect(stale.find((s) => s.run_id === 'run-v2-bare')).toEqual({run_id: 'run-v2-bare', reason: 'schema-v2'})
+        expect(stale.find((s) => s.run_id === 'run-unstamped')).toEqual({
+            run_id: 'run-unstamped',
+            reason: 'schema-vundefined',
+        })
         expect(stale.find((s) => s.run_id === 'run-corrupt')).toEqual({run_id: 'run-corrupt', reason: 'corrupt-json'})
     })
 
@@ -647,6 +665,19 @@ describe('D57: born whole — birth-write seeding + stale-pointer tolerance + st
         expect(existsSync(join(dataDir, 'current', 'acme-widgets'))).toBe(false)
         // The unrelated repo's pointer + global pointer (naming run-keep) survive.
         expect(await m.readCurrentForRepo('acme/other')).toMatchObject({run_id: 'run-keep'})
+    })
+
+    it('deleteRun drops the GLOBAL runs/current pointer when it names the deleted run (P4)', async () => {
+        // create() points BOTH the per-repo AND the legacy global pointer at the new
+        // run — this exercises the `basename(target) === runId` global-link branch
+        // that the sibling test above never hits (its run-old is planted via
+        // plantV2Run, which only ever touches the per-repo tree).
+        const m = mgr()
+        await m.create({run_id: 'run-old', staging_branch: 'staging-run-old', spec})
+        expect(existsSync(currentLinkPath(dataDir))).toBe(true)
+
+        await m.deleteRun('run-old')
+        expect(existsSync(currentLinkPath(dataDir))).toBe(false)
     })
 })
 

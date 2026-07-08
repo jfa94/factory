@@ -677,6 +677,46 @@ describe('runCreate boundary (Decision 35)', () => {
         expect(code).toBe(EXIT.OK)
     })
 
+    it('S4: --e2e with a multi-project testDir config → UsageError (ambiguous, no first-match false-accept)', async () => {
+        // Before the hardening, .exec's first-match semantics would ACCEPT this config
+        // (the first testDir is 'e2e') even though the second project's real suite
+        // ('tests') lives outside the TCB-covered e2e/ path.
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await playwrightReadyCwd(git)
+        await writeFile(
+            join(cwd, 'playwright.config.ts'),
+            "export default {projects: [{testDir: 'e2e'}, {testDir: 'tests'}]};\n"
+        )
+        const create = runCreate(['--issue', '42', '--run-id', 'run-e2e-multi', '--e2e'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+        await expect(create).rejects.toMatchObject({isUsageError: true})
+        await expect(create).rejects.toThrow(/declare testDir exactly once/)
+    })
+
+    it('S4: --e2e with a decoy testDir comment ahead of the real declaration → UsageError (ambiguous)', async () => {
+        // A leading `// testDir: 'e2e'` comment would otherwise satisfy .exec's
+        // first-match check while the REAL testDir ('tests') governs at runtime.
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const gh = new FakeGhClient()
+        const cwd = await playwrightReadyCwd(git)
+        await writeFile(join(cwd, 'playwright.config.ts'), "// testDir: 'e2e'\nexport default {testDir: 'tests'};\n")
+        const create = runCreate(['--issue', '42', '--run-id', 'run-e2e-decoy', '--e2e'], {
+            gitClient: git,
+            ghClient: gh,
+            cwd,
+            dataDir,
+        })
+        await expect(create).rejects.toMatchObject({isUsageError: true})
+        await expect(create).rejects.toThrow(/declare testDir exactly once/)
+    })
+
     it('runCreate: no --e2e → run defaults to e2e:false', async () => {
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
         git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)

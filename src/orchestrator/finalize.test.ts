@@ -15,7 +15,7 @@
  * store: the report is recomputed, never read back).
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtemp, rm, readFile} from 'node:fs/promises'
+import {mkdtemp, rm, readFile, mkdir, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -27,6 +27,8 @@ import {readMetrics} from '../scoring/index.js'
 import {runReportPath} from '../core/state/paths.js'
 import {scanRun} from '../rescue/scan.js'
 import {defaultConfig} from '../config/schema.js'
+import {GATE_CONTRACT_REL} from '../verifier/deterministic/gate-contract.js'
+import {validContract} from '../verifier/deterministic/gate-contract.test.js'
 import type {ShipMode} from './types.js'
 import type {FailureClass, TaskState} from '../types/index.js'
 import {nonNull, at, getOrThrow} from '../shared/index.js'
@@ -656,6 +658,130 @@ describe('finalizeRun', () => {
         expect(gh.created.at(-1)?.head).toBe(`staging-${RUN_ID}`)
         // (c) run reached completed.
         expect(res.run.status).toBe('completed')
+    })
+})
+
+// ---------------------------------------------------------------------------
+// P4 (quick-code-review 2026-07-07): resolveGatesInForce + its three states
+// (ok/absent/invalid) were wired into finalize but never exercised through
+// finalizeRun end-to-end — only buildPartialReport's rendering was unit-tested
+// against hand-built inputs. Drive the real absent/invalid/ok contract states
+// via a FakeGitClient pointed at a real temp repo root.
+// ---------------------------------------------------------------------------
+
+describe('finalizeRun — gates-in-force (S3, resolveGatesInForce)', () => {
+    let dataDir: string
+    let repoRoot: string
+    let state: StateManager
+    let gh: FakeGhClient
+    let git: FakeGitClient
+
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'factory-finalize-gates-'))
+        repoRoot = await mkdtemp(join(tmpdir(), 'factory-finalize-gates-repo-'))
+        state = new StateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        gh = new FakeGhClient()
+        git = new FakeGitClient({repoRoot})
+        await state.create({
+            run_id: RUN_ID,
+            staging_branch: `staging-${RUN_ID}`,
+            spec: {repo: REPO, spec_id: SPEC_ID, issue_number: ISSUE},
+        })
+    })
+
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+        await rm(repoRoot, {recursive: true, force: true})
+    })
+
+    async function seed(tasks: readonly TaskSeed[]): Promise<void> {
+        await state.update(RUN_ID, (s) => ({
+            ...s,
+            tasks: Object.fromEntries(tasks.map((t) => [t.task_id, taskRow(t)])),
+        }))
+    }
+
+    function makeDeps(spec: SpecManifest): FinalizeRunDeps {
+        return {
+            state,
+            gh,
+            git,
+            config: defaultConfig(),
+            spec,
+            dataDir,
+            owner: 'acme',
+            repo: 'widgets',
+            shipMode: 'live',
+            nowIso: NOW,
+            rollup: {
+                sleep: async () => {
+                    /* no-op */
+                },
+                pollIntervalMs: 0,
+                maxPolls: 3,
+            },
+        }
+    }
+
+    it('ok contract → report.gates enumerated, markdown renders "Enforced:"', async () => {
+        await mkdir(join(repoRoot, '.factory'), {recursive: true})
+        await writeFile(join(repoRoot, GATE_CONTRACT_REL), JSON.stringify(validContract()), 'utf8')
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks)), RUN_ID)
+
+        expect(result.report.gates).toBeDefined()
+        expect(result.report.gates?.contracted).toEqual(expect.arrayContaining(['test', 'tdd', 'type', 'build']))
+        expect(result.report.gates_unavailable).toBeUndefined()
+        const markdown = await readFile(runReportPath(dataDir, RUN_ID), 'utf8')
+        expect(markdown).toMatch(/## Gates in force\nEnforced: `test`/)
+    })
+
+    it('absent contract (no .factory/gates.json) → report.gates_unavailable, markdown renders the warning', async () => {
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks)), RUN_ID)
+
+        expect(result.report.gates).toBeUndefined()
+        expect(result.report.gates_unavailable).toMatch(/contract absent/)
+        const markdown = await readFile(runReportPath(dataDir, RUN_ID), 'utf8')
+        expect(markdown).toMatch(/## Gates in force\n⚠️ gate contract unavailable at finalize: contract absent/)
+    })
+
+    it('invalid contract (malformed JSON) → report.gates_unavailable names the parse failure', async () => {
+        await mkdir(join(repoRoot, '.factory'), {recursive: true})
+        await writeFile(join(repoRoot, GATE_CONTRACT_REL), '{not json', 'utf8')
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks)), RUN_ID)
+
+        expect(result.report.gates).toBeUndefined()
+        expect(result.report.gates_unavailable).toMatch(/contract invalid/)
+        const markdown = await readFile(runReportPath(dataDir, RUN_ID), 'utf8')
+        expect(markdown).toMatch(/## Gates in force\n⚠️ gate contract unavailable at finalize: contract invalid/)
+    })
+
+    it('showToplevel() throw (repo root unresolved) → report.gates_unavailable, finalize still completes', async () => {
+        class ThrowingToplevelGit extends FakeGitClient {
+            override showToplevel(): Promise<string> {
+                throw new Error('fatal: not a git repository')
+            }
+        }
+        const throwingGit = new ThrowingToplevelGit({repoRoot})
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        const result = await finalizeRun({...makeDeps(makeSpec(tasks)), git: throwingGit}, RUN_ID)
+
+        expect(result.run.status).toBe('completed')
+        expect(result.report.gates).toBeUndefined()
+        expect(result.report.gates_unavailable).toMatch(/repo root unresolved/)
     })
 })
 

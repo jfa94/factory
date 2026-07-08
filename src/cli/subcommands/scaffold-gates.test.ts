@@ -40,6 +40,15 @@ describe('detectStack', () => {
         await writeFile(join(root, 'deno.jsonc'), '{}', 'utf8')
         expect(detectStack(root)).toBe('deno')
     })
+
+    it('a JS lockfile wins over a coexisting deno.json (node toolchain proof)', async () => {
+        // e.g. a pnpm/Next.js repo whose deno.json only scopes a Supabase Edge
+        // Function subdirectory — the root deno.json is not the repo's toolchain.
+        await writeFile(join(root, 'package.json'), '{}', 'utf8')
+        await writeFile(join(root, 'pnpm-lock.yaml'), '', 'utf8')
+        await writeFile(join(root, 'deno.json'), '{"workspace":["supabase/functions/x"]}', 'utf8')
+        expect(detectStack(root)).toBe('npm')
+    })
 })
 
 describe('resolveGateContract — deno build-task probe', () => {

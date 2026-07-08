@@ -25,13 +25,22 @@ import {
 } from '../../verifier/deterministic/gate-contract.js'
 import {ESLINT_CONFIGS} from '../../verifier/deterministic/strategies/lint.js'
 
-/** Detect the target's stack. Deno FIRST: deno repos often carry a package.json
- * for tooling; npm repos never carry a deno.json. */
+/** Detect the target's stack. A root JS lockfile is decisive proof of a node
+ * toolchain and wins over a coexisting deno.json — the deno.json may only scope
+ * a subdirectory (e.g. a Supabase Edge Function workspace member). Absent a
+ * lockfile, deno.json wins (deno repos often carry a package.json for tooling). */
 export function detectStack(targetRoot: string): GateContractStack {
-    if (existsSync(join(targetRoot, 'deno.json')) || existsSync(join(targetRoot, 'deno.jsonc'))) {
+    const has = (f: string) => existsSync(join(targetRoot, f))
+    const hasPkg = has('package.json')
+    const hasDeno = has('deno.json') || has('deno.jsonc')
+    const hasNodeLock = has('pnpm-lock.yaml') || has('package-lock.json') || has('yarn.lock') || has('bun.lockb')
+    if (hasPkg && hasNodeLock) {
+        return 'npm'
+    }
+    if (hasDeno) {
         return 'deno'
     }
-    if (existsSync(join(targetRoot, 'package.json'))) {
+    if (hasPkg) {
         return 'npm'
     }
     return 'custom'

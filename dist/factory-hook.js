@@ -1978,6 +1978,9 @@ var UsageError = class extends Error {
     this.name = "UsageError";
   }
 };
+function isUsageError(err) {
+  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+}
 
 // src/hooks/token-helpers.ts
 var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
@@ -8066,6 +8069,9 @@ function specDir(dataDir, repo, specId) {
 // src/core/state/manager.ts
 var log7 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
+function isStaleStateError(err) {
+  return err instanceof JsonParseError || err instanceof ZodError || isUsageError(err);
+}
 var StateManager = class _StateManager {
   dataDir;
   lockTuning;
@@ -8493,6 +8499,12 @@ var StateManager = class _StateManager {
    * prove the "still-live, different owner" condition the guard exists for. Mirrors
    * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
    * contract for every other caller.
+   *
+   * The tolerance is SCOPED to recognized parse/schema failures ({@link isStaleStateError}
+   * — JSON parse errors, the schema-version UsageError, or a Zod validation error);
+   * any other error (EACCES, EIO, or an unexpected bug) rethrows loudly instead of
+   * being treated as stale, so a transient read failure on a genuinely live,
+   * different-owner run never silently repoints over it.
    */
   async pointCurrentAt(state) {
     const repo = state.spec.repo;
@@ -8500,6 +8512,9 @@ var StateManager = class _StateManager {
     try {
       existing = await this.readCurrentForRepo(repo);
     } catch (err) {
+      if (!isStaleStateError(err)) {
+        throw err;
+      }
       log7.warn(
         `state: current pointer for repo '${repo}' names an unparseable run \u2014 treating as stale and repointing: ${err.message}`
       );

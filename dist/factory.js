@@ -7290,6 +7290,9 @@ function specBuildDir(root, repo, issueNumber) {
 // src/core/state/manager.ts
 var log4 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
+function isStaleStateError(err) {
+  return err instanceof JsonParseError || err instanceof ZodError || isUsageError(err);
+}
 var StateManager = class _StateManager {
   dataDir;
   lockTuning;
@@ -7717,6 +7720,12 @@ var StateManager = class _StateManager {
    * prove the "still-live, different owner" condition the guard exists for. Mirrors
    * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
    * contract for every other caller.
+   *
+   * The tolerance is SCOPED to recognized parse/schema failures ({@link isStaleStateError}
+   * — JSON parse errors, the schema-version UsageError, or a Zod validation error);
+   * any other error (EACCES, EIO, or an unexpected bug) rethrows loudly instead of
+   * being treated as stale, so a transient read failure on a genuinely live,
+   * different-owner run never silently repoints over it.
    */
   async pointCurrentAt(state) {
     const repo = state.spec.repo;
@@ -7724,6 +7733,9 @@ var StateManager = class _StateManager {
     try {
       existing = await this.readCurrentForRepo(repo);
     } catch (err) {
+      if (!isStaleStateError(err)) {
+        throw err;
+      }
       log4.warn(
         `state: current pointer for repo '${repo}' names an unparseable run \u2014 treating as stale and repointing: ${err.message}`
       );
@@ -16488,7 +16500,13 @@ async function assertE2ePrereqs(cwd) {
     );
   }
   if (configRaw !== void 0) {
-    const declared = /testDir\s*:\s*['"]([^'"]+)['"]/.exec(configRaw)?.[1];
+    const declarations = [...configRaw.matchAll(/testDir\s*:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+    if (declarations.length > 1) {
+      throw new UsageError(
+        `run create: --e2e requires playwright.config.ts to declare testDir exactly once (found ${declarations.length}: ${declarations.join(", ")}). A multi-project or duplicated testDir config is ambiguous \u2014 the TCB write-deny protects the literal e2e/ path only, so a second declaration could route the real suite outside it. Collapse to a single top-level testDir: 'e2e'.`
+      );
+    }
+    const declared = declarations[0];
     if (declared === void 0 || !TCB_COVERED_TEST_DIRS.includes(declared)) {
       const found = declared === void 0 ? "no testDir declaration" : `testDir '${declared}'`;
       throw new UsageError(
@@ -18039,10 +18057,17 @@ import { existsSync as existsSync9 } from "node:fs";
 import { mkdir as mkdir11, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname8, join as join25 } from "node:path";
 function detectStack(targetRoot) {
-  if (existsSync9(join25(targetRoot, "deno.json")) || existsSync9(join25(targetRoot, "deno.jsonc"))) {
+  const has = (f) => existsSync9(join25(targetRoot, f));
+  const hasPkg = has("package.json");
+  const hasDeno = has("deno.json") || has("deno.jsonc");
+  const hasNodeLock = has("pnpm-lock.yaml") || has("package-lock.json") || has("yarn.lock") || has("bun.lockb");
+  if (hasPkg && hasNodeLock) {
+    return "npm";
+  }
+  if (hasDeno) {
     return "deno";
   }
-  if (existsSync9(join25(targetRoot, "package.json"))) {
+  if (hasPkg) {
     return "npm";
   }
   return "custom";

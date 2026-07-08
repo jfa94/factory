@@ -150,6 +150,29 @@ every task you are currently driving. It is a rebuildable cache held in conversa
 context ONLY — the state file is truth. Never persist it anywhere (not to disk, not
 to results files).
 
+**The non-completion heartbeat (S1/3c self-heal).** A background completion is not the
+only event that must re-enter this loop — a spawn that silently dies produces none, so
+`work.stale` (below) would otherwise never be observed inside a live session. Before the
+first REFILL, arm ONE session-scoped recurring wake sized to the configured TTL:
+
+```bash
+TTL_MIN=$(factory config-defaults | jq -r .stallTtlMinutes)   # default 20
+```
+```
+CronCreate({
+  cron: "*/<TTL_MIN> * * * *", recurring: true,
+  prompt: "Heartbeat for factory run <run_id>: re-enter skills/pipeline-runner/SKILL.md
+    Phase 3 REFILL. If the run is now terminal or this session no longer has an
+    in-flight table for it, CronDelete this job and do nothing else."
+})
+```
+
+One job for the run's whole lifetime — CronCreate jobs already recur on their own;
+never re-arm per turn. It fires only while the session is idle (exactly the "WAIT: end
+the turn" window below), so it never races a call in flight. Best-effort teardown:
+`CronDelete` it once Phase 4 (report) is reached — like the worktree teardown, leaving
+it is harmless (its own prompt self-deletes it against a terminal run) but tidy.
+
 ```
 REFILL (run at loop entry and after every completion):
   env = factory next-task --run <run_id>                       # foreground
@@ -172,7 +195,31 @@ REFILL (run at loop entry and after every completion):
     "document"  → run the DOCS STAGE (below); on done, REFILL; on suspend,
                   report the reason + STOP (run is suspended — /factory:resume retries)
     "pause"     → PAUSE CONVERGENCE (below)
-    "work"      → for each task in env.ready (order preserved — in-flight tasks are
+    "work"      → # S1/3c self-heal FIRST, before the ready-fill loop, so a revived
+                  # task reclaims its slot ahead of new work:
+                  for each id in env.stale that IS in the table:
+                    check TaskList for whether its tracked agent task-ids are still
+                    running. If ANY still is → false positive (a slow-but-alive spawn,
+                    e.g. a deep verify panel that outlived the TTL) — do NOT touch it;
+                    the heartbeat re-checks next cycle. This liveness check is the ONLY
+                    guard against killing a live spawn: there is no safe non-destructive
+                    way to "just refresh spawned_at" on a timer — the sole re-drive
+                    mechanism (orchestrator.ts, on next-action re-entry) resets the task
+                    worktree to its checkpoint tip, so a periodic no-op ping would itself
+                    destroy a live agent's uncommitted/committed-since-spawn work.
+                    Else (every tracked agent already finished/errored/unaccounted-for):
+                      TaskStop each tracked agent id (harmless if already dead)
+                      remove the task from the table
+                      tenv = factory next-action --run <run_id> --task <task>   # WITHOUT --results
+                      case tenv.kind:
+                        "spawn" → spawn per the collection contract + spawn rule below;
+                                  add the task back to the table
+                        "done"  → report tenv.outcome; REFILL again
+                        "pause" → PAUSE CONVERGENCE
+                  for each id in env.stale NOT in the table (compaction/context-loss —
+                  nothing tracked to liveness-check): re-drive it the same way (idempotent
+                  per the Compaction recovery note below).
+                  then, for each task in env.ready (order preserved — in-flight tasks are
                   listed first) that is NOT already in the table, while the table has
                   fewer than env.max_parallel tasks:
                     tenv = factory next-action --run <run_id> --task <task>   # foreground
@@ -185,8 +232,8 @@ REFILL (run at loop entry and after every completion):
                       "done"  → report tenv.outcome (a drop is loud + classified);
                                 REFILL again (a terminal task may unblock dependents)
                       "pause" → PAUSE CONVERGENCE
-                  then WAIT: end the turn. Background agent completions re-invoke
-                  you — never poll, never sleep.
+                  then WAIT: end the turn. A background agent completion OR the
+                  heartbeat re-invokes you — never busy-poll.
 
 ON AGENT COMPLETION (a background agent finishes):
   Collect its output (TaskOutput) and mark it in the table.
@@ -233,7 +280,10 @@ in-flight task, `next-action` WITHOUT `--results` idempotently re-emits the curr
 manifest. Before re-spawning, check `TaskList` for still-running agents this session
 owns and re-attach them to the table (never double-spawn a producer into a task
 worktree); any manifest agent you cannot account for → re-spawn it per the manifest
-(abandoned spawns are resume-clean).
+(abandoned spawns are resume-clean). **Also re-arm the heartbeat** — `CronCreate` jobs
+are session-scoped (a compaction that starts a fresh session, or `/factory:resume`,
+loses whatever job the prior session armed); `CronList` first to avoid a duplicate if
+the same session is merely re-entering after a completion.
 
 ```
 e2e stage:

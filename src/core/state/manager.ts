@@ -31,7 +31,8 @@ import {existsSync} from 'node:fs'
 import {basename, dirname, join} from 'node:path'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../../shared/file-lock.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
-import {parseJson, stringifyJson} from '../../shared/json.js'
+import {parseJson, stringifyJson, JsonParseError} from '../../shared/json.js'
+import {ZodError} from 'zod'
 import {nowIso} from '../../shared/time.js'
 import {createLogger} from '../../shared/logging.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/load.js'
@@ -46,7 +47,7 @@ import {
     RUNS_DIR,
 } from './paths.js'
 import {parseRunState, type RunState, type SpecPointer, type TaskState, isTerminalRunStatus} from './schema.js'
-import {UsageError} from '../../shared/usage-error.js'
+import {UsageError, isUsageError} from '../../shared/usage-error.js'
 import {at} from '../../shared/index.js'
 
 const log = createLogger('state')
@@ -92,6 +93,17 @@ export interface CreateRunArgs {
      * holds exactly (callers cannot know `now` before create() mints it).
      */
     human_touches?: {kind: RunState['human_touches'][number]['kind']; at?: string}[]
+}
+
+/**
+ * True iff `err` is a recognized "this state is unparseable/old-schema" failure —
+ * the class D57's pointer-liveness tolerance ({@link StateManager.pointCurrentAt})
+ * exists to sweep. Deliberately narrow: a raw fs error (EACCES, EIO, ENOENT-that-
+ * somehow-reached-here) or any other unexpected exception is NOT stale-shaped and
+ * must rethrow rather than be treated as an abandoned run.
+ */
+function isStaleStateError(err: unknown): boolean {
+    return err instanceof JsonParseError || err instanceof ZodError || isUsageError(err)
 }
 
 /**
@@ -602,6 +614,12 @@ export class StateManager {
      * prove the "still-live, different owner" condition the guard exists for. Mirrors
      * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
      * contract for every other caller.
+     *
+     * The tolerance is SCOPED to recognized parse/schema failures ({@link isStaleStateError}
+     * — JSON parse errors, the schema-version UsageError, or a Zod validation error);
+     * any other error (EACCES, EIO, or an unexpected bug) rethrows loudly instead of
+     * being treated as stale, so a transient read failure on a genuinely live,
+     * different-owner run never silently repoints over it.
      */
     private async pointCurrentAt(state: RunState): Promise<void> {
         const repo = state.spec.repo
@@ -609,6 +627,9 @@ export class StateManager {
         try {
             existing = await this.readCurrentForRepo(repo)
         } catch (err) {
+            if (!isStaleStateError(err)) {
+                throw err
+            }
             log.warn(
                 `state: current pointer for repo '${repo}' names an unparseable run — treating as stale and repointing: ${(err as Error).message}`
             )

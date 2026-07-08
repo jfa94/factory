@@ -75,7 +75,21 @@ export async function assertE2ePrereqs(cwd: string): Promise<void> {
         )
     }
     if (configRaw !== undefined) {
-        const declared = /testDir\s*:\s*['"]([^'"]+)['"]/.exec(configRaw)?.[1]
+        // Every testDir declaration in the file, not just the first — a multi-project
+        // config (`projects: [{testDir:'e2e'},{testDir:'tests'}]`) or a decoy comment
+        // ahead of the real declaration would otherwise false-ACCEPT via .exec's
+        // first-match semantics, letting a real suite live outside the TCB-covered
+        // e2e/ path. Ambiguous (>1 declaration) refuses rather than guessing which
+        // one governs — the safe default for a check the TCB write-deny relies on.
+        const declarations = [...configRaw.matchAll(/testDir\s*:\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+        if (declarations.length > 1) {
+            throw new UsageError(
+                `run create: --e2e requires playwright.config.ts to declare testDir exactly once (found ${declarations.length}: ${declarations.join(', ')}). ` +
+                    'A multi-project or duplicated testDir config is ambiguous — the TCB write-deny protects the ' +
+                    "literal e2e/ path only, so a second declaration could route the real suite outside it. Collapse to a single top-level testDir: 'e2e'."
+            )
+        }
+        const declared = declarations[0]
         if (declared === undefined || !TCB_COVERED_TEST_DIRS.includes(declared)) {
             const found = declared === undefined ? 'no testDir declaration' : `testDir '${declared}'`
             throw new UsageError(
