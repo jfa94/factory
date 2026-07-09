@@ -147,6 +147,26 @@ describe('DefaultGitClient over an injectable runner (no real git)', () => {
         expect(calls.flat().some((a) => /force/i.test(a) || a === '-f')).toBe(false)
     })
 
+    it('tryMergeNoForce emits `git merge -m <message>` (no --no-edit) when opts.message is set', async () => {
+        const calls: (readonly string[])[] = []
+        const runner = vi.fn<GitRunner>((args) => {
+            calls.push(args)
+            return Promise.resolve(result({code: 0}))
+        })
+        const git = new DefaultGitClient(runner)
+        const r = await git.tryMergeNoForce('factory/run-1/T1', 'origin/staging-run-1', {
+            message: 'chore(sync): merge staging into task branch [T1]',
+        })
+
+        expect(r).toEqual({merged: true})
+        expect(calls[1]).toEqual([
+            'merge',
+            '-m',
+            'chore(sync): merge staging into task branch [T1]',
+            'origin/staging-run-1',
+        ])
+    })
+
     it('tryMergeNoForce aborts to a clean tree and returns {merged:false, conflict} on conflict (does NOT throw)', async () => {
         const calls: (readonly string[])[] = []
         const runner: GitRunner = (args) => {

@@ -8333,9 +8333,10 @@ var DefaultGitClient = class {
     await this.execOrThrow(["merge", "--no-edit", ref], opts);
   }
   async tryMergeNoForce(branch, ref, opts) {
-    log5.debug(`tryMerge --no-edit ${ref} into ${branch}`);
+    const mergeArgs = opts?.message !== void 0 ? ["merge", "-m", opts.message, ref] : ["merge", "--no-edit", ref];
+    log5.debug(`tryMerge ${mergeArgs.slice(1).join(" ")} into ${branch}`);
     await this.execOrThrow(["checkout", branch], opts);
-    const r = await this.exec(["merge", "--no-edit", ref], opts);
+    const r = await this.exec(mergeArgs, opts);
     if (r.code === 0) {
       return { merged: true };
     }
@@ -8850,7 +8851,10 @@ async function resyncTaskBranchOntoStaging(args) {
   const remote = args.remote ?? "origin";
   const opts = { cwd: args.cwd };
   await args.git.fetch(remote, args.stagingBranch, opts);
-  const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, opts);
+  const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, {
+    ...opts,
+    ...args.message !== void 0 ? { message: args.message } : {}
+  });
   if (attempt.merged) {
     await args.git.push(remote, args.branch, opts);
   }
@@ -8941,6 +8945,9 @@ async function createTaskPrIdempotent(args) {
 import { join as join5 } from "node:path";
 var log11 = createLogger("git");
 var GIT_DEFAULTS4 = GitSchema.parse({});
+var realSleep2 = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
+var DEFAULT_MERGEABILITY_POLL_MAX_TRIES = 5;
+var DEFAULT_MERGEABILITY_POLL_INTERVAL_MS = 2e3;
 var MERGE_LOCK_DEFAULTS = {
   ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
@@ -8956,6 +8963,9 @@ var MergeSerializer = class {
   dataDir;
   lockScope;
   tuning;
+  mergeabilityPollMaxTries;
+  mergeabilityPollIntervalMs;
+  mergeabilityPollSleep;
   constructor(opts) {
     this.ghClient = opts.ghClient;
     this.owner = opts.owner;
@@ -8964,6 +8974,9 @@ var MergeSerializer = class {
     this.dataDir = resolveDataDir(opts);
     this.lockScope = opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
     this.tuning = { ...MERGE_LOCK_DEFAULTS, ...opts.lock ?? {} };
+    this.mergeabilityPollMaxTries = opts.mergeabilityPoll?.maxTries ?? DEFAULT_MERGEABILITY_POLL_MAX_TRIES;
+    this.mergeabilityPollIntervalMs = opts.mergeabilityPoll?.intervalMs ?? DEFAULT_MERGEABILITY_POLL_INTERVAL_MS;
+    this.mergeabilityPollSleep = opts.mergeabilityPoll?.sleep ?? realSleep2;
   }
   lockfilePath() {
     return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
@@ -8990,14 +9003,7 @@ var MergeSerializer = class {
    */
   async merge(prNumber) {
     return this.withMergeLock(async () => {
-      const pr = await this.ghClient.prView(prNumber, [
-        "number",
-        "headRefName",
-        "baseRefName",
-        "state",
-        "mergeable",
-        "mergeStateStatus"
-      ]);
+      const pr = await this.readSettledPr(prNumber);
       if (pr.state === "MERGED") {
         log11.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
         await this.deleteMergedHeadBestEffort(pr.headRefName);
@@ -9035,6 +9041,29 @@ var MergeSerializer = class {
       await this.deleteMergedHeadBestEffort(pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
+  }
+  /**
+   * Read the PR, polling while GitHub is still computing mergeability
+   * (`mergeable === 'UNKNOWN'`) — Issue #1: a fresh push/update reports UNKNOWN
+   * for a beat while GitHub's background mergeability job runs. Treating that as
+   * a real refusal burns a full exec resync (MERGE_RESYNC_CAP) on a PR that was
+   * actually fine. Stops as soon as `mergeable` settles to ANY terminal value
+   * (MERGEABLE or CONFLICTING) or the budget is spent — still-UNKNOWN after the
+   * budget falls through UNCHANGED to the existing refuse-and-resync path, so
+   * this is never worse than today's behavior.
+   *
+   * NOTE: does NOT poll on `mergeStateStatus === 'UNKNOWN'` alone — that field
+   * co-settles with `mergeable` in practice, and gating strictly on `mergeable`
+   * keeps the poll narrow (see the serial-writer tests for the exact contract).
+   */
+  async readSettledPr(prNumber) {
+    const fields = ["number", "headRefName", "baseRefName", "state", "mergeable", "mergeStateStatus"];
+    let pr = await this.ghClient.prView(prNumber, fields);
+    for (let tries = 1; pr.mergeable === "UNKNOWN" && tries < this.mergeabilityPollMaxTries; tries++) {
+      await this.mergeabilityPollSleep(this.mergeabilityPollIntervalMs);
+      pr = await this.ghClient.prView(prNumber, fields);
+    }
+    return pr;
   }
   /**
    * Delete the merged PR's remote head ref — BEST EFFORT. The squash-merge has
@@ -15083,7 +15112,11 @@ async function resyncShipRetry(deps, runId, taskId, stagingBranch, reason) {
     git: deps.git,
     cwd: worktree,
     branch: runScopedBranch(runId, taskId),
-    stagingBranch
+    stagingBranch,
+    // Issue #2: tag a non-FF resync merge commit with [task-id] so the TDD gate's
+    // commit-tag check attributes it (tools.ts:793). An FF resync creates no commit,
+    // so this is a harmless no-op there.
+    message: `chore(sync): merge staging into task branch [${taskId}]`
   });
   if (!resync.merged) {
     const step = await failStep(

@@ -8777,9 +8777,10 @@ var DefaultGitClient = class {
     await this.execOrThrow(["merge", "--no-edit", ref], opts);
   }
   async tryMergeNoForce(branch, ref, opts) {
-    log8.debug(`tryMerge --no-edit ${ref} into ${branch}`);
+    const mergeArgs = opts?.message !== void 0 ? ["merge", "-m", opts.message, ref] : ["merge", "--no-edit", ref];
+    log8.debug(`tryMerge ${mergeArgs.slice(1).join(" ")} into ${branch}`);
     await this.execOrThrow(["checkout", branch], opts);
-    const r = await this.exec(["merge", "--no-edit", ref], opts);
+    const r = await this.exec(mergeArgs, opts);
     if (r.code === 0) {
       return { merged: true };
     }

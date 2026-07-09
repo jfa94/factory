@@ -23,11 +23,22 @@ import {join} from 'node:path'
 import {createLogger, withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../shared/index.js'
 import {GitSchema} from '../config/schema.js'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
-import type {GhClient} from './gh-client.js'
+import type {GhClient, PullRequest} from './gh-client.js'
 
 const log = createLogger('git')
 
 const GIT_DEFAULTS = GitSchema.parse({})
+
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Issue #1 (transient not-mergeable false positive): right after a PR is pushed/
+// updated, GitHub reports `mergeable: UNKNOWN` for a beat while it computes
+// mergeability in the background — not a real conflict. 5 tries * 2s = ~10s ceiling.
+// ponytail: keep maxTries*intervalMs well under MERGE_LOCK_DEFAULTS.stale (30s below)
+// — the poll runs INSIDE the merge lock, so approaching the stale window risks a
+// concurrent acquirer breaking the "stale" lock mid-poll and racing a second merge.
+const DEFAULT_MERGEABILITY_POLL_MAX_TRIES = 5
+const DEFAULT_MERGEABILITY_POLL_INTERVAL_MS = 2_000
 
 /**
  * Lock tuning — the shared {@link FileLockTuning}; kept as a local alias so the
@@ -52,6 +63,19 @@ export type MergeOutcome =
     | {merged: true; via: 'app-level' | 'merge-queue'; number: number}
     | {merged: false; reason: 'behind' | 'not-mergeable'; number: number}
 
+/**
+ * Bounds the transient-UNKNOWN mergeability poll (Issue #1). All fields optional;
+ * defaults give a ~10s ceiling — see the module-level constants.
+ */
+export interface MergeabilityPollOptions {
+    /** Max prView reads while `mergeable === 'UNKNOWN'`. Default 5. */
+    maxTries?: number
+    /** Delay between reads (ms). Default 2000. */
+    intervalMs?: number
+    /** Injectable sleep (tests pass a no-op / instrumented fn). Default a real timer. */
+    sleep?: (ms: number) => Promise<void>
+}
+
 /** Options for {@link MergeSerializer}. */
 export interface MergeSerializerOptions extends DataDirOptions {
     ghClient: GhClient
@@ -62,6 +86,8 @@ export interface MergeSerializerOptions extends DataDirOptions {
     /** Override the merge-lock scope id (default: repo-scoped key). */
     lockScope?: string
     lock?: Partial<MergeLockTuning>
+    /** Override the transient-UNKNOWN mergeability poll bounds (Issue #1). */
+    mergeabilityPoll?: MergeabilityPollOptions
 }
 
 /**
@@ -78,6 +104,9 @@ export class MergeSerializer {
     private readonly dataDir: string
     private readonly lockScope: string
     private readonly tuning: MergeLockTuning
+    private readonly mergeabilityPollMaxTries: number
+    private readonly mergeabilityPollIntervalMs: number
+    private readonly mergeabilityPollSleep: (ms: number) => Promise<void>
 
     constructor(opts: MergeSerializerOptions) {
         this.ghClient = opts.ghClient
@@ -87,6 +116,9 @@ export class MergeSerializer {
         this.dataDir = resolveDataDir(opts)
         this.lockScope = opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, '-')
         this.tuning = {...MERGE_LOCK_DEFAULTS, ...(opts.lock ?? {})}
+        this.mergeabilityPollMaxTries = opts.mergeabilityPoll?.maxTries ?? DEFAULT_MERGEABILITY_POLL_MAX_TRIES
+        this.mergeabilityPollIntervalMs = opts.mergeabilityPoll?.intervalMs ?? DEFAULT_MERGEABILITY_POLL_INTERVAL_MS
+        this.mergeabilityPollSleep = opts.mergeabilityPoll?.sleep ?? realSleep
     }
 
     private lockfilePath(): string {
@@ -118,14 +150,8 @@ export class MergeSerializer {
         return this.withMergeLock(async () => {
             // Re-read the PR INSIDE the lock — its mergeable/up-to-date state may have
             // changed since the caller queued (e.g. a prior merge advanced staging).
-            const pr = await this.ghClient.prView(prNumber, [
-                'number',
-                'headRefName',
-                'baseRefName',
-                'state',
-                'mergeable',
-                'mergeStateStatus',
-            ])
+            // Polls while GitHub is still computing mergeability (Issue #1).
+            const pr = await this.readSettledPr(prNumber)
 
             // Idempotent resume (Δ P): ship can crash AFTER the merge lands but BEFORE
             // the run records `done` (e.g. a post-merge cleanup error). Re-running drive
@@ -203,6 +229,30 @@ export class MergeSerializer {
             await this.deleteMergedHeadBestEffort(pr.headRefName)
             return {merged: true, via: 'app-level', number: prNumber}
         })
+    }
+
+    /**
+     * Read the PR, polling while GitHub is still computing mergeability
+     * (`mergeable === 'UNKNOWN'`) — Issue #1: a fresh push/update reports UNKNOWN
+     * for a beat while GitHub's background mergeability job runs. Treating that as
+     * a real refusal burns a full exec resync (MERGE_RESYNC_CAP) on a PR that was
+     * actually fine. Stops as soon as `mergeable` settles to ANY terminal value
+     * (MERGEABLE or CONFLICTING) or the budget is spent — still-UNKNOWN after the
+     * budget falls through UNCHANGED to the existing refuse-and-resync path, so
+     * this is never worse than today's behavior.
+     *
+     * NOTE: does NOT poll on `mergeStateStatus === 'UNKNOWN'` alone — that field
+     * co-settles with `mergeable` in practice, and gating strictly on `mergeable`
+     * keeps the poll narrow (see the serial-writer tests for the exact contract).
+     */
+    private async readSettledPr(prNumber: number): Promise<PullRequest> {
+        const fields = ['number', 'headRefName', 'baseRefName', 'state', 'mergeable', 'mergeStateStatus']
+        let pr = await this.ghClient.prView(prNumber, fields)
+        for (let tries = 1; pr.mergeable === 'UNKNOWN' && tries < this.mergeabilityPollMaxTries; tries++) {
+            await this.mergeabilityPollSleep(this.mergeabilityPollIntervalMs)
+            pr = await this.ghClient.prView(prNumber, fields)
+        }
+        return pr
     }
 
     /**

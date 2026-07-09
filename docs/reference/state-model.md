@@ -251,6 +251,21 @@ merge and re-routed back through `exec` to re-sync. The `next-action` orchestrat
 (`MERGE_RESYNC_CAP`) and persists the count so the budget survives process
 boundaries; exhausting it fails the task as `blocked-environmental`.
 
+The serial merge writer (`MergeSerializer.merge`, `src/git/serial-writer.ts`)
+re-reads the PR **inside** the app-level merge lock before deciding. Right after a PR
+push/update GitHub reports `mergeable: UNKNOWN` for a beat while it computes
+mergeability in the background — a transient state, not a real conflict. Treating it
+as an immediate refusal would burn a full re-sync out of this budget on a PR that was
+actually fine, so the writer first **polls** (`readSettledPr`) while `mergeable ===
+'UNKNOWN'`: bounded at `DEFAULT_MERGEABILITY_POLL_MAX_TRIES` × `DEFAULT_MERGEABILITY_POLL_INTERVAL_MS`
+(5 tries × 2 s ≈ 10 s ceiling; override via `MergeSerializerOptions.mergeabilityPoll`).
+It stops as soon as `mergeable` settles to any terminal value (`MERGEABLE` or
+`CONFLICTING`) or the budget is spent, then falls through to the existing allow-list
+logic unchanged — a still-`UNKNOWN` PR after the poll refuses exactly as before, so
+the poll is never worse than a single read. The poll runs while holding the merge
+lock, so its ceiling stays well under the lock's stale window (`MERGE_LOCK_DEFAULTS.stale
+= 30 s`) to avoid a concurrent acquirer breaking the "stale" lock mid-poll.
+
 ### `spawn_in_flight` — idempotent re-spawn checkpoint
 
 `{ phase: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string, spawned_at: number }`

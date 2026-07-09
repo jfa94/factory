@@ -313,8 +313,12 @@ export class FakeGitClient implements GitClient {
         return Promise.resolve()
     }
 
-    tryMergeNoForce(branch: string, ref: string, _opts?: MergeOptions): Promise<MergeAttempt> {
-        this.calls.push(`try-merge --no-edit ${ref} into ${branch}`)
+    tryMergeNoForce(branch: string, ref: string, opts?: MergeOptions): Promise<MergeAttempt> {
+        this.calls.push(
+            opts?.message !== undefined
+                ? `try-merge -m "${opts.message}" ${ref} into ${branch}`
+                : `try-merge --no-edit ${ref} into ${branch}`
+        )
         // `failMergeNoForce` set → model a conflict (tree already aborted-to-clean, per the
         // real client's contract) WITHOUT throwing, so tests exercise the conflict branch.
         if (this.failMergeNoForce) {
@@ -396,6 +400,12 @@ export class FakeGhClient implements GhClient {
     readonly issueCloses: {number: number; repo: string; comment?: string}[] = []
     /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
     private readonly checksQueue = new Map<number, ChecksState[]>()
+    /**
+     * Per-PR mergeable/mergeStateStatus override sequence; each prView call shifts
+     * one (the last value sticks) — models GitHub settling `UNKNOWN` after a beat
+     * (Issue #1: the mergeability-poll regression coverage), mirroring `checksQueue`.
+     */
+    private readonly mergeabilityQueue = new Map<number, Pick<PullRequest, 'mergeable' | 'mergeStateStatus'>[]>()
     private readonly defaultChecks: ChecksState
     private numberCounter = 100
     private readonly truncate: boolean
@@ -449,6 +459,15 @@ export class FakeGhClient implements GhClient {
      */
     setChecks(number: number, ...states: ChecksState[]): void {
         this.checksQueue.set(number, states)
+    }
+
+    /**
+     * Test helper: program the mergeable/mergeStateStatus sequence prView returns for
+     * `number`. The last entry sticks (mirrors `setChecks`) — use to simulate GitHub
+     * reporting `UNKNOWN` for a beat before settling to a terminal state.
+     */
+    setMergeabilitySequence(number: number, ...states: Pick<PullRequest, 'mergeable' | 'mergeStateStatus'>[]): void {
+        this.mergeabilityQueue.set(number, [...states])
     }
 
     prList(args: PrListArgs, _opts?: GhOpts): Promise<PullRequest[]> {
@@ -507,6 +526,11 @@ export class FakeGhClient implements GhClient {
         }
         for (const pr of this.prs.values()) {
             if (pr.number === number) {
+                const q = this.mergeabilityQueue.get(number)
+                if (q && q.length > 0) {
+                    const next = q.length > 1 ? nonNull(q.shift()) : nonNull(q[0])
+                    return Promise.resolve({...pr, ...next})
+                }
                 return Promise.resolve(pr)
             }
         }
