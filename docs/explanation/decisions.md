@@ -2553,6 +2553,138 @@ Decision 63's dial-pinning pass.
 
 ---
 
+## Decision 65 — `bypassPermissions` Relaunch + Deny-List Shrink to Honest Accident-Prevention
+
+**Problem:** A live run (`run-20260709-095909`, task `legal-001`) stalled on permission
+_prompts_ — "edit and create sensitive files" and "allow Claude to edit its own settings" —
+for ordinary writes under the plugin's own data dir
+(`~/.claude/plugins/data/<plugin>/worktrees/<run>/<task>/...`). Autonomous mode has no
+operator to answer a prompt, so every prompt is an unattended stall — the #1 pain point
+(Decision 62/Session-6). The user's principle: in autonomous mode every decision must be
+**binary** (allow or deny); nothing should ever prompt.
+
+**Root cause:** Claude Code's built-in protected-path check protects the whole `.claude/`
+tree except `.claude/worktrees`. This plugin's data dir lives under `~/.claude/plugins/data/`,
+and its worktrees sit under `.../data/<plugin>/worktrees/...` — a sibling path, not the
+exempted one — so every Edit/Write there hit the built-in prompt regardless of
+`permissions.allow`/`additionalDirectories` (that check runs _before_ allow-rules are
+consulted).
+
+**Choice:** The autonomous relaunch command (`factory autonomy ensure` /
+`runAutonomyEnsure`/`runAutonomyStatus` in `src/cli/subcommands/autonomy.ts`) now appends
+`--permission-mode bypassPermissions`:
+
+```
+claude --worktree --settings <merged-settings-path> --permission-mode bypassPermissions
+```
+
+**Why this is not the security regression it sounds like:** `bypassPermissions` only
+suppresses the prompt-on-allow path (including the protected-path Edit/Write prompt). It
+does **not** disable `permissions.deny`, does **not** skip any hook in
+`hooks/hooks.json`/`dist/factory-hook.js`, and does **not** suppress explicit `ask` rules or
+Claude Code's own `rm -rf /` / `rm -rf ~` circuit-breaker. The only delta bypass adds is
+protected-path Edit/Write going prompt → allow. In an unattended run a prompt was never a
+real gate — nobody was there to answer it — so this converts a silent stall into the
+correct binary outcome.
+
+**Course correction — this decision also walks back a first attempt in the same session.**
+An earlier pass solved the reported prompts with this same `bypassPermissions` flag, but then
+_added_ ~16 new `permissions.deny` entries and a ~180-line scoped-recursive-`rm` hook
+(`dangerousRmTargets`/`protectedRmRoots` in `src/hooks/write-protection.ts`) on top of an
+already-121-entry deny-list. User feedback: this added layers when the goal was to simplify.
+On review, the added hook solved nothing the reported prompts needed — `rm` was exactly as
+protected after bypass as before it, since bypass never touches Bash deny rules. That hook and
+its 16 deny additions are **reverted** by this decision.
+
+**The deny-list is reframed and cut from 121 entries to ~57** (`templates/settings.autonomous.json`),
+on a single thesis:
+
+> A string-glob deny-list cannot be a security boundary. It is simultaneously **incomplete**
+> (misses `rm -rf ../..`, absolute-path forms, nested shells, every AWS destructive verb) and
+> **over-broad** (blocks legitimate migration/test-DB/`.env.example` work). Against a
+> **non-adversarial** coding agent it doesn't need to be complete — it only needs to prevent
+> _accidents_ to a few irreversible, non-file-path-shaped operations. Real containment against
+> a _malicious_ agent is the OS sandbox (deferred below), which string-globs were never going
+> to provide.
+
+**What the deny-list keeps** (all from the KEEP set — nothing here overlaps what the
+path-resolving hook layer already enforces):
+
+- **A few catastrophic `rm` globs** (`rm -rf /`, `rm -rf ~`, `rm -rf ~/*`, `rm -rf $HOME*`,
+  `rm -rf /*`) — makes the built-in circuit-breaker's cases binary instead of a stalling
+  prompt.
+- **Interpreter-eval** (`node -e`, `python -c`, `python3 -c`, `perl -e`, `ruby -e`,
+  `deno eval`, `bun -e`, `eval *`) — kept unchanged, on purpose. Over-broad (blocks legitimate
+  one-off interpreter use) but load-bearing under a string-matching boundary: the only thing
+  stopping an agent from laundering an otherwise-denied command through an interpreter, past
+  the parsed-command guards. The only _safe_ way to relax this is an OS sandbox that confines
+  interpreter child processes at the kernel level — deferred, not attempted here.
+- **Irreversible remote/publish ops** (`npm publish`, `pnpm publish`, `gh repo delete`,
+  `gh release delete`, `gh api -X DELETE`) — not file-path-shaped, so no hook can see them;
+  the deny-list is the only place these can be stopped.
+- **`Write`/`Edit(**/.git/**)`** and **home credentials/config**
+  (`~/.ssh/**`, `~/.aws/**`, `~/.gnupg/**`, `~/.netrc`, `~/.config/gh/**`, `~/.gitconfig`,
+  `~/.npmrc`, `~/.claude.json`, `~/.bashrc`, `~/.zshrc`, `~/.profile`, and the `~/.claude/*`
+  settings/credentials/hooks/CLAUDE.md set) — these sit outside any task worktree, so the
+  hook layer (which is scoped to TCB paths and the worktree) can't reach them; the deny-list
+  is the only guard.
+
+**What was deleted (~90 entries) and why it's safe:**
+
+- **All AWS destructive-verb entries (9)** and **all SQL `DROP`/`TRUNCATE` entries (5)** —
+  globs can't distinguish a prod resource from a test one, so they only ever gave false
+  confidence while blocking legitimate infra/test-DB work.
+- **Redundant git history-rewrite globs (10)** — `branch-protection`
+  (`src/hooks/branch-protection.ts`) already path-resolves and denies force-push/reset/
+  branch-delete on the protected-branch set; a feature-branch force-push is legitimate and
+  the glob duplicate only blocked it.
+- **`.claude` Bash read-guards (3)** — the `.claude`-carve-out PreToolUse hook and
+  holdout-guard already govern sensitive `.claude` access with path resolution; the blanket
+  `ls`/`find`/`cat .claude*` denies blocked harmless introspection.
+- **Repo-relative sensitive-file writes (~10: `.env`, `**/secrets/**`, `**/migrations/**`,
+`**/_.tfstate_`, repo-relative `**/.npmrc`/`**/.gitconfig`/`**/.mcp.json`/`**/.claude.json`)**
+— these live inside the ephemeral task worktree, are often the task itself (a migration, an
+`.env.example`), never reach `main`if junk, and`secret-guard` already blocks committing an
+  actual secret.
+- **Theater/misc (~6): `chmod 777`/`chmod -R 777`, `sudo *`, `npx *create-*`, `*base64 -d*`,
+  `*--no-verify*`/`*--no-gpg-sign*`** — `sudo` fails with no TTY regardless; `--no-verify`
+  bypasses _git_ hooks, not the factory's Claude Code hooks, so denying it is moot; the rest
+  never blocked a real threat.
+
+**Rejected design — a positive "write only inside your own worktree" sandbox.** Considered
+and rejected (not merely deferred): no ambient signal identifies the current agent's
+worktree — `FACTORY_TASK_ID`/`FACTORY_RUN_ID` are read by hooks but never set in production,
+and a subagent's cwd isn't reliably the task worktree (confirmed against
+`src/hooks/hook-context.ts`). Even with a reliable signal, legitimate tooling writes outside
+any worktree (`~/.npm`, `~/.cache`, `/tmp`), so a worktree-only allowlist would deny real work
+and stall the run — precisely the failure mode this whole decision exists to eliminate. Doing
+this safely is exactly what an OS sandbox (`sandbox.*` allowlists) is for; see below.
+
+**Deferred to separate sessions (not attempted here):**
+
+- **A global dotfiles hook** (`~/.dotfiles/.claude/hooks/dangerous-patterns-check.sh`,
+  symlinked into `~/.claude/hooks/`) independently emits a permission `ask` on a
+  false-positive string match (the word "credentials" inside a heredoc body) — a third
+  prompt source in the original report. Out of scope here: it lives in the user's global
+  config, and this change is scoped to be self-contained to this repo. It likely survives
+  bypass too, since bypass still fires explicit `ask` rules.
+- **OS sandbox adoption** (`sandbox.*`, macOS Seatbelt): the genuinely stronger,
+  injection-resistant boundary, the only way to safely relax the interpreter-eval denies, and
+  the only way to implement the worktree-only sandbox rejected above. Not pursued now — it
+  doesn't fix the protected-path prompt (Read/Edit/Write bypass the sandbox), its network
+  confinement pre-allows no domains (so `git push`/`gh`/`npm` would newly stall on first use),
+  and `gh`/`gcloud`/`terraform` fail TLS under Seatbelt without `excludedCommands` entries.
+  Scoped as its own future initiative.
+
+**Relationship:** Extends Decision 17 (coarse-Bash, hook-enforced boundary) — the
+pipeline-integrity hooks (branch-protection, secret-guard, pipeline-guards, holdout-guard,
+write-protection's TCB-path arm) remain the actual, complete boundary for what they guard;
+this decision narrows `permissions.deny` to the residual accident-prevention role those hooks
+structurally can't cover. Continues the Close-the-Loop stall-elimination line
+(Decision 61/62).
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

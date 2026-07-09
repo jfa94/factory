@@ -19948,7 +19948,7 @@ ensure     Merges templates/settings.autonomous.json with your existing settings
            baked, statusLine wired to \`factory statusline\`) and prints the relaunch
            command:
 
-             claude --worktree --settings <merged-settings.json>
+             claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
 
 status     Reports whether THIS session is autonomous and whether merged-settings.json
            exists. Exits 0 when autonomous, 1 when not (never throws).
@@ -20100,7 +20100,7 @@ async function runAutonomyEnsure(opts = {}) {
   });
   const path7 = mergedSettingsPath(dataDir);
   await atomicWriteFile(path7, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path7}`;
+  const relaunchCommand = `claude --worktree --settings ${path7} --permission-mode bypassPermissions`;
   write(
     `Wrote autonomous settings \u2192 ${path7}
 Relaunch the session in autonomous mode with:
@@ -20140,7 +20140,7 @@ merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path7.l
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
 merged-settings: ${status.mergedSettingsPresent ? `present at ${path7}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path7}
+  claude --worktree --settings ${path7} --permission-mode bypassPermissions
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
