@@ -676,7 +676,8 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
   spawns verbatim via `codex exec`) and `request.verifier_spec` (the finding-verifier
   spawn template — `{ agent_type, model, isolation, prompt_template, interpolate_fields }`;
   the runner renders one instance per blocking+citable finding by substituting only the
-  whitelisted `interpolate_fields`, never the finding's `description`). `effort` (the `Agent`
+  admissible `interpolate_fields` — what the verifier can check against the code — never
+  the reviewer's `description`, `severity`, or `reviewer`). `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of

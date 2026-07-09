@@ -56,22 +56,22 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
             expect(m.verifier_spec?.agent_type).toBe('finding-verifier')
             expect(m.verifier_spec?.model).toBe('sonnet')
             expect(m.verifier_spec?.isolation).toBe('worktree')
-            expect(m.verifier_spec?.prompt_template).toContain('{reviewer}')
-            expect(m.verifier_spec?.interpolate_fields).toEqual([
-                'reviewer',
-                'severity',
-                'claim',
-                'file',
-                'line',
-                'quote',
-            ])
+            expect(m.verifier_spec?.prompt_template).toContain('{claim}')
+            expect(m.verifier_spec?.interpolate_fields).toEqual(['claim', 'file', 'line', 'quote'])
         })
 
-        it('never interpolates {description} — anti-anchoring (D27)', () => {
-            const m = buildPanelManifest('verify')
-            expect(m.verifier_spec?.interpolate_fields).not.toContain('description')
-            expect(m.verifier_spec?.prompt_template).not.toContain('{description}')
-        })
+        // ADMISSIBILITY (D27/D44): a field is interpolated iff the verifier can CHECK it
+        // against the code. What the reviewer BELIEVED — its reasoning, its confidence,
+        // its identity — is checkable against nothing, so none of the three reaches the
+        // prompt. A verifier that weighs them is agreeing, not verifying.
+        it.each(['description', 'severity', 'reviewer'])(
+            'never interpolates the inadmissible field {%s} — anti-anchoring (D27)',
+            (field) => {
+                const m = buildPanelManifest('verify')
+                expect(m.verifier_spec?.interpolate_fields).not.toContain(field)
+                expect(m.verifier_spec?.prompt_template).not.toContain(`{${field}}`)
+            }
+        )
 
         it("the finding-verifier's model is decoupled from the reviewer panel (fixed sonnet)", () => {
             const m = buildPanelManifest('verify')

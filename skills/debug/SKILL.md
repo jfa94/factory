@@ -152,9 +152,15 @@ Write the CONTENT of `skills/pipeline-runner/SKILL.md`'s per-task
 
 Omit `crossVendorAbsent` entirely when the Codex quality-reviewer actually ran;
 include it when it didn't — echoing the envelope's `codex_absent_reason` verbatim,
-or `"codex execution failed: <detail>"` if the `codex exec` fallback fired. Include
-one verdict for every blocking+citable finding — the CLI fails closed on a missing
-one.
+or `"codex execution failed: <detail>"` if the `codex exec` fallback fired.
+
+Include one verdict for every blocking+citable finding. **If a finding-verifier
+returns no parseable JSON, OMIT its verdict — never synthesize one.** A missing
+verdict is the correct fail-closed signal: the CLI raises a verifier error and the
+merge gate blocks. A fabricated `holds: false` is read as a genuine refutation,
+silently drops a possibly-real blocker, and leaves no trace in state. **This is the
+only reason to omit a verdict** — a verifier that inspected and is merely unsure
+returns `holds: false` on its own.
 
 ```bash
 factory debug review --record --run <run_id> --results <path-to-above-file>

@@ -183,10 +183,14 @@ task:
 2. **Independent confirmation** — a separate finding-verifier, whose identity
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
-   The verifier is **claim-only** (anti-anchoring, Decision 44): its prompt is
-   built from `{reviewer, severity, claim, file, line, quote}` — never the
-   reviewer's `description` reasoning chain, so it can't be led to the same
-   wrong conclusion. The finding-verifier is spawned from the manifest's
+   The verifier is **claim-only** (anti-anchoring, Decision 44). A field is
+   admissible into its prompt iff the verifier can CHECK it against the code, so
+   the prompt is built from `{claim, file, line, quote}`: the `claim` is the
+   proposition under test, and `file`/`line`/`quote` say where to look. What the
+   reviewer BELIEVED is excluded — its reasoning (`description`), its confidence
+   (`severity`), and its identity (`reviewer`). None of the three can be confirmed
+   or refuted by reading the file; each would lead the verifier to the finder's
+   conclusion. The finding-verifier is spawned from the manifest's
    `verifier_spec` **template** (`{ agent_type, model, isolation, prompt_template,
 interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
    hardcoded agent-type/model/isolation — the finding set is only known after the panel

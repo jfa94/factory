@@ -1372,9 +1372,19 @@ was a config-presence check that never executed Codex.
 - **Claim-only verification (D27 hardening).** `Finding` gains a required
   `claim` (≤300 chars, the one-sentence checkable assertion; `description` stays the
   reviewer's reasoning). The verifier sees ONLY the typed `ClaimOnlyFinding`
-  projection `{reviewer, severity, claim, file, line, quote}` — `description?: never`
-  makes leaking it a compile error, and both runner SKILLs pin the same six-field
-  interpolation rule. `FixFinding` (producer-facing) deliberately KEEPS `description`.
+  projection `{claim, file, line, quote}`. **Admissibility rule:** a field enters the
+  verifier's prompt iff the verifier can CHECK it against the code — `claim` is the
+  proposition under test, and `file`/`line`/`quote` say where to look (`line` is a
+  coordinate, not an assertion). What the reviewer BELIEVED is excluded: its reasoning
+  (`description`), its confidence (`severity`), and its identity (`reviewer`). None can
+  be confirmed or refuted by reading the file, so each is a pure prior — severity is the
+  finder's own confidence signal and decision-irrelevant (`blocking:true` already
+  filtered, materiality is defined intrinsically in the agent body); reviewer is an
+  authorship label, and withheld authorship is what makes cross-context review
+  non-sycophantic. The rule derives the whitelist rather than enumerating it.
+  `description?: never; severity?: never; reviewer?: never` makes leaking any of the
+  three a compile error, and `pipeline-runner`'s SKILL pins the interpolation rule.
+  `FixFinding` (producer-facing) deliberately KEEPS `description`.
   `claim` is REQUIRED with no grace fallback: prompts + engine ship in one bundle, and a
   mid-upgrade old-format review fails loud at `parseRawReview` → fresh panel spawn.
 - **Real cross-vendor (Δ U).** `review.requireCrossVendor: "warn" | "block"` (default

@@ -69,18 +69,21 @@ function reviewerModelFor(role: SpawnRole): string {
 
 /**
  * The finding-verifier's fixed framing (3b/iii) — an adversarial "try to refute
- * this" posture, with `{field}` placeholders for EXACTLY the whitelisted
- * per-finding data the runner interpolates. Never `{description}` — the
- * reviewer's reasoning chain must not lead the independent verifier
- * (anti-anchoring, D27).
+ * this" posture, with `{field}` placeholders for EXACTLY the admissible
+ * per-finding data the runner interpolates.
+ *
+ * ADMISSIBILITY (anti-anchoring, D27/D44): a field belongs here iff the verifier
+ * can CHECK it against the code. `{claim}` is the proposition under test;
+ * `{file}`/`{line}`/`{quote}` say where to look. What the reviewer BELIEVED is
+ * never interpolated — not its reasoning (`description`), its confidence
+ * (`severity`), or its identity (`reviewer`). None can be confirmed or refuted by
+ * reading the file, and each would lead the verifier toward the finder's prior.
  */
-const VERIFIER_INTERPOLATE_FIELDS = ['reviewer', 'severity', 'claim', 'file', 'line', 'quote'] as const
+const VERIFIER_INTERPOLATE_FIELDS = ['claim', 'file', 'line', 'quote'] as const
 
 const VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
 following review finding against the actual code — do not assume it is correct.
 
-Reviewer: {reviewer}
-Severity: {severity}
 Claim: {claim}
 Cited location: {file}:{line}
 Quoted source: {quote}

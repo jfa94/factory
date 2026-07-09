@@ -457,10 +457,11 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    INDEPENDENT finding-verifier using `manifest.verifier_spec` VERBATIM — `agent_type`,
    `model`, `isolation` (3b/iii: no more hardcoded `general-purpose`/`opus`/
    `"worktree"`). Render `verifier_spec.prompt_template` by substituting EXACTLY
-   `verifier_spec.interpolate_fields` (today: `{reviewer, severity, claim, file, line,
-quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier must
-   judge the bare claim against the code, not be led by the reviewer's reasoning
-   chain). Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
+   `verifier_spec.interpolate_fields` (today: `{claim, file, line, quote}`). A field is
+   admissible iff the verifier can CHECK it against the code — so NEVER pass what the
+   reviewer BELIEVED: its `description` (reasoning), its `severity` (confidence), or its
+   `reviewer` (identity). Anti-anchoring: the verifier must judge the bare claim against
+   the code, not be led toward the finder's prior. Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
 <tenv.base_ref>`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
@@ -473,7 +474,13 @@ quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier mus
         "crossVendorAbsent": { "reason": "<the manifest stamp's reason, or the codex runtime-failure detail>" } } }
     ```
     Omit `"holdout"` when there was no sidecar. Include one verdict for every
-    blocking+citable finding (the CLI fails closed on a missing one). Include
+    blocking+citable finding. **If a finding-verifier returns no parseable JSON,
+    OMIT its verdict — never synthesize one.** A missing verdict is the correct
+    fail-closed signal: the CLI raises a verifier error and the merge gate blocks.
+    A fabricated `holds: false` is read as a genuine refutation, silently drops a
+    possibly-real blocker, and leaves no trace in state. **This is the only reason
+    to omit a verdict** — a verifier that inspected and is merely unsure returns
+    `holds: false` on its own. Include
     `crossVendorAbsent` ONLY when no cross-vendor reviewer actually ran (stamp
     absent, or the `codex exec` fallback fired) — never invent the reason: echo
     the stamp's reason or the runtime-failure detail exactly.

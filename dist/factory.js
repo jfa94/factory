@@ -12258,12 +12258,10 @@ function reviewerModelFor(role) {
   }
   return model;
 }
-var VERIFIER_INTERPOLATE_FIELDS = ["reviewer", "severity", "claim", "file", "line", "quote"];
+var VERIFIER_INTERPOLATE_FIELDS = ["claim", "file", "line", "quote"];
 var VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
 following review finding against the actual code \u2014 do not assume it is correct.
 
-Reviewer: {reviewer}
-Severity: {severity}
 Claim: {claim}
 Cited location: {file}:{line}
 Quoted source: {quote}
@@ -12603,8 +12601,6 @@ async function confirmBlocker(finding, runner, finderIdentity, citedLine) {
     );
   }
   const projection = {
-    reviewer: finding.reviewer,
-    severity: finding.severity,
     claim: finding.claim,
     file: finding.file,
     line: citedLine ?? finding.line,
