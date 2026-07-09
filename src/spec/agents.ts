@@ -21,7 +21,7 @@ import {SPEC_GENERATOR_AGENT_TYPE, SPEC_REVIEWER_AGENT_TYPE} from '../core/phase
 
 /** Decision-21 apex pin — invariant by construction, deliberately NOT config. */
 const APEX_MODEL = 'opus'
-const APEX_EFFORT = 'max'
+const APEX_EFFORT = 'xhigh'
 
 /** The two spec-agent roles. */
 export type SpecAgentRole = 'spec-generator' | 'spec-reviewer'

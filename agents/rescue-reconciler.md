@@ -3,6 +3,8 @@ name: rescue-reconciler
 description: Reconciles the LOCAL-git residue the engine's autonomous adoption cannot decide for ONE stalled factory run before it is resumed — a run branch behind `origin/<base>` needing a forward-merge (conflict → blocked), a branch gone BOTH locally and remotely (reconstruction judgment), orphan worktrees, an unresolvable staging base. PR↔state agreement and re-pushing a branch that still exists locally are now engine adoption (`factory reconcile --adopt`); this agent handles only what needs local-git judgment. Performs ONLY forward-only, non-destructive fixes autonomously (fetch, forward-merge); anything destructive (force, delete, discard) is SURFACED for the runner to prompt, never executed. Its final message IS the reconciliation verdict JSON the runner consumes.
 tools: Read, Grep, Glob, Bash
 model: sonnet
+effort: medium
+maxTurns: 30
 ---
 
 # rescue-reconciler

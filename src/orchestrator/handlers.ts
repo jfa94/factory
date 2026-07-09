@@ -38,8 +38,8 @@ import {
     buildPanelManifest,
     panelRolesFor,
     touchesDatabase,
-    resolveReviewModel,
     dialForRung,
+    selectProducerModel,
     buildProducerContext,
     renderProducerPrompt,
     resolveCodexCrossVendor,
@@ -168,6 +168,11 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         confirmedBlockers?: readonly ConfirmedBlocker[]
     ): PhaseResult {
         const dial = dialForRung(specTask.risk_tier, rung, deps.config)
+        // test-writer is pinned to the ceiling model regardless of risk tier (the
+        // config-driven high-tier producerModels entry — Opus by default); only
+        // implementer follows the tiered dial. Effort still climbs off the SAME
+        // dial result for both roles.
+        const model = role === 'test-writer' ? selectProducerModel('high', deps.config) : dial.model
         const split = splitFor(deps.config, runId, specTask)
         const context: ProducerContext = buildProducerContext({
             taskId: specTask.task_id,
@@ -192,10 +197,9 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 {
                     role,
                     agent_type: AGENT_TYPE_BY_ROLE[role],
-                    model: dial.model,
-                    // No implementer-specific turn budget exists; both producer roles share the
-                    // test-writer cap (documented WS10 decision).
-                    max_turns: deps.config.testWriter.maxTurns,
+                    model,
+                    // max_turns omitted — each producer's own frontmatter is the single
+                    // source of truth for its turn budget (single-source-of-truth).
                     // 3b(i): the runner spawns this VERBATIM.
                     prompt: renderProducerPrompt(context, worktree),
                     // Effort is set ONLY once the dial has climbed the model to its ceiling
@@ -363,16 +367,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                               worktree,
                           })
                         : undefined
-                return spawn(
-                    buildPanelManifest(
-                        'verify',
-                        resolveReviewModel(deps.config),
-                        deps.config.review.maxTurnsDeep,
-                        crossVendor,
-                        dbApplicable,
-                        crossVendorPrompt
-                    )
-                )
+                return spawn(buildPanelManifest('verify', crossVendor, dbApplicable, crossVendorPrompt))
             }
 
             // Fail-closed: re-spawn unless a FULL panel is on record. Guarding only the empty

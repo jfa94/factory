@@ -163,10 +163,6 @@ export const ReviewSchema = z
     .object({
         /** Reviewer model id (panel runs on a fixed model per Decision 26). */
         model: z.string().optional(),
-        /** Max turns for a deep review pass. */
-        maxTurnsDeep: z.number().int().positive().default(40),
-        /** Max turns for a quick review pass. */
-        maxTurnsQuick: z.number().int().positive().default(20),
         /**
          * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
          * `warn` records the absence loudly (task state + report + summary);
@@ -174,13 +170,6 @@ export const ReviewSchema = z
          * independent second-vendor review.
          */
         requireCrossVendor: z.enum(['warn', 'block']).default('warn'),
-    })
-    .default({})
-
-/** Test-writer agent config (WS8 extends). */
-export const TestWriterSchema = z
-    .object({
-        maxTurns: z.number().int().positive().default(30),
     })
     .default({})
 
@@ -306,7 +295,6 @@ export const ConfigSchema = z
         quota: QuotaSchema,
         spec: SpecSchema,
         review: ReviewSchema,
-        testWriter: TestWriterSchema,
         codex: CodexSchema,
         git: GitSchema,
         e2e: E2eConfigSchema,

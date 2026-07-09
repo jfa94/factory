@@ -62,6 +62,14 @@ export type {SpawnPhase}
 /** Ship live-merge re-sync budget per task (persisted in TaskState.merge_resyncs). */
 export const MERGE_RESYNC_CAP = 8
 
+/**
+ * The holdout-validator sidecar's turn budget. It spawns as `general-purpose`
+ * (no bespoke agent, so no frontmatter to fall back to) — unlike the panel/
+ * producer agents, its max_turns has nowhere else to live, so it stays a
+ * local const here (was `config.review.maxTurnsDeep`, default 40).
+ */
+const HOLDOUT_MAX_TURNS = 40
+
 /** What the orchestrator must collect for the emitted request. */
 export type DriveExpects = 'producer-status' | 'reviews'
 
@@ -181,7 +189,7 @@ export async function holdoutSidecar(
         agent_type: GENERAL_PURPOSE_AGENT_TYPE,
         worktree,
         model: resolveReviewModel(deps.config),
-        max_turns: deps.config.review.maxTurnsDeep,
+        max_turns: HOLDOUT_MAX_TURNS,
         prompt: buildHoldoutPrompt(record, worktree, baseRef),
     }
 }

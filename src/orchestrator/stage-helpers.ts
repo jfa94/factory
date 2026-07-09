@@ -19,7 +19,11 @@ export interface StageSpawnBase {
     readonly worktree: string
     readonly staging_branch: string
     readonly model: string
-    readonly max_turns: number
+    /**
+     * Optional hard turn budget. Omitted ⇒ the runner falls back to the agent's
+     * own frontmatter `maxTurns` (single-source-of-truth, mirrors AgentSpecSchema).
+     */
+    readonly max_turns?: number
     readonly prompt: string
 }
 

@@ -418,6 +418,8 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 ## Decision 18: Reviewer Model is Fixed, Not Quota-Routed
 
 > **Refined by Decision 21** (layered model/effort): the "fixed, not quota-routed" principle stands; the canonical tier becomes Opus and an effort dimension is added.
+>
+> **Refined again by [Decision 64](#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)** (per-role reviewer model): "fixed, not quota-routed" still stands — reviewer model is keyed on **role**, never risk tier — but the _one-model-for-every-reviewer_ implementation (internally **Δ T**) is reversed in favour of a per-role model map. The operator override this decision added (`review.model` over the whole reviewer surface) is retired for the panel: `review.model` now overrides only the holdout-validator sidecar.
 
 **Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`, `security-reviewer`, `architecture-reviewer`) spawn with a fixed model. They do not consult `pipeline-model-router`. Default is `sonnet`; operator can override the entire reviewer surface via `package.json.factory.review.model` (and the parallel `review.maxTurnsDeep` / `review.maxTurnsQuick` / `testWriter.maxTurns` knobs).
 
@@ -483,13 +485,20 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ## Decision 21: Layered Model/Effort Allocation
 
+> **Amended (2026-07-09) — apex effort `max` → `xhigh`.** The spec-apex pin's effort
+> was lowered one notch, from `max` to `xhigh` (`APEX_EFFORT` in `src/spec/agents.ts`;
+> `APEX_MODEL` stays `opus`). This is a value tuning of the same apex-pin concept — the
+> pin itself (unconditional, hard-const, non-config; Decision 45) is unchanged, so it is
+> an amendment, not a new decision. Read "Max" below as `xhigh`. The wider per-agent
+> model/effort/turns tuning it landed with is [Decision 63](#decision-63--per-agent-dial-pinning--max_turns-single-sourced-to-frontmatter).
+
 **Choice:** Allocate model tier and reasoning effort per layer by each layer's role in the quality chain:
 
-| Layer                      | Model                       | Effort  |
-| -------------------------- | --------------------------- | ------- |
-| Spec (generation + review) | Opus                        | **Max** |
-| Verifier (reviewers)       | Opus                        | Default |
-| Producer (implementer)     | **Adaptive** (by task risk) | Default |
+| Layer                      | Model                       | Effort    |
+| -------------------------- | --------------------------- | --------- |
+| Spec (generation + review) | Opus                        | **xhigh** |
+| Verifier (reviewers)       | Opus                        | Default   |
+| Producer (implementer)     | **Adaptive** (by task risk) | Default   |
 
 **Why:**
 
@@ -1363,9 +1372,19 @@ was a config-presence check that never executed Codex.
 - **Claim-only verification (D27 hardening).** `Finding` gains a required
   `claim` (≤300 chars, the one-sentence checkable assertion; `description` stays the
   reviewer's reasoning). The verifier sees ONLY the typed `ClaimOnlyFinding`
-  projection `{reviewer, severity, claim, file, line, quote}` — `description?: never`
-  makes leaking it a compile error, and both runner SKILLs pin the same six-field
-  interpolation rule. `FixFinding` (producer-facing) deliberately KEEPS `description`.
+  projection `{claim, file, line, quote}`. **Admissibility rule:** a field enters the
+  verifier's prompt iff the verifier can CHECK it against the code — `claim` is the
+  proposition under test, and `file`/`line`/`quote` say where to look (`line` is a
+  coordinate, not an assertion). What the reviewer BELIEVED is excluded: its reasoning
+  (`description`), its confidence (`severity`), and its identity (`reviewer`). None can
+  be confirmed or refuted by reading the file, so each is a pure prior — severity is the
+  finder's own confidence signal and decision-irrelevant (`blocking:true` already
+  filtered, materiality is defined intrinsically in the agent body); reviewer is an
+  authorship label, and withheld authorship is what makes cross-context review
+  non-sycophantic. The rule derives the whitelist rather than enumerating it.
+  `description?: never; severity?: never; reviewer?: never` makes leaking any of the
+  three a compile error, and `pipeline-runner`'s SKILL pins the interpolation rule.
+  `FixFinding` (producer-facing) deliberately KEEPS `description`.
   `claim` is REQUIRED with no grace fallback: prompts + engine ship in one bundle, and a
   mid-upgrade old-format review fails loud at `parseRawReview` → fresh panel spawn.
 - **Real cross-vendor (Δ U).** `review.requireCrossVendor: "warn" | "block"` (default
@@ -2388,6 +2407,281 @@ gone) returns to needing a human `/factory:resume` — the pre-sentinel behavior
 vestigial wait-config keys (`sleepCapSec`/`maxWaitCycles`/`wallBudgetMin`) are pruned: the
 self-bounded wait needs no knobs. Scope is the main PAUSE CONVERGENCE path; run-level
 e2e/traceability/docs stage suspends still STOP.
+
+---
+
+## Decision 63 — Per-Agent Dial Pinning + max_turns Single-Sourced to Frontmatter
+
+**Date:** 2026-07-09
+
+**Context:** The pipeline spawns ~16 subagents, each with three cost dials — `model`,
+`effort`, `max_turns`. The dials were inconsistent and mostly _inherited_ rather than
+explicitly pinned, and `max_turns` in particular was scattered across **five** places:
+agent frontmatter, two config fields (`review.maxTurnsDeep` / `review.maxTurnsQuick`),
+one config block (`testWriter.maxTurns`), four hardcoded consts (`TRACE_MAX_TURNS`,
+`DOCS_MAX_TURNS`, `ASSESSOR_MAX_TURNS`, `E2E_AUTHOR_MAX_TURNS`), and "nothing" for a few
+unbounded agents. The scatter created a live **dead-frontmatter trap**: `implementer.md`
+declared `maxTurns: 60` but the engine stamped `30`, so the frontmatter value was dead.
+
+**Decision:**
+
+- **Pin all three dials explicitly, per agent, in frontmatter** — trimmed where the
+  reasoning load is light, kept strong where quality is critical (`haiku` avoided by prior
+  feedback). The agreed allocation:
+
+    | Agent                     | model                         | effort | max_turns |
+    | ------------------------- | ----------------------------- | ------ | --------- |
+    | spec-generator            | opus                          | xhigh  | 60        |
+    | spec-reviewer             | opus                          | xhigh  | 30        |
+    | test-writer               | opus (pinned, risk-invariant) | high   | 30        |
+    | implementer               | sonnet→opus (tiered dial)     | medium | 50        |
+    | quality-reviewer          | opus                          | high   | 40        |
+    | systemic-failure-reviewer | opus                          | medium | 40        |
+    | implementation-reviewer   | sonnet                        | medium | 40        |
+    | database-design-reviewer  | opus                          | medium | 40        |
+    | silent-failure-hunter     | sonnet                        | medium | 40        |
+    | finding-verifier          | sonnet                        | high   | 30        |
+    | traceability-auditor      | sonnet                        | medium | 60        |
+    | scribe                    | sonnet                        | medium | 60        |
+    | e2e-assessor              | sonnet                        | medium | 60        |
+    | e2e-author                | sonnet                        | medium | 90        |
+    | rescue-diagnostic         | sonnet                        | medium | 30        |
+    | rescue-reconciler         | sonnet                        | medium | 30        |
+
+- **`max_turns` is single-sourced to frontmatter.** `AgentSpecSchema.max_turns`
+  (`src/core/phase-machine/spawn.ts`) and `StageSpawnBase.max_turns` are now both
+  `optional()`. The engine **never stamps** `max_turns` on a spawn-manifest entry; when it
+  is absent the runner (`skills/pipeline-runner/SKILL.md`) omits it at spawn, so the
+  agent's own frontmatter `maxTurns:` governs — the same fallback pattern `effort` already
+  uses. Every engine build site that used to stamp it (`buildPanelManifest`, `producerSpawn`,
+  and the single-agent requests in `traceability.ts` / `docs.ts` / `assessment.ts` /
+  `e2e-author.ts` / `e2e-suite.ts`) drops the field. This deletes the dead-frontmatter trap
+  by construction — the frontmatter value is now the only value.
+
+- **Config + consts deleted.** `review.maxTurnsDeep`, `review.maxTurnsQuick`, the whole
+  `testWriter` block (`TestWriterSchema`), `JudgmentConfig.maxTurnsDeep`, and the four
+  `*_MAX_TURNS` consts are removed. Turn budgets are **no longer overridable via
+  `/factory:configure`** — they are plugin-author-owned in frontmatter (the accepted
+  trade-off). Stale on-disk overlays keep loading (ConfigSchema strips unknown keys).
+
+- **One deliberate carve-out.** The holdout-validator sidecar (`HoldoutSpawn`,
+  `src/orchestrator/orchestrator.ts`) spawns as generic `general-purpose` with no bespoke
+  agent file to fall back to, so its cap stays a local const `HOLDOUT_MAX_TURNS = 40` — the
+  single documented exception to the single-source rule.
+
+- **Standalone model trims (opus → sonnet).** `traceability-auditor`, `scribe` (the docs
+  stage), `e2e-assessor`, and `e2e-author` moved from opus to sonnet in the same cost-tuning
+  pass. The e2e pair was apex-pinned opus by
+  [Decision 40](#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)
+  (D3/D4/D5); that pin is relaxed to sonnet here — these lenses are auxiliary, not the merge
+  gate, so they are cost-flex points.
+
+- **Scope of single-sourcing.** Only `max_turns` becomes single-source. `effort` stays
+  **two-layer by design** — frontmatter default + engine override for the spec apex pin
+  (Decision 21) and the producer escalation ladder (Decision 25). `model` stays
+  engine-authoritative where tier/role logic requires it: the producer keeps its tiered
+  `sonnet→opus` dial, `test-writer` is pinned opus regardless of task risk (config-driven
+  ceiling in `producerSpawn`), and the panel model is per-role (Decision 64).
+
+- **finding-verifier promoted to a first-class agent.** Previously the independent
+  finding-verifier (verify-then-fix, Decision 27) ran as generic `general-purpose` with no
+  frontmatter, tracking the reviewer panel's model. It is now a real agent file
+  `agents/finding-verifier.md` (`model: sonnet`, `effort: high`, `maxTurns: 30`,
+  `isolation: worktree`), decoupled from the panel's model. Its spawn points at the new
+  `FINDING_VERIFIER_AGENT_TYPE` const (`src/core/phase-machine/spawn.ts`). Per-finding
+  prompts still come from `VERIFIER_PROMPT_TEMPLATE` at spawn; the agent-file body is the
+  standing system prompt and now carries the full verification discipline (adversarial
+  mandate, grounding gate, refute-when-unsure calibration — authored in a follow-up
+  session, see below).
+
+**Consequences:** Each agent's turn cap lives in exactly one place — its own frontmatter —
+and the "declared 60 / stamped 30" class of bug cannot recur. The config surface shrinks to
+only keys the engine actually reads. Reviewer/producer turn budgets are no longer
+operator-tunable; accepted as the price of a single source of truth.
+
+**Gap closed:** `agents/finding-verifier.md` shipped as a stub (a `TODO(user)` in place of
+the full verification discipline) until a follow-up session authored the body — process,
+red flags, and output-contract restatement, consistent with the runner-supplied
+`VERIFIER_PROMPT_TEMPLATE` which still carries the operative per-finding prompt.
+
+**Relationship:** Amends Decision 21 (apex effort `max`→`xhigh`); carries the per-role
+reviewer-model change (Decision 64); extends Decision 27 (the finding-verifier it promotes);
+relaxes Decision 40's e2e apex pin.
+
+---
+
+## Decision 64 — Per-Role Reviewer Model Reverses the Single-Fixed-Reviewer Model
+
+**Date:** 2026-07-09
+
+**Context:** The risk-invariant review panel (Decision 26) stamped **one** fixed model on
+**every** reviewer — the single-fixed-reviewer-model implementation (internally **Δ T**),
+which realised the "reviewer model is fixed, not quota-routed" principle of Decisions
+18/21/26 by holding the model literally constant across the whole panel. The independent
+finding-verifier (Decision 27) and the holdout-validator both tracked that same panel model.
+Uniform Opus across the panel was the single largest happy-path quota spend, yet the
+narrower-scoped lenses (spec-alignment, silent-failure) do not need apex reasoning.
+
+**Decision:**
+
+- **Per-role reviewer model.** `src/verifier/judgment/panel.ts` replaces the single stamped
+  model with a `REVIEWER_MODEL_BY_ROLE` map: **opus** for the deepest-reasoning lenses
+  (`quality-reviewer`, `systemic-failure-reviewer`, `database-design-reviewer`), **sonnet**
+  for the narrower ones (`implementation-reviewer`, `silent-failure-hunter`). The map is
+  keyed **only on role, never on risk tier**, so the merge gate stays **risk-invariant**
+  (Decision 26) — this is additive precision, not a break of that invariant. Producer roles
+  are never looked up here.
+
+- **The single-model implementation (Δ T) is SUPERSEDED.** "Fixed, not quota-routed"
+  (Decision 18) still holds — reviewer model is a fixed function of role, independent of a
+  task's risk — but the _one-model-for-every-reviewer_ realisation is gone.
+
+- **finding-verifier and holdout decoupled.** The finding-verifier now runs on its own fixed
+  `sonnet` (`FINDING_VERIFIER_MODEL`, plus its own agent file — Decision 63), no longer the
+  reviewer model. `review.model` config is retired for the panel and now overrides **only**
+  the `general-purpose` holdout-validator sidecar (`resolveReviewModel`,
+  `src/orchestrator/orchestrator.ts`).
+
+**Consequences:** The panel spends apex tokens only on the lenses that need them; the
+narrower lenses run cheaper on sonnet, with no loss of risk-invariance — a mis-tagged task
+still meets the identical panel. Reviewer model is now a per-role constant in code, not a
+run-level config knob.
+
+**Relationship:** Refines Decision 18 (fixed, not quota-routed) and Decision 21 (canonical
+verifier tier); preserves Decision 26 (risk-invariant merge gate); landed alongside
+Decision 63's dial-pinning pass.
+
+---
+
+## Decision 65 — `bypassPermissions` Relaunch + Deny-List Shrink to Honest Accident-Prevention
+
+**Problem:** A live run (`run-20260709-095909`, task `legal-001`) stalled on permission
+_prompts_ — "edit and create sensitive files" and "allow Claude to edit its own settings" —
+for ordinary writes under the plugin's own data dir
+(`~/.claude/plugins/data/<plugin>/worktrees/<run>/<task>/...`). Autonomous mode has no
+operator to answer a prompt, so every prompt is an unattended stall — the #1 pain point
+(Decision 62/Session-6). The user's principle: in autonomous mode every decision must be
+**binary** (allow or deny); nothing should ever prompt.
+
+**Root cause:** Claude Code's built-in protected-path check protects the whole `.claude/`
+tree except `.claude/worktrees`. This plugin's data dir lives under `~/.claude/plugins/data/`,
+and its worktrees sit under `.../data/<plugin>/worktrees/...` — a sibling path, not the
+exempted one — so every Edit/Write there hit the built-in prompt regardless of
+`permissions.allow`/`additionalDirectories` (that check runs _before_ allow-rules are
+consulted).
+
+**Choice:** The autonomous relaunch command (`factory autonomy ensure` /
+`runAutonomyEnsure`/`runAutonomyStatus` in `src/cli/subcommands/autonomy.ts`) now appends
+`--permission-mode bypassPermissions`:
+
+```
+claude --worktree --settings <merged-settings-path> --permission-mode bypassPermissions
+```
+
+**Why this is not the security regression it sounds like:** `bypassPermissions` only
+suppresses the prompt-on-allow path (including the protected-path Edit/Write prompt). It
+does **not** disable `permissions.deny`, does **not** skip any hook in
+`hooks/hooks.json`/`dist/factory-hook.js`, and does **not** suppress explicit `ask` rules or
+Claude Code's own `rm -rf /` / `rm -rf ~` circuit-breaker. The only delta bypass adds is
+protected-path Edit/Write going prompt → allow. In an unattended run a prompt was never a
+real gate — nobody was there to answer it — so this converts a silent stall into the
+correct binary outcome.
+
+**Course correction — this decision also walks back a first attempt in the same session.**
+An earlier pass solved the reported prompts with this same `bypassPermissions` flag, but then
+_added_ ~16 new `permissions.deny` entries and a ~180-line scoped-recursive-`rm` hook
+(`dangerousRmTargets`/`protectedRmRoots` in `src/hooks/write-protection.ts`) on top of an
+already-121-entry deny-list. User feedback: this added layers when the goal was to simplify.
+On review, the added hook solved nothing the reported prompts needed — `rm` was exactly as
+protected after bypass as before it, since bypass never touches Bash deny rules. That hook and
+its 16 deny additions are **reverted** by this decision.
+
+**The deny-list is reframed and cut from 121 entries to ~57** (`templates/settings.autonomous.json`),
+on a single thesis:
+
+> A string-glob deny-list cannot be a security boundary. It is simultaneously **incomplete**
+> (misses `rm -rf ../..`, absolute-path forms, nested shells, every AWS destructive verb) and
+> **over-broad** (blocks legitimate migration/test-DB/`.env.example` work). Against a
+> **non-adversarial** coding agent it doesn't need to be complete — it only needs to prevent
+> _accidents_ to a few irreversible, non-file-path-shaped operations. Real containment against
+> a _malicious_ agent is the OS sandbox (deferred below), which string-globs were never going
+> to provide.
+
+**What the deny-list keeps** (all from the KEEP set — nothing here overlaps what the
+path-resolving hook layer already enforces):
+
+- **A few catastrophic `rm` globs** (`rm -rf /`, `rm -rf ~`, `rm -rf ~/*`, `rm -rf $HOME*`,
+  `rm -rf /*`) — makes the built-in circuit-breaker's cases binary instead of a stalling
+  prompt.
+- **Interpreter-eval** (`node -e`, `python -c`, `python3 -c`, `perl -e`, `ruby -e`,
+  `deno eval`, `bun -e`, `eval *`) — kept unchanged, on purpose. Over-broad (blocks legitimate
+  one-off interpreter use) but load-bearing under a string-matching boundary: the only thing
+  stopping an agent from laundering an otherwise-denied command through an interpreter, past
+  the parsed-command guards. The only _safe_ way to relax this is an OS sandbox that confines
+  interpreter child processes at the kernel level — deferred, not attempted here.
+- **Irreversible remote/publish ops** (`npm publish`, `pnpm publish`, `gh repo delete`,
+  `gh release delete`, `gh api -X DELETE`) — not file-path-shaped, so no hook can see them;
+  the deny-list is the only place these can be stopped.
+- **`Write`/`Edit(**/.git/**)`** and **home credentials/config**
+  (`~/.ssh/**`, `~/.aws/**`, `~/.gnupg/**`, `~/.netrc`, `~/.config/gh/**`, `~/.gitconfig`,
+  `~/.npmrc`, `~/.claude.json`, `~/.bashrc`, `~/.zshrc`, `~/.profile`, and the `~/.claude/*`
+  settings/credentials/hooks/CLAUDE.md set) — these sit outside any task worktree, so the
+  hook layer (which is scoped to TCB paths and the worktree) can't reach them; the deny-list
+  is the only guard.
+
+**What was deleted (~90 entries) and why it's safe:**
+
+- **All AWS destructive-verb entries (9)** and **all SQL `DROP`/`TRUNCATE` entries (5)** —
+  globs can't distinguish a prod resource from a test one, so they only ever gave false
+  confidence while blocking legitimate infra/test-DB work.
+- **Redundant git history-rewrite globs (10)** — `branch-protection`
+  (`src/hooks/branch-protection.ts`) already path-resolves and denies force-push/reset/
+  branch-delete on the protected-branch set; a feature-branch force-push is legitimate and
+  the glob duplicate only blocked it.
+- **`.claude` Bash read-guards (3)** — the `.claude`-carve-out PreToolUse hook and
+  holdout-guard already govern sensitive `.claude` access with path resolution; the blanket
+  `ls`/`find`/`cat .claude*` denies blocked harmless introspection.
+- **Repo-relative sensitive-file writes (~10: `.env`, `**/secrets/**`, `**/migrations/**`,
+`**/_.tfstate_`, repo-relative `**/.npmrc`/`**/.gitconfig`/`**/.mcp.json`/`**/.claude.json`)**
+— these live inside the ephemeral task worktree, are often the task itself (a migration, an
+`.env.example`), never reach `main`if junk, and`secret-guard` already blocks committing an
+  actual secret.
+- **Theater/misc (~6): `chmod 777`/`chmod -R 777`, `sudo *`, `npx *create-*`, `*base64 -d*`,
+  `*--no-verify*`/`*--no-gpg-sign*`** — `sudo` fails with no TTY regardless; `--no-verify`
+  bypasses _git_ hooks, not the factory's Claude Code hooks, so denying it is moot; the rest
+  never blocked a real threat.
+
+**Rejected design — a positive "write only inside your own worktree" sandbox.** Considered
+and rejected (not merely deferred): no ambient signal identifies the current agent's
+worktree — `FACTORY_TASK_ID`/`FACTORY_RUN_ID` are read by hooks but never set in production,
+and a subagent's cwd isn't reliably the task worktree (confirmed against
+`src/hooks/hook-context.ts`). Even with a reliable signal, legitimate tooling writes outside
+any worktree (`~/.npm`, `~/.cache`, `/tmp`), so a worktree-only allowlist would deny real work
+and stall the run — precisely the failure mode this whole decision exists to eliminate. Doing
+this safely is exactly what an OS sandbox (`sandbox.*` allowlists) is for; see below.
+
+**Deferred to separate sessions (not attempted here):**
+
+- **A global dotfiles hook** (`~/.dotfiles/.claude/hooks/dangerous-patterns-check.sh`,
+  symlinked into `~/.claude/hooks/`) independently emits a permission `ask` on a
+  false-positive string match (the word "credentials" inside a heredoc body) — a third
+  prompt source in the original report. Out of scope here: it lives in the user's global
+  config, and this change is scoped to be self-contained to this repo. It likely survives
+  bypass too, since bypass still fires explicit `ask` rules.
+- **OS sandbox adoption** (`sandbox.*`, macOS Seatbelt): the genuinely stronger,
+  injection-resistant boundary, the only way to safely relax the interpreter-eval denies, and
+  the only way to implement the worktree-only sandbox rejected above. Not pursued now — it
+  doesn't fix the protected-path prompt (Read/Edit/Write bypass the sandbox), its network
+  confinement pre-allows no domains (so `git push`/`gh`/`npm` would newly stall on first use),
+  and `gh`/`gcloud`/`terraform` fail TLS under Seatbelt without `excludedCommands` entries.
+  Scoped as its own future initiative.
+
+**Relationship:** Extends Decision 17 (coarse-Bash, hook-enforced boundary) — the
+pipeline-integrity hooks (branch-protection, secret-guard, pipeline-guards, holdout-guard,
+write-protection's TCB-path arm) remain the actual, complete boundary for what they guard;
+this decision narrows `permissions.deny` to the residual accident-prevention role those hooks
+structurally can't cover. Continues the Close-the-Loop stall-elimination line
+(Decision 61/62).
 
 ---
 

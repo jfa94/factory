@@ -80,7 +80,9 @@ ships a real defect silently. Making the merge gate risk-invariant removes
 classification error from the verifier's blast radius: the panel is the panel,
 regardless of how the task was tiered. The reviewer model is fixed (not
 quota-routed) for the same reason — review quality must not degrade under quota
-pressure.
+pressure. "Fixed" now means a fixed **per-role** model (opus for the deepest-reasoning
+lenses, sonnet for the narrower ones), keyed on role and never on risk tier, so
+risk-invariance still holds ([Decision 64](./decisions.md#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)).
 
 "The panel is the panel" is enforced structurally, not just intended. The merge-gate
 verdict is unanimity over whatever reviews arrive, so a partial all-approve **subset**
@@ -166,8 +168,25 @@ rung's files become inert rather than misleading.
 
 A reviewer's raw "this is a blocker" cannot be trusted to act on directly: LLM
 reviewers hallucinate findings. So every blocking, citable finding (one carrying
-both a `file` and a `line`) is independently confirmed before it can block the
-task:
+both a `file` and a `line`) must clear two independent checks before it can block
+the task.
+
+> **Order of execution.** These are listed as a logical pipeline, but they do NOT
+> run in this order. The **runner** spawns a finding-verifier per blocking+citable
+> finding directly from the reviewer's raw JSON, because the finding set is only
+> known after the panel returns and the manifest was stamped before it ran. Citation-verify
+> runs later and independently, inside `factory next-action --results`, when the
+> engine records the verdicts. So the verifier sees the reviewer's **unverified,
+> unredacted** `quote` and its **cited** (possibly miscounted) `line`. The two
+> checks are combined at record time, and a finding must clear both — but neither
+> informs the other. `agents/finding-verifier.md` is written to that reality: an
+> unfindable quote is a fabricated citation the verifier refutes on its own, which
+> agrees with the drop citation-verify independently makes.
+>
+> Inverting this — record reviews, citation-verify, then spawn verifiers with
+> engine-composed prompts — is proposed in
+> [verifier-prompt-ordering.md](../proposals/verifier-prompt-ordering.md). It would
+> make `ClaimOnlyFinding` the enforced boundary rather than a prose convention.
 
 1. **Citation-verify** — the finding's quoted code is checked against the actual
    worktree source. An uncitable finding (missing `file`/`line`, or a quote that
@@ -176,17 +195,23 @@ task:
    file is relocated there (`RELOCATE relocated_ok` in the audit) instead of
    dropped — reviewers are frequently right about the code and off by a few lines.
    Zero or multiple matches, multi-line quotes, and whitespace-only quotes stay
-   fail-closed. Confirmation still keys on the reviewer's **cited** line (what the
-   verifier agent saw); the relocated line is what reaches the producer.
+   fail-closed. Confirmation keys on the reviewer's **cited** line (the only
+   coordinate the verifier agent ever saw); the relocated line is what reaches the
+   producer. Redaction likewise applies to the text the engine persists and
+   surfaces, not to the verifier's prompt.
 2. **Independent confirmation** — a separate finding-verifier, whose identity
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
-   The verifier is **claim-only** (anti-anchoring, Decision 44): its prompt is
-   built from `{reviewer, severity, claim, file, line, quote}` — never the
-   reviewer's `description` reasoning chain, so it can't be led to the same
-   wrong conclusion. The finding-verifier is spawned from the manifest's
+   The verifier is **claim-only** (anti-anchoring, Decision 44). A field is
+   admissible into its prompt iff the verifier can CHECK it against the code, so
+   the prompt is built from `{claim, file, line, quote}`: the `claim` is the
+   proposition under test, and `file`/`line`/`quote` say where to look. What the
+   reviewer BELIEVED is excluded — its reasoning (`description`), its confidence
+   (`severity`), and its identity (`reviewer`). None of the three can be confirmed
+   or refuted by reading the file; each would lead the verifier to the finder's
+   conclusion. The finding-verifier is spawned from the manifest's
    `verifier_spec` **template** (`{ agent_type, model, isolation, prompt_template,
-   interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
+interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
    hardcoded agent-type/model/isolation — the finding set is only known after the panel
    returns, so the engine ships the fixed framing with `{field}` placeholders and the
    runner substitutes exactly `interpolate_fields` per finding. This closes the last

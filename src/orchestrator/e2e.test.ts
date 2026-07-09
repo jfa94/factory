@@ -208,7 +208,7 @@ describe('runE2eEmit', () => {
         expect(env.base_ref).toBe('origin/develop')
         expect(env.worktree).toContain(RUN_ID)
         expect(env.throwaway_dir).toContain(RUN_ID)
-        expect(env.model).toBe('opus') // apex-pinned (Decision 40 D4)
+        expect(env.model).toBe('sonnet') // trimmed from the prior apex pin (Decision 40 D4)
         expect(git.calls.some((c) => c.startsWith('worktree add') && c.includes(`-B e2e-${RUN_ID} `))).toBe(true)
         expect(env.prompt).toContain('task-a')
         expect(env.prompt).toContain(CONTROL_TITLE_PREFIX)

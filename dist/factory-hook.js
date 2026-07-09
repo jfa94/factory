@@ -6601,10 +6601,6 @@ var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var ReviewSchema = external_exports.object({
   /** Reviewer model id (panel runs on a fixed model per Decision 26). */
   model: external_exports.string().optional(),
-  /** Max turns for a deep review pass. */
-  maxTurnsDeep: external_exports.number().int().positive().default(40),
-  /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20),
   /**
    * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
    * `warn` records the absence loudly (task state + report + summary);
@@ -6612,9 +6608,6 @@ var ReviewSchema = external_exports.object({
    * independent second-vendor review.
    */
   requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
-}).default({});
-var TestWriterSchema = external_exports.object({
-  maxTurns: external_exports.number().int().positive().default(30)
 }).default({});
 var CodexSchema = external_exports.object({
   model: external_exports.string().optional()
@@ -6697,7 +6690,6 @@ var ConfigSchema = external_exports.object({
   quota: QuotaSchema,
   spec: SpecSchema,
   review: ReviewSchema,
-  testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
   e2e: E2eConfigSchema,
@@ -8605,8 +8597,13 @@ var AgentSpecSchema = external_exports.object({
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
   model: external_exports.string().min(1),
-  /** Hard turn budget for the agent (positive integer). */
-  max_turns: external_exports.number().int().positive(),
+  /**
+   * Optional hard turn budget for the agent (positive integer). Omitted ⇒ the runner
+   * falls back to the agent's own frontmatter `maxTurns` (single-source-of-truth —
+   * mirrors how `effort` already works below). Set only when the engine deliberately
+   * overrides the frontmatter default.
+   */
+  max_turns: external_exports.number().int().positive().optional(),
   /**
    * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
    * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —

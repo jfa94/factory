@@ -20,6 +20,22 @@ function round(
     }
 }
 
+/** A review.round carrying the 7b/2 funnel counters: [raised, cited, confirmed] per lens. */
+function funnelRound(
+    outcome: ReviewRound['outcome'],
+    lenses: Record<string, [raised: number, cited: number, confirmed: number]>
+): ReviewRound {
+    return {
+        outcome,
+        reviewers: Object.entries(lenses).map(([reviewer, [raised, cited, confirmed]]) => ({
+            reviewer,
+            confirmed_blockers: confirmed,
+            raised_blockers: raised,
+            cited_blockers: cited,
+        })),
+    }
+}
+
 function run(over: Partial<ReviewerValueRun> & {run_id: string}): ReviewerValueRun {
     return {misses: [], rounds: [], ...over}
 }
@@ -123,6 +139,86 @@ describe('aggregateReviewerValue', () => {
             'silent-failure-hunter', // yield 1
         ])
     })
+
+    it('splits the funnel: citation_rate = cited/raised, confirm_rate = confirmed/cited', () => {
+        const report = aggregateReviewerValue([
+            run({run_id: 'r1', rounds: [funnelRound('send-back', {'quality-reviewer': [4, 3, 1]})]}),
+        ])
+        const q = report.lenses.find((l) => l.lens === 'quality-reviewer')
+        expect(q?.citation_rate).toBe(0.75) // 3 of 4 quotes were real source
+        expect(q?.confirm_rate).toBe(1 / 3) // 1 of those 3 claims survived refutation
+        expect(report.rounds_without_funnel).toBe(0)
+    })
+
+    it('an environmental round scores citation_rate but NEVER confirm_rate (no verdict was reached)', () => {
+        const report = aggregateReviewerValue([
+            run({
+                run_id: 'r1',
+                rounds: [
+                    // Verifier errored: 2 findings cited real code, none got a verdict.
+                    funnelRound('environmental', {'quality-reviewer': [2, 2, 0]}),
+                ],
+            }),
+        ])
+        const q = report.lenses.find((l) => l.lens === 'quality-reviewer')
+        expect(q?.rounds).toBe(1)
+        expect(q?.citation_rate).toBe(1) // citation-verify DID run
+        expect(q?.confirm_rate).toBeNull() // scoring 0/2 here would libel the lens
+    })
+
+    it('mixes an environmental round into the citation denominator but not the confirm one', () => {
+        const report = aggregateReviewerValue([
+            run({
+                run_id: 'r1',
+                rounds: [
+                    funnelRound('send-back', {'quality-reviewer': [2, 2, 1]}),
+                    funnelRound('environmental', {'quality-reviewer': [2, 1, 0]}),
+                ],
+            }),
+        ])
+        const q = report.lenses.find((l) => l.lens === 'quality-reviewer')
+        expect(q?.citation_rate).toBe(0.75) // (2+1) cited / (2+2) raised
+        expect(q?.confirm_rate).toBe(0.5) // 1 confirmed / 2 cited — the environmental round is excluded
+    })
+
+    it('a round with no funnel counters yields null rates and counts as rounds_without_funnel', () => {
+        const report = aggregateReviewerValue([
+            run({run_id: 'r1', rounds: [round('send-back', {'quality-reviewer': 2})]}),
+        ])
+        const q = report.lenses.find((l) => l.lens === 'quality-reviewer')
+        expect(q?.confirmed_blockers).toBe(2) // yield still works
+        expect(q?.yield).toBe(2)
+        expect(q?.citation_rate).toBeNull() // never a fabricated 0 (D49 backfill honesty)
+        expect(q?.confirm_rate).toBeNull()
+        expect(report.rounds_without_funnel).toBe(1)
+    })
+
+    it('a pre-7b/2 round contributes to yield but not to the rates of a lens that also has funnel rounds', () => {
+        const report = aggregateReviewerValue([
+            run({
+                run_id: 'r1',
+                rounds: [
+                    round('send-back', {'quality-reviewer': 2}), // no funnel data
+                    funnelRound('send-back', {'quality-reviewer': [2, 2, 2]}),
+                ],
+            }),
+        ])
+        const q = report.lenses.find((l) => l.lens === 'quality-reviewer')
+        expect(q?.rounds).toBe(2)
+        expect(q?.yield).toBe(2) // 4 blockers / 2 rounds
+        expect(q?.citation_rate).toBe(1) // only the funnel round's 2/2
+        expect(q?.confirm_rate).toBe(1)
+        expect(report.rounds_without_funnel).toBe(1)
+    })
+
+    it('a lens that never raised a blocker has a null citation_rate, not a divide-by-zero', () => {
+        const report = aggregateReviewerValue([
+            run({run_id: 'r1', rounds: [funnelRound('advance', {'implementation-reviewer': [0, 0, 0]})]}),
+        ])
+        const impl = report.lenses.find((l) => l.lens === 'implementation-reviewer')
+        expect(impl).toMatchObject({rounds: 1, citation_rate: null, confirm_rate: null})
+        expect(report.rounds_without_funnel).toBe(0) // the counters WERE emitted; they were just zero
+    })
 })
 
 describe('parseReviewRounds', () => {
@@ -166,5 +262,37 @@ describe('parseReviewRounds', () => {
             metric('review.round', {outcome: 'advance', reviewers: [{reviewer: 'quality-reviewer'}]}),
         ])
         expect(rounds[0]?.reviewers[0]).toEqual({reviewer: 'quality-reviewer', confirmed_blockers: 0})
+    })
+
+    it('leaves the funnel counters ABSENT when unemitted — never defaulted to 0', () => {
+        const rounds = parseReviewRounds([
+            metric('review.round', {outcome: 'advance', reviewers: [{reviewer: 'quality-reviewer'}]}),
+        ])
+        const r = rounds[0]?.reviewers[0]
+        expect(r?.raised_blockers).toBeUndefined()
+        expect(r?.cited_blockers).toBeUndefined()
+    })
+
+    it('parses the funnel counters when present', () => {
+        const rounds = parseReviewRounds([
+            metric('review.round', {
+                outcome: 'send-back',
+                reviewers: [
+                    {
+                        reviewer: 'quality-reviewer',
+                        verdict: 'block',
+                        confirmed_blockers: 1,
+                        raised_blockers: 3,
+                        cited_blockers: 2,
+                    },
+                ],
+            }),
+        ])
+        expect(rounds[0]?.reviewers[0]).toEqual({
+            reviewer: 'quality-reviewer',
+            confirmed_blockers: 1,
+            raised_blockers: 3,
+            cited_blockers: 2,
+        })
     })
 })

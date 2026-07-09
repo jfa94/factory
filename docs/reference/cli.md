@@ -221,8 +221,8 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
 unattended by design; `/factory:run` calls [`factory autonomy preflight`](#autonomy-preflight)
-first, which auto-scaffolds and prints the `claude --settings <merged-settings.json>` relaunch
-command when needed (`ensure`/`status` remain the manual primitives). See
+first, which auto-scaffolds and prints the `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
+relaunch command when needed (`ensure`/`status` remain the manual primitives). See
 [Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)
 and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
 
@@ -676,7 +676,8 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
   spawns verbatim via `codex exec`) and `request.verifier_spec` (the finding-verifier
   spawn template — `{ agent_type, model, isolation, prompt_template, interpolate_fields }`;
   the runner renders one instance per blocking+citable finding by substituting only the
-  whitelisted `interpolate_fields`, never the finding's `description`). `effort` (the `Agent`
+  admissible `interpolate_fields` — what the verifier can check against the code — never
+  the reviewer's `description`, `severity`, or `reviewer`). `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
@@ -1061,7 +1062,20 @@ factory autonomy ensure [--user-settings <path>]
 | `--user-settings <path>` | no       | Override the user-settings source (default: `~/.claude/settings.json`). |
 
 Prints a human-readable relaunch message to stdout that includes the command
-`claude --settings <merged-settings.json>` — not a `{kind:…}` envelope.
+
+```
+claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
+```
+
+— not a `{kind:…}` envelope. The `--permission-mode bypassPermissions` flag suppresses
+Claude Code's built-in protected-path _prompt_ for writes under the plugin's data dir
+(which lives under `~/.claude/`, outside the exempted `.claude/worktrees`), converting an
+unattended stall into the correct binary outcome. It does **not** disable
+`permissions.deny`, any hook, or the `rm -rf /` / `rm -rf ~` circuit-breaker. The real
+security boundary stays the path-resolving hook layer (branch-protection, secret-guard,
+pipeline-guards, holdout-guard, write-protection); the template's `deny` block is
+deliberately short — accident-prevention for a non-adversarial agent, not a containment
+boundary. See [Decision 65](../explanation/decisions.md#decision-65--bypasspermissions-relaunch--deny-list-shrink-to-honest-accident-prevention).
 
 ### `autonomy status`
 
@@ -1108,7 +1122,8 @@ plugin version:
 | yes         | present       | plugin unknowable | **proceed** (`version-unknowable` — no churn)                 |
 
 On a halt it delegates to `ensure` (the single writer path) to (re)materialize the settings,
-prints the same `claude --settings <merged-settings.json>` relaunch block plus a one-line
+prints the same `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
+relaunch block ([see `ensure`](#autonomy-ensure) for what the flag does) plus a one-line
 reason, and **exits 1**. On proceed it writes nothing and **exits 0**. Like `status`, it is
 infallible on the decision path (an unresolvable data/root dir degrades to a halt-with-message,
 never a throw). The relaunch itself is irreducible — Claude Code reads settings only at launch,

@@ -88,16 +88,13 @@ export type E2eAction =
  */
 export type EmitFn = (deps: E2eRunDeps, runId: string) => Promise<E2eAction>
 
-// Apex-pinned (Decision 40): the author runs once per run, no human reviews its
-// assertions, and they gate the run — same rationale as the spec-generator pin (Decision 21).
-export const E2E_AUTHOR_MODEL = 'opus'
+// Trimmed from the prior apex pin (Decision 40) per the model/effort/max_turns
+// tuning pass: sonnet is sufficient for spec authoring against a live app.
+export const E2E_AUTHOR_MODEL = 'sonnet'
 // D5 (Decision 40): a crashed/unparseable author earns ONE automatic re-spawn —
 // mirrors the assessment coroutine's MAX_ASSESS_ATTEMPTS. Deliberate verdicts
 // (blocked-escalate, needs-context) are FINAL and never retry.
 export const MAX_AUTHOR_ATTEMPTS = 2
-// ponytail: 90 (docs' 60 + a 50% margin) — live MCP exploration burns more turns
-// than a diff read; bump if the author routinely hits the ceiling.
-export const E2E_AUTHOR_MAX_TURNS = 90
 
 export function errText(err: unknown): string {
     return err instanceof Error ? err.message : String(err)

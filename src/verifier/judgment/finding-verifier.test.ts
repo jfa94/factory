@@ -92,11 +92,14 @@ describe('WS7 verify-then-fix finding-verifier (D27)', () => {
     })
 })
 
-// S5/B2 — anti-anchoring: the independent verifier confirms the CLAIM, never the
-// reviewer's reasoning chain. The projection is enforced both at the type level
-// (`description?: never`) and at runtime (exactly six keys reach the runner).
+// S5/B2 — ADMISSIBILITY (anti-anchoring): a field reaches the verifier iff the verifier
+// can CHECK it against the code. The `claim` is the proposition under test;
+// `file`/`line`/`quote` say where to look. What the reviewer BELIEVED — its reasoning
+// (`description`), its confidence (`severity`), its identity (`reviewer`) — is checkable
+// against nothing, and is excluded both at the type level (`?: never`) and at runtime
+// (exactly four keys reach the runner).
 describe('claim-only projection (S5/B2)', () => {
-    it('the runner receives EXACTLY {reviewer,severity,claim,file,line,quote} — never description', async () => {
+    it('the runner receives EXACTLY {claim,file,line,quote}', async () => {
         let received: ClaimOnlyFinding | undefined
         await confirmBlocker(
             finding,
@@ -107,16 +110,23 @@ describe('claim-only projection (S5/B2)', () => {
             'quality-reviewer'
         )
         expect(received).toBeDefined()
-        expect(Object.keys(nonNull(received)).sort()).toEqual([
-            'claim',
-            'file',
-            'line',
-            'quote',
-            'reviewer',
-            'severity',
-        ])
-        expect(received).not.toHaveProperty('description')
+        expect(Object.keys(nonNull(received)).sort()).toEqual(['claim', 'file', 'line', 'quote'])
         expect(nonNull(received).claim).toBe('unsanitised input reaches process()')
+    })
+
+    // The finder's belief-state, field by field. Each would lead the verifier toward the
+    // finder's prior, and none can be confirmed or refuted by reading the cited file.
+    it.each(['description', 'severity', 'reviewer'])('never projects the inadmissible field `%s`', async (field) => {
+        let received: ClaimOnlyFinding | undefined
+        await confirmBlocker(
+            finding,
+            runner((f) => {
+                received = f
+                return Promise.resolve({holds: true, note: 'ok'})
+            }),
+            'quality-reviewer'
+        )
+        expect(received).not.toHaveProperty(field)
     })
 
     it('projects the CITED line (replay-verdict key, S5/A2) when the finding was grep-relocated', async () => {
@@ -133,8 +143,10 @@ describe('claim-only projection (S5/B2)', () => {
         expect(nonNull(received).line).toBe(9)
     })
 
-    it('type-level leak guard: a full Finding (with description) is not assignable to ClaimOnlyFinding', () => {
-        // @ts-expect-error — `description?: never` rejects any object carrying it.
+    it('type-level leak guard: a full Finding is not assignable to ClaimOnlyFinding', () => {
+        // @ts-expect-error — `description`/`severity`/`reviewer` are `?: never`, so any
+        // object carrying the reviewer's belief-state fails to compile. This is why
+        // confirmBlocker field-picks explicitly instead of spreading.
         const leak: ClaimOnlyFinding = {...finding}
         expect(leak).toBeDefined() // the assertion is the compile error above
     })

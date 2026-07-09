@@ -116,10 +116,11 @@ Emits:
 }
 ```
 
-`manifest` is `buildPanelManifest("verify", <reviewModel>, <maxTurnsDeep>)` —
-**identical construction** to the per-task verify phase's panel (Δ T/Δ K: the panel
-is risk-invariant, same model + turn budget for every reviewer, no debug-specific
-variant). Spawn the panel (all 4 in one assistant message), run the cross-vendor
+`manifest` is `buildPanelManifest("verify")` — **identical construction** to the
+per-task verify phase's panel (Δ K: the panel is risk-invariant, same fixed
+per-role model for every reviewer, no debug-specific variant; each reviewer's
+turn budget comes from its own frontmatter, not the manifest). Spawn the panel
+(all 4 in one assistant message), run the cross-vendor
 quality-reviewer recipe, and verify-then-fix EXACTLY per
 `skills/pipeline-runner/SKILL.md`'s `expects: "reviews"` steps 2–3 (each entry's
 `agent_type` verbatim, isolation `"worktree"`, model-alias mapped) — reused, not
@@ -151,9 +152,15 @@ Write the CONTENT of `skills/pipeline-runner/SKILL.md`'s per-task
 
 Omit `crossVendorAbsent` entirely when the Codex quality-reviewer actually ran;
 include it when it didn't — echoing the envelope's `codex_absent_reason` verbatim,
-or `"codex execution failed: <detail>"` if the `codex exec` fallback fired. Include
-one verdict for every blocking+citable finding — the CLI fails closed on a missing
-one.
+or `"codex execution failed: <detail>"` if the `codex exec` fallback fired.
+
+Include one verdict for every blocking+citable finding. **If a finding-verifier
+returns no parseable JSON, OMIT its verdict — never synthesize one.** A missing
+verdict is the correct fail-closed signal: the CLI raises a verifier error and the
+merge gate blocks. A fabricated `holds: false` is read as a genuine refutation,
+silently drops a possibly-real blocker, and leaves no trace in state. **This is the
+only reason to omit a verdict** — a verifier that inspected and is merely unsure
+returns `holds: false` on its own.
 
 ```bash
 factory debug review --record --run <run_id> --results <path-to-above-file>

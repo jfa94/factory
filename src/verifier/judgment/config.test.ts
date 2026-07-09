@@ -19,11 +19,10 @@ describe('WS7 config (Δ T fixed reviewer model)', () => {
         expect(() => resolveReviewModel(cfg)).toThrow(/empty/i)
     })
 
-    it('D26: resolveJudgmentConfig reads fixed model + deep depth + redaction gate from the seam', () => {
+    it('D26: resolveJudgmentConfig reads fixed model + redaction gate from the seam', () => {
         const cfg = defaultConfig()
         const jc = resolveJudgmentConfig(cfg)
         expect(jc.reviewModel).toBe(FALLBACK_REVIEW_MODEL)
-        expect(jc.maxTurnsDeep).toBe(cfg.review.maxTurnsDeep)
         expect(jc.redactFindings).toBe(cfg.quality.securityRedactFindings)
     })
 

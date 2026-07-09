@@ -88,6 +88,34 @@ describe('parseDriveResults', () => {
         ).toThrow()
     })
 
+    it('rejects an empty verifier note — a verdict with no justification is a broken agent', () => {
+        expect(() =>
+            parseDriveResults({
+                result_key: {phase: 'verify', rung: 0},
+                reviews: {
+                    reviews: [{reviewer: 'quality-reviewer', verdict: 'approve', findings: []}],
+                    verifications: [
+                        {reviewer: 'quality-reviewer', verdicts: [{file: 'a.ts', line: 1, holds: false, note: ''}]},
+                    ],
+                },
+            })
+        ).toThrow()
+    })
+
+    it('accepts a one-character verifier note', () => {
+        expect(() =>
+            parseDriveResults({
+                result_key: {phase: 'verify', rung: 0},
+                reviews: {
+                    reviews: [{reviewer: 'quality-reviewer', verdict: 'approve', findings: []}],
+                    verifications: [
+                        {reviewer: 'quality-reviewer', verdicts: [{file: 'a.ts', line: 1, holds: false, note: 'x'}]},
+                    ],
+                },
+            })
+        ).not.toThrow()
+    })
+
     it('rejects reviews.reviews: [] (min 1)', () => {
         expect(() =>
             parseDriveResults({

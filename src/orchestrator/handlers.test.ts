@@ -31,6 +31,7 @@ import {
 } from '../verifier/deterministic/fakes.js'
 import {InMemoryHoldoutStore, FsHoldoutVerdictStore, makeHoldoutRecord} from '../verifier/holdout/index.js'
 import {dialForRung} from '../producer/index.js'
+import {selectProducerModel} from '../quota/index.js'
 import {PANEL_ROLES} from '../verifier/judgment/index.js'
 import type {ReviewerResult, PhaseContext, TaskState} from '../types/index.js'
 import {nonNull, at} from '../shared/index.js'
@@ -379,9 +380,10 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(agent.role).toBe('test-writer')
 
         // The persisted context is built off the holdout-stripped visible criteria,
-        // and the rung-0 dial injects NO prior-failure note.
-        const dial = dialForRung('medium', 0, deps.config)
-        expect(agent.model).toBe(dial.model)
+        // and the rung-0 dial injects NO prior-failure note. test-writer is pinned to
+        // the ceiling model regardless of rung/tier (only the implementer follows the
+        // tiered dial) — see selectProducerModel('high', ...) in producerSpawn.
+        expect(agent.model).toBe(selectProducerModel('high', deps.config))
         expect(agent.effort).toBeUndefined() // rung 0 carries no effort override
         // The inlined prompt (3b(i)) is built off the holdout-stripped visible criteria.
         expect(criteriaFromPrompt(nonNull(agent.prompt))).toHaveLength(4) // 5 total − 1 withheld
@@ -572,7 +574,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         }
         expect(result.request.agents).toHaveLength(PANEL_ROLES.length)
         // 3b(iii): the real verify-phase handler stamps verifier_spec on every panel manifest.
-        expect(result.request.verifier_spec).toMatchObject({agent_type: 'general-purpose', isolation: 'worktree'})
+        expect(result.request.verifier_spec).toMatchObject({agent_type: 'finding-verifier', isolation: 'worktree'})
     })
 
     it('verify RE-SPAWNS the panel when only a SUBSET of reviewers is on record (fail-closed roster)', async () => {

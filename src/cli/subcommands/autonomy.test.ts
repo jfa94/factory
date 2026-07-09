@@ -3,7 +3,11 @@
  * `pipeline-ensure-autonomy`. It materializes `${CLAUDE_PLUGIN_DATA}/merged-settings.json`
  * from `templates/settings.autonomous.json` merged with the user's settings,
  * with placeholder substitution + env-baking + statusLine wiring, and prints the
- * `claude --worktree --settings <path>` relaunch command.
+ * `claude --worktree --settings <path> --permission-mode bypassPermissions` relaunch
+ * command. The bypass flag suppresses Claude Code's built-in protected-path prompt
+ * for writes under the plugin data dir (which lives under `~/.claude/`); the deny
+ * list and every factory hook still apply under it. The deny list is deliberately
+ * short (accident-prevention, not containment) — see Decision 65.
  *
  * The materialize core is pure + injectable (template string, user settings,
  * dataDir, pluginRoot) so units never touch the real ~/.claude or a real plugin
@@ -13,6 +17,7 @@ import {mkdtemp, rm, readFile, writeFile, mkdir} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {fileURLToPath} from 'node:url'
 import {afterEach, beforeEach, describe, expect, it} from 'vitest'
 
 import {
@@ -280,9 +285,11 @@ describe('runAutonomyEnsure', () => {
         expect((written.env as Record<string, string>).CLAUDE_PLUGIN_DATA).toBe(dataDir)
         expect((written.statusLine as {command: string}).command).toBe(`${pluginRoot}/bin/factory statusline`)
         expect(result.path).toBe(path)
-        // Prints the relaunch command.
+        // Prints the relaunch command, carrying the bypass flag (kills the
+        // protected-path prompt for writes under the data dir — Decision extending D17).
         const printed = out.join('')
-        expect(printed).toContain(`claude --worktree --settings ${path}`)
+        expect(printed).toContain(`claude --worktree --settings ${path} --permission-mode bypassPermissions`)
+        expect(result.relaunchCommand).toContain('--permission-mode bypassPermissions')
     })
 
     it("reads the user's settings.json when present and chains its statusLine", async () => {
@@ -491,7 +498,7 @@ describe('runAutonomyPreflight', () => {
         expect(written.__sentinel).toBeUndefined()
         expect(written._factoryVersion).toBe('1.0.0')
         const printed = out.join('')
-        expect(printed).toContain(`claude --worktree --settings ${settingsPath()}`)
+        expect(printed).toContain(`claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`)
         expect(printed).toContain('stale')
         // Human-facing result: an unmistakable HALT: line on the relaunch-required path.
         expect(printed).toContain('HALT:')
@@ -523,7 +530,9 @@ describe('runAutonomyPreflight', () => {
         })
         expect(code).toBe(EXIT.ERROR)
         expect(existsSync(settingsPath())).toBe(true)
-        expect(out.join('')).toContain(`claude --worktree --settings ${settingsPath()}`)
+        expect(out.join('')).toContain(
+            `claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`
+        )
     })
 
     it('exits OK without writing when autonomous via raw env + no file (CI path)', async () => {
@@ -580,6 +589,69 @@ describe('runAutonomyPreflight', () => {
             home: HOME,
             writeStdout: (t) => out.push(t),
         })
-        expect(out.join('')).toContain(`claude --worktree --settings ${settingsPath()}`)
+        expect(out.join('')).toContain(
+            `claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`
+        )
+    })
+})
+
+describe('the real templates/settings.autonomous.json', () => {
+    // Drift guard (Decision 65): the deny list is deliberately short —
+    // accident-prevention for a non-adversarial agent, not a containment
+    // boundary. It must still cover: the worktree's own .git/, home
+    // credentials/config (outside any worktree, unreachable by the
+    // path-resolving hooks), and the handful of non-file-path-shaped
+    // irreversible ops (interpreter eval, publish/remote-delete).
+    it('denies the worktree .git/ and home credentials/config paths', async () => {
+        const templatePath = fileURLToPath(new URL('../../../templates/settings.autonomous.json', import.meta.url))
+        const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+            permissions: {deny: string[]}
+        }
+        const deny = template.permissions.deny
+        for (const pattern of [
+            'Write(**/.git/**)',
+            'Edit(**/.git/**)',
+            'Write(~/.ssh/**)',
+            'Edit(~/.ssh/**)',
+            'Write(~/.aws/**)',
+            'Edit(~/.aws/**)',
+            'Write(~/.gitconfig)',
+            'Edit(~/.gitconfig)',
+            'Write(~/.npmrc)',
+            'Edit(~/.npmrc)',
+            'Write(~/.claude.json)',
+            'Edit(~/.claude.json)',
+        ]) {
+            expect(deny).toContain(pattern)
+        }
+    })
+
+    it('still denies node -e / python -c (kept over-broad on purpose — see Decision doc)', async () => {
+        const templatePath = fileURLToPath(new URL('../../../templates/settings.autonomous.json', import.meta.url))
+        const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+            permissions: {deny: string[]}
+        }
+        expect(template.permissions.deny).toContain('Bash(node -e *)')
+        expect(template.permissions.deny).toContain('Bash(python -c *)')
+    })
+
+    it('no longer carries the AWS/SQL/repo-relative-secrets entries retired by the aggressive shrink', async () => {
+        const templatePath = fileURLToPath(new URL('../../../templates/settings.autonomous.json', import.meta.url))
+        const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+            permissions: {deny: string[]}
+        }
+        const deny = template.permissions.deny
+        for (const pattern of [
+            'Bash(aws s3 rb *)',
+            'Bash(DROP TABLE*)',
+            'Bash(TRUNCATE*)',
+            'Write(.env)',
+            'Write(**/migrations/**)',
+            'Write(**/.npmrc)',
+            'Bash(sudo *)',
+            'Bash(git rebase *)',
+        ]) {
+            expect(deny).not.toContain(pattern)
+        }
     })
 })

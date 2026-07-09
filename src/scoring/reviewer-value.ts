@@ -21,6 +21,15 @@ const ReviewRoundDataSchema = z.object({
             z.object({
                 reviewer: z.string().min(1),
                 confirmed_blockers: z.number().int().min(0).default(0),
+                /**
+                 * The two funnel denominators (7b/2). `.optional()`, NEVER `.default(0)`:
+                 * a pre-7b/2 round genuinely has no denominator, and a fabricated `0`
+                 * would read as "raised nothing" — indistinguishable from a lens that
+                 * raised findings and had them all dropped. Absent ⇒ excluded from the
+                 * rates and counted in `rounds_without_funnel` (D49 backfill honesty).
+                 */
+                raised_blockers: z.number().int().min(0).optional(),
+                cited_blockers: z.number().int().min(0).optional(),
             })
         )
         .default([]),
@@ -46,6 +55,18 @@ export interface LensValue {
     yield: number | null
     /** rounds where the lens raised ≥1 confirmed blocker AND the round was sent back / rounds. */
     send_back_rate: number | null
+    /**
+     * cited / raised — did the lens quote REAL code? Low ⇒ it hallucinates citations
+     * and citation-verify drops them. Null when no round carried funnel data.
+     */
+    citation_rate: number | null
+    /**
+     * confirmed / cited — did the lens's CLAIMS survive an adversarial verifier? Low ⇒
+     * it cites real code but reasons wrongly about it. Accumulated only over
+     * non-`environmental` rounds: a verifier error yields no verdict, so counting those
+     * findings would score an unresolved finding as unconfirmed. Null on no data.
+     */
+    confirm_rate: number | null
     /** Misses attributed to this lens by the miss ledger's `lens` field. */
     misses: number
 }
@@ -61,6 +82,11 @@ export interface ReviewerValueReport {
     cross_vendor_absent_rounds: number
     /** Misses with no lens (or `'none'`) — reported apart, never forced onto a lens. */
     unattributed_misses: number
+    /**
+     * Rounds emitted before the funnel counters existed. They contribute to `rounds`
+     * and `yield` but to NEITHER rate — never interpolated (D49 backfill honesty).
+     */
+    rounds_without_funnel: number
 }
 
 /**
@@ -87,6 +113,18 @@ interface LensAcc {
     confirmed_blockers: number
     send_back_blocker_rounds: number
     misses: number
+    /**
+     * Funnel counters, accumulated ONLY from rounds that carry them.
+     *
+     * citation_rate and confirm_rate need DIFFERENT denominators. Citation-verify runs
+     * on every round, so an `environmental` round (a verifier errored) still yields a
+     * valid raised→cited measurement. But its cited findings never got a verdict, so
+     * counting them as unconfirmed would libel the lens. Hence `_resolved`.
+     */
+    raised: number
+    cited: number
+    cited_resolved: number
+    confirmed_resolved: number
 }
 
 /**
@@ -99,7 +137,16 @@ export function aggregateReviewerValue(runs: readonly ReviewerValueRun[]): Revie
     const acc = (lens: string): LensAcc => {
         let a = byLens.get(lens)
         if (a === undefined) {
-            a = {rounds: 0, confirmed_blockers: 0, send_back_blocker_rounds: 0, misses: 0}
+            a = {
+                rounds: 0,
+                confirmed_blockers: 0,
+                send_back_blocker_rounds: 0,
+                misses: 0,
+                raised: 0,
+                cited: 0,
+                cited_resolved: 0,
+                confirmed_resolved: 0,
+            }
             byLens.set(lens, a)
         }
         return a
@@ -109,6 +156,7 @@ export function aggregateReviewerValue(runs: readonly ReviewerValueRun[]): Revie
     let runsWithoutEvents = 0
     let crossVendorAbsentRounds = 0
     let unattributedMisses = 0
+    let roundsWithoutFunnel = 0
 
     for (const run of runs) {
         if (run.rounds.length > 0) {
@@ -120,12 +168,25 @@ export function aggregateReviewerValue(runs: readonly ReviewerValueRun[]): Revie
             if (round.cross_vendor_absent === true) {
                 crossVendorAbsentRounds += 1
             }
+            // Funnel data is emitted for every lens in a round or for none of them
+            // (one emit site), so `every` here is also `some`.
+            if (round.reviewers.length > 0 && round.reviewers.every((r) => r.raised_blockers === undefined)) {
+                roundsWithoutFunnel += 1
+            }
             for (const r of round.reviewers) {
                 const a = acc(r.reviewer)
                 a.rounds += 1
                 a.confirmed_blockers += r.confirmed_blockers
                 if (r.confirmed_blockers > 0 && round.outcome === 'send-back') {
                     a.send_back_blocker_rounds += 1
+                }
+                if (r.raised_blockers !== undefined && r.cited_blockers !== undefined) {
+                    a.raised += r.raised_blockers
+                    a.cited += r.cited_blockers
+                    if (round.outcome !== 'environmental') {
+                        a.cited_resolved += r.cited_blockers
+                        a.confirmed_resolved += r.confirmed_blockers
+                    }
                 }
             }
         }
@@ -145,6 +206,8 @@ export function aggregateReviewerValue(runs: readonly ReviewerValueRun[]): Revie
             confirmed_blockers: a.confirmed_blockers,
             yield: a.rounds > 0 ? a.confirmed_blockers / a.rounds : null,
             send_back_rate: a.rounds > 0 ? a.send_back_blocker_rounds / a.rounds : null,
+            citation_rate: a.raised > 0 ? a.cited / a.raised : null,
+            confirm_rate: a.cited_resolved > 0 ? a.confirmed_resolved / a.cited_resolved : null,
             misses: a.misses,
         }))
         .sort((x, y) => (y.yield ?? -1) - (x.yield ?? -1) || x.lens.localeCompare(y.lens))
@@ -155,5 +218,6 @@ export function aggregateReviewerValue(runs: readonly ReviewerValueRun[]): Revie
         runs_without_events: runsWithoutEvents,
         cross_vendor_absent_rounds: crossVendorAbsentRounds,
         unattributed_misses: unattributedMisses,
+        rounds_without_funnel: roundsWithoutFunnel,
     }
 }

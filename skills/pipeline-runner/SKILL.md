@@ -406,8 +406,9 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 **`expects: "producer-status"`** (stages tests/exec — ONE producer agent):
 
 1. Spawn the producer — `subagent_type` = the manifest agent's `agent_type`
-   VERBATIM, model mapped, `maxTurns` from
-   the manifest, **isolation OMITTED**, plus the manifest agent's `effort` as the
+   VERBATIM, model mapped, `maxTurns` OMITTED unless the manifest entry carries
+   one (frontmatter governs — see the spawn rule above), **isolation OMITTED**,
+   plus the manifest agent's `effort` as the
    spawn's `effort` opt **when present** (the dial sets it only on high escalation
    rungs; omit it otherwise to inherit the default). Prompt = `agents[0].prompt`
    VERBATIM (the engine composes the full ProducerContext + cd-sentence at spawn time).
@@ -427,7 +428,8 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    content-conditional `database-design-reviewer` when the task diff touches migration/schema
    files, Decision 51; each `subagent_type` = the entry's `agent_type` VERBATIM,
    isolation `"worktree"`, model mapped from each agent's `model`,
-   `max_turns` from the manifest). Each prompt: inspect via
+   `maxTurns` OMITTED — reviewer entries never carry `max_turns`; each
+   reviewer's own frontmatter governs). Each prompt: inspect via
    `git -C <tenv.worktree> diff <tenv.base_ref>` and emit ONE RawReview JSON exactly per
    `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
    reviewer via its frontmatter `skills:` — do not restate the shape).
@@ -455,10 +457,11 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    INDEPENDENT finding-verifier using `manifest.verifier_spec` VERBATIM — `agent_type`,
    `model`, `isolation` (3b/iii: no more hardcoded `general-purpose`/`opus`/
    `"worktree"`). Render `verifier_spec.prompt_template` by substituting EXACTLY
-   `verifier_spec.interpolate_fields` (today: `{reviewer, severity, claim, file, line,
-quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier must
-   judge the bare claim against the code, not be led by the reviewer's reasoning
-   chain). Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
+   `verifier_spec.interpolate_fields` (today: `{claim, file, line, quote}`). A field is
+   admissible iff the verifier can CHECK it against the code — so NEVER pass what the
+   reviewer BELIEVED: its `description` (reasoning), its `severity` (confidence), or its
+   `reviewer` (identity). Anti-anchoring: the verifier must judge the bare claim against
+   the code, not be led toward the finder's prior. Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
 <tenv.base_ref>`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
@@ -471,7 +474,13 @@ quote}`) — NEVER the finding's `description` (anti-anchoring: the verifier mus
         "crossVendorAbsent": { "reason": "<the manifest stamp's reason, or the codex runtime-failure detail>" } } }
     ```
     Omit `"holdout"` when there was no sidecar. Include one verdict for every
-    blocking+citable finding (the CLI fails closed on a missing one). Include
+    blocking+citable finding. **If a finding-verifier returns no parseable JSON,
+    OMIT its verdict — never synthesize one.** A missing verdict is the correct
+    fail-closed signal: the CLI raises a verifier error and the merge gate blocks.
+    A fabricated `holds: false` is read as a genuine refutation, silently drops a
+    possibly-real blocker, and leaves no trace in state. **This is the only reason
+    to omit a verdict** — a verifier that inspected and is merely unsure returns
+    `holds: false` on its own. Include
     `crossVendorAbsent` ONLY when no cross-vendor reviewer actually ran (stamp
     absent, or the `codex exec` fallback fired) — never invent the reason: echo
     the stamp's reason or the runtime-failure detail exactly.
@@ -485,6 +494,12 @@ say "isolation OMITTED — works IN the envelope's worktree"; panel reviewers sa
 `"worktree"`). NEVER re-derive the type from `role` or from prose. The
 finding-verifier (step 3 above) is spawned from `manifest.verifier_spec`, not
 hardcoded — same rule, different field.
+
+`max_turns` is OPTIONAL on a spawn entry — each agent's own frontmatter
+(`agents/<agent_type>.md` `maxTurns:`) is the single source of truth. When the
+entry omits `max_turns`, spawn with NO turn-budget override at all (let the
+agent's frontmatter govern); when present, it's a deliberate engine override —
+pass it verbatim.
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the

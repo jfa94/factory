@@ -6200,10 +6200,6 @@ var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var ReviewSchema = external_exports.object({
   /** Reviewer model id (panel runs on a fixed model per Decision 26). */
   model: external_exports.string().optional(),
-  /** Max turns for a deep review pass. */
-  maxTurnsDeep: external_exports.number().int().positive().default(40),
-  /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20),
   /**
    * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
    * `warn` records the absence loudly (task state + report + summary);
@@ -6211,9 +6207,6 @@ var ReviewSchema = external_exports.object({
    * independent second-vendor review.
    */
   requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
-}).default({});
-var TestWriterSchema = external_exports.object({
-  maxTurns: external_exports.number().int().positive().default(30)
 }).default({});
 var CodexSchema = external_exports.object({
   model: external_exports.string().optional()
@@ -6296,7 +6289,6 @@ var ConfigSchema = external_exports.object({
   quota: QuotaSchema,
   spec: SpecSchema,
   review: ReviewSchema,
-  testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
   e2e: E2eConfigSchema,
@@ -8039,6 +8031,7 @@ var E2E_ASSESSOR_AGENT_TYPE = "e2e-assessor";
 var TRACEABILITY_AUDITOR_AGENT_TYPE = "traceability-auditor";
 var SPEC_GENERATOR_AGENT_TYPE = "spec-generator";
 var SPEC_REVIEWER_AGENT_TYPE = "spec-reviewer";
+var FINDING_VERIFIER_AGENT_TYPE = "finding-verifier";
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
@@ -8048,8 +8041,13 @@ var AgentSpecSchema = external_exports.object({
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
   model: external_exports.string().min(1),
-  /** Hard turn budget for the agent (positive integer). */
-  max_turns: external_exports.number().int().positive(),
+  /**
+   * Optional hard turn budget for the agent (positive integer). Omitted ⇒ the runner
+   * falls back to the agent's own frontmatter `maxTurns` (single-source-of-truth —
+   * mirrors how `effort` already works below). Set only when the engine deliberately
+   * overrides the frontmatter default.
+   */
+  max_turns: external_exports.number().int().positive().optional(),
   /**
    * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
    * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
@@ -9610,7 +9608,16 @@ var ReviewRoundDataSchema = external_exports.object({
   reviewers: external_exports.array(
     external_exports.object({
       reviewer: external_exports.string().min(1),
-      confirmed_blockers: external_exports.number().int().min(0).default(0)
+      confirmed_blockers: external_exports.number().int().min(0).default(0),
+      /**
+       * The two funnel denominators (7b/2). `.optional()`, NEVER `.default(0)`:
+       * a pre-7b/2 round genuinely has no denominator, and a fabricated `0`
+       * would read as "raised nothing" — indistinguishable from a lens that
+       * raised findings and had them all dropped. Absent ⇒ excluded from the
+       * rates and counted in `rounds_without_funnel` (D49 backfill honesty).
+       */
+      raised_blockers: external_exports.number().int().min(0).optional(),
+      cited_blockers: external_exports.number().int().min(0).optional()
     })
   ).default([]),
   cross_vendor_absent: external_exports.boolean().optional()
@@ -9633,7 +9640,16 @@ function aggregateReviewerValue(runs) {
   const acc = (lens) => {
     let a = byLens.get(lens);
     if (a === void 0) {
-      a = { rounds: 0, confirmed_blockers: 0, send_back_blocker_rounds: 0, misses: 0 };
+      a = {
+        rounds: 0,
+        confirmed_blockers: 0,
+        send_back_blocker_rounds: 0,
+        misses: 0,
+        raised: 0,
+        cited: 0,
+        cited_resolved: 0,
+        confirmed_resolved: 0
+      };
       byLens.set(lens, a);
     }
     return a;
@@ -9642,6 +9658,7 @@ function aggregateReviewerValue(runs) {
   let runsWithoutEvents = 0;
   let crossVendorAbsentRounds = 0;
   let unattributedMisses = 0;
+  let roundsWithoutFunnel = 0;
   for (const run9 of runs) {
     if (run9.rounds.length > 0) {
       runsCovered += 1;
@@ -9652,12 +9669,23 @@ function aggregateReviewerValue(runs) {
       if (round.cross_vendor_absent === true) {
         crossVendorAbsentRounds += 1;
       }
+      if (round.reviewers.length > 0 && round.reviewers.every((r) => r.raised_blockers === void 0)) {
+        roundsWithoutFunnel += 1;
+      }
       for (const r of round.reviewers) {
         const a = acc(r.reviewer);
         a.rounds += 1;
         a.confirmed_blockers += r.confirmed_blockers;
         if (r.confirmed_blockers > 0 && round.outcome === "send-back") {
           a.send_back_blocker_rounds += 1;
+        }
+        if (r.raised_blockers !== void 0 && r.cited_blockers !== void 0) {
+          a.raised += r.raised_blockers;
+          a.cited += r.cited_blockers;
+          if (round.outcome !== "environmental") {
+            a.cited_resolved += r.cited_blockers;
+            a.confirmed_resolved += r.confirmed_blockers;
+          }
         }
       }
     }
@@ -9675,6 +9703,8 @@ function aggregateReviewerValue(runs) {
     confirmed_blockers: a.confirmed_blockers,
     yield: a.rounds > 0 ? a.confirmed_blockers / a.rounds : null,
     send_back_rate: a.rounds > 0 ? a.send_back_blocker_rounds / a.rounds : null,
+    citation_rate: a.raised > 0 ? a.cited / a.raised : null,
+    confirm_rate: a.cited_resolved > 0 ? a.confirmed_resolved / a.cited_resolved : null,
     misses: a.misses
   })).sort((x, y) => (y.yield ?? -1) - (x.yield ?? -1) || x.lens.localeCompare(y.lens));
   return {
@@ -9682,7 +9712,8 @@ function aggregateReviewerValue(runs) {
     runs_covered: runsCovered,
     runs_without_events: runsWithoutEvents,
     cross_vendor_absent_rounds: crossVendorAbsentRounds,
-    unattributed_misses: unattributedMisses
+    unattributed_misses: unattributedMisses,
+    rounds_without_funnel: roundsWithoutFunnel
   };
 }
 
@@ -10288,7 +10319,7 @@ var META_FILE = "spec.meta.json";
 
 // src/spec/agents.ts
 var APEX_MODEL = "opus";
-var APEX_EFFORT = "max";
+var APEX_EFFORT = "xhigh";
 var GenerateResultSchema = external_exports.object({
   specMd: external_exports.string().min(1),
   slug: external_exports.string().min(1),
@@ -12245,12 +12276,25 @@ function resolveReviewModel(config) {
 }
 
 // src/verifier/judgment/panel.ts
-var VERIFIER_INTERPOLATE_FIELDS = ["reviewer", "severity", "claim", "file", "line", "quote"];
+var REVIEWER_MODEL_BY_ROLE = {
+  "implementation-reviewer": "sonnet",
+  "quality-reviewer": "opus",
+  "silent-failure-hunter": "sonnet",
+  "systemic-failure-reviewer": "opus",
+  "database-design-reviewer": "opus"
+};
+var FINDING_VERIFIER_MODEL = "sonnet";
+function reviewerModelFor(role) {
+  const model = REVIEWER_MODEL_BY_ROLE[role];
+  if (model === void 0) {
+    throw new Error(`panel: no reviewer model configured for role '${role}'`);
+  }
+  return model;
+}
+var VERIFIER_INTERPOLATE_FIELDS = ["claim", "file", "line", "quote"];
 var VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
 following review finding against the actual code \u2014 do not assume it is correct.
 
-Reviewer: {reviewer}
-Severity: {severity}
 Claim: {claim}
 Cited location: {file}:{line}
 Quoted source: {quote}
@@ -12267,18 +12311,17 @@ var DB_DESIGN_ROLE = "database-design-reviewer";
 function panelRolesFor(dbApplicable) {
   return dbApplicable ? [...PANEL_ROLES, DB_DESIGN_ROLE] : PANEL_ROLES;
 }
-function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false, crossVendorPrompt) {
+function buildPanelManifest(resumePhase, crossVendor, dbApplicable = false, crossVendorPrompt) {
   const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
     agent_type: AGENT_TYPE_BY_ROLE[role],
     isolation: "worktree",
-    model,
-    max_turns: maxTurns
+    model: reviewerModelFor(role)
   }));
   const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model, prompt: crossVendorPrompt } : { status: "absent", reason: crossVendor.reason };
   const verifier_spec = {
-    agent_type: GENERAL_PURPOSE_AGENT_TYPE,
-    model,
+    agent_type: FINDING_VERIFIER_AGENT_TYPE,
+    model: FINDING_VERIFIER_MODEL,
     isolation: "worktree",
     prompt_template: VERIFIER_PROMPT_TEMPLATE,
     interpolate_fields: [...VERIFIER_INTERPOLATE_FIELDS]
@@ -12591,8 +12634,6 @@ async function confirmBlocker(finding, runner, finderIdentity, citedLine) {
     );
   }
   const projection = {
-    reviewer: finding.reviewer,
-    severity: finding.severity,
     claim: finding.claim,
     file: finding.file,
     line: citedLine ?? finding.line,
@@ -12630,7 +12671,9 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
     reviewer: review.reviewer,
     rawVerdict: review.verdict,
     confirmedBlockers: confirmed,
-    hadVerifierError
+    hadVerifierError,
+    raisedBlockers: blocking.length,
+    citedBlockers: kept.length
   };
 }
 function reviewerResultOf(a) {
@@ -14099,6 +14142,7 @@ function makePhaseHandlers(deps) {
   }
   function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
+    const model = role === "test-writer" ? selectProducerModel("high", deps.config) : dial.model;
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
       taskId: specTask.task_id,
@@ -14123,10 +14167,9 @@ function makePhaseHandlers(deps) {
         {
           role,
           agent_type: AGENT_TYPE_BY_ROLE[role],
-          model: dial.model,
-          // No implementer-specific turn budget exists; both producer roles share the
-          // test-writer cap (documented WS10 decision).
-          max_turns: deps.config.testWriter.maxTurns,
+          model,
+          // max_turns omitted — each producer's own frontmatter is the single
+          // source of truth for its turn budget (single-source-of-truth).
           // 3b(i): the runner spawns this VERBATIM.
           prompt: renderProducerPrompt(context, worktree),
           // Effort is set ONLY once the dial has climbed the model to its ceiling
@@ -14251,16 +14294,7 @@ function makePhaseHandlers(deps) {
           baseRef: gateCtx.baseRef,
           worktree
         }) : void 0;
-        return spawn2(
-          buildPanelManifest(
-            "verify",
-            resolveReviewModel(deps.config),
-            deps.config.review.maxTurnsDeep,
-            crossVendor,
-            dbApplicable,
-            crossVendorPrompt
-          )
-        );
+        return spawn2(buildPanelManifest("verify", crossVendor, dbApplicable, crossVendorPrompt));
       };
       if (task.reviewers.length < expectedRoster.length) {
         return panelSpawn();
@@ -14755,17 +14789,23 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   } else {
     throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
   }
+  const funnelOf = new Map(panel.adjudicated.map((a) => [a.reviewer, a]));
   await emitMetric(deps.dataDir, runId, "review.round", {
     task_id: taskId,
     rung: task.escalation_rung,
     outcome,
-    // Per-lens {reviewer, verdict, confirmed_blockers} so `score --reviewers` can
-    // compute each lens's yield + send-back rate without re-reading state.
-    reviewers: panel.reviewerResults.map((r) => ({
-      reviewer: r.reviewer,
-      verdict: r.verdict,
-      confirmed_blockers: r.confirmed_blockers
-    })),
+    // Per-lens {reviewer, verdict, raised/cited/confirmed_blockers} so
+    // `score --reviewers` can compute each lens's yield, send-back rate, and BOTH
+    // funnel rates (citation_rate, confirm_rate) without re-reading state.
+    reviewers: panel.reviewerResults.map((r) => {
+      const funnel = funnelOf.get(r.reviewer);
+      return {
+        reviewer: r.reviewer,
+        verdict: r.verdict,
+        confirmed_blockers: r.confirmed_blockers,
+        ...funnel !== void 0 ? { raised_blockers: funnel.raisedBlockers, cited_blockers: funnel.citedBlockers } : {}
+      };
+    }),
     ...panel.crossVendorAbsence !== void 0 ? { cross_vendor_absent: true } : {}
   });
   return {
@@ -14792,7 +14832,12 @@ var ReviewsResultSchema = external_exports.object({
           file: external_exports.string().min(1),
           line: external_exports.number().int().positive(),
           holds: external_exports.boolean(),
-          note: external_exports.string()
+          // `.min(1)` is hygiene, not an anti-fabrication measure: a runner
+          // willing to synthesise `holds` will synthesise a note with it.
+          // What it catches is a BROKEN verifier agent — an empty note means
+          // no justification was reached, and recording that as a verdict is
+          // worse than failing the parse LOUD.
+          note: external_exports.string().min(1)
         }).strict()
       )
     }).strict()
@@ -14938,6 +14983,7 @@ async function shipTask(deps, ctx) {
 // src/orchestrator/orchestrator.ts
 var log26 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
+var HOLDOUT_MAX_TURNS = 40;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
   if (task === void 0) {
@@ -14983,7 +15029,7 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
     agent_type: GENERAL_PURPOSE_AGENT_TYPE,
     worktree,
     model: resolveReviewModel(deps.config),
-    max_turns: deps.config.review.maxTurnsDeep,
+    max_turns: HOLDOUT_MAX_TURNS,
     prompt: buildHoldoutPrompt(record, worktree, baseRef)
   };
 }
@@ -15217,8 +15263,7 @@ function specTaskLines(spec) {
 }
 
 // src/orchestrator/docs.ts
-var DOCS_MODEL = "opus";
-var DOCS_MAX_TURNS = 60;
+var DOCS_MODEL = "sonnet";
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
   return join15(dataDir, "worktrees", runId, ".docs");
@@ -15258,7 +15303,6 @@ async function runDocsEmit(deps, runId) {
     staging_branch: staging,
     docs_branch: docsBranch,
     model: DOCS_MODEL,
-    max_turns: DOCS_MAX_TURNS,
     prompt: buildScribePrompt(worktree, baseRef)
   };
 }
@@ -15292,8 +15336,7 @@ async function runDocsRecord(deps, runId, results) {
 
 // src/orchestrator/traceability.ts
 import { join as join16 } from "node:path";
-var TRACE_MODEL = "opus";
-var TRACE_MAX_TURNS = 60;
+var TRACE_MODEL = "sonnet";
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(dataDir, runId) {
   return join16(dataDir, "worktrees", runId, ".trace");
@@ -15354,7 +15397,6 @@ async function runTraceabilityEmit(deps, runId) {
     base_ref: baseRef,
     staging_branch: staging,
     model: TRACE_MODEL,
-    max_turns: TRACE_MAX_TURNS,
     prompt: buildAuditorPrompt(worktree, baseRef, requirements, deps.spec)
   };
 }
@@ -15759,9 +15801,8 @@ var DefaultE2eFileOps = class {
     await writeFile2(path7, contents);
   }
 };
-var E2E_AUTHOR_MODEL = "opus";
+var E2E_AUTHOR_MODEL = "sonnet";
 var MAX_AUTHOR_ATTEMPTS = 2;
-var E2E_AUTHOR_MAX_TURNS = 90;
 function errText(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -15968,7 +16009,6 @@ async function prepareAdjudicatorSpawn(deps, run9, runId, boot) {
     staging_branch: staging,
     adjudicate_branch: branch,
     model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
     prompt: buildAdjudicationPrompt({ worktree, boot, cursor, spec: deps.spec })
   };
 }
@@ -16331,7 +16371,6 @@ async function prepareAuthorSpawn(deps, run9, runId, boot, testDir) {
     e2e_branch: branch,
     throwaway_dir: throwawayDir,
     model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
     prompt: buildAuthorPrompt({
       worktree,
       baseRef,
@@ -16484,8 +16523,7 @@ async function runE2eRecord(deps, runId, results) {
 // src/orchestrator/assessment.ts
 import { join as join20 } from "node:path";
 var log31 = createLogger("e2e-assess");
-var ASSESSOR_MODEL = "opus";
-var ASSESSOR_MAX_TURNS = 60;
+var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
   return join20(dataDir, "worktrees", runId, ".e2e-assess");
@@ -16567,7 +16605,6 @@ async function runAssessmentEmit(deps, runId) {
     staging_branch: staging,
     assess_branch: branch,
     model: ASSESSOR_MODEL,
-    max_turns: ASSESSOR_MAX_TURNS,
     prompt: buildAssessorPrompt({
       worktree,
       testDir: deps.config.e2e.testDir,
@@ -17635,14 +17672,7 @@ async function buildReviewManifest(opts) {
     baseRef: opts.base,
     worktree: opts.worktree
   }) : void 0;
-  const manifest = buildPanelManifest(
-    opts.resumePhase,
-    opts.model,
-    opts.maxTurns,
-    opts.crossVendor,
-    false,
-    crossVendorPrompt
-  );
+  const manifest = buildPanelManifest(opts.resumePhase, opts.crossVendor, false, crossVendorPrompt);
   return {
     manifest,
     base: opts.base,
@@ -17963,8 +17993,6 @@ async function debugReviewEmit(deps, runId) {
   const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
   const built = await buildReviewManifest({
     resumePhase: "verify",
-    model: resolveReviewModel(deps.config),
-    maxTurns: deps.config.review.maxTurnsDeep,
     base: session.base,
     worktree: deps.cwd,
     crossVendor
@@ -19480,13 +19508,16 @@ Usage:
                    (total_misses, misses_per_run over terminal runs, misses_by_lens).
   --reviewers      Report per-lens review value from the review.round telemetry
                    joined with the miss ledger: rounds, confirmed blockers, yield,
-                   send-back rate, and misses attributed to each lens. Honest about
-                   coverage (runs_covered vs runs_without_events).
+                   send-back rate, and misses attributed to each lens. Also the two
+                   funnel rates \u2014 citation_rate (cited/raised: did the lens quote
+                   REAL code?) and confirm_rate (confirmed/cited: did its claims
+                   survive an adversarial verifier?). Honest about coverage
+                   (runs_covered vs runs_without_events, rounds_without_funnel).
 
 Emits ONE JSON document:
   { kind:"score", summary }
   { kind:"fleet-score", runs, aggregate, total_misses, misses_per_run, misses_by_lens }
-  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses }`;
+  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses, rounds_without_funnel }`;
 async function runFleet(state) {
   const all = await state.listRuns();
   const runs = all.map((r) => ({
@@ -19917,7 +19948,7 @@ ensure     Merges templates/settings.autonomous.json with your existing settings
            baked, statusLine wired to \`factory statusline\`) and prints the relaunch
            command:
 
-             claude --worktree --settings <merged-settings.json>
+             claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
 
 status     Reports whether THIS session is autonomous and whether merged-settings.json
            exists. Exits 0 when autonomous, 1 when not (never throws).
@@ -20069,7 +20100,7 @@ async function runAutonomyEnsure(opts = {}) {
   });
   const path7 = mergedSettingsPath(dataDir);
   await atomicWriteFile(path7, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path7}`;
+  const relaunchCommand = `claude --worktree --settings ${path7} --permission-mode bypassPermissions`;
   write(
     `Wrote autonomous settings \u2192 ${path7}
 Relaunch the session in autonomous mode with:
@@ -20109,7 +20140,7 @@ merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path7.l
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
 merged-settings: ${status.mergedSettingsPresent ? `present at ${path7}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path7}
+  claude --worktree --settings ${path7} --permission-mode bypassPermissions
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );

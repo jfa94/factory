@@ -191,6 +191,24 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Automated Gates and Holdout Validation.
 - **synonyms**: —
 
+### Claim-Only Projection
+
+- **type**: Value Object
+- **status**: accepted
+- **definition**: The strict subset of a review finding that the independent finding-verifier is permitted to see. It carries the reviewer's one-sentence checkable claim and the citation locating it in the code, and nothing else. Its purpose is to let the verifier re-derive the finding from the code alone, so that a confirmation is evidence rather than agreement.
+- **invariants**:
+    - **Admissibility rule.** A field is admissible into the verifier's prompt if and only if the verifier can check it against the code. The claim is the proposition under test; the cited file, line, and quote say where to look. The line is a coordinate — it directs attention and asserts nothing.
+    - What the reviewer believed is inadmissible: its reasoning, its confidence, and its identity. None of the three can be confirmed or refuted by reading the file, so a verifier that weighs them is agreeing, not verifying. The type makes carrying any of them a compile error.
+    - The projection carries the reviewer's cited line, never the relocated one, because that coordinate is also the key under which a recorded verdict is later found.
+    - The rule derives the field list; the field list does not define the rule. A new field is admitted only by showing the verifier can check it.
+    - **The type is not currently the enforced boundary.** The verifier's prompt is rendered by the runner from the reviewer's raw finding, using the manifest's prompt template; the projection is what the engine hands its own replay lookup, which reads only the file and line. So admissibility is enforced by the template's field whitelist and the runner protocol, and the compile-time guard is insurance against a future live runner rather than today's control. Making this type the real boundary is the point of the verifier-prompt-ordering proposal.
+- **examples**:
+    - A reviewer marks a finding `critical` and writes three paragraphs of reasoning. The verifier receives neither — only "unsanitised input reaches process()" and the file, line, and quoted source. It confirms only if the code says so.
+    - Counter-example: passing the severity through as "routing metadata, to be discounted." Instructing a reader to ignore a prior is strictly weaker than not showing it.
+- **relationships**: derived from a Finding; consumed by the finding-verifier that gates every blocking finding before it reaches the Implementer; keyed by file and line for verdict replay. The producer-facing finding deliberately keeps the reasoning the verifier was denied.
+- **synonyms**: claim-only finding.
+- **code anchor**: `src/verifier/judgment/finding-verifier.ts`
+
 ### Review Miss
 
 - **type**: Domain Event (a defect that outlived the merge gate)

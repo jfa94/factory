@@ -25,29 +25,40 @@
  * (where a dead verifier lets the finding through as-is): in the factory a
  * verifier death BLOCKS the task rather than shipping an unverified blocker.
  *
- * ANTI-ANCHORING (S5/B2): the verifier sees ONLY the {@link ClaimOnlyFinding}
- * projection — the one-sentence `claim`, never the reviewer's `description`
- * (its reasoning chain). A verifier that reads the finder's reasoning tends to
- * be led by it; a bare checkable claim must stand against the code on its own.
+ * ADMISSIBILITY (S5/B2, anti-anchoring): the verifier sees ONLY the
+ * {@link ClaimOnlyFinding} projection. A field is admissible into the verifier's
+ * prompt iff the verifier can CHECK it against the code — the `claim` is the
+ * proposition under test; `file`/`line`/`quote` say where to look. What the
+ * reviewer BELIEVED is excluded: its reasoning (`description`), its confidence
+ * (`severity`), its identity (`reviewer`). None of the three can be confirmed or
+ * refuted by reading the file, and a verifier that weighs them is agreeing, not
+ * verifying.
  */
-import type {Finding, FindingSeverity} from './finding.js'
+import type {Finding} from './finding.js'
 
 /**
  * The projection of a finding the independent verifier is allowed to see (S5/B2).
  * Built by {@link confirmBlocker} via explicit field-picking — NEVER a spread of a
- * full {@link Finding}. `line` is the reviewer's CITED line (the coordinate the
- * runner-side verifier agent was spawned on and replay verdicts are keyed by —
- * S5/A2), not a grep-relocated one.
+ * full {@link Finding}.
+ *
+ * Every field here is checkable against the code. `line` is a COORDINATE, not a
+ * proposition — it says where to look and asserts nothing; it is the reviewer's
+ * CITED line (what the runner-side verifier agent was spawned on and what replay
+ * verdicts are keyed by — S5/A2), not a grep-relocated one.
  */
 export interface ClaimOnlyFinding {
-    readonly reviewer: string
-    readonly severity: FindingSeverity
     readonly claim: string
     readonly file: string
     readonly line: number
     readonly quote: string
-    /** Type-level leak guard: an object carrying the reviewer's reasoning fails to compile. */
+    /**
+     * Type-level leak guard: an object carrying what the reviewer BELIEVED — its
+     * reasoning, its confidence, or its identity — fails to compile. None is
+     * checkable against the code, so none is admissible.
+     */
     readonly description?: never
+    readonly severity?: never
+    readonly reviewer?: never
 }
 
 /** Ground-truth evidence the verifier inspected (audit trail). */
@@ -121,10 +132,9 @@ export async function confirmBlocker(
         )
     }
 
-    // Explicit field-picking — never `...finding`, which would leak `description`.
+    // Explicit field-picking — never `...finding`, which would leak the reviewer's
+    // reasoning, confidence, and identity (see ClaimOnlyFinding: admissibility).
     const projection: ClaimOnlyFinding = {
-        reviewer: finding.reviewer,
-        severity: finding.severity,
         claim: finding.claim,
         file: finding.file,
         line: citedLine ?? finding.line,

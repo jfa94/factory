@@ -43,8 +43,7 @@ export type TraceabilityAction =
     | StageFailed
     | StageSuspend
 
-const TRACE_MODEL = 'opus'
-const TRACE_MAX_TURNS = 60
+const TRACE_MODEL = 'sonnet'
 
 /**
  * Maximum crash attempts before the phase CONCLUDES `failed`. The anti-docs
@@ -136,7 +135,6 @@ export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: stri
         base_ref: baseRef,
         staging_branch: staging,
         model: TRACE_MODEL,
-        max_turns: TRACE_MAX_TURNS,
         prompt: buildAuditorPrompt(worktree, baseRef, requirements, deps.spec),
     }
 }

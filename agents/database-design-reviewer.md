@@ -1,6 +1,8 @@
 ---
 name: database-design-reviewer
 model: opus
+effort: medium
+maxTurns: 40
 description: 'Relational-schema lens of the review panel — a CONDITIONAL specialist appended only when the task diff touches migrations/DDL/ORM schema files. Judges the schema change against the Iron Laws and Decision Gates of relational design (constraints, keys, types, normalisation, migration safety). Runs in a fresh context. Emits a RawReview JSON.'
 skills:
     - review-protocol

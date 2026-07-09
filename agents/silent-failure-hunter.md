@@ -1,6 +1,8 @@
 ---
 name: silent-failure-hunter
-model: opus
+model: sonnet
+effort: medium
+maxTurns: 40
 description: 'Silent-failure lens of the risk-invariant panel: swallowed exceptions, empty/log-only catch blocks, ignored return values and error tuples, unchecked promises, and fallbacks that mask failure as success. Runs in a fresh context. Emits a RawReview JSON.'
 skills:
     - review-protocol

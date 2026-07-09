@@ -25,20 +25,20 @@ const task: SpecTask = {
 
 const generated: GenerateResult = {specMd: '# spec', slug: 'checkout', tasks: [task]}
 
-describe('D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max', () => {
-    it('D21: generate spawn pins model=opus + effort=max', () => {
+describe('D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/xhigh', () => {
+    it('D21: generate spawn pins model=opus + effort=xhigh', () => {
         const s = buildGenerateSpawn(prd)
         expect(s.model).toBe('opus')
-        expect(s.effort).toBe('max')
+        expect(s.effort).toBe('xhigh')
         expect(s.model).toBe('opus')
-        expect(s.effort).toBe('max')
+        expect(s.effort).toBe('xhigh')
         expect(s.role).toBe('spec-generator')
     })
 
-    it('D21: review spawn pins model=opus + effort=max', () => {
+    it('D21: review spawn pins model=opus + effort=xhigh', () => {
         const s = buildReviewSpawn(prd, generated)
         expect(s.model).toBe('opus')
-        expect(s.effort).toBe('max')
+        expect(s.effort).toBe('xhigh')
         expect(s.role).toBe('spec-reviewer')
     })
 
@@ -53,11 +53,11 @@ describe('D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max', () 
 
         for (const p of [prd, bigPrd]) {
             expect(buildGenerateSpawn(p).model).toBe('opus')
-            expect(buildGenerateSpawn(p).effort).toBe('max')
+            expect(buildGenerateSpawn(p).effort).toBe('xhigh')
             for (const g of [generated, manyTasks]) {
                 const r = buildReviewSpawn(p, g)
                 expect(r.model).toBe('opus')
-                expect(r.effort).toBe('max')
+                expect(r.effort).toBe('xhigh')
             }
         }
     })
@@ -82,9 +82,9 @@ describe('buildReviseSpawn — feeds the prior spec + blockers back for an incre
         const s = buildReviseSpawn(prd, generated, blockers)
         expect(s.role).toBe('spec-generator')
         expect(s.model).toBe('opus')
-        expect(s.effort).toBe('max')
+        expect(s.effort).toBe('xhigh')
         expect(s.model).toBe('opus')
-        expect(s.effort).toBe('max')
+        expect(s.effort).toBe('xhigh')
     })
 
     it('forwards the original PRD context (the axiom is preserved across revisions)', () => {

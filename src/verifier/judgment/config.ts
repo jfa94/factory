@@ -33,8 +33,6 @@ export const FALLBACK_REVIEW_MODEL = 'opus' as const
 export interface JudgmentConfig {
     /** The FIXED reviewer model — identical for every reviewer, every task. */
     readonly reviewModel: string
-    /** Turn budget for a deep (panel) review pass — D26 fixed depth. */
-    readonly maxTurnsDeep: number
     /** Cross-vendor (Codex) model id, if configured; else absent. */
     readonly codexModel?: string
     /** Whether retained finding text is redacted before it is surfaced (Δ K). */
@@ -64,7 +62,6 @@ export function resolveReviewModel(config: Config): string {
 export function resolveJudgmentConfig(config: Config): JudgmentConfig {
     const base: JudgmentConfig = {
         reviewModel: resolveReviewModel(config),
-        maxTurnsDeep: config.review.maxTurnsDeep,
         redactFindings: config.quality.securityRedactFindings,
     }
     return config.codex.model !== undefined ? {...base, codexModel: config.codex.model} : base

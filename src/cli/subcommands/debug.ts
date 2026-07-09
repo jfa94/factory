@@ -77,7 +77,6 @@ import {resolveSpec, gateSpec, storeSpec, type SpecBuildDeps, type SpecBuildEnve
 import {buildReviewManifest, adjudicateWholeScope, runCommittedE2e, foldE2eIntoBlockers} from '../../debug/review.js'
 import {debugIssueNumber, buildDebugReport, wireDebugSpecDeps} from '../../debug/spec-source.js'
 import {appendTasksFromSpec} from '../../debug/batch.js'
-import {resolveReviewModel} from '../../verifier/judgment/config.js'
 import {resolveCodexCrossVendor} from '../../verifier/judgment/codex-probe.js'
 import type {VendorProbe} from '../../verifier/judgment/vendor.js'
 import type {ReviewerVerifications} from '../../orchestrator/record.js'
@@ -374,9 +373,10 @@ export async function debugStart(deps: DebugDeps, opts: DebugStartOptions = {}):
 
 /**
  * Build the whole-scope panel spawn manifest for the session's current pass —
- * a thin wrapper over `src/debug/review.ts`'s `buildReviewManifest`, resolving
- * the fixed reviewer model/turn budget from config exactly as the per-task
- * verify phase does (`resolveReviewModel`, `config.review.maxTurnsDeep`).
+ * a thin wrapper over `src/debug/review.ts`'s `buildReviewManifest`. Reviewer
+ * model is the fixed per-role map in `panel.ts`; `max_turns` is not stamped —
+ * each reviewer's own frontmatter is the single source of truth (mirrors the
+ * per-task verify phase exactly).
  */
 export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<DebugEnvelope> {
     const session = await readSession(deps.dataDir, runId)
@@ -384,8 +384,6 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
     const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
     const built = await buildReviewManifest({
         resumePhase: 'verify',
-        model: resolveReviewModel(deps.config),
-        maxTurns: deps.config.review.maxTurnsDeep,
         base: session.base,
         worktree: deps.cwd,
         crossVendor,

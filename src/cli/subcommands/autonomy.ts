@@ -4,7 +4,17 @@
  * Ports the old `bin/pipeline-ensure-autonomy` regenerate step to the Node CLI.
  * It materializes `${CLAUDE_PLUGIN_DATA}/merged-settings.json` from
  * `templates/settings.autonomous.json` merged with the user's existing settings,
- * then prints the `claude --worktree --settings <merged-settings.json>` relaunch command.
+ * then prints the `claude --worktree --settings <merged-settings.json>
+ * --permission-mode bypassPermissions` relaunch command. The bypass flag is what
+ * suppresses Claude Code's built-in protected-path PROMPT (the plugin data dir
+ * sits under `~/.claude/`, which the protected-path check covers except for the
+ * `.claude/worktrees` exemption the factory doesn't use) — `permissions.deny`,
+ * every hook, and the `rm -rf /`/`rm -rf ~` circuit-breaker still apply under
+ * bypass. The real security boundary stays the path-resolving hook dispatcher
+ * (branch-protection, secret-guard, pipeline-guards, holdout-guard,
+ * write-protection); `permissions.deny` is deliberately short — accident
+ * prevention for a non-adversarial agent, not a containment boundary (see
+ * Decision 65).
  * A session relaunched with it runs in autonomous mode and — because the
  * template wires `statusLine → factory statusline` — produces a fresh
  * usage-cache.json (the session-mode quota pacer's input) on the first turn.
@@ -62,7 +72,7 @@ ensure     Merges templates/settings.autonomous.json with your existing settings
            baked, statusLine wired to \`factory statusline\`) and prints the relaunch
            command:
 
-             claude --worktree --settings <merged-settings.json>
+             claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
 
 status     Reports whether THIS session is autonomous and whether merged-settings.json
            exists. Exits 0 when autonomous, 1 when not (never throws).
@@ -343,7 +353,7 @@ export async function runAutonomyEnsure(opts: AutonomyEnsureOptions = {}): Promi
     const path = mergedSettingsPath(dataDir)
     await atomicWriteFile(path, stringifyJson(merged))
 
-    const relaunchCommand = `claude --worktree --settings ${path}`
+    const relaunchCommand = `claude --worktree --settings ${path} --permission-mode bypassPermissions`
     write(
         `Wrote autonomous settings → ${path}\n` +
             `Relaunch the session in autonomous mode with:\n\n  ${relaunchCommand}\n\n` +
@@ -410,7 +420,7 @@ export function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promise<Exi
             `autonomous: NO — the pipeline will refuse to start or resume a run.\n` +
                 `merged-settings: ${status.mergedSettingsPresent ? `present at ${path}` : 'absent'}\n` +
                 (status.mergedSettingsPresent
-                    ? `Relaunch the session with:\n  claude --worktree --settings ${path}\n`
+                    ? `Relaunch the session with:\n  claude --worktree --settings ${path} --permission-mode bypassPermissions\n`
                     : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.\n`)
         )
     }

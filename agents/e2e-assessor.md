@@ -2,7 +2,8 @@
 name: e2e-assessor
 description: Run-start e2e assessment (Decision 40). Spawned once per --e2e run BEFORE any task executes; verifies/authors the repo's e2e machinery (real boot config in playwright.config.ts, seed/auth support), validates it by booting the app and logging in, and forecasts which committed specs this run's tasks will touch. Returns a structured verdict (ok | degraded | boot-impossible | machinery-impossible) via --results.
 tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_playwright_playwright__browser_navigate, mcp__plugin_playwright_playwright__browser_snapshot, mcp__plugin_playwright_playwright__browser_click, mcp__plugin_playwright_playwright__browser_type, mcp__plugin_playwright_playwright__browser_fill_form, mcp__plugin_playwright_playwright__browser_select_option, mcp__plugin_playwright_playwright__browser_press_key, mcp__plugin_playwright_playwright__browser_hover, mcp__plugin_playwright_playwright__browser_wait_for, mcp__plugin_playwright_playwright__browser_evaluate, mcp__plugin_playwright_playwright__browser_console_messages, mcp__plugin_playwright_playwright__browser_network_requests, mcp__plugin_playwright_playwright__browser_take_screenshot, mcp__plugin_playwright_playwright__browser_close
-model: opus
+model: sonnet
+effort: medium
 maxTurns: 60
 ---
 

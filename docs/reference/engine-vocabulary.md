@@ -84,8 +84,9 @@ verify-only fields:
   `{ agent_type, model, isolation, prompt_template, interpolate_fields }`. The finding set
   is only known after the panel returns, so the runner renders one instance per
   blocking+citable finding by substituting exactly `interpolate_fields` into
-  `prompt_template` — never the finding's `description` (anti-anchoring). This carries the
-  last spawn decision (`agent_type`/`model`/`isolation`) that the runner used to hardcode.
+  `prompt_template`. A field is admissible iff the verifier can check it against the code,
+  so never the reviewer's `description`, `severity`, or `reviewer` (anti-anchoring). This
+  carries the last spawn decision (`agent_type`/`model`/`isolation`) the runner hardcoded.
 
 ## Execution mode
 
