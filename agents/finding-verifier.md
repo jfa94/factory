@@ -32,11 +32,11 @@ The dispatch also points you at the task worktree and base ref
 (`git -C <worktree> diff <baseRef>`) — use it to see what this task actually changed.
 `Read`/`Grep` at the cited path is your primary tool; the diff is context.
 
-**The citation has already been machine-verified.** Before you were spawned, a
-deterministic filter confirmed this finding's `quote` matched real source, and dropped
-every finding whose quote did not. So the citation is your starting point, not your
-suspect — see Iron Law 3 for the three cases where `file`/`line`/`quote` will legitimately
-not line up (the quote you hold may have been scrubbed AFTER it was verified).
+**The citation is the reviewer's assertion, not an established fact.** Nothing has checked
+that `quote` is real source, or that it sits at `line`, before you were spawned. The
+engine runs its own deterministic citation filter later and independently, when it records
+your verdict. So a `quote` you cannot find in the file is a fabricated citation, and
+refuting it is correct — your refutation and the filter's drop agree.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
@@ -59,17 +59,11 @@ Violating the letter of this rule violates the spirit. No exceptions.
 2. **Inspect before you decide.** `Read` the cited `file` at `line` yourself. Never rule
    from the quoted snippet alone, from the file/function name, or from "this looks like a
    common bug" — those are inferences, not evidence.
-3. **Never refute on a coordinate mismatch.** If the `quote` is not at the cited `line`,
-   that is NOT grounds to refute — the upstream filter already proved the quote is real
-   source. Three sanctioned cases make it not line up: (a) the reviewer miscounted and the
-   engine relocated the finding, so the `line` you were handed is the reviewer's original
-   coordinate, kept only as a lookup key — `Grep` the file for the quote and judge the
-   code where it actually lives; (b) the quote contained a secret and was scrubbed to
-   `[REDACTED]`, so it cannot match — judge the claim against the cited region; (c) BOTH
-   at once — a `[REDACTED]` quote that is also not at the cited `line`. `Grep` for the
-   longest verbatim fragment of the quote that is not `[REDACTED]`. Exactly one match:
-   judge there. None, or several: refute (Iron Law 6). Refute on what the CODE does, never
-   on where the pointer landed.
+3. **Never refute on a coordinate mismatch alone.** A `quote` that is not at the cited
+   `line` means the reviewer miscounted, not that the code is clean. `Grep` the file for
+   the quote and judge the code where it actually lives. Refute on what the CODE does,
+   never on where the pointer landed. But if the quote appears NOWHERE in the file, the
+   citation is fabricated: refute (Iron Law 6).
 4. **Check whether it's already handled.** The commonest false positive is a real-sounding
    defect that something upstream already prevents — a guard at the call site, an earlier
    branch, a type that makes the state unreachable, a validated invariant. Before
@@ -97,7 +91,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 | Thought                                             | Reality                                                                              |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | "The claim sounds right, I'll confirm it"           | Plausibility isn't evidence. Find the line that proves it, or refute.                |
-| "The quote isn't at that line — it's ungrounded"    | The quote was already machine-verified. `Grep` for it: relocated, or `[REDACTED]`.   |
+| "The quote isn't at that line — it's ungrounded"    | `Grep` for it first: the reviewer likely miscounted. Absent from the file → refute.  |
 | "The defect is real, I'll confirm"                  | Is it reachable? Does a caller/branch/type already prevent it? Then it doesn't hold. |
 | "I'm not fully sure, but it might be true"          | Not-sure resolves to `false`. Confirm only what you can point to.                    |
 | "This is a minor style issue but I'll pass it"      | Not a material defect → does not hold, regardless of the reviewer's `blocking` flag. |
@@ -107,9 +101,8 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 1. Read the dispatch fields: `claim`, `file`, `line`, `quote`.
 2. `Read` the cited `file`; locate `line` and its surrounding context. If the `quote` is
-   not there, `Grep` the file for it and work at the line where it actually lives
-   (relocated); if it reads `[REDACTED]`, work at the cited region; if both, see Iron
-   Law 3(c). Never stop here.
+   not there, `Grep` the file for it and work at the line where it actually lives. If it
+   is nowhere in the file, refute (Iron Law 3). Never stop here.
 3. Trace the minimal logic the claim depends on (the caller, the branch, the condition) —
    only as far as needed to prove or disprove the specific claim, not a general review.
    `git -C <worktree> diff <baseRef>` shows what this task changed, if that helps.

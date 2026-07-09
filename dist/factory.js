@@ -9608,7 +9608,16 @@ var ReviewRoundDataSchema = external_exports.object({
   reviewers: external_exports.array(
     external_exports.object({
       reviewer: external_exports.string().min(1),
-      confirmed_blockers: external_exports.number().int().min(0).default(0)
+      confirmed_blockers: external_exports.number().int().min(0).default(0),
+      /**
+       * The two funnel denominators (7b/2). `.optional()`, NEVER `.default(0)`:
+       * a pre-7b/2 round genuinely has no denominator, and a fabricated `0`
+       * would read as "raised nothing" — indistinguishable from a lens that
+       * raised findings and had them all dropped. Absent ⇒ excluded from the
+       * rates and counted in `rounds_without_funnel` (D49 backfill honesty).
+       */
+      raised_blockers: external_exports.number().int().min(0).optional(),
+      cited_blockers: external_exports.number().int().min(0).optional()
     })
   ).default([]),
   cross_vendor_absent: external_exports.boolean().optional()
@@ -9631,7 +9640,16 @@ function aggregateReviewerValue(runs) {
   const acc = (lens) => {
     let a = byLens.get(lens);
     if (a === void 0) {
-      a = { rounds: 0, confirmed_blockers: 0, send_back_blocker_rounds: 0, misses: 0 };
+      a = {
+        rounds: 0,
+        confirmed_blockers: 0,
+        send_back_blocker_rounds: 0,
+        misses: 0,
+        raised: 0,
+        cited: 0,
+        cited_resolved: 0,
+        confirmed_resolved: 0
+      };
       byLens.set(lens, a);
     }
     return a;
@@ -9640,6 +9658,7 @@ function aggregateReviewerValue(runs) {
   let runsWithoutEvents = 0;
   let crossVendorAbsentRounds = 0;
   let unattributedMisses = 0;
+  let roundsWithoutFunnel = 0;
   for (const run9 of runs) {
     if (run9.rounds.length > 0) {
       runsCovered += 1;
@@ -9650,12 +9669,23 @@ function aggregateReviewerValue(runs) {
       if (round.cross_vendor_absent === true) {
         crossVendorAbsentRounds += 1;
       }
+      if (round.reviewers.length > 0 && round.reviewers.every((r) => r.raised_blockers === void 0)) {
+        roundsWithoutFunnel += 1;
+      }
       for (const r of round.reviewers) {
         const a = acc(r.reviewer);
         a.rounds += 1;
         a.confirmed_blockers += r.confirmed_blockers;
         if (r.confirmed_blockers > 0 && round.outcome === "send-back") {
           a.send_back_blocker_rounds += 1;
+        }
+        if (r.raised_blockers !== void 0 && r.cited_blockers !== void 0) {
+          a.raised += r.raised_blockers;
+          a.cited += r.cited_blockers;
+          if (round.outcome !== "environmental") {
+            a.cited_resolved += r.cited_blockers;
+            a.confirmed_resolved += r.confirmed_blockers;
+          }
         }
       }
     }
@@ -9673,6 +9703,8 @@ function aggregateReviewerValue(runs) {
     confirmed_blockers: a.confirmed_blockers,
     yield: a.rounds > 0 ? a.confirmed_blockers / a.rounds : null,
     send_back_rate: a.rounds > 0 ? a.send_back_blocker_rounds / a.rounds : null,
+    citation_rate: a.raised > 0 ? a.cited / a.raised : null,
+    confirm_rate: a.cited_resolved > 0 ? a.confirmed_resolved / a.cited_resolved : null,
     misses: a.misses
   })).sort((x, y) => (y.yield ?? -1) - (x.yield ?? -1) || x.lens.localeCompare(y.lens));
   return {
@@ -9680,7 +9712,8 @@ function aggregateReviewerValue(runs) {
     runs_covered: runsCovered,
     runs_without_events: runsWithoutEvents,
     cross_vendor_absent_rounds: crossVendorAbsentRounds,
-    unattributed_misses: unattributedMisses
+    unattributed_misses: unattributedMisses,
+    rounds_without_funnel: roundsWithoutFunnel
   };
 }
 
@@ -12638,7 +12671,9 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
     reviewer: review.reviewer,
     rawVerdict: review.verdict,
     confirmedBlockers: confirmed,
-    hadVerifierError
+    hadVerifierError,
+    raisedBlockers: blocking.length,
+    citedBlockers: kept.length
   };
 }
 function reviewerResultOf(a) {
@@ -14754,17 +14789,23 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   } else {
     throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
   }
+  const funnelOf = new Map(panel.adjudicated.map((a) => [a.reviewer, a]));
   await emitMetric(deps.dataDir, runId, "review.round", {
     task_id: taskId,
     rung: task.escalation_rung,
     outcome,
-    // Per-lens {reviewer, verdict, confirmed_blockers} so `score --reviewers` can
-    // compute each lens's yield + send-back rate without re-reading state.
-    reviewers: panel.reviewerResults.map((r) => ({
-      reviewer: r.reviewer,
-      verdict: r.verdict,
-      confirmed_blockers: r.confirmed_blockers
-    })),
+    // Per-lens {reviewer, verdict, raised/cited/confirmed_blockers} so
+    // `score --reviewers` can compute each lens's yield, send-back rate, and BOTH
+    // funnel rates (citation_rate, confirm_rate) without re-reading state.
+    reviewers: panel.reviewerResults.map((r) => {
+      const funnel = funnelOf.get(r.reviewer);
+      return {
+        reviewer: r.reviewer,
+        verdict: r.verdict,
+        confirmed_blockers: r.confirmed_blockers,
+        ...funnel !== void 0 ? { raised_blockers: funnel.raisedBlockers, cited_blockers: funnel.citedBlockers } : {}
+      };
+    }),
     ...panel.crossVendorAbsence !== void 0 ? { cross_vendor_absent: true } : {}
   });
   return {
@@ -14791,7 +14832,12 @@ var ReviewsResultSchema = external_exports.object({
           file: external_exports.string().min(1),
           line: external_exports.number().int().positive(),
           holds: external_exports.boolean(),
-          note: external_exports.string()
+          // `.min(1)` is hygiene, not an anti-fabrication measure: a runner
+          // willing to synthesise `holds` will synthesise a note with it.
+          // What it catches is a BROKEN verifier agent — an empty note means
+          // no justification was reached, and recording that as a verdict is
+          // worse than failing the parse LOUD.
+          note: external_exports.string().min(1)
         }).strict()
       )
     }).strict()
@@ -19462,13 +19508,16 @@ Usage:
                    (total_misses, misses_per_run over terminal runs, misses_by_lens).
   --reviewers      Report per-lens review value from the review.round telemetry
                    joined with the miss ledger: rounds, confirmed blockers, yield,
-                   send-back rate, and misses attributed to each lens. Honest about
-                   coverage (runs_covered vs runs_without_events).
+                   send-back rate, and misses attributed to each lens. Also the two
+                   funnel rates \u2014 citation_rate (cited/raised: did the lens quote
+                   REAL code?) and confirm_rate (confirmed/cited: did its claims
+                   survive an adversarial verifier?). Honest about coverage
+                   (runs_covered vs runs_without_events, rounds_without_funnel).
 
 Emits ONE JSON document:
   { kind:"score", summary }
   { kind:"fleet-score", runs, aggregate, total_misses, misses_per_run, misses_by_lens }
-  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses }`;
+  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses, rounds_without_funnel }`;
 async function runFleet(state) {
   const all = await state.listRuns();
   const runs = all.map((r) => ({

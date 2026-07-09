@@ -49,6 +49,16 @@ export interface AdjudicatedReviewer {
     readonly confirmedBlockers: readonly Finding[]
     /** True iff any confirmation was UNRESOLVED (verifier error) — fails LOUDLY. */
     readonly hadVerifierError: boolean
+    /**
+     * Funnel stage 1 (7b/2): blocking findings this lens RAISED, post-cap. Surfaced
+     * for `review.round` telemetry so `score --reviewers` can separate the two
+     * attrition steps — `raised → cited` is "did it cite real code?",
+     * `cited → confirmed` is "did the claim survive refutation?". A single
+     * confirmed/raised rate would conflate quoting badly with claiming badly.
+     */
+    readonly raisedBlockers: number
+    /** Funnel stage 2: those that survived citation-verify and reached a verifier. */
+    readonly citedBlockers: number
 }
 
 /** The full result of one verify pass. */
@@ -115,6 +125,8 @@ async function adjudicateReviewer(
         rawVerdict: review.verdict,
         confirmedBlockers: confirmed,
         hadVerifierError,
+        raisedBlockers: blocking.length,
+        citedBlockers: kept.length,
     }
 }
 

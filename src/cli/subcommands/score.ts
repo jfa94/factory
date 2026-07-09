@@ -31,13 +31,16 @@ Usage:
                    (total_misses, misses_per_run over terminal runs, misses_by_lens).
   --reviewers      Report per-lens review value from the review.round telemetry
                    joined with the miss ledger: rounds, confirmed blockers, yield,
-                   send-back rate, and misses attributed to each lens. Honest about
-                   coverage (runs_covered vs runs_without_events).
+                   send-back rate, and misses attributed to each lens. Also the two
+                   funnel rates — citation_rate (cited/raised: did the lens quote
+                   REAL code?) and confirm_rate (confirmed/cited: did its claims
+                   survive an adversarial verifier?). Honest about coverage
+                   (runs_covered vs runs_without_events, rounds_without_funnel).
 
 Emits ONE JSON document:
   { kind:"score", summary }
   { kind:"fleet-score", runs, aggregate, total_misses, misses_per_run, misses_by_lens }
-  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses }`
+  { kind:"reviewer-score", lenses, runs_covered, runs_without_events, cross_vendor_absent_rounds, unattributed_misses, rounds_without_funnel }`
 
 /** `factory score --fleet` — the store-wide touch-metric roll-up (read-only). */
 async function runFleet(state: StateManager): Promise<ExitCode> {

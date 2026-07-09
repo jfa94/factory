@@ -357,6 +357,60 @@ describe('applyRecordReviews record', () => {
         expect(rounds[0]?.data?.cross_vendor_absent).toBeUndefined()
     })
 
+    // 7b/2 — the funnel counters reach metrics.jsonl from a REAL record pass, so
+    // `score --reviewers` can separate "cited fake code" from "claimed wrongly".
+    it('emits raised/cited/confirmed blockers per lens: a fabricated quote drops, a refuted claim does not confirm', async () => {
+        await writeWorktreeFile('src/x.ts', 'line1\nconst x = 1\nconst y = 2\n')
+        const deps = makeDeps()
+        const finding = (line: number, quote: string, claim: string) => ({
+            reviewer: 'quality-reviewer',
+            severity: 'critical' as const,
+            blocking: true,
+            file: 'src/x.ts',
+            line,
+            quote,
+            claim,
+            description: claim,
+        })
+        const input: RecordReviewsInput = {
+            reviews: fullPanel({
+                reviewer: 'quality-reviewer',
+                verdict: 'blocked',
+                findings: [
+                    finding(2, 'const x = 1', 'x is a magic number'), // cited + confirmed
+                    finding(3, 'const y = 2', 'y is a magic number'), // cited + refuted
+                    finding(2, 'const z = 3', 'z is a magic number'), // quote is nowhere → DROPPED
+                ],
+            }),
+            verifications: [
+                {
+                    reviewer: 'quality-reviewer',
+                    verdicts: [
+                        {file: 'src/x.ts', line: 2, holds: true, note: 'confirmed'},
+                        {file: 'src/x.ts', line: 3, holds: false, note: 'y is a loop bound, not magic'},
+                    ],
+                },
+            ],
+        }
+
+        await captureWarnings(() => applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input))
+
+        const rounds = (await readMetrics(dataDir, RUN_ID)).filter((m) => m.event === 'review.round')
+        const reviewers = rounds[0]?.data?.reviewers as {
+            reviewer: string
+            raised_blockers: number
+            cited_blockers: number
+            confirmed_blockers: number
+        }[]
+        const quality = nonNull(reviewers.find((r) => r.reviewer === 'quality-reviewer'))
+        expect(quality.raised_blockers).toBe(3) // what the lens asserted
+        expect(quality.cited_blockers).toBe(2) // what citation-verify kept (z was fabricated)
+        expect(quality.confirmed_blockers).toBe(1) // what survived the verifier (y was refuted)
+        // An approving lens raised nothing: a real 0, never an absent field.
+        const impl = nonNull(reviewers.find((r) => r.reviewer === 'implementation-reviewer'))
+        expect(impl).toMatchObject({raised_blockers: 0, cited_blockers: 0, confirmed_blockers: 0})
+    })
+
     it('emits a review.round metric with outcome send-back when the merge gate blocks', async () => {
         const deps = makeDeps()
         const input: RecordReviewsInput = {

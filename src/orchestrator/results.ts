@@ -46,7 +46,12 @@ const ReviewsResultSchema = z
                                 file: z.string().min(1),
                                 line: z.number().int().positive(),
                                 holds: z.boolean(),
-                                note: z.string(),
+                                // `.min(1)` is hygiene, not an anti-fabrication measure: a runner
+                                // willing to synthesise `holds` will synthesise a note with it.
+                                // What it catches is a BROKEN verifier agent — an empty note means
+                                // no justification was reached, and recording that as a verdict is
+                                // worse than failing the parse LOUD.
+                                note: z.string().min(1),
                             })
                             .strict()
                     ),

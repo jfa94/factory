@@ -559,17 +559,26 @@ export async function applyRecordReviews(
     // 7b — ONE telemetry line per verify round (observability, not state; emitMetric
     // swallows IO errors so it can never break the record). `rung` is the rung this
     // round RAN at (pre-escalation). Feeds `factory score --reviewers`.
+    // Reviewer names are unique per roster (D26), so this join is total.
+    const funnelOf = new Map(panel.adjudicated.map((a) => [a.reviewer, a]))
     await emitMetric(deps.dataDir, runId, 'review.round', {
         task_id: taskId,
         rung: task.escalation_rung,
         outcome,
-        // Per-lens {reviewer, verdict, confirmed_blockers} so `score --reviewers` can
-        // compute each lens's yield + send-back rate without re-reading state.
-        reviewers: panel.reviewerResults.map((r) => ({
-            reviewer: r.reviewer,
-            verdict: r.verdict,
-            confirmed_blockers: r.confirmed_blockers,
-        })),
+        // Per-lens {reviewer, verdict, raised/cited/confirmed_blockers} so
+        // `score --reviewers` can compute each lens's yield, send-back rate, and BOTH
+        // funnel rates (citation_rate, confirm_rate) without re-reading state.
+        reviewers: panel.reviewerResults.map((r) => {
+            const funnel = funnelOf.get(r.reviewer)
+            return {
+                reviewer: r.reviewer,
+                verdict: r.verdict,
+                confirmed_blockers: r.confirmed_blockers,
+                ...(funnel !== undefined
+                    ? {raised_blockers: funnel.raisedBlockers, cited_blockers: funnel.citedBlockers}
+                    : {}),
+            }
+        }),
         ...(panel.crossVendorAbsence !== undefined ? {cross_vendor_absent: true} : {}),
     })
 

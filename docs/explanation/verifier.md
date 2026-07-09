@@ -168,8 +168,25 @@ rung's files become inert rather than misleading.
 
 A reviewer's raw "this is a blocker" cannot be trusted to act on directly: LLM
 reviewers hallucinate findings. So every blocking, citable finding (one carrying
-both a `file` and a `line`) is independently confirmed before it can block the
-task:
+both a `file` and a `line`) must clear two independent checks before it can block
+the task.
+
+> **Order of execution.** These are listed as a logical pipeline, but they do NOT
+> run in this order. The **runner** spawns a finding-verifier per blocking+citable
+> finding directly from the reviewer's raw JSON, because the finding set is only
+> known after the panel returns and the manifest was stamped before it ran. Citation-verify
+> runs later and independently, inside `factory next-action --results`, when the
+> engine records the verdicts. So the verifier sees the reviewer's **unverified,
+> unredacted** `quote` and its **cited** (possibly miscounted) `line`. The two
+> checks are combined at record time, and a finding must clear both — but neither
+> informs the other. `agents/finding-verifier.md` is written to that reality: an
+> unfindable quote is a fabricated citation the verifier refutes on its own, which
+> agrees with the drop citation-verify independently makes.
+>
+> Inverting this — record reviews, citation-verify, then spawn verifiers with
+> engine-composed prompts — is proposed in
+> [verifier-prompt-ordering.md](../proposals/verifier-prompt-ordering.md). It would
+> make `ClaimOnlyFinding` the enforced boundary rather than a prose convention.
 
 1. **Citation-verify** — the finding's quoted code is checked against the actual
    worktree source. An uncitable finding (missing `file`/`line`, or a quote that
@@ -178,8 +195,10 @@ task:
    file is relocated there (`RELOCATE relocated_ok` in the audit) instead of
    dropped — reviewers are frequently right about the code and off by a few lines.
    Zero or multiple matches, multi-line quotes, and whitespace-only quotes stay
-   fail-closed. Confirmation still keys on the reviewer's **cited** line (what the
-   verifier agent saw); the relocated line is what reaches the producer.
+   fail-closed. Confirmation keys on the reviewer's **cited** line (the only
+   coordinate the verifier agent ever saw); the relocated line is what reaches the
+   producer. Redaction likewise applies to the text the engine persists and
+   surfaces, not to the verifier's prompt.
 2. **Independent confirmation** — a separate finding-verifier, whose identity
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
