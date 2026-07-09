@@ -2473,25 +2473,26 @@ declared `maxTurns: 60` but the engine stamped `30`, so the frontmatter value wa
   `sonnet→opus` dial, `test-writer` is pinned opus regardless of task risk (config-driven
   ceiling in `producerSpawn`), and the panel model is per-role (Decision 64).
 
-- **finding-verifier promoted to a first-class agent (STUB).** Previously the independent
+- **finding-verifier promoted to a first-class agent.** Previously the independent
   finding-verifier (verify-then-fix, Decision 27) ran as generic `general-purpose` with no
   frontmatter, tracking the reviewer panel's model. It is now a real agent file
   `agents/finding-verifier.md` (`model: sonnet`, `effort: high`, `maxTurns: 30`,
   `isolation: worktree`), decoupled from the panel's model. Its spawn points at the new
   `FINDING_VERIFIER_AGENT_TYPE` const (`src/core/phase-machine/spawn.ts`). Per-finding
   prompts still come from `VERIFIER_PROMPT_TEMPLATE` at spawn; the agent-file body is the
-  standing system prompt and currently a **STUB** (a `TODO(user)` marks where the full
-  verification discipline is authored later) — see the known-gap note below.
+  standing system prompt and now carries the full verification discipline (adversarial
+  mandate, grounding gate, refute-when-unsure calibration — authored in a follow-up
+  session, see below).
 
 **Consequences:** Each agent's turn cap lives in exactly one place — its own frontmatter —
 and the "declared 60 / stamped 30" class of bug cannot recur. The config surface shrinks to
 only keys the engine actually reads. Reviewer/producer turn budgets are no longer
 operator-tunable; accepted as the price of a single source of truth.
 
-**Known gap:** `agents/finding-verifier.md` ships as a **stub** — the full verification
-discipline (process, red flags, output-contract detail beyond the runner-supplied template)
-is a `TODO(user)` for a follow-up session, not finished work. Until then the per-finding
-`VERIFIER_PROMPT_TEMPLATE` carries the operative instructions.
+**Gap closed:** `agents/finding-verifier.md` shipped as a stub (a `TODO(user)` in place of
+the full verification discipline) until a follow-up session authored the body — process,
+red flags, and output-contract restatement, consistent with the runner-supplied
+`VERIFIER_PROMPT_TEMPLATE` which still carries the operative per-finding prompt.
 
 **Relationship:** Amends Decision 21 (apex effort `max`→`xhigh`); carries the per-role
 reviewer-model change (Decision 64); extends Decision 27 (the finding-verifier it promotes);
