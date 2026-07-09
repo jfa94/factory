@@ -154,6 +154,11 @@ export interface ResyncTaskBranchArgs {
     /** Bare staging branch name (the `origin/` ref is built internally). */
     stagingBranch: string
     remote?: string
+    /**
+     * Commit message for a non-FF merge (e.g. tagged `[task-id]` so the TDD gate
+     * attributes the commit, Issue #2). Omitted → git's default `--no-edit` message.
+     */
+    message?: string
 }
 
 /**
@@ -170,7 +175,10 @@ export async function resyncTaskBranchOntoStaging(args: ResyncTaskBranchArgs): P
     const remote = args.remote ?? 'origin'
     const opts: GitOpts = {cwd: args.cwd}
     await args.git.fetch(remote, args.stagingBranch, opts)
-    const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, opts)
+    const attempt = await args.git.tryMergeNoForce(args.branch, `${remote}/${args.stagingBranch}`, {
+        ...opts,
+        ...(args.message !== undefined ? {message: args.message} : {}),
+    })
     if (attempt.merged) {
         await args.git.push(remote, args.branch, opts)
     }

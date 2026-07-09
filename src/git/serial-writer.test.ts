@@ -238,6 +238,134 @@ describe('Δ L — serial writer (#1)', () => {
         expect(stderr).toContain('factory/run-1/t2')
     })
 
+    // -- Issue #1: transient UNKNOWN mergeability must be POLLED, not refused ----
+    // GitHub reports `mergeable: UNKNOWN` for a beat right after a PR is created/
+    // updated while it lazily computes mergeability in the background — not a real
+    // conflict. Treating it as a permanent refusal burns a full exec resync
+    // (MERGE_RESYNC_CAP) on a PR that was actually fine.
+
+    it('transient UNKNOWN mergeability is polled until it settles, then merges (no resync)', async () => {
+        const gh = new FakeGhClient({prs: [openPr(600, 'factory/run-1/t1')]})
+        gh.setMergeabilitySequence(
+            600,
+            {mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN'},
+            {mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN'}
+        )
+        let sleeps = 0
+        const ser = new MergeSerializer({
+            ghClient: gh,
+            owner: 'fake',
+            repo: 'repo',
+            dataDir,
+            lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            mergeabilityPoll: {sleep: () => Promise.resolve().then(() => void (sleeps += 1))},
+        })
+        const outcome = await ser.merge(600)
+        expect(outcome).toEqual({merged: true, via: 'app-level', number: 600})
+        expect(sleeps).toBeGreaterThan(0)
+        expect(gh.calls.filter((c) => c === 'pr view 600')).toHaveLength(2)
+    })
+
+    it('a settling CONFLICTING result stops the poll immediately and refuses (not merged)', async () => {
+        // Proves the poll stops as soon as `mergeable` settles to ANY terminal
+        // value, not just when it becomes MERGEABLE.
+        const gh = new FakeGhClient({prs: [openPr(602, 'factory/run-1/t1')]})
+        gh.setMergeabilitySequence(
+            602,
+            {mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN'},
+            {mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY'}
+        )
+        let sleeps = 0
+        const ser = new MergeSerializer({
+            ghClient: gh,
+            owner: 'fake',
+            repo: 'repo',
+            dataDir,
+            lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            mergeabilityPoll: {maxTries: 5, sleep: () => Promise.resolve().then(() => void (sleeps += 1))},
+        })
+        const outcome = await ser.merge(602)
+        expect(outcome).toEqual({merged: false, reason: 'not-mergeable', number: 602})
+        expect(sleeps).toBe(1) // one sleep: UNKNOWN → settled on the 2nd read
+        expect(gh.calls.filter((c) => c === 'pr view 602')).toHaveLength(2)
+    })
+
+    it('still-UNKNOWN after the poll budget falls through to the unchanged refuse-and-resync path', async () => {
+        const gh = new FakeGhClient({
+            prs: [openPr(601, 'factory/run-1/t1', {mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN'})],
+        })
+        let sleeps = 0
+        const ser = new MergeSerializer({
+            ghClient: gh,
+            owner: 'fake',
+            repo: 'repo',
+            dataDir,
+            lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            mergeabilityPoll: {maxTries: 3, sleep: () => Promise.resolve().then(() => void (sleeps += 1))},
+        })
+        const outcome = await ser.merge(601)
+        expect(outcome).toEqual({merged: false, reason: 'not-mergeable', number: 601})
+        expect(sleeps).toBe(2) // maxTries=3 reads → 2 sleeps between them
+        expect(gh.calls.filter((c) => c === 'pr view 601')).toHaveLength(3)
+    })
+
+    it('non-mergeable/pending mergeStateStatus alone (mergeable already resolved) is NOT polled — unchanged fast refusal', async () => {
+        // Regression guard: the existing 'non-mergeable/pending merge states' test
+        // (above) sets ONLY mergeStateStatus (mergeable stays MERGEABLE) and must stay
+        // fast — the poll predicate is `mergeable === 'UNKNOWN'`, not mergeStateStatus.
+        const gh = new FakeGhClient({prs: [openPr(604, 'factory/run-1/t1', {mergeStateStatus: 'UNKNOWN'})]})
+        let sleeps = 0
+        const ser = new MergeSerializer({
+            ghClient: gh,
+            owner: 'fake',
+            repo: 'repo',
+            dataDir,
+            lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            mergeabilityPoll: {sleep: () => Promise.resolve().then(() => void (sleeps += 1))},
+        })
+        const outcome = await ser.merge(604)
+        expect(outcome).toEqual({merged: false, reason: 'not-mergeable', number: 604})
+        expect(sleeps).toBe(0)
+        expect(gh.calls.filter((c) => c === 'pr view 604')).toHaveLength(1)
+    })
+
+    it('a prView throw mid-poll propagates (never swallowed)', async () => {
+        class FlakyGhClient extends FakeGhClient {
+            private callsSoFar = 0
+            constructor(
+                private readonly failOn: number,
+                private readonly err: Error,
+                opts: ConstructorParameters<typeof FakeGhClient>[0]
+            ) {
+                super(opts)
+            }
+            override prView(
+                number: number,
+                fields: readonly string[],
+                opts?: Parameters<FakeGhClient['prView']>[2]
+            ): Promise<PullRequest> {
+                this.callsSoFar += 1
+                if (this.callsSoFar === this.failOn) {
+                    return Promise.reject(this.err)
+                }
+                return super.prView(number, fields, opts)
+            }
+        }
+        const err = new Error('HTTP 500: server error')
+        const gh = new FlakyGhClient(2, err, {
+            prs: [openPr(603, 'factory/run-1/t1', {mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN'})],
+        })
+        const ser = new MergeSerializer({
+            ghClient: gh,
+            owner: 'fake',
+            repo: 'repo',
+            dataDir,
+            lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            mergeabilityPoll: {sleep: () => Promise.resolve()},
+        })
+        await expect(ser.merge(603)).rejects.toThrow('HTTP 500: server error')
+    })
+
     // -- Theme D1: a "couldn't tell" merge-queue probe must DEGRADE, not crash ----
     it('merge-queue probe failure degrades to app-level squash (warns, does NOT crash)', async () => {
         // The honest probe THROWS on a "couldn't tell" gh failure (auth/rate-limit/5xx).

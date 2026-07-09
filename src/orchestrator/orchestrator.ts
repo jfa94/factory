@@ -286,6 +286,10 @@ async function resyncShipRetry(
         cwd: worktree,
         branch: runScopedBranch(runId, taskId),
         stagingBranch,
+        // Issue #2: tag a non-FF resync merge commit with [task-id] so the TDD gate's
+        // commit-tag check attributes it (tools.ts:793). An FF resync creates no commit,
+        // so this is a harmless no-op there.
+        message: `chore(sync): merge staging into task branch [${taskId}]`,
     })
     if (!resync.merged) {
         const step = await failStep(

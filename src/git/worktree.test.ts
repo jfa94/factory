@@ -140,6 +140,21 @@ describe('resyncTaskBranchOntoStaging (Bug #1 — forward-merge staging into a B
         expect(r.merged).toBe(false)
         expect(git.calls).not.toContain('push origin factory/run-1/t1')
     })
+
+    it('Issue #2: forwards a tagged message so the merge commit carries [task-id]', async () => {
+        const git = new FakeGitClient({remoteHeads: {'staging-run-1': 'sha-staging-1'}})
+        const r = await resyncTaskBranchOntoStaging({
+            git,
+            cwd: '/tmp/wt-rs',
+            branch: 'factory/run-1/t1',
+            stagingBranch: 'staging-run-1',
+            message: 'chore(sync): merge staging into task branch [t1]',
+        })
+        expect(r).toEqual({merged: true})
+        expect(git.calls).toContain(
+            'try-merge -m "chore(sync): merge staging into task branch [t1]" origin/staging-run-1 into factory/run-1/t1'
+        )
+    })
 })
 
 describe('removeWorktree', () => {

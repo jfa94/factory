@@ -98,6 +98,24 @@ describe('deriveTddVerdict (Δ N — ports tdd-gate cases)', () => {
         expect(v.violations[0]?.reason).toBe('impl-without-preceding-test')
     })
 
+    it('Issue #2: a tagged resync merge bringing impl passes — [test RED][impl][tagged sync-merge bringing impl]', () => {
+        // Mirrors resyncTaskBranchOntoStaging's tagged `-m` merge commit landing on the
+        // task branch tip after the real RED/impl pair. The preceding test-only commit
+        // already satisfies TDD ordering, so the merge (classified `impl` by its
+        // first-parent diff) is fine as long as it's tagged (Fix #2) — untagged would
+        // trip impl-commit-untagged (case9/10).
+        const v = deriveTddVerdict(
+            [
+                commit({sha: 'c1', files: ['tests/x.test.ts'], tagged: true}),
+                commit({sha: 'c2', files: ['src/x.ts'], tagged: true}),
+                commit({sha: 'm1', files: ['src/other-task.ts'], tagged: true, parentCount: 2}),
+            ],
+            false
+        )
+        expect(v.ok).toBe(true)
+        expect(v.violations).toEqual([])
+    })
+
     it('defective-test recovery: [test, impl, test, impl] (all tagged) passes — each impl has a preceding test', () => {
         // The test-defective retry replays the RED phase on the SAME task branch, so the
         // tip sees a doubled sequence. The first test-only commit satisfies every later

@@ -897,14 +897,15 @@ describe('nextAction', () => {
             expect(resyncEnv.phase).toBe('exec')
             // … having forward-merged the LATEST staging into the branch and re-pushed it,
             // so the remote PR head advances off BEHIND (the serializer reads the remote).
+            // Issue #2: the re-sync merge is tagged with [task-id] so the TDD gate's
+            // commit-tag check attributes it (not git's default untagged message).
+            const mergeCall = `try-merge -m "chore(sync): merge staging into task branch [T1]" origin/${stagingBranch} into ${branch}`
             expect(git.calls).toContain(`fetch origin ${stagingBranch}`)
-            expect(git.calls).toContain(`try-merge --no-edit origin/${stagingBranch} into ${branch}`)
+            expect(git.calls).toContain(mergeCall)
             expect(git.calls).toContain(`push origin ${branch}`)
             expect(git.mergesInto[branch]).toContain(`origin/${stagingBranch}`)
             // The push must come AFTER the merge (a local-only merge would leave the PR BEHIND).
-            expect(git.calls.indexOf(`push origin ${branch}`)).toBeGreaterThan(
-                git.calls.indexOf(`try-merge --no-edit origin/${stagingBranch} into ${branch}`)
-            )
+            expect(git.calls.indexOf(`push origin ${branch}`)).toBeGreaterThan(git.calls.indexOf(mergeCall))
         } finally {
             await cleanup()
         }

@@ -28,8 +28,17 @@ export interface PushOptions extends GitOpts {
     setUpstream?: boolean
 }
 
-/** Options for {@link GitClient.mergeFfOrCommit}. */
-export type MergeOptions = GitOpts
+/** Options for {@link GitClient.mergeFfOrCommit} and {@link GitClient.tryMergeNoForce}. */
+export interface MergeOptions extends GitOpts {
+    /**
+     * Custom merge commit message: `git merge -m <message> <ref>` (non-interactive,
+     * replaces `--no-edit`). Only {@link GitClient.tryMergeNoForce} honors this — the
+     * resync flow uses it to tag its merge commit with the task's `[task-id]` so the
+     * TDD gate's commit-tag check attributes the commit (Issue #2). Omitted → today's
+     * `git merge --no-edit <ref>`. {@link GitClient.mergeFfOrCommit} ignores it.
+     */
+    message?: string
+}
 
 /**
  * Outcome of {@link GitClient.tryMergeNoForce}: a clean merge, or a conflict the caller
@@ -302,9 +311,10 @@ export class DefaultGitClient implements GitClient {
     }
 
     async tryMergeNoForce(branch: string, ref: string, opts?: MergeOptions): Promise<MergeAttempt> {
-        log.debug(`tryMerge --no-edit ${ref} into ${branch}`)
+        const mergeArgs = opts?.message !== undefined ? ['merge', '-m', opts.message, ref] : ['merge', '--no-edit', ref]
+        log.debug(`tryMerge ${mergeArgs.slice(1).join(' ')} into ${branch}`)
         await this.execOrThrow(['checkout', branch], opts)
-        const r = await this.exec(['merge', '--no-edit', ref], opts)
+        const r = await this.exec(mergeArgs, opts)
         if (r.code === 0) {
             return {merged: true}
         }

@@ -106,12 +106,12 @@ pins that split explicitly so local-green can never silently diverge from CI-gre
   own CI on the shipped commit.
 - `LOCAL_ONLY_GATES` = `tdd`, `coverage`, `sast` — enforced by the local runner but
   **not** rendered into CI:
-  - `tdd` needs the pre-squash task branch (commit ordering); CI only ever sees the
-    squashed merge, so the check cannot run there.
-  - `coverage` reads a per-tree-SHA local store keyed off the task worktree — no CI
-    analogue.
-  - `sast` is deliberately local for now (a plain command gate, so a future CI step
-    is possible — a classification choice, not a hard constraint).
+    - `tdd` needs the pre-squash task branch (commit ordering); CI only ever sees the
+      squashed merge, so the check cannot run there.
+    - `coverage` reads a per-tree-SHA local store keyed off the task worktree — no CI
+      analogue.
+    - `sast` is deliberately local for now (a plain command gate, so a future CI step
+      is possible — a classification choice, not a hard constraint).
 
 A cross-check test asserts `[...CI_RENDERED_GATES, ...LOCAL_ONLY_GATES]` equals the
 canonical `GATE_IDS`. A **9th** gate id therefore fails the partition test until it is
@@ -138,11 +138,11 @@ there is no emit step — so a normal deno contract never false-warns).
 
 If a committed contract leaves a floor gate `contracted: false`, an operator
 hand-edited the contract to drop it — the one misconfiguration TCB write-protection
-cannot catch (it guards the file's *writability*, not its *content*). So:
+cannot catch (it guards the file's _writability_, not its _content_). So:
 
 - **At `run create`**, each such dropped floor gate is warned loudly on stderr
   (`run create: default-set gate '<id>' is not contracted: … — the merge gate will
-  not enforce it`). The created/superseded JSON envelope also carries `gates`
+not enforce it`). The created/superseded JSON envelope also carries `gates`
   (the full `GatesInForce` shape).
 - **At finalize**, the run report re-derives the same enumeration from the committed
   contract and renders a **Gates in force** markdown section (Enforced / Not
@@ -220,6 +220,16 @@ impl-before-test ordering blocks the task.
 - **Squash no-op**: a single commit introducing _both_ test and impl files is the
   squashed shape — unverifiable for ordering, so the gate is a pass (not a false
   violation). A single impl-only commit is still a violation.
+- **Commit-tag attribution**: the classifier (`tdd-classify.ts`) reads each commit's
+  `[task-id]` tag to attribute it. An implementation commit with no tag is flagged
+  `impl-commit-untagged` and blocks the task. This also covers the task→staging
+  **re-sync merge**: when `resyncTaskBranchOntoStaging` (`src/git/worktree.ts`) does a
+  genuine non-fast-forward merge of `origin/staging-<run-id>` into the task branch, the
+  merge commit must carry the tag or it trips this check. The caller (`resyncShipRetry`,
+  `src/orchestrator/orchestrator.ts`) supplies a tagged message —
+  `chore(sync): merge staging into task branch [<taskId>]` — threaded through
+  `ResyncTaskBranchArgs.message` → `MergeOptions.message` → `git merge -m <message>`
+  (a fast-forward re-sync creates no commit, so the message is a harmless no-op there).
 - **Exemptions**: `tdd_exempt: true` on a task in the spec's `tasks.json` (per
   task), or `package.json.factory.tddExempt` (globally). Read from those sources,
   **never** from `state.json` (derive-don't-store). For exotic test runners (Go,
