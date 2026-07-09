@@ -22,19 +22,50 @@
  * systemic-failure-reviewer. All roles already exist in the frozen
  * {@link SpawnRoleEnum} — no new role is invented here.
  *
- * Every reviewer runs on the SAME fixed model (Δ T) and the SAME turn budget
- * (D26 fixed depth). The request is validated through the frozen
+ * Each reviewer runs on a FIXED per-role model ({@link REVIEWER_MODEL_BY_ROLE} — a
+ * deliberate reversal of the prior single-fixed-reviewer-model decision, Δ T; still
+ * keyed only on role, never risk tier, so risk-invariance holds). `max_turns` is
+ * NOT stamped on any agent here — each reviewer's own frontmatter is the single
+ * source of truth for its turn budget. The request is validated through the frozen
  * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
 import {
     parseSpawnRequest,
     AGENT_TYPE_BY_ROLE,
-    GENERAL_PURPOSE_AGENT_TYPE,
+    FINDING_VERIFIER_AGENT_TYPE,
     type SpawnRequest,
     type SpawnRole,
     type VerifierSpec,
 } from '../../types/index.js'
 import type {CrossVendorResolution} from './vendor.js'
+
+/**
+ * Per-role reviewer model (a deliberate reversal of the single-fixed-reviewer-model
+ * decision, Δ T — ADR-worthy, see the model/effort/max_turns tuning plan). Still keyed
+ * ONLY on role, never risk tier, so risk-invariance (Decision 26) holds: opus for the
+ * deepest-reasoning lenses (quality/systemic/database), sonnet for the narrower-scoped
+ * ones (spec-alignment/silent-failure). Producer roles are never looked up here — only
+ * {@link PANEL_ROLES} + {@link DB_DESIGN_ROLE} keys are ever read.
+ */
+const REVIEWER_MODEL_BY_ROLE: Partial<Record<SpawnRole, string>> = {
+    'implementation-reviewer': 'sonnet',
+    'quality-reviewer': 'opus',
+    'silent-failure-hunter': 'sonnet',
+    'systemic-failure-reviewer': 'opus',
+    'database-design-reviewer': 'opus',
+}
+
+/** The finding-verifier's fixed model — decoupled from the panel/reviewer model. */
+const FINDING_VERIFIER_MODEL = 'sonnet'
+
+/** Look up a panel role's fixed model. Throws on a non-panel role — a programming error. */
+function reviewerModelFor(role: SpawnRole): string {
+    const model = REVIEWER_MODEL_BY_ROLE[role]
+    if (model === undefined) {
+        throw new Error(`panel: no reviewer model configured for role '${role}'`)
+    }
+    return model
+}
 
 /**
  * The finding-verifier's fixed framing (3b/iii) — an adversarial "try to refute
@@ -89,10 +120,6 @@ export function panelRolesFor(dbApplicable: boolean): readonly SpawnRole[] {
  *
  * @param resumePhase the per-task phase the engine resumes at once the panel
  *   returns (the verify phase).
- * @param model the FIXED reviewer model — a SINGLE value used for ALL four
- *   reviewers (resolve via {@link resolveReviewModel}). Deliberately not a
- *   per-role map: every reviewer runs the same model (Δ T).
- * @param maxTurns the FIXED deep-review turn budget for ALL reviewers (D26).
  * @param crossVendor the resolved cross-vendor slot (S5/C, resolveCodexCrossVendor)
  *   — stamped onto the manifest so the runner knows whether to run the
  *   quality-reviewer via `codex exec` (present) or report the absence verbatim.
@@ -105,15 +132,16 @@ export function panelRolesFor(dbApplicable: boolean): readonly SpawnRole[] {
  *   when `crossVendor.status === 'present'` (parseSpawnRequest fails loud
  *   otherwise); ignored when absent/omitted.
  *
- * The output is validated through {@link parseSpawnRequest}; an empty/blank
- * model or non-positive `maxTurns` therefore fails LOUDLY at the seam rather than
- * producing a malformed request. The result is provably independent of any
- * RiskTier because no tier is in scope.
+ * Neither `model` nor `max_turns` is a parameter here: each reviewer's model is
+ * the fixed per-role value ({@link REVIEWER_MODEL_BY_ROLE}), and `max_turns` is
+ * omitted from every agent spec entirely — the runner falls back to that agent's
+ * own frontmatter `maxTurns` (single-source-of-truth). The output is validated
+ * through {@link parseSpawnRequest}, so an empty/blank model therefore fails
+ * LOUDLY at the seam rather than producing a malformed request. The result is
+ * provably independent of any RiskTier because no tier is in scope.
  */
 export function buildPanelManifest(
     resumePhase: SpawnRequest['resume_phase'],
-    model: string,
-    maxTurns: number,
     crossVendor?: CrossVendorResolution,
     dbApplicable = false,
     crossVendorPrompt?: string
@@ -122,8 +150,7 @@ export function buildPanelManifest(
         role,
         agent_type: AGENT_TYPE_BY_ROLE[role],
         isolation: 'worktree' as const,
-        model,
-        max_turns: maxTurns,
+        model: reviewerModelFor(role),
     }))
     const cross_vendor =
         crossVendor === undefined
@@ -132,8 +159,8 @@ export function buildPanelManifest(
               ? ({status: 'present', model: crossVendor.slot.model, prompt: crossVendorPrompt} as const)
               : ({status: 'absent', reason: crossVendor.reason} as const)
     const verifier_spec: VerifierSpec = {
-        agent_type: GENERAL_PURPOSE_AGENT_TYPE,
-        model,
+        agent_type: FINDING_VERIFIER_AGENT_TYPE,
+        model: FINDING_VERIFIER_MODEL,
         isolation: 'worktree',
         prompt_template: VERIFIER_PROMPT_TEMPLATE,
         interpolate_fields: [...VERIFIER_INTERPOLATE_FIELDS],

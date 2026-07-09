@@ -57,7 +57,7 @@ export const AGENT_TYPE_BY_ROLE = {
     scribe: 'scribe',
 } as const satisfies Record<SpawnRole, string>
 
-/** Holdout-validator sidecar + finding-verifier — generic contexts, no bespoke agent. */
+/** Holdout-validator sidecar — a generic context, no bespoke agent. */
 export const GENERAL_PURPOSE_AGENT_TYPE = 'general-purpose'
 /** The e2e AUTHOR and ADJUDICATOR spawns (both `expects` arms) share one agent. */
 export const E2E_AUTHOR_AGENT_TYPE = 'e2e-author'
@@ -65,6 +65,9 @@ export const E2E_ASSESSOR_AGENT_TYPE = 'e2e-assessor'
 export const TRACEABILITY_AUDITOR_AGENT_TYPE = 'traceability-auditor'
 export const SPEC_GENERATOR_AGENT_TYPE = 'spec-generator'
 export const SPEC_REVIEWER_AGENT_TYPE = 'spec-reviewer'
+/** The independent finding-verifier (verify-then-fix, Decision 27) — its own agent
+ * (frontmatter-sourced model/effort/max_turns), not `general-purpose`. */
+export const FINDING_VERIFIER_AGENT_TYPE = 'finding-verifier'
 
 /**
  * One agent to spawn. `isolation` defaults to `"worktree"` (the normal case — the
@@ -80,8 +83,13 @@ export const AgentSpecSchema = z.object({
     isolation: z.enum(['worktree', 'none']).default('worktree'),
     /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
     model: z.string().min(1),
-    /** Hard turn budget for the agent (positive integer). */
-    max_turns: z.number().int().positive(),
+    /**
+     * Optional hard turn budget for the agent (positive integer). Omitted ⇒ the runner
+     * falls back to the agent's own frontmatter `maxTurns` (single-source-of-truth —
+     * mirrors how `effort` already works below). Set only when the engine deliberately
+     * overrides the frontmatter default.
+     */
+    max_turns: z.number().int().positive().optional(),
     /**
      * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
      * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —

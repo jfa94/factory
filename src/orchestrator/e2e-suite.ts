@@ -44,7 +44,6 @@ import {
     specPathMatches,
     unattributableToolingFailure,
     E2E_AUTHOR_MODEL,
-    E2E_AUTHOR_MAX_TURNS,
     MAX_AUTHOR_ATTEMPTS,
     type E2eAction,
     type E2eRunDeps,
@@ -148,7 +147,6 @@ export async function prepareAdjudicatorSpawn(
         staging_branch: staging,
         adjudicate_branch: branch,
         model: E2E_AUTHOR_MODEL,
-        max_turns: E2E_AUTHOR_MAX_TURNS,
         prompt: buildAdjudicationPrompt({worktree, boot, cursor, spec: deps.spec}),
     }
 }

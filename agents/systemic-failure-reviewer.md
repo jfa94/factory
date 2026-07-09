@@ -1,6 +1,8 @@
 ---
 name: systemic-failure-reviewer
 model: opus
+effort: medium
+maxTurns: 40
 description: 'Systemic-failure lens of the risk-invariant panel: stuck states, invariants without a repair path, unsafe recovery, and over-pinned cross-stage contracts — bugs that span multiple files or pipeline stages that no line-level reviewer sees. Runs in a fresh context; every finding requires ≥2 verbatim-verified anchors. Emits a RawReview JSON.'
 skills:
     - review-protocol

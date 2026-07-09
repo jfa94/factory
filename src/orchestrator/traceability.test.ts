@@ -70,7 +70,7 @@ describe('runTraceabilityEmit', () => {
         }
         expect(env.staging_branch).toBe(`staging-${RUN_ID}`)
         expect(env.base_ref).toBe('origin/develop')
-        expect(env.model).toBe('opus')
+        expect(env.model).toBe('sonnet')
         expect(env.worktree).toBe(traceWorktreePath(dataDir, RUN_ID))
         // TCB: worktrees/<runId>/, never runs/** (agent writes there are denied).
         expect(env.worktree).toContain(join('worktrees', RUN_ID))

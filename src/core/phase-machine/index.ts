@@ -23,6 +23,7 @@ export {
     TRACEABILITY_AUDITOR_AGENT_TYPE,
     SPEC_GENERATOR_AGENT_TYPE,
     SPEC_REVIEWER_AGENT_TYPE,
+    FINDING_VERIFIER_AGENT_TYPE,
 } from './spawn.js'
 export type {SpawnRole, AgentSpec, SpawnRequest, CrossVendorStamp, VerifierSpec} from './spawn.js'
 

@@ -28,7 +28,6 @@ export {
     SpecSchema,
     SPEC_DEFAULTS,
     ReviewSchema,
-    TestWriterSchema,
     CodexSchema,
     GitSchema,
     E2eConfigSchema,

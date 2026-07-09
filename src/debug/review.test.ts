@@ -14,8 +14,6 @@ describe('buildReviewManifest', () => {
     it("bundles buildPanelManifest's request with the debug-specific diff-scope fields", async () => {
         const result = await buildReviewManifest({
             resumePhase: 'verify',
-            model: 'opus',
-            maxTurns: 40,
             base: 'origin/main',
             worktree: '/tmp/debug-worktree',
             crossVendor: {status: 'present', slot: {vendor: 'codex', model: 'gpt-5-codex'}},
@@ -34,17 +32,18 @@ describe('buildReviewManifest', () => {
         expect(result.manifest.resume_phase).toBe('verify')
         const roles = result.manifest.agents.map((a) => a.role).sort()
         expect(roles).toEqual([...PANEL_ROLES].sort())
-        const models = new Set(result.manifest.agents.map((a) => a.model))
-        expect([...models]).toEqual(['opus'])
-        const turns = new Set(result.manifest.agents.map((a) => a.max_turns))
-        expect([...turns]).toEqual([40])
+        // Per-role reviewer model (Δ T reversal) — no maxTurns stamped (frontmatter governs).
+        for (const agent of result.manifest.agents) {
+            expect(agent.model).toBe(
+                agent.role === 'quality-reviewer' || agent.role === 'systemic-failure-reviewer' ? 'opus' : 'sonnet'
+            )
+            expect(agent.max_turns).toBeUndefined()
+        }
     })
 
     it('an absent resolution yields codexAvailable=false plus the exact reason (stamped on the manifest too)', async () => {
         const result = await buildReviewManifest({
             resumePhase: 'verify',
-            model: 'opus',
-            maxTurns: 40,
             base: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', // empty-tree SHA
             worktree: '/tmp/debug-worktree-2',
             crossVendor: {status: 'absent', reason: 'no cross-vendor model configured (codex.model)'},
@@ -56,19 +55,6 @@ describe('buildReviewManifest', () => {
             reason: 'no cross-vendor model configured (codex.model)',
         })
         expect(result.base).toBe('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
-    })
-
-    it('delegates validation to buildPanelManifest — a blank model fails LOUD, no new validation logic added', async () => {
-        await expect(
-            buildReviewManifest({
-                resumePhase: 'verify',
-                model: '',
-                maxTurns: 40,
-                base: 'origin/main',
-                worktree: '/tmp/debug-worktree',
-                crossVendor: {status: 'present', slot: {vendor: 'codex', model: 'gpt-5-codex'}},
-            })
-        ).rejects.toThrow()
     })
 })
 

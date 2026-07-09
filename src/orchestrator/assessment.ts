@@ -66,8 +66,7 @@ export type AssessmentAction =
 
 // Apex-pinned (Decision 40): the assessor's verdict can fail the whole run and its
 // machinery merges unreviewed — same rationale as the author/spec-generator pins.
-const ASSESSOR_MODEL = 'opus'
-const ASSESSOR_MAX_TURNS = 60
+const ASSESSOR_MODEL = 'sonnet'
 
 /** Spawn attempts before a crashing/misbehaving assessor fails the run loud. */
 // ponytail: 2 mirrors MAX_DOCS_ATTEMPTS — one retry covers a flake, more just delays the verdict
@@ -203,7 +202,6 @@ export async function runAssessmentEmit(deps: AssessmentRunDeps, runId: string):
         staging_branch: staging,
         assess_branch: branch,
         model: ASSESSOR_MODEL,
-        max_turns: ASSESSOR_MAX_TURNS,
         prompt: buildAssessorPrompt({
             worktree,
             testDir: deps.config.e2e.testDir,

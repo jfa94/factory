@@ -418,6 +418,8 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 ## Decision 18: Reviewer Model is Fixed, Not Quota-Routed
 
 > **Refined by Decision 21** (layered model/effort): the "fixed, not quota-routed" principle stands; the canonical tier becomes Opus and an effort dimension is added.
+>
+> **Refined again by [Decision 64](#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)** (per-role reviewer model): "fixed, not quota-routed" still stands — reviewer model is keyed on **role**, never risk tier — but the _one-model-for-every-reviewer_ implementation (internally **Δ T**) is reversed in favour of a per-role model map. The operator override this decision added (`review.model` over the whole reviewer surface) is retired for the panel: `review.model` now overrides only the holdout-validator sidecar.
 
 **Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`, `security-reviewer`, `architecture-reviewer`) spawn with a fixed model. They do not consult `pipeline-model-router`. Default is `sonnet`; operator can override the entire reviewer surface via `package.json.factory.review.model` (and the parallel `review.maxTurnsDeep` / `review.maxTurnsQuick` / `testWriter.maxTurns` knobs).
 
@@ -483,13 +485,20 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ## Decision 21: Layered Model/Effort Allocation
 
+> **Amended (2026-07-09) — apex effort `max` → `xhigh`.** The spec-apex pin's effort
+> was lowered one notch, from `max` to `xhigh` (`APEX_EFFORT` in `src/spec/agents.ts`;
+> `APEX_MODEL` stays `opus`). This is a value tuning of the same apex-pin concept — the
+> pin itself (unconditional, hard-const, non-config; Decision 45) is unchanged, so it is
+> an amendment, not a new decision. Read "Max" below as `xhigh`. The wider per-agent
+> model/effort/turns tuning it landed with is [Decision 63](#decision-63--per-agent-dial-pinning--max_turns-single-sourced-to-frontmatter).
+
 **Choice:** Allocate model tier and reasoning effort per layer by each layer's role in the quality chain:
 
-| Layer                      | Model                       | Effort  |
-| -------------------------- | --------------------------- | ------- |
-| Spec (generation + review) | Opus                        | **Max** |
-| Verifier (reviewers)       | Opus                        | Default |
-| Producer (implementer)     | **Adaptive** (by task risk) | Default |
+| Layer                      | Model                       | Effort    |
+| -------------------------- | --------------------------- | --------- |
+| Spec (generation + review) | Opus                        | **xhigh** |
+| Verifier (reviewers)       | Opus                        | Default   |
+| Producer (implementer)     | **Adaptive** (by task risk) | Default   |
 
 **Why:**
 
@@ -2388,6 +2397,148 @@ gone) returns to needing a human `/factory:resume` — the pre-sentinel behavior
 vestigial wait-config keys (`sleepCapSec`/`maxWaitCycles`/`wallBudgetMin`) are pruned: the
 self-bounded wait needs no knobs. Scope is the main PAUSE CONVERGENCE path; run-level
 e2e/traceability/docs stage suspends still STOP.
+
+---
+
+## Decision 63 — Per-Agent Dial Pinning + max_turns Single-Sourced to Frontmatter
+
+**Date:** 2026-07-09
+
+**Context:** The pipeline spawns ~16 subagents, each with three cost dials — `model`,
+`effort`, `max_turns`. The dials were inconsistent and mostly _inherited_ rather than
+explicitly pinned, and `max_turns` in particular was scattered across **five** places:
+agent frontmatter, two config fields (`review.maxTurnsDeep` / `review.maxTurnsQuick`),
+one config block (`testWriter.maxTurns`), four hardcoded consts (`TRACE_MAX_TURNS`,
+`DOCS_MAX_TURNS`, `ASSESSOR_MAX_TURNS`, `E2E_AUTHOR_MAX_TURNS`), and "nothing" for a few
+unbounded agents. The scatter created a live **dead-frontmatter trap**: `implementer.md`
+declared `maxTurns: 60` but the engine stamped `30`, so the frontmatter value was dead.
+
+**Decision:**
+
+- **Pin all three dials explicitly, per agent, in frontmatter** — trimmed where the
+  reasoning load is light, kept strong where quality is critical (`haiku` avoided by prior
+  feedback). The agreed allocation:
+
+    | Agent                     | model                         | effort | max_turns |
+    | ------------------------- | ----------------------------- | ------ | --------- |
+    | spec-generator            | opus                          | xhigh  | 60        |
+    | spec-reviewer             | opus                          | xhigh  | 30        |
+    | test-writer               | opus (pinned, risk-invariant) | high   | 30        |
+    | implementer               | sonnet→opus (tiered dial)     | medium | 50        |
+    | quality-reviewer          | opus                          | high   | 40        |
+    | systemic-failure-reviewer | opus                          | medium | 40        |
+    | implementation-reviewer   | sonnet                        | medium | 40        |
+    | database-design-reviewer  | opus                          | medium | 40        |
+    | silent-failure-hunter     | sonnet                        | medium | 40        |
+    | finding-verifier          | sonnet                        | high   | 30        |
+    | traceability-auditor      | sonnet                        | medium | 60        |
+    | scribe                    | sonnet                        | medium | 60        |
+    | e2e-assessor              | sonnet                        | medium | 60        |
+    | e2e-author                | sonnet                        | medium | 90        |
+    | rescue-diagnostic         | sonnet                        | medium | 30        |
+    | rescue-reconciler         | sonnet                        | medium | 30        |
+
+- **`max_turns` is single-sourced to frontmatter.** `AgentSpecSchema.max_turns`
+  (`src/core/phase-machine/spawn.ts`) and `StageSpawnBase.max_turns` are now both
+  `optional()`. The engine **never stamps** `max_turns` on a spawn-manifest entry; when it
+  is absent the runner (`skills/pipeline-runner/SKILL.md`) omits it at spawn, so the
+  agent's own frontmatter `maxTurns:` governs — the same fallback pattern `effort` already
+  uses. Every engine build site that used to stamp it (`buildPanelManifest`, `producerSpawn`,
+  and the single-agent requests in `traceability.ts` / `docs.ts` / `assessment.ts` /
+  `e2e-author.ts` / `e2e-suite.ts`) drops the field. This deletes the dead-frontmatter trap
+  by construction — the frontmatter value is now the only value.
+
+- **Config + consts deleted.** `review.maxTurnsDeep`, `review.maxTurnsQuick`, the whole
+  `testWriter` block (`TestWriterSchema`), `JudgmentConfig.maxTurnsDeep`, and the four
+  `*_MAX_TURNS` consts are removed. Turn budgets are **no longer overridable via
+  `/factory:configure`** — they are plugin-author-owned in frontmatter (the accepted
+  trade-off). Stale on-disk overlays keep loading (ConfigSchema strips unknown keys).
+
+- **One deliberate carve-out.** The holdout-validator sidecar (`HoldoutSpawn`,
+  `src/orchestrator/orchestrator.ts`) spawns as generic `general-purpose` with no bespoke
+  agent file to fall back to, so its cap stays a local const `HOLDOUT_MAX_TURNS = 40` — the
+  single documented exception to the single-source rule.
+
+- **Standalone model trims (opus → sonnet).** `traceability-auditor`, `scribe` (the docs
+  stage), `e2e-assessor`, and `e2e-author` moved from opus to sonnet in the same cost-tuning
+  pass. The e2e pair was apex-pinned opus by
+  [Decision 40](#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)
+  (D3/D4/D5); that pin is relaxed to sonnet here — these lenses are auxiliary, not the merge
+  gate, so they are cost-flex points.
+
+- **Scope of single-sourcing.** Only `max_turns` becomes single-source. `effort` stays
+  **two-layer by design** — frontmatter default + engine override for the spec apex pin
+  (Decision 21) and the producer escalation ladder (Decision 25). `model` stays
+  engine-authoritative where tier/role logic requires it: the producer keeps its tiered
+  `sonnet→opus` dial, `test-writer` is pinned opus regardless of task risk (config-driven
+  ceiling in `producerSpawn`), and the panel model is per-role (Decision 64).
+
+- **finding-verifier promoted to a first-class agent (STUB).** Previously the independent
+  finding-verifier (verify-then-fix, Decision 27) ran as generic `general-purpose` with no
+  frontmatter, tracking the reviewer panel's model. It is now a real agent file
+  `agents/finding-verifier.md` (`model: sonnet`, `effort: high`, `maxTurns: 30`,
+  `isolation: worktree`), decoupled from the panel's model. Its spawn points at the new
+  `FINDING_VERIFIER_AGENT_TYPE` const (`src/core/phase-machine/spawn.ts`). Per-finding
+  prompts still come from `VERIFIER_PROMPT_TEMPLATE` at spawn; the agent-file body is the
+  standing system prompt and currently a **STUB** (a `TODO(user)` marks where the full
+  verification discipline is authored later) — see the known-gap note below.
+
+**Consequences:** Each agent's turn cap lives in exactly one place — its own frontmatter —
+and the "declared 60 / stamped 30" class of bug cannot recur. The config surface shrinks to
+only keys the engine actually reads. Reviewer/producer turn budgets are no longer
+operator-tunable; accepted as the price of a single source of truth.
+
+**Known gap:** `agents/finding-verifier.md` ships as a **stub** — the full verification
+discipline (process, red flags, output-contract detail beyond the runner-supplied template)
+is a `TODO(user)` for a follow-up session, not finished work. Until then the per-finding
+`VERIFIER_PROMPT_TEMPLATE` carries the operative instructions.
+
+**Relationship:** Amends Decision 21 (apex effort `max`→`xhigh`); carries the per-role
+reviewer-model change (Decision 64); extends Decision 27 (the finding-verifier it promotes);
+relaxes Decision 40's e2e apex pin.
+
+---
+
+## Decision 64 — Per-Role Reviewer Model Reverses the Single-Fixed-Reviewer Model
+
+**Date:** 2026-07-09
+
+**Context:** The risk-invariant review panel (Decision 26) stamped **one** fixed model on
+**every** reviewer — the single-fixed-reviewer-model implementation (internally **Δ T**),
+which realised the "reviewer model is fixed, not quota-routed" principle of Decisions
+18/21/26 by holding the model literally constant across the whole panel. The independent
+finding-verifier (Decision 27) and the holdout-validator both tracked that same panel model.
+Uniform Opus across the panel was the single largest happy-path quota spend, yet the
+narrower-scoped lenses (spec-alignment, silent-failure) do not need apex reasoning.
+
+**Decision:**
+
+- **Per-role reviewer model.** `src/verifier/judgment/panel.ts` replaces the single stamped
+  model with a `REVIEWER_MODEL_BY_ROLE` map: **opus** for the deepest-reasoning lenses
+  (`quality-reviewer`, `systemic-failure-reviewer`, `database-design-reviewer`), **sonnet**
+  for the narrower ones (`implementation-reviewer`, `silent-failure-hunter`). The map is
+  keyed **only on role, never on risk tier**, so the merge gate stays **risk-invariant**
+  (Decision 26) — this is additive precision, not a break of that invariant. Producer roles
+  are never looked up here.
+
+- **The single-model implementation (Δ T) is SUPERSEDED.** "Fixed, not quota-routed"
+  (Decision 18) still holds — reviewer model is a fixed function of role, independent of a
+  task's risk — but the _one-model-for-every-reviewer_ realisation is gone.
+
+- **finding-verifier and holdout decoupled.** The finding-verifier now runs on its own fixed
+  `sonnet` (`FINDING_VERIFIER_MODEL`, plus its own agent file — Decision 63), no longer the
+  reviewer model. `review.model` config is retired for the panel and now overrides **only**
+  the `general-purpose` holdout-validator sidecar (`resolveReviewModel`,
+  `src/orchestrator/orchestrator.ts`).
+
+**Consequences:** The panel spends apex tokens only on the lenses that need them; the
+narrower lenses run cheaper on sonnet, with no loss of risk-invariance — a mis-tagged task
+still meets the identical panel. Reviewer model is now a per-role constant in code, not a
+run-level config knob.
+
+**Relationship:** Refines Decision 18 (fixed, not quota-routed) and Decision 21 (canonical
+verifier tier); preserves Decision 26 (risk-invariant merge gate); landed alongside
+Decision 63's dial-pinning pass.
 
 ---
 

@@ -5,6 +5,7 @@ skills:
     - test-driven-development
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
+effort: high
 maxTurns: 30
 ---
 

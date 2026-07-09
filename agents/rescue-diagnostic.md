@@ -3,6 +3,8 @@ name: rescue-diagnostic
 description: Read-only diagnostic agent that investigates ONE ambiguous dropped (dead-end) task in a factory pipeline run and returns a structured reset / leave-dropped recommendation. Reasons over the rescue scan line + ground truth (worktree, review files, CI logs); never writes state, never edits code, never runs git/gh/Bash. Its final message IS the decision JSON the runner consumes.
 tools: Read, Grep, Glob
 model: sonnet
+effort: medium
+maxTurns: 30
 ---
 
 # rescue-diagnostic

@@ -136,12 +136,10 @@ is deliberately **not** a config key: it is an _unconditional_ pin, hard consts 
 
 The judgment panel.
 
-| Key                  | Type                | Default | Meaning                                                                                                                                                                                                                                                                                                                            |
-| -------------------- | ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | string (optional)   | —       | Reviewer model id (panel runs on a fixed model, Decision 26).                                                                                                                                                                                                                                                                      |
-| `maxTurnsDeep`       | int >0              | `40`    | Max turns for a deep review pass.                                                                                                                                                                                                                                                                                                  |
-| `maxTurnsQuick`      | int >0              | `20`    | Max turns for a quick review pass.                                                                                                                                                                                                                                                                                                 |
-| `requireCrossVendor` | `"warn" \| "block"` | `warn`  | Policy when no cross-vendor (Codex) reviewer ran on the advancing verify pass ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)). `warn` records the absence loudly; `block` additionally fails the merge gate so a task cannot ship single-vendor. |
+| Key                  | Type                | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------- | ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`              | string (optional)   | —       | **Holdout-validator model override only.** The review panel no longer reads this key — each reviewer runs on a fixed **per-role** model ([Decision 64](../explanation/decisions.md#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)). It now only overrides the `general-purpose` holdout-validator sidecar's model (`resolveReviewModel`, consumed at `src/orchestrator/orchestrator.ts`); unset ⇒ the documented fallback. |
+| `requireCrossVendor` | `"warn" \| "block"` | `warn`  | Policy when no cross-vendor (Codex) reviewer ran on the advancing verify pass ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)). `warn` records the absence loudly; `block` additionally fails the merge gate so a task cannot ship single-vendor.                                                                                                                         |
 
 Cross-vendor availability is **probed at spawn time** (`codex --version`, memoized),
 never inferred from config presence — the engine stamps `cross_vendor` on the verify
@@ -157,11 +155,14 @@ See [verifier.md](../explanation/verifier.md).
 > `factory configure --set review.requireCrossVendor=block` (writes
 > `$CLAUDE_PLUGIN_DATA/config.json`, not the repo).
 
-## `testWriter`
-
-| Key        | Type   | Default | Meaning                         |
-| ---------- | ------ | ------- | ------------------------------- |
-| `maxTurns` | int >0 | `30`    | Max turns for a producer agent. |
+> **Turn budgets are no longer configurable here.** The former `review.maxTurnsDeep` /
+> `review.maxTurnsQuick` keys and the whole `testWriter` block are **deleted**. Every
+> agent's turn cap (`max_turns`) is now single-sourced to its own frontmatter
+> (`agents/*.md` `maxTurns:`) — the engine never stamps it, so it is plugin-author-owned,
+> not operator-tunable ([Decision 63](../explanation/decisions.md#decision-63--per-agent-dial-pinning--max_turns-single-sourced-to-frontmatter)).
+> The one carve-out is the `general-purpose` holdout-validator sidecar, whose cap is the
+> `HOLDOUT_MAX_TURNS` const in `src/orchestrator/orchestrator.ts` (no frontmatter to fall
+> back to).
 
 ## `codex`
 

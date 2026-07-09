@@ -40,7 +40,7 @@ export interface ProducerSpawn {
      * (model-dial.ts). NEVER a hardcoded model id.
      */
     readonly model: string
-    /** Max agent turns (config.testWriter.maxTurns / a producer cap). */
+    /** Max agent turns (a producer cap; frontmatter is the source of truth — see AgentSpecSchema). */
     readonly maxTurns: number
     /** Structured prompt context (prompt-context.ts assembles it). */
     readonly context: ProducerContext

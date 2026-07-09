@@ -1,6 +1,8 @@
 ---
 name: quality-reviewer
 model: opus
+effort: high
+maxTurns: 40
 description: 'Adversarial code-quality lens of the risk-invariant panel — the merged charter (Decision 43): logic errors, edge cases, test quality, and AI anti-patterns, plus the folded security (source→sink exploitability), architecture (boundaries/coupling), and type-design (illegal states) dimensions. Runs in a fresh context to avoid author-bias rubber-stamping. Codex is the preferred executor when available. Emits a RawReview JSON.'
 skills:
     - review-protocol

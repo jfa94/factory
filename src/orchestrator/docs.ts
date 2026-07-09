@@ -22,8 +22,7 @@ export type DocsAction =
     | StageDone
     | StageSuspend
 
-const DOCS_MODEL = 'opus'
-const DOCS_MAX_TURNS = 60
+const DOCS_MODEL = 'sonnet'
 
 /**
  * Maximum docs-phase attempts before the run treats docs as best-effort and finalizes
@@ -85,7 +84,6 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
         staging_branch: staging,
         docs_branch: docsBranch,
         model: DOCS_MODEL,
-        max_turns: DOCS_MAX_TURNS,
         prompt: buildScribePrompt(worktree, baseRef),
     }
 }

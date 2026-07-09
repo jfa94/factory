@@ -1,6 +1,8 @@
 ---
 name: implementation-reviewer
-model: opus
+model: sonnet
+effort: medium
+maxTurns: 40
 description: "Verifies the implementation satisfies the spec's intent, not merely that tests pass. A risk-invariant panel member; checks every acceptance criterion is genuinely addressed by tracing the end-to-end path through the diff. Emits a RawReview JSON."
 skills:
     - review-protocol

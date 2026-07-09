@@ -5,6 +5,12 @@ import {at} from '../../shared/index.js'
 
 const ALL_TIERS: readonly RiskTier[] = RiskTierEnum.options
 
+/** The fixed per-role reviewer model (Δ T reversal) — mirrors panel.ts's own map. */
+const OPUS_ROLES = new Set(['quality-reviewer', 'systemic-failure-reviewer', 'database-design-reviewer'])
+function expectedModelFor(role: string): string {
+    return OPUS_ROLES.has(role) ? 'opus' : 'sonnet'
+}
+
 describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
     it('D43: panel is EXACTLY the 4 fixed consolidated roles', () => {
         expect([...PANEL_ROLES].sort()).toEqual(
@@ -13,52 +19,42 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         expect(PANEL_ROLES.length).toBe(4)
     })
 
-    it('D26 / Δ T: membership, model, and max_turns are IDENTICAL across all risk tiers', () => {
+    it('D26 / Δ T: membership + per-role model are IDENTICAL across all risk tiers; no max_turns stamped', () => {
         // The function has no RiskTier parameter — invariance is structural. We prove
         // it by building one request per tier (membership is the SAME regardless) and
         // asserting deep equality. Exhaustive over the closed RiskTier set (= property
         // test over the finite domain; fast-check is not a dep here).
-        const manifests = ALL_TIERS.map(() => buildPanelManifest('verify', 'opus', 40))
+        const manifests = ALL_TIERS.map(() => buildPanelManifest('verify'))
         const first = at(manifests, 0)
         for (const m of manifests) {
             expect(m).toEqual(first)
         }
-        // And the model is a SINGLE fixed value for every reviewer.
-        const models = new Set(first.agents.map((a) => a.model))
-        expect(models.size).toBe(1)
-        expect(at([...models], 0)).toBe('opus')
-        // Fixed depth: one max_turns for all.
-        const turns = new Set(first.agents.map((a) => a.max_turns))
-        expect(turns.size).toBe(1)
-        expect(at([...turns], 0)).toBe(40)
+        // Each reviewer runs its FIXED per-role model (Δ T reversal — no longer a
+        // single value for every reviewer).
+        for (const agent of first.agents) {
+            expect(agent.model).toBe(expectedModelFor(agent.role))
+            expect(agent.max_turns).toBeUndefined()
+        }
     })
 
     it('D26: every panel role appears exactly once in the request', () => {
-        const m = buildPanelManifest('verify', 'opus', 40)
+        const m = buildPanelManifest('verify')
         const roles = m.agents.map((a) => a.role).sort()
         expect(roles).toEqual([...PANEL_ROLES].sort())
         expect(new Set(roles).size).toBe(roles.length)
     })
 
     it('WS2 coherence: the request validates through the frozen parseSpawnRequest', () => {
-        const m = buildPanelManifest('verify', 'opus', 40)
+        const m = buildPanelManifest('verify')
         expect(() => parseSpawnRequest(m)).not.toThrow()
         expect(m.resume_phase).toBe('verify')
     })
 
-    it('Δ T: a blank model fails LOUD at the seam (no malformed request)', () => {
-        expect(() => buildPanelManifest('verify', '', 40)).toThrow()
-    })
-
-    it('D26: a non-positive max_turns fails LOUD at the seam', () => {
-        expect(() => buildPanelManifest('verify', 'opus', 0)).toThrow()
-    })
-
     describe('3b(iii) verifier_spec template', () => {
         it('stamps agent_type/model/isolation/prompt_template/interpolate_fields on every manifest', () => {
-            const m = buildPanelManifest('verify', 'opus', 40)
-            expect(m.verifier_spec?.agent_type).toBe('general-purpose')
-            expect(m.verifier_spec?.model).toBe('opus')
+            const m = buildPanelManifest('verify')
+            expect(m.verifier_spec?.agent_type).toBe('finding-verifier')
+            expect(m.verifier_spec?.model).toBe('sonnet')
             expect(m.verifier_spec?.isolation).toBe('worktree')
             expect(m.verifier_spec?.prompt_template).toContain('{reviewer}')
             expect(m.verifier_spec?.interpolate_fields).toEqual([
@@ -72,14 +68,18 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         })
 
         it('never interpolates {description} — anti-anchoring (D27)', () => {
-            const m = buildPanelManifest('verify', 'opus', 40)
+            const m = buildPanelManifest('verify')
             expect(m.verifier_spec?.interpolate_fields).not.toContain('description')
             expect(m.verifier_spec?.prompt_template).not.toContain('{description}')
         })
 
-        it('reuses the SAME model as the reviewer panel (Δ T)', () => {
-            const m = buildPanelManifest('verify', 'sonnet', 40)
+        it("the finding-verifier's model is decoupled from the reviewer panel (fixed sonnet)", () => {
+            const m = buildPanelManifest('verify')
             expect(m.verifier_spec?.model).toBe('sonnet')
+            // Independent of any reviewer's model — quality-reviewer runs opus, the
+            // verifier still runs sonnet.
+            const quality = m.agents.find((a) => a.role === 'quality-reviewer')
+            expect(quality?.model).toBe('opus')
         })
     })
 
@@ -87,8 +87,6 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         it("present resolution stamps { status: 'present', model, prompt } from the slot", () => {
             const m = buildPanelManifest(
                 'verify',
-                'opus',
-                40,
                 {status: 'present', slot: {vendor: 'codex', model: 'gpt-5-codex'}},
                 false,
                 'the composed codex prompt'
@@ -102,7 +100,7 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
 
         it('a present resolution with no crossVendorPrompt fails LOUD (never spawns codex blind)', () => {
             expect(() =>
-                buildPanelManifest('verify', 'opus', 40, {
+                buildPanelManifest('verify', {
                     status: 'present',
                     slot: {vendor: 'codex', model: 'gpt-5-codex'},
                 })
@@ -110,7 +108,7 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         })
 
         it("absent resolution stamps { status: 'absent', reason } verbatim", () => {
-            const m = buildPanelManifest('verify', 'opus', 40, {
+            const m = buildPanelManifest('verify', {
                 status: 'absent',
                 reason: 'no cross-vendor model configured (codex.model)',
             })
@@ -121,16 +119,16 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
         })
 
         it('no resolution ⇒ no stamp (key absent, not undefined-valued)', () => {
-            const m = buildPanelManifest('verify', 'opus', 40)
+            const m = buildPanelManifest('verify')
             expect('cross_vendor' in m).toBe(false)
         })
 
-        it('the stamp never changes panel membership, model, or turns', () => {
-            const stamped = buildPanelManifest('verify', 'opus', 40, {
+        it('the stamp never changes panel membership or model', () => {
+            const stamped = buildPanelManifest('verify', {
                 status: 'absent',
                 reason: 'r',
             })
-            const bare = buildPanelManifest('verify', 'opus', 40)
+            const bare = buildPanelManifest('verify')
             expect(stamped.agents).toEqual(bare.agents)
         })
     })
@@ -147,24 +145,24 @@ describe('WS7 risk-invariant panel (D26 / Δ T)', () => {
             expect(at(roles, roles.length - 1)).toBe(DB_DESIGN_ROLE)
         })
 
-        it('dbApplicable=true builds a 5-agent manifest with the SAME model + turns for the specialist', () => {
-            const m = buildPanelManifest('verify', 'opus', 40, undefined, true)
+        it('dbApplicable=true builds a 5-agent manifest with the specialist on its fixed model', () => {
+            const m = buildPanelManifest('verify', undefined, true)
             expect(m.agents).toHaveLength(PANEL_ROLES.length + 1)
             const db = m.agents.find((a) => a.role === DB_DESIGN_ROLE)
             expect(db).toBeDefined()
             expect(db?.model).toBe('opus')
-            expect(db?.max_turns).toBe(40)
+            expect(db?.max_turns).toBeUndefined()
             expect(db?.isolation).toBe('worktree')
             expect(() => parseSpawnRequest(m)).not.toThrow()
         })
 
         it('dbApplicable defaults to false — pre-existing callers keep the exact floor', () => {
-            expect(buildPanelManifest('verify', 'opus', 40).agents.map((a) => a.role)).toEqual([...PANEL_ROLES])
+            expect(buildPanelManifest('verify').agents.map((a) => a.role)).toEqual([...PANEL_ROLES])
         })
 
         it('additive-only: the floor agents are byte-identical with and without the specialist', () => {
-            const withDb = buildPanelManifest('verify', 'opus', 40, undefined, true)
-            const bare = buildPanelManifest('verify', 'opus', 40)
+            const withDb = buildPanelManifest('verify', undefined, true)
+            const bare = buildPanelManifest('verify')
             expect(withDb.agents.slice(0, PANEL_ROLES.length)).toEqual(bare.agents)
         })
     })

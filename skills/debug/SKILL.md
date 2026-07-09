@@ -116,10 +116,11 @@ Emits:
 }
 ```
 
-`manifest` is `buildPanelManifest("verify", <reviewModel>, <maxTurnsDeep>)` —
-**identical construction** to the per-task verify phase's panel (Δ T/Δ K: the panel
-is risk-invariant, same model + turn budget for every reviewer, no debug-specific
-variant). Spawn the panel (all 4 in one assistant message), run the cross-vendor
+`manifest` is `buildPanelManifest("verify")` — **identical construction** to the
+per-task verify phase's panel (Δ K: the panel is risk-invariant, same fixed
+per-role model for every reviewer, no debug-specific variant; each reviewer's
+turn budget comes from its own frontmatter, not the manifest). Spawn the panel
+(all 4 in one assistant message), run the cross-vendor
 quality-reviewer recipe, and verify-then-fix EXACTLY per
 `skills/pipeline-runner/SKILL.md`'s `expects: "reviews"` steps 2–3 (each entry's
 `agent_type` verbatim, isolation `"worktree"`, model-alias mapped) — reused, not

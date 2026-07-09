@@ -115,6 +115,7 @@ export {
     TRACEABILITY_AUDITOR_AGENT_TYPE,
     SPEC_GENERATOR_AGENT_TYPE,
     SPEC_REVIEWER_AGENT_TYPE,
+    FINDING_VERIFIER_AGENT_TYPE,
     // result union: exhaustiveness primitive + constructors
     assertNever,
     isTerminalResult,

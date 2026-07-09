@@ -2,7 +2,8 @@
 name: e2e-author
 description: Explores the live staging app via the Playwright MCP tools and authors Playwright end-to-end journey specs — one throwaway spec per user-facing task (ephemeral, never committed) plus a small critical money-path suite (committed, load-bearing). Spawned once by the run-level e2e phase (Decision 39); self-validates every spec green, then returns a spec→task manifest via --results.
 tools: Read, Write, Edit, Bash, Grep, Glob, mcp__plugin_playwright_playwright__browser_navigate, mcp__plugin_playwright_playwright__browser_snapshot, mcp__plugin_playwright_playwright__browser_click, mcp__plugin_playwright_playwright__browser_type, mcp__plugin_playwright_playwright__browser_fill_form, mcp__plugin_playwright_playwright__browser_select_option, mcp__plugin_playwright_playwright__browser_press_key, mcp__plugin_playwright_playwright__browser_hover, mcp__plugin_playwright_playwright__browser_wait_for, mcp__plugin_playwright_playwright__browser_evaluate, mcp__plugin_playwright_playwright__browser_console_messages, mcp__plugin_playwright_playwright__browser_network_requests, mcp__plugin_playwright_playwright__browser_take_screenshot, mcp__plugin_playwright_playwright__browser_close
-model: opus
+model: sonnet
+effort: medium
 maxTurns: 90
 ---
 

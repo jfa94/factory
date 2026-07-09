@@ -189,7 +189,7 @@ describe('resolveSpec', () => {
 
         expect(env.spawn.role).toBe('spec-generator')
         expect(env.spawn.model).toBe('opus')
-        expect(env.spawn.effort).toBe('max')
+        expect(env.spawn.effort).toBe('xhigh')
         expect(env.max_iterations).toBe(SPEC_DEFAULTS.maxRegenIterations)
         expect(env.generated_path.endsWith('generated.json')).toBe(true)
 

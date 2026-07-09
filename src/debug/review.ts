@@ -67,8 +67,6 @@ export interface DebugReviewManifest {
  */
 export async function buildReviewManifest(opts: {
     readonly resumePhase: SpawnRequest['resume_phase']
-    readonly model: string
-    readonly maxTurns: number
     readonly base: string
     readonly worktree: string
     /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
@@ -82,14 +80,7 @@ export async function buildReviewManifest(opts: {
                   worktree: opts.worktree,
               })
             : undefined
-    const manifest = buildPanelManifest(
-        opts.resumePhase,
-        opts.model,
-        opts.maxTurns,
-        opts.crossVendor,
-        false,
-        crossVendorPrompt
-    )
+    const manifest = buildPanelManifest(opts.resumePhase, opts.crossVendor, false, crossVendorPrompt)
     return {
         manifest,
         base: opts.base,

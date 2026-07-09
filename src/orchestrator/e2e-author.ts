@@ -23,7 +23,6 @@ import {
     errText,
     markFailed,
     E2E_AUTHOR_MODEL,
-    E2E_AUTHOR_MAX_TURNS,
     MAX_AUTHOR_ATTEMPTS,
     type E2eAction,
     type E2eRunDeps,
@@ -111,7 +110,6 @@ export async function prepareAuthorSpawn(
         e2e_branch: branch,
         throwaway_dir: throwawayDir,
         model: E2E_AUTHOR_MODEL,
-        max_turns: E2E_AUTHOR_MAX_TURNS,
         prompt: buildAuthorPrompt({
             worktree,
             baseRef,

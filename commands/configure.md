@@ -95,15 +95,17 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 
 | Key                  | Default | Meaning                                                                                                                                             |
 | -------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | —       | Reviewer model override (panel is risk-invariant)                                                                                                   |
-| `maxTurnsDeep`       | 40      | Max turns for a deep review pass                                                                                                                    |
-| `maxTurnsQuick`      | 20      | Max turns for a quick review pass                                                                                                                   |
+| `model`              | —       | Holdout-validator model override only — the panel now stamps a fixed per-role model (Δ T reversal) and no longer reads this key                     |
 | `requireCrossVendor` | warn    | Second-vendor reviewer policy (Δ U/S5): `warn` surfaces an absence in the report/summary; `block` fails the merge gate until Codex actually reviews |
 
 > `requireCrossVendor` needs `codex.model` set AND the `codex` CLI installed —
 > the engine probes `codex --version` and stamps the verify manifest; with
 > `block` + no working Codex, verify wait-retries instead of shipping
 > single-vendor.
+>
+> Reviewer/producer turn budgets (`max_turns`) are no longer config — each
+> agent's own frontmatter (`agents/*.md` `maxTurns:`) is the single source of
+> truth (not overridable via `/factory:configure`).
 
 ### E2E phase (`e2e.*`, Decisions 39 + 40)
 
@@ -142,7 +144,7 @@ producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by ri
 
 ### Other roots
 
-`testWriter.maxTurns` (30), `codex.model` (—), `maxConsecutiveFailures` (3 — the
+`codex.model` (—), `maxConsecutiveFailures` (3 — the
 circuit-breaker FLOOR; effective threshold `max(floor, ceil(0.15 × total tasks))`),
 `maxParallelTasks` (3 — max tasks the runner drives in flight; emitted as
 `max_parallel` on the work envelope).

@@ -80,7 +80,9 @@ ships a real defect silently. Making the merge gate risk-invariant removes
 classification error from the verifier's blast radius: the panel is the panel,
 regardless of how the task was tiered. The reviewer model is fixed (not
 quota-routed) for the same reason — review quality must not degrade under quota
-pressure.
+pressure. "Fixed" now means a fixed **per-role** model (opus for the deepest-reasoning
+lenses, sonnet for the narrower ones), keyed on role and never on risk tier, so
+risk-invariance still holds ([Decision 64](./decisions.md#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)).
 
 "The panel is the panel" is enforced structurally, not just intended. The merge-gate
 verdict is unanimity over whatever reviews arrive, so a partial all-approve **subset**
@@ -186,7 +188,7 @@ task:
    reviewer's `description` reasoning chain, so it can't be led to the same
    wrong conclusion. The finding-verifier is spawned from the manifest's
    `verifier_spec` **template** (`{ agent_type, model, isolation, prompt_template,
-   interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
+interpolate_fields }`, stamped by `buildPanelManifest`), not from a runner-side
    hardcoded agent-type/model/isolation — the finding set is only known after the panel
    returns, so the engine ships the fixed framing with `{field}` placeholders and the
    runner substitutes exactly `interpolate_fields` per finding. This closes the last

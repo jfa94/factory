@@ -119,6 +119,7 @@ export {
     buildCheckpoint,
     buildUnavailableCheckpoint,
     clearCheckpoint,
+    selectProducerModel,
 } from '../quota/index.js'
 export type {QuotaDecision, UsageSignal, UsageReading} from '../quota/index.js'
 

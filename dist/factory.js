@@ -6200,10 +6200,6 @@ var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var ReviewSchema = external_exports.object({
   /** Reviewer model id (panel runs on a fixed model per Decision 26). */
   model: external_exports.string().optional(),
-  /** Max turns for a deep review pass. */
-  maxTurnsDeep: external_exports.number().int().positive().default(40),
-  /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20),
   /**
    * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
    * `warn` records the absence loudly (task state + report + summary);
@@ -6211,9 +6207,6 @@ var ReviewSchema = external_exports.object({
    * independent second-vendor review.
    */
   requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
-}).default({});
-var TestWriterSchema = external_exports.object({
-  maxTurns: external_exports.number().int().positive().default(30)
 }).default({});
 var CodexSchema = external_exports.object({
   model: external_exports.string().optional()
@@ -6296,7 +6289,6 @@ var ConfigSchema = external_exports.object({
   quota: QuotaSchema,
   spec: SpecSchema,
   review: ReviewSchema,
-  testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
   e2e: E2eConfigSchema,
@@ -8039,6 +8031,7 @@ var E2E_ASSESSOR_AGENT_TYPE = "e2e-assessor";
 var TRACEABILITY_AUDITOR_AGENT_TYPE = "traceability-auditor";
 var SPEC_GENERATOR_AGENT_TYPE = "spec-generator";
 var SPEC_REVIEWER_AGENT_TYPE = "spec-reviewer";
+var FINDING_VERIFIER_AGENT_TYPE = "finding-verifier";
 var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
@@ -8048,8 +8041,13 @@ var AgentSpecSchema = external_exports.object({
   isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
   /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
   model: external_exports.string().min(1),
-  /** Hard turn budget for the agent (positive integer). */
-  max_turns: external_exports.number().int().positive(),
+  /**
+   * Optional hard turn budget for the agent (positive integer). Omitted ⇒ the runner
+   * falls back to the agent's own frontmatter `maxTurns` (single-source-of-truth —
+   * mirrors how `effort` already works below). Set only when the engine deliberately
+   * overrides the frontmatter default.
+   */
+  max_turns: external_exports.number().int().positive().optional(),
   /**
    * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
    * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
@@ -10288,7 +10286,7 @@ var META_FILE = "spec.meta.json";
 
 // src/spec/agents.ts
 var APEX_MODEL = "opus";
-var APEX_EFFORT = "max";
+var APEX_EFFORT = "xhigh";
 var GenerateResultSchema = external_exports.object({
   specMd: external_exports.string().min(1),
   slug: external_exports.string().min(1),
@@ -12245,6 +12243,21 @@ function resolveReviewModel(config) {
 }
 
 // src/verifier/judgment/panel.ts
+var REVIEWER_MODEL_BY_ROLE = {
+  "implementation-reviewer": "sonnet",
+  "quality-reviewer": "opus",
+  "silent-failure-hunter": "sonnet",
+  "systemic-failure-reviewer": "opus",
+  "database-design-reviewer": "opus"
+};
+var FINDING_VERIFIER_MODEL = "sonnet";
+function reviewerModelFor(role) {
+  const model = REVIEWER_MODEL_BY_ROLE[role];
+  if (model === void 0) {
+    throw new Error(`panel: no reviewer model configured for role '${role}'`);
+  }
+  return model;
+}
 var VERIFIER_INTERPOLATE_FIELDS = ["reviewer", "severity", "claim", "file", "line", "quote"];
 var VERIFIER_PROMPT_TEMPLATE = `You are an INDEPENDENT finding-verifier (verify-then-fix, D27). Try to REFUTE the
 following review finding against the actual code \u2014 do not assume it is correct.
@@ -12267,18 +12280,17 @@ var DB_DESIGN_ROLE = "database-design-reviewer";
 function panelRolesFor(dbApplicable) {
   return dbApplicable ? [...PANEL_ROLES, DB_DESIGN_ROLE] : PANEL_ROLES;
 }
-function buildPanelManifest(resumePhase, model, maxTurns, crossVendor, dbApplicable = false, crossVendorPrompt) {
+function buildPanelManifest(resumePhase, crossVendor, dbApplicable = false, crossVendorPrompt) {
   const agents = panelRolesFor(dbApplicable).map((role) => ({
     role,
     agent_type: AGENT_TYPE_BY_ROLE[role],
     isolation: "worktree",
-    model,
-    max_turns: maxTurns
+    model: reviewerModelFor(role)
   }));
   const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model, prompt: crossVendorPrompt } : { status: "absent", reason: crossVendor.reason };
   const verifier_spec = {
-    agent_type: GENERAL_PURPOSE_AGENT_TYPE,
-    model,
+    agent_type: FINDING_VERIFIER_AGENT_TYPE,
+    model: FINDING_VERIFIER_MODEL,
     isolation: "worktree",
     prompt_template: VERIFIER_PROMPT_TEMPLATE,
     interpolate_fields: [...VERIFIER_INTERPOLATE_FIELDS]
@@ -14099,6 +14111,7 @@ function makePhaseHandlers(deps) {
   }
   function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
+    const model = role === "test-writer" ? selectProducerModel("high", deps.config) : dial.model;
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
       taskId: specTask.task_id,
@@ -14123,10 +14136,9 @@ function makePhaseHandlers(deps) {
         {
           role,
           agent_type: AGENT_TYPE_BY_ROLE[role],
-          model: dial.model,
-          // No implementer-specific turn budget exists; both producer roles share the
-          // test-writer cap (documented WS10 decision).
-          max_turns: deps.config.testWriter.maxTurns,
+          model,
+          // max_turns omitted — each producer's own frontmatter is the single
+          // source of truth for its turn budget (single-source-of-truth).
           // 3b(i): the runner spawns this VERBATIM.
           prompt: renderProducerPrompt(context, worktree),
           // Effort is set ONLY once the dial has climbed the model to its ceiling
@@ -14251,16 +14263,7 @@ function makePhaseHandlers(deps) {
           baseRef: gateCtx.baseRef,
           worktree
         }) : void 0;
-        return spawn2(
-          buildPanelManifest(
-            "verify",
-            resolveReviewModel(deps.config),
-            deps.config.review.maxTurnsDeep,
-            crossVendor,
-            dbApplicable,
-            crossVendorPrompt
-          )
-        );
+        return spawn2(buildPanelManifest("verify", crossVendor, dbApplicable, crossVendorPrompt));
       };
       if (task.reviewers.length < expectedRoster.length) {
         return panelSpawn();
@@ -14938,6 +14941,7 @@ async function shipTask(deps, ctx) {
 // src/orchestrator/orchestrator.ts
 var log26 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
+var HOLDOUT_MAX_TURNS = 40;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
   if (task === void 0) {
@@ -14983,7 +14987,7 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
     agent_type: GENERAL_PURPOSE_AGENT_TYPE,
     worktree,
     model: resolveReviewModel(deps.config),
-    max_turns: deps.config.review.maxTurnsDeep,
+    max_turns: HOLDOUT_MAX_TURNS,
     prompt: buildHoldoutPrompt(record, worktree, baseRef)
   };
 }
@@ -15217,8 +15221,7 @@ function specTaskLines(spec) {
 }
 
 // src/orchestrator/docs.ts
-var DOCS_MODEL = "opus";
-var DOCS_MAX_TURNS = 60;
+var DOCS_MODEL = "sonnet";
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
   return join15(dataDir, "worktrees", runId, ".docs");
@@ -15258,7 +15261,6 @@ async function runDocsEmit(deps, runId) {
     staging_branch: staging,
     docs_branch: docsBranch,
     model: DOCS_MODEL,
-    max_turns: DOCS_MAX_TURNS,
     prompt: buildScribePrompt(worktree, baseRef)
   };
 }
@@ -15292,8 +15294,7 @@ async function runDocsRecord(deps, runId, results) {
 
 // src/orchestrator/traceability.ts
 import { join as join16 } from "node:path";
-var TRACE_MODEL = "opus";
-var TRACE_MAX_TURNS = 60;
+var TRACE_MODEL = "sonnet";
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(dataDir, runId) {
   return join16(dataDir, "worktrees", runId, ".trace");
@@ -15354,7 +15355,6 @@ async function runTraceabilityEmit(deps, runId) {
     base_ref: baseRef,
     staging_branch: staging,
     model: TRACE_MODEL,
-    max_turns: TRACE_MAX_TURNS,
     prompt: buildAuditorPrompt(worktree, baseRef, requirements, deps.spec)
   };
 }
@@ -15759,9 +15759,8 @@ var DefaultE2eFileOps = class {
     await writeFile2(path7, contents);
   }
 };
-var E2E_AUTHOR_MODEL = "opus";
+var E2E_AUTHOR_MODEL = "sonnet";
 var MAX_AUTHOR_ATTEMPTS = 2;
-var E2E_AUTHOR_MAX_TURNS = 90;
 function errText(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -15968,7 +15967,6 @@ async function prepareAdjudicatorSpawn(deps, run9, runId, boot) {
     staging_branch: staging,
     adjudicate_branch: branch,
     model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
     prompt: buildAdjudicationPrompt({ worktree, boot, cursor, spec: deps.spec })
   };
 }
@@ -16331,7 +16329,6 @@ async function prepareAuthorSpawn(deps, run9, runId, boot, testDir) {
     e2e_branch: branch,
     throwaway_dir: throwawayDir,
     model: E2E_AUTHOR_MODEL,
-    max_turns: E2E_AUTHOR_MAX_TURNS,
     prompt: buildAuthorPrompt({
       worktree,
       baseRef,
@@ -16484,8 +16481,7 @@ async function runE2eRecord(deps, runId, results) {
 // src/orchestrator/assessment.ts
 import { join as join20 } from "node:path";
 var log31 = createLogger("e2e-assess");
-var ASSESSOR_MODEL = "opus";
-var ASSESSOR_MAX_TURNS = 60;
+var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(dataDir, runId) {
   return join20(dataDir, "worktrees", runId, ".e2e-assess");
@@ -16567,7 +16563,6 @@ async function runAssessmentEmit(deps, runId) {
     staging_branch: staging,
     assess_branch: branch,
     model: ASSESSOR_MODEL,
-    max_turns: ASSESSOR_MAX_TURNS,
     prompt: buildAssessorPrompt({
       worktree,
       testDir: deps.config.e2e.testDir,
@@ -17635,14 +17630,7 @@ async function buildReviewManifest(opts) {
     baseRef: opts.base,
     worktree: opts.worktree
   }) : void 0;
-  const manifest = buildPanelManifest(
-    opts.resumePhase,
-    opts.model,
-    opts.maxTurns,
-    opts.crossVendor,
-    false,
-    crossVendorPrompt
-  );
+  const manifest = buildPanelManifest(opts.resumePhase, opts.crossVendor, false, crossVendorPrompt);
   return {
     manifest,
     base: opts.base,
@@ -17963,8 +17951,6 @@ async function debugReviewEmit(deps, runId) {
   const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
   const built = await buildReviewManifest({
     resumePhase: "verify",
-    model: resolveReviewModel(deps.config),
-    maxTurns: deps.config.review.maxTurnsDeep,
     base: session.base,
     worktree: deps.cwd,
     crossVendor
