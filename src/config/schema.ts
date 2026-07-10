@@ -316,9 +316,33 @@ export const ConfigSchema = z
          * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
          * before `next-task` flags it in `work.stale` (advisory — a hung agent that
          * died silently is never re-driven inside a live session otherwise). Default
-         * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+         * 15: stalls are the #1 operational pain (design-review-2026-07-07). Also
+         * sizes the runner's heartbeat cron, so keep it under 60 (the usage-cache
+         * staleness ceiling — pipeline-runner SKILL).
          */
-        stallTtlMinutes: z.number().int().positive().default(20),
+        stallTtlMinutes: z.number().int().positive().default(15),
+        /**
+         * HARD wall-clock cap (minutes) on one in-flight spawn. Past this age
+         * `next-task` lists the task in `work.hung` (disjoint from `stale`): the
+         * runner kills the spawn's agents EVEN IF ALIVE and re-drives — bounded by
+         * SPAWN_REDRIVE_CAP (orchestrator.ts), after which the task fails
+         * `blocked-environmental` and finalize/rescue-auto take over (Decision 66).
+         * Must exceed stallTtlMinutes (the advisory liveness-checked tier below
+         * it) — enforced by the superRefine below.
+         */
+        hungSpawnMinutes: z.number().int().positive().default(120),
+    })
+    .superRefine((cfg, ctx) => {
+        if (cfg.hungSpawnMinutes <= cfg.stallTtlMinutes) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['hungSpawnMinutes'],
+                message:
+                    `hungSpawnMinutes (${cfg.hungSpawnMinutes}) must exceed stallTtlMinutes ` +
+                    `(${cfg.stallTtlMinutes}) — the hard kill-even-if-alive tier sits above the ` +
+                    'advisory liveness-checked stale band',
+            })
+        }
     })
     .default({})
 

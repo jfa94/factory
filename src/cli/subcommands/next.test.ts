@@ -430,13 +430,15 @@ describe('next-task stale-shipping adoption (Decision 60)', () => {
                     started_at: '2026-07-08T00:00:00.000Z',
                     // shipping carries a leftover verify-phase checkpoint (only terminal
                     // writers clear it); executing carries its own exec checkpoint. Ancient
-                    // spawned_at → past any TTL → `stale`.
+                    // spawned_at → past the hard wall clock → `hung` (the adoption gate
+                    // unions both bands, Decision 66).
                     ...(status === 'shipping' ? {branch: `factory/${RUN}/T1`, pr_number: 101} : {}),
                     spawn_in_flight: {
                         phase: status === 'shipping' ? 'verify' : 'exec',
                         rung: 0,
                         tip_sha: 'x',
                         spawned_at: 1000,
+                        redrives: 0,
                     },
                 },
             },
@@ -510,10 +512,11 @@ describe('next-task stale-shipping adoption (Decision 60)', () => {
         try {
             const code = await runNextTask(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: gh})
             expect(code).toBe(EXIT.OK)
-            const env = JSON.parse(stdout.read()) as {kind: string; stale: string[]; adoption?: unknown}
-            // T1 IS stale — proving the gate (status !== shipping), not absence of
-            // staleness, is what kept the hot loop probe-free.
-            expect(env.stale).toContain('T1')
+            const env = JSON.parse(stdout.read()) as {kind: string; hung: string[]; adoption?: unknown}
+            // T1 IS aged past the hard band (ancient spawned_at → hung) — proving the
+            // gate (status !== shipping), not absence of aging, is what kept the hot
+            // loop probe-free.
+            expect(env.hung).toContain('T1')
             expect(env.adoption).toBeUndefined()
             expect(gh.calls.length).toBe(0)
         } finally {

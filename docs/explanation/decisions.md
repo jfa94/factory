@@ -2395,7 +2395,7 @@ quota gate re-runs and **self-clears `paused`→`running` on a fresh proceed**
 horizon is days, not hours, and an unobservable reading fails closed. No new engine code,
 timer, config, or ledger: the wait is **self-bounded** (a 5h window fully resets by
 `resets_at_epoch`, ≤5h, so recovery is guaranteed), and the heartbeat interval (default
-20 min) stays under the 3600s usage-cache staleness ceiling, so the statusline-refreshed
+15 min) stays under the 3600s usage-cache staleness ceiling, so the statusline-refreshed
 cache never goes stale mid-wait.
 
 **Consequences:** Restores the pre-Decision-42 posture — a 5h pause waits and
@@ -2682,6 +2682,55 @@ write-protection's TCB-path arm) remain the actual, complete boundary for what t
 this decision narrows `permissions.deny` to the residual accident-prevention role those hooks
 structurally can't cover. Continues the Close-the-Loop stall-elimination line
 (Decision 61/62).
+
+---
+
+## Decision 66 — Hung-Spawn Hard Wall Clock + Bounded Re-Drive Budget
+
+**Date:** 2026-07-10
+
+**Context:** The stall TTL (S1) is advisory: `next-task` flags an aged in-flight spawn in
+`work.stale`, and the runner liveness-checks it — if ANY tracked agent still runs, it is
+left alone, forever (the false-positive guard; deliberately, because the only re-drive
+mechanism resets the task worktree and would destroy a live agent's work). A **hung-but-alive
+agent is therefore never reaped**, and the failure compounds structurally: the hung task keeps
+the run permanently non-terminal, so it never reaches finalize — which is the only gate that
+fires `rescue auto` (Decision 48/60) — locking out every escalation mechanism the system has.
+Re-drives also incremented no counter, so even the dead-spawn kill→respawn loop was unbounded.
+Stalls are the #1 operational pain (design-review-2026-07-07).
+
+**Decision:** Two disjoint age bands on the `work` envelope, both engine-computed:
+
+- `stale` — the ADVISORY band, `stallTtlMinutes < age ≤ hungSpawnMinutes` (defaults 15/120;
+  the TTL default also dropped 20 → 15 to tighten heartbeat-driven recovery). Runner behavior
+  unchanged: liveness-check first, touch only all-dead spawns.
+- `hung` — the HARD band, `age > hungSpawnMinutes`. The runner TaskStops the spawn's agents
+  **even if alive** (past the hard cap, aliveness IS the failure) and re-drives.
+
+The kill→respawn→hang loop is bounded engine-side: `spawn_in_flight.redrives` (default 0,
+so pre-existing checkpoints parse with a full budget) is incremented on every matching
+`(phase, rung)` re-entry; a re-entry that would exceed `SPAWN_REDRIVE_CAP` (2,
+`orchestrator.ts`) instead fails the task `blocked-environmental` — the same over-cap shape
+as the merge re-sync budget — which is rescue-`recoverable`, so finalize → `rescue auto`
+(≤3 cycles) → page owns the escalation from there. Worst case is finite by construction.
+The stale-shipping adoption probe (Decision 60) gates on the UNION of both bands — a
+crashed-before-recording spawn is typically ancient, so it surfaces as `hung`.
+
+**Consequences:** `redrives` counts ALL matching re-entries, including pause-resume and
+legitimate dead-spawn re-drives (the engine cannot know why the runner re-entered without
+anti-Model-A flags; a re-drive looping at the same `(phase, rung)` is "no progress" evidence
+regardless of cause). The counter resets on every phase/rung advance (a fresh checkpoint is
+written with 0) and on rescue reset. Quota-pause recovery deliberately does NOT refresh
+`spawned_at`: PAUSE CONVERGENCE TaskStops all in-flight agents before waiting, so a
+post-pause `hung` flag correctly re-drives already-dead spawns, and refreshing would mask a
+genuinely pre-pause-hung spawn for another full window. `hungSpawnMinutes` must exceed
+`stallTtlMinutes` (schema `superRefine`). A legacy untimed checkpoint (`spawned_at` 0) now
+lands in `hung` rather than `stale` — still "never silently trust an untimed spawn," but the
+recovery is now kill+re-drive instead of liveness-check.
+
+**Relationship:** Closes the last structural stall in the Close-the-Loop line
+(Decision 61/62): S1/3c handled silent DEATH; this handles silent HANGING. Mirrors the
+`MERGE_RESYNC_CAP` bounded-budget shape and hands over to Decision 48/60's bounded self-heal.
 
 ---
 

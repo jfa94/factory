@@ -64,13 +64,24 @@ export type NextTask =
           /** Max tasks the runner may drive in flight at once (config `maxParallelTasks`). */
           readonly max_parallel: number
           /**
-           * Task ids (subset of `ready`) whose `spawn_in_flight` has aged past
-           * `config.stallTtlMinutes` (S1). Advisory only — status is unchanged, the
-           * task stays in `ready`. Means: abandon the in-flight spawn and re-drive
-           * via `next-action` (idempotent — resets the worktree + re-spawns; the old
-           * agent's late results are rejected by the stale `result_key` guard).
+           * Task ids (subset of `ready`) whose `spawn_in_flight` has aged into the
+           * ADVISORY band: past `config.stallTtlMinutes` (S1) but not yet past
+           * `config.hungSpawnMinutes` (disjoint from `hung`). Status is unchanged,
+           * the task stays in `ready`. Means: liveness-check first — if the spawn's
+           * agents are all dead, abandon and re-drive via `next-action` (idempotent —
+           * resets the worktree + re-spawns; the old agent's late results are
+           * rejected by the stale `result_key` guard); if any still runs, leave it.
            */
           readonly stale: readonly string[]
+          /**
+           * Task ids (subset of `ready`, DISJOINT from `stale`) whose spawn has aged
+           * past `config.hungSpawnMinutes` — the hard wall clock (Decision 66). The
+           * runner must TaskStop the spawn's agents EVEN IF ALIVE and re-drive via
+           * `next-action` (no liveness check: past the hard cap, aliveness IS the
+           * failure). Bounded engine-side by SPAWN_REDRIVE_CAP (orchestrator.ts) —
+           * once spent, the re-drive fails the task instead.
+           */
+          readonly hung: readonly string[]
       })
     | (NextContext & {
           readonly kind: 'finalize'
@@ -401,12 +412,27 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     const inFlight = ready.filter((t) => t.status !== 'pending').map((t) => t.task_id)
     const pending = ready.filter((t) => t.status === 'pending').map((t) => t.task_id)
     const ordered = [...inFlight, ...pending]
-    // S1 stall TTL: an in-flight spawn whose clock (refreshed on every emit/re-drive,
-    // see orchestrator.ts) has aged past the configured TTL is flagged for the runner
-    // to abandon and re-drive — a silently-dead agent otherwise never self-heals.
+    // S1 stall TTL, two bands (Decision 66): an in-flight spawn whose clock (refreshed
+    // on every emit/re-drive, see orchestrator.ts) has aged past the advisory TTL is
+    // flagged `stale` (runner liveness-checks before touching); past the HARD wall
+    // clock it is flagged `hung` (runner kills even a live agent) — a silently-dead
+    // agent otherwise never self-heals, and a hung-but-alive one otherwise keeps the
+    // run non-terminal forever, locking out every escalation mechanism.
     const ttlSeconds = deps.config.stallTtlMinutes * 60
+    const hungSeconds = deps.config.hungSpawnMinutes * 60
+    const spawnAge = (t: (typeof ready)[number]): number | undefined =>
+        t.spawn_in_flight === undefined ? undefined : deps.now() - t.spawn_in_flight.spawned_at
     const stale = ready
-        .filter((t) => t.spawn_in_flight !== undefined && deps.now() - t.spawn_in_flight.spawned_at > ttlSeconds)
+        .filter((t) => {
+            const age = spawnAge(t)
+            return age !== undefined && age > ttlSeconds && age <= hungSeconds
+        })
+        .map((t) => t.task_id)
+    const hung = ready
+        .filter((t) => {
+            const age = spawnAge(t)
+            return age !== undefined && age > hungSeconds
+        })
         .map((t) => t.task_id)
 
     if (ordered.length === 0) {
@@ -438,5 +464,6 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
         cascade_failed: cascadeFailed,
         max_parallel: deps.config.maxParallelTasks,
         stale,
+        hung,
     }
 }

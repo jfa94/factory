@@ -268,7 +268,7 @@ lock, so its ceiling stays well under the lock's stale window (`MERGE_LOCK_DEFAU
 
 ### `spawn_in_flight` — idempotent re-spawn checkpoint
 
-`{ phase: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string, spawned_at: number }`
+`{ phase: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string, spawned_at: number, redrives: int ≥0 }`
 (optional). The checkpoint that makes a stop-mid-spawn plus `factory resume`
 idempotent. Producers commit to the **shared** task worktree, so a stop in the
 post-spawn / pre-record window leaves the abandoned producer's partial commits (and
@@ -288,13 +288,22 @@ rung)` before any results were recorded, the orchestrator resets the worktree to
   run in their own isolated worktrees, so the shared worktree HEAD never moved).
 - **`spawned_at` — stall-TTL clock.** Epoch **seconds** (the shared quota clock,
   `OrchestratorDeps.now()`) stamped at spawn emit and refreshed on a matching re-entry
-  (`src/orchestrator/orchestrator.ts`). `next-task` reads it to flag a task whose spawn
-  has aged past `config.stallTtlMinutes` in the `work` envelope's advisory `stale` list
-  (a silently-dead agent otherwise never self-heals in a live session — see
+  (`src/orchestrator/orchestrator.ts`). `next-task` reads it to band a task's spawn age
+  into the `work` envelope's advisory `stale` (`stallTtlMinutes < age ≤ hungSpawnMinutes`)
+  or `hung` (`age > hungSpawnMinutes`, kill-even-if-alive — Decision 66) lists (a
+  silently-dead or hung agent otherwise never self-heals in a live session — see
   [cli.md](./cli.md#next-task)). Detection is read-only: no status change. Defaults to
   `0` (epoch) so an untimed checkpoint persisted before this field existed parses as
-  maximally stale — an untimed in-flight spawn should be flagged for re-drive, not
-  silently trusted.
+  maximally aged (it lands in `hung`) — an untimed in-flight spawn should be flagged
+  for re-drive, not silently trusted.
+- **`redrives` — bounded re-drive budget (Decision 66).** Matching `(phase, rung)`
+  re-entries already consumed. Incremented by the orchestrator's re-entry branch; a
+  re-entry that would exceed `SPAWN_REDRIVE_CAP` (2) instead fails the task
+  `blocked-environmental` (rescue-recoverable, so finalize → rescue-auto → page own the
+  escalation). Resets naturally on any phase/rung advance (a fresh checkpoint is written
+  with `0`). Defaults to `0` so a checkpoint persisted before this field existed parses
+  with a **full** budget — safe: the cap bounds future re-entries only (the opposite
+  gotcha from `spawned_at`).
 
 (The `phase` literals duplicate the orchestrator's spawn-phase set deliberately, so
 `src/core/state` need not import the orchestrator; a cross-check test keeps them equal.)

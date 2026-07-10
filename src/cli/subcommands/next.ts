@@ -34,7 +34,7 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context — run_id, data_dir (canonical), ship_mode — so the runner adopts them
 from the first \`next-task\`:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...], hung:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  → call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
@@ -107,13 +107,15 @@ export async function runNextTask(argv: string[], overrides: NextOverrides = {})
 
     // Adopt a stale SHIPPING task (Decision 60): the "PR merged, crashed before
     // completeTask" wedge. The gate keeps the hot runner loop probe-free — a gh probe
-    // fires ONLY when work remains AND a stale in-flight task is actually `shipping`
-    // (self-quiets on the first hit, since the flip drops it out of `stale`). A gh
+    // fires ONLY when work remains AND an aged in-flight task is actually `shipping`
+    // (self-quiets on the first hit, since the flip drops it out of the aged bands).
+    // BOTH bands qualify (stale ∪ hung, Decision 66): a crashed-before-recording spawn
+    // is typically ancient, so it surfaces as `hung` — the probe must still fire. A gh
     // outage logs and emits unchanged; a real flip recomputes (may free dependents or
     // make the run finalize-ready) and attaches the adoption report.
     if (result.kind === 'work') {
         const run = await deps.state.read(runId)
-        const staleShipping = result.stale.some((id) => run.tasks[id]?.status === 'shipping')
+        const staleShipping = [...result.stale, ...result.hung].some((id) => run.tasks[id]?.status === 'shipping')
         if (staleShipping) {
             const git = overrides.gitClient ?? deps.git
             const gh = overrides.ghClient ?? deps.gh

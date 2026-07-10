@@ -63,6 +63,16 @@ export type {SpawnPhase}
 export const MERGE_RESYNC_CAP = 8
 
 /**
+ * Matching (phase, rung) re-drive budget per spawn checkpoint (persisted in
+ * `spawn_in_flight.redrives`, Decision 66). Bounds the runner's kill→respawn loop
+ * for stale/hung spawns: a re-entry that would exceed it fails the task
+ * `blocked-environmental` instead — rescue-recoverable, so finalize → rescue-auto
+ * (≤3 cycles) → page owns the escalation from there. Resets naturally on any
+ * phase/rung advance (a fresh checkpoint is written with 0).
+ */
+export const SPAWN_REDRIVE_CAP = 2
+
+/**
  * The holdout-validator sidecar's turn budget. It spawns as `general-purpose`
  * (no bespoke agent, so no frontmatter to fall back to) — unlike the panel/
  * producer agents, its max_turns has nowhere else to live, so it stays a
@@ -446,13 +456,34 @@ export async function nextAction(
                 if (await deps.git.worktreeExists(worktree)) {
                     const inFlight = task.spawn_in_flight
                     if (inFlight?.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
+                        // Bounded re-drive (Decision 66): every matching re-entry spends one
+                        // unit of the checkpoint's budget; over-cap fails the task instead of
+                        // respawning — otherwise a spawn that hangs (or dies) the same way
+                        // every time loops kill→respawn forever, and the run never reaches
+                        // finalize where rescue-auto/page could take over. Checked BEFORE the
+                        // worktree reset so a task about to fail keeps its forensics
+                        // (failStep clears the checkpoint anyway).
+                        const redrives = inFlight.redrives + 1
+                        if (redrives > SPAWN_REDRIVE_CAP) {
+                            const step = await failStep(
+                                deps,
+                                runId,
+                                taskId,
+                                'blocked-environmental',
+                                `hung spawn: re-drive budget (${SPAWN_REDRIVE_CAP}) for phase ` +
+                                    `'${spawnPhase}' rung ${task.escalation_rung} exhausted — the spawn ` +
+                                    `repeatedly exceeded the wall clock (config stallTtlMinutes/` +
+                                    `hungSpawnMinutes) without delivering results`
+                            )
+                            return doneFromStep(runId, taskId, step)
+                        }
                         await deps.git.resetHardClean(inFlight.tip_sha, {cwd: worktree})
                         // Refresh spawned_at on re-entry (S1's stall TTL): this spawn is being
                         // actively re-driven, so its clock restarts — otherwise a task making
                         // genuine progress through repeated re-entries would trip work.stale.
                         await deps.state.updateTask(runId, taskId, (t) => ({
                             ...t,
-                            spawn_in_flight: {...inFlight, spawned_at: deps.now()},
+                            spawn_in_flight: {...inFlight, spawned_at: deps.now(), redrives},
                         }))
                     } else {
                         const tip_sha = await deps.git.revParse('HEAD', {cwd: worktree})
@@ -463,6 +494,7 @@ export async function nextAction(
                                 rung: t.escalation_rung,
                                 tip_sha,
                                 spawned_at: deps.now(),
+                                redrives: 0,
                             },
                         }))
                     }

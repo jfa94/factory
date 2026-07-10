@@ -6738,9 +6738,29 @@ var ConfigSchema = external_exports.object({
    * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
    * before `next-task` flags it in `work.stale` (advisory — a hung agent that
    * died silently is never re-driven inside a live session otherwise). Default
-   * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+   * 15: stalls are the #1 operational pain (design-review-2026-07-07). Also
+   * sizes the runner's heartbeat cron, so keep it under 60 (the usage-cache
+   * staleness ceiling — pipeline-runner SKILL).
    */
-  stallTtlMinutes: external_exports.number().int().positive().default(20)
+  stallTtlMinutes: external_exports.number().int().positive().default(15),
+  /**
+   * HARD wall-clock cap (minutes) on one in-flight spawn. Past this age
+   * `next-task` lists the task in `work.hung` (disjoint from `stale`): the
+   * runner kills the spawn's agents EVEN IF ALIVE and re-drives — bounded by
+   * SPAWN_REDRIVE_CAP (orchestrator.ts), after which the task fails
+   * `blocked-environmental` and finalize/rescue-auto take over (Decision 66).
+   * Must exceed stallTtlMinutes (the advisory liveness-checked tier below
+   * it) — enforced by the superRefine below.
+   */
+  hungSpawnMinutes: external_exports.number().int().positive().default(120)
+}).superRefine((cfg, ctx) => {
+  if (cfg.hungSpawnMinutes <= cfg.stallTtlMinutes) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["hungSpawnMinutes"],
+      message: `hungSpawnMinutes (${cfg.hungSpawnMinutes}) must exceed stallTtlMinutes (${cfg.stallTtlMinutes}) \u2014 the hard kill-even-if-alive tier sits above the advisory liveness-checked stale band`
+    });
+  }
 }).default({});
 
 // src/config/load.ts
@@ -7581,11 +7601,22 @@ var TaskStateSchema = external_exports.object({
     tip_sha: external_exports.string().min(1),
     /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
      * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
-     * (`next.ts` `work.stale`) reads this — advisory only, no status change.
-     * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
-     * existed parses as maximally stale — correct: an untimed in-flight spawn
-     * should be flagged for re-drive, not silently trusted. */
-    spawned_at: external_exports.number().default(0)
+     * (`next.ts` `work.stale`/`work.hung`) reads this — advisory only, no
+     * status change. Defaults to 0 (epoch) so a pre-S? checkpoint persisted
+     * before this field existed parses as maximally aged — it lands in `hung`
+     * (kill + re-drive) — correct: an untimed in-flight spawn should be
+     * flagged for re-drive, not silently trusted. */
+    spawned_at: external_exports.number().default(0),
+    /**
+     * Matching (phase, rung) re-entries already consumed — the bound on the
+     * kill→respawn→hang loop (Decision 66). Incremented by the orchestrator's
+     * re-entry branch; a fresh checkpoint (any phase/rung advance) is written
+     * with 0, so the budget is per-(phase, rung) by construction. Defaults to
+     * 0 so a checkpoint persisted before this field existed parses with a
+     * FULL budget — safe: the cap bounds FUTURE re-entries only (the opposite
+     * gotcha from spawned_at, whose default-0 must read as maximally aged).
+     */
+    redrives: external_exports.number().int().min(0).default(0)
   }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),

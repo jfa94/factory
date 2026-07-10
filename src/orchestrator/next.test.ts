@@ -187,7 +187,7 @@ describe('nextTask', () => {
                 ...t,
                 status: 'executing',
                 phase: 'exec',
-                spawn_in_flight: {phase: 'exec', rung: 0, tip_sha: 'sha', spawned_at: spawnedAt},
+                spawn_in_flight: {phase: 'exec', rung: 0, tip_sha: 'sha', spawned_at: spawnedAt, redrives: 0},
             }))
         }
 
@@ -196,9 +196,9 @@ describe('nextTask', () => {
                 tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
             })
             try {
-                await seedInFlight(deps, runId, NOW - 2000) // default stallTtlMinutes=20 → 1200s
+                await seedInFlight(deps, runId, NOW - 2000) // default stallTtlMinutes=15 → 900s
                 const env = await nextTask(deps, runId)
-                expect(env).toMatchObject({kind: 'work', stale: ['T1']})
+                expect(env).toMatchObject({kind: 'work', stale: ['T1'], hung: []})
             } finally {
                 await cleanup()
             }
@@ -211,7 +211,7 @@ describe('nextTask', () => {
             try {
                 await seedInFlight(deps, runId, NOW - 10)
                 const env = await nextTask(deps, runId)
-                expect(env).toMatchObject({kind: 'work', stale: []})
+                expect(env).toMatchObject({kind: 'work', stale: [], hung: []})
             } finally {
                 await cleanup()
             }
@@ -247,13 +247,58 @@ describe('nextTask', () => {
             })
             try {
                 await seedInFlight(deps, runId, NOW - 120)
-                // 120s old task: not stale at the 20min default, IS stale at a 1min TTL.
+                // 120s old task: not stale at the 15min default, IS stale at a 1min TTL.
                 const defaultEnv = await nextTask(deps, runId)
                 expect(defaultEnv).toMatchObject({kind: 'work', stale: []})
 
                 const tightened = {...deps, config: {...deps.config, stallTtlMinutes: 1}}
                 const tightEnv = await nextTask(tightened, runId)
                 expect(tightEnv).toMatchObject({kind: 'work', stale: ['T1']})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        // Decision 66: the HARD band — past hungSpawnMinutes the task moves from
+        // `stale` (liveness-checked) to `hung` (kill-even-if-alive). Disjoint sets.
+        it('a spawn older than hungSpawnMinutes lands in work.hung, not work.stale', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 8000) // default hungSpawnMinutes=120 → 7200s
+                const env = await nextTask(deps, runId)
+                expect(env).toMatchObject({kind: 'work', stale: [], hung: ['T1']})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        it('respects a configured hungSpawnMinutes override', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, NOW - 2000) // stale at defaults (900 < 2000 ≤ 7200)
+                const defaultEnv = await nextTask(deps, runId)
+                expect(defaultEnv).toMatchObject({kind: 'work', stale: ['T1'], hung: []})
+
+                const tightened = {...deps, config: {...deps.config, hungSpawnMinutes: 30}} // 1800s
+                const tightEnv = await nextTask(tightened, runId)
+                expect(tightEnv).toMatchObject({kind: 'work', stale: [], hung: ['T1']})
+            } finally {
+                await cleanup()
+            }
+        })
+
+        it('a legacy checkpoint without spawned_at (default 0) lands in work.hung', async () => {
+            const {deps, runId, cleanup} = await makeOrchestratorDeps({
+                tasks: [{task_id: 'T1', acceptance_criteria: ['only one']}],
+            })
+            try {
+                await seedInFlight(deps, runId, 0) // maximally aged — never silently trusted
+                const env = await nextTask(deps, runId)
+                expect(env).toMatchObject({kind: 'work', stale: [], hung: ['T1']})
             } finally {
                 await cleanup()
             }

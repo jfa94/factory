@@ -32,6 +32,20 @@ describe('runner protocol wires the S1/3c stall-TTL self-heal', () => {
         expect(skill).toContain('false positive')
     })
 
+    // Decision 66: the HARD band — hung spawns are killed even if alive, before the
+    // advisory stale handling; the engine bounds the loop via SPAWN_REDRIVE_CAP.
+    it('the work case consumes env.hung and kills a hung spawn even if alive (no liveness check)', () => {
+        expect(skill).toContain('env.hung')
+        expect(skill).toContain('EVEN IF STILL RUNNING')
+    })
+
+    it('a hung task is re-driven WITHOUT --results and its over-cap failure is reported', () => {
+        // Two re-drive sites (hung + stale) share the exact command shape.
+        const redrives = skill.match(/next-action --run <run_id> --task <task>\s+# WITHOUT --results/g)
+        expect(redrives?.length).toBeGreaterThanOrEqual(2)
+        expect(skill).toContain('SPAWN_REDRIVE_CAP')
+    })
+
     it('the runner arms a non-completion heartbeat sized to the configured TTL', () => {
         expect(skill).toContain('CronCreate')
         expect(skill).toContain('stallTtlMinutes')

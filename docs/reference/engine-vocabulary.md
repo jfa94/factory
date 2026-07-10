@@ -31,9 +31,11 @@ a loop:
 Both returns are discriminated unions whose `kind` is an **imperative** — it tells
 the runner what to do, not what state something is in.
 
-The `work` kind also carries an advisory `stale` list — ready tasks whose in-flight
-spawn has aged past `config.stallTtlMinutes`, telling the runner to abandon a
-silently-dead agent and re-drive (see [cli.md](./cli.md#next-task)).
+The `work` kind also carries two disjoint advisory age bands — `stale` (ready tasks
+whose in-flight spawn has aged past `config.stallTtlMinutes`: liveness-check, then
+abandon a silently-dead agent and re-drive) and `hung` (past `config.hungSpawnMinutes`:
+kill the spawn's agents even if alive and re-drive, bounded by the engine's re-drive
+budget — Decision 66; see [cli.md](./cli.md#next-task)).
 
 **`NextTask` kinds:** `work` (drive this ready task) · `traceability` (run the
 PRD-traceability audit — every non-debug run, before docs) · `document` (run the docs

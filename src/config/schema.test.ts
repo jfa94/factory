@@ -88,9 +88,26 @@ describe('ConfigSchema', () => {
     it('rejects out-of-range values (loud, not silent)', () => {
         expect(() => ConfigSchema.parse({quality: {holdoutPercent: 150}})).toThrow()
         expect(() => ConfigSchema.parse({stallTtlMinutes: -1})).toThrow()
+        expect(() => ConfigSchema.parse({hungSpawnMinutes: 0})).toThrow()
+        expect(() => ConfigSchema.parse({hungSpawnMinutes: -1})).toThrow()
         // maxParallelTasks: min 1 (N4) — 0 and negatives reject.
         expect(() => ConfigSchema.parse({maxParallelTasks: 0})).toThrow()
         expect(() => ConfigSchema.parse({maxParallelTasks: -1})).toThrow()
+    })
+
+    it('defaults the two-band stall clocks (Decision 66)', () => {
+        const cfg = ConfigSchema.parse({})
+        expect(cfg.stallTtlMinutes).toBe(15)
+        expect(cfg.hungSpawnMinutes).toBe(120)
+    })
+
+    it('rejects hungSpawnMinutes ≤ stallTtlMinutes (the hard tier must sit above the advisory band)', () => {
+        expect(() => ConfigSchema.parse({hungSpawnMinutes: 10})).toThrow() // under the 15 default
+        expect(() => ConfigSchema.parse({stallTtlMinutes: 200})).toThrow() // over the 120 default
+        expect(() => ConfigSchema.parse({stallTtlMinutes: 60, hungSpawnMinutes: 60})).toThrow() // equal
+        const cfg = ConfigSchema.parse({stallTtlMinutes: 30, hungSpawnMinutes: 60})
+        expect(cfg.stallTtlMinutes).toBe(30)
+        expect(cfg.hungSpawnMinutes).toBe(60)
     })
 
     it('rejects a wrong-length threshold curve', () => {

@@ -6346,9 +6346,29 @@ var ConfigSchema = external_exports.object({
    * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
    * before `next-task` flags it in `work.stale` (advisory — a hung agent that
    * died silently is never re-driven inside a live session otherwise). Default
-   * 20: stalls are the #1 operational pain (design-review-2026-07-07).
+   * 15: stalls are the #1 operational pain (design-review-2026-07-07). Also
+   * sizes the runner's heartbeat cron, so keep it under 60 (the usage-cache
+   * staleness ceiling — pipeline-runner SKILL).
    */
-  stallTtlMinutes: external_exports.number().int().positive().default(20)
+  stallTtlMinutes: external_exports.number().int().positive().default(15),
+  /**
+   * HARD wall-clock cap (minutes) on one in-flight spawn. Past this age
+   * `next-task` lists the task in `work.hung` (disjoint from `stale`): the
+   * runner kills the spawn's agents EVEN IF ALIVE and re-drives — bounded by
+   * SPAWN_REDRIVE_CAP (orchestrator.ts), after which the task fails
+   * `blocked-environmental` and finalize/rescue-auto take over (Decision 66).
+   * Must exceed stallTtlMinutes (the advisory liveness-checked tier below
+   * it) — enforced by the superRefine below.
+   */
+  hungSpawnMinutes: external_exports.number().int().positive().default(120)
+}).superRefine((cfg, ctx) => {
+  if (cfg.hungSpawnMinutes <= cfg.stallTtlMinutes) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["hungSpawnMinutes"],
+      message: `hungSpawnMinutes (${cfg.hungSpawnMinutes}) must exceed stallTtlMinutes (${cfg.stallTtlMinutes}) \u2014 the hard kill-even-if-alive tier sits above the advisory liveness-checked stale band`
+    });
+  }
 }).default({});
 
 // src/config/load.ts
@@ -6726,11 +6746,22 @@ var TaskStateSchema = external_exports.object({
     tip_sha: external_exports.string().min(1),
     /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
      * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
-     * (`next.ts` `work.stale`) reads this — advisory only, no status change.
-     * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
-     * existed parses as maximally stale — correct: an untimed in-flight spawn
-     * should be flagged for re-drive, not silently trusted. */
-    spawned_at: external_exports.number().default(0)
+     * (`next.ts` `work.stale`/`work.hung`) reads this — advisory only, no
+     * status change. Defaults to 0 (epoch) so a pre-S? checkpoint persisted
+     * before this field existed parses as maximally aged — it lands in `hung`
+     * (kill + re-drive) — correct: an untimed in-flight spawn should be
+     * flagged for re-drive, not silently trusted. */
+    spawned_at: external_exports.number().default(0),
+    /**
+     * Matching (phase, rung) re-entries already consumed — the bound on the
+     * kill→respawn→hang loop (Decision 66). Incremented by the orchestrator's
+     * re-entry branch; a fresh checkpoint (any phase/rung advance) is written
+     * with 0, so the budget is per-(phase, rung) by construction. Defaults to
+     * 0 so a checkpoint persisted before this field existed parses with a
+     * FULL budget — safe: the cap bounds FUTURE re-entries only (the opposite
+     * gotcha from spawned_at, whose default-0 must read as maximally aged).
+     */
+    redrives: external_exports.number().int().min(0).default(0)
   }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
@@ -14945,6 +14976,7 @@ async function shipTask(deps, ctx) {
 // src/orchestrator/orchestrator.ts
 var log26 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
+var SPAWN_REDRIVE_CAP = 2;
 var HOLDOUT_MAX_TURNS = 40;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
@@ -15133,10 +15165,21 @@ async function nextAction(deps, runId, taskId, results) {
         if (await deps.git.worktreeExists(worktree)) {
           const inFlight = task.spawn_in_flight;
           if (inFlight?.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
+            const redrives = inFlight.redrives + 1;
+            if (redrives > SPAWN_REDRIVE_CAP) {
+              const step = await failStep(
+                deps,
+                runId,
+                taskId,
+                "blocked-environmental",
+                `hung spawn: re-drive budget (${SPAWN_REDRIVE_CAP}) for phase '${spawnPhase}' rung ${task.escalation_rung} exhausted \u2014 the spawn repeatedly exceeded the wall clock (config stallTtlMinutes/hungSpawnMinutes) without delivering results`
+              );
+              return doneFromStep(runId, taskId, step);
+            }
             await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
             await deps.state.updateTask(runId, taskId, (t) => ({
               ...t,
-              spawn_in_flight: { ...inFlight, spawned_at: deps.now() }
+              spawn_in_flight: { ...inFlight, spawned_at: deps.now(), redrives }
             }));
           } else {
             const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
@@ -15146,7 +15189,8 @@ async function nextAction(deps, runId, taskId, results) {
                 phase: spawnPhase,
                 rung: t.escalation_rung,
                 tip_sha,
-                spawned_at: deps.now()
+                spawned_at: deps.now(),
+                redrives: 0
               }
             }));
           }
@@ -15636,7 +15680,16 @@ async function nextTask(deps, runId) {
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
   const ttlSeconds = deps.config.stallTtlMinutes * 60;
-  const stale = ready.filter((t) => t.spawn_in_flight !== void 0 && deps.now() - t.spawn_in_flight.spawned_at > ttlSeconds).map((t) => t.task_id);
+  const hungSeconds = deps.config.hungSpawnMinutes * 60;
+  const spawnAge = (t) => t.spawn_in_flight === void 0 ? void 0 : deps.now() - t.spawn_in_flight.spawned_at;
+  const stale = ready.filter((t) => {
+    const age = spawnAge(t);
+    return age !== void 0 && age > ttlSeconds && age <= hungSeconds;
+  }).map((t) => t.task_id);
+  const hung = ready.filter((t) => {
+    const age = spawnAge(t);
+    return age !== void 0 && age > hungSeconds;
+  }).map((t) => t.task_id);
   if (ordered.length === 0) {
     const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
     const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -15659,7 +15712,8 @@ async function nextTask(deps, runId) {
     ready: ordered,
     cascade_failed: cascadeFailed,
     max_parallel: deps.config.maxParallelTasks,
-    stale
+    stale,
+    hung
   };
 }
 
@@ -19696,7 +19750,7 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the runner adopts them
 from the first \`next-task\`:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...], max_parallel, stale:[...], hung:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  \u2192 call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
@@ -19745,7 +19799,7 @@ async function runNextTask(argv, overrides = {}) {
   const result = await nextTask(deps, runId);
   if (result.kind === "work") {
     const run9 = await deps.state.read(runId);
-    const staleShipping = result.stale.some((id) => run9.tasks[id]?.status === "shipping");
+    const staleShipping = [...result.stale, ...result.hung].some((id) => run9.tasks[id]?.status === "shipping");
     if (staleShipping) {
       const git = overrides.gitClient ?? deps.git;
       const gh = overrides.ghClient ?? deps.gh;

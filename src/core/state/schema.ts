@@ -348,11 +348,22 @@ export const TaskStateSchema = z.object({
             tip_sha: z.string().min(1),
             /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
              * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
-             * (`next.ts` `work.stale`) reads this — advisory only, no status change.
-             * Defaults to 0 (epoch) so a pre-S? checkpoint persisted before this field
-             * existed parses as maximally stale — correct: an untimed in-flight spawn
-             * should be flagged for re-drive, not silently trusted. */
+             * (`next.ts` `work.stale`/`work.hung`) reads this — advisory only, no
+             * status change. Defaults to 0 (epoch) so a pre-S? checkpoint persisted
+             * before this field existed parses as maximally aged — it lands in `hung`
+             * (kill + re-drive) — correct: an untimed in-flight spawn should be
+             * flagged for re-drive, not silently trusted. */
             spawned_at: z.number().default(0),
+            /**
+             * Matching (phase, rung) re-entries already consumed — the bound on the
+             * kill→respawn→hang loop (Decision 66). Incremented by the orchestrator's
+             * re-entry branch; a fresh checkpoint (any phase/rung advance) is written
+             * with 0, so the budget is per-(phase, rung) by construction. Defaults to
+             * 0 so a checkpoint persisted before this field existed parses with a
+             * FULL budget — safe: the cap bounds FUTURE re-entries only (the opposite
+             * gotcha from spawned_at, whose default-0 must read as maximally aged).
+             */
+            redrives: z.number().int().min(0).default(0),
         })
         .optional(),
 

@@ -459,6 +459,14 @@ describe('TaskState.phase cursor', () => {
         expect(() => parseTaskState(minimalTask({merge_resyncs: -1}))).toThrow()
         expect(() => parseTaskState(minimalTask({merge_resyncs: 1.5}))).toThrow()
     })
+
+    it('spawn_in_flight.redrives defaults to 0 (pre-Decision-66 checkpoints parse with a full budget)', () => {
+        const legacy = {phase: 'exec', rung: 0, tip_sha: 'sha', spawned_at: 123}
+        const t = parseTaskState(minimalTask({spawn_in_flight: legacy}))
+        expect(t.spawn_in_flight?.redrives).toBe(0)
+        expect(() => parseTaskState(minimalTask({spawn_in_flight: {...legacy, redrives: -1}}))).toThrow()
+        expect(() => parseTaskState(minimalTask({spawn_in_flight: {...legacy, redrives: 1.5}}))).toThrow()
+    })
 })
 
 describe('TaskState.test_revision_feedback (defective-RED-test recovery)', () => {

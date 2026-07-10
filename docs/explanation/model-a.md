@@ -104,13 +104,15 @@ CLI's JSON contract.
   prompts remain the one thing the runner builds inline, from the committed
   `agents/<role>.md` + `skills/review-protocol/SKILL.md` — static plugin surface, not
   per-run engine output.)
-- **Self-healing inside a live session.** Two failure modes that used to strand a
+- **Self-healing inside a live session.** Three failure modes that used to strand a
   session now recover without a human: a mid-run **compaction** that drops the runner
   skill from context is re-seeded by the `SessionStart` re-injection hook (once wired —
-  see [hooks.md](../reference/hooks.md#sessionstart-wiring-is-pending)), and a
+  see [hooks.md](../reference/hooks.md#sessionstart-wiring-is-pending)), a
   **silently-dead agent** whose spawn never returns is flagged by an engine-side stall
   TTL (`config.stallTtlMinutes`) in the `work` envelope's `stale` list so the runner
-  abandons and re-drives it.
+  abandons and re-drives it, and a **hung-but-alive agent** past the hard wall clock
+  (`config.hungSpawnMinutes`) is flagged in the `hung` list so the runner kills and
+  re-drives it — bounded by the engine's re-drive budget (Decision 66).
 
 ## The cost
 

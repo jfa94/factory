@@ -619,16 +619,21 @@ Every envelope also carries the self-resolved run context (`run_id`, canonical
 
 Emits one of:
 
-- `{ kind:"work", run_id, ready:[...], cascade_failed:[...], max_parallel, stale:[...] }` — ready
-  tasks, **in-flight first** (crash-resume finishes started work before opening
+- `{ kind:"work", run_id, ready:[...], cascade_failed:[...], max_parallel, stale:[...], hung:[...] }` —
+  ready tasks, **in-flight first** (crash-resume finishes started work before opening
   new), then pending in spec order. `max_parallel` is the config's
   `maxParallelTasks` — the runner drives at most that many tasks in flight. `stale`
-  is the subset of `ready` whose in-flight spawn has aged past
-  `config.stallTtlMinutes` (`spawn_in_flight.spawned_at`, [state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)) — **advisory only**,
-  the task's status is unchanged: it tells the runner to abandon a silently-dead
-  agent's in-flight spawn and re-drive the task via `next-action` (idempotent — the
-  reset re-spawns clean, and the dead agent's late results are rejected by the stale
-  `result_key` guard). An empty list is the steady state.
+  and `hung` are DISJOINT subsets of `ready` banded by in-flight spawn age
+  (`spawn_in_flight.spawned_at`, [state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)) — **advisory only**,
+  the task's status is unchanged. `stale` (`stallTtlMinutes < age ≤ hungSpawnMinutes`):
+  liveness-check first, then abandon a silently-dead agent's spawn and re-drive the
+  task via `next-action` (idempotent — the reset re-spawns clean, and the dead agent's
+  late results are rejected by the stale `result_key` guard). `hung`
+  (`age > hungSpawnMinutes`, Decision 66): kill the spawn's agents **even if alive**
+  and re-drive — bounded engine-side by `SPAWN_REDRIVE_CAP` per `(phase, rung)`
+  checkpoint, after which the re-drive fails the task `blocked-environmental`. The
+  stale-shipping adoption probe (Decision 60) gates on the union of both bands. Empty
+  lists are the steady state.
 - `{ kind:"traceability", run_id, data_dir, ship_mode }` — all tasks are terminal and
   the run will complete (non-debug), but the PRD-traceability audit has not concluded
   (Decision 47). Ordered **after the e2e phase, before `document`**. The runner runs

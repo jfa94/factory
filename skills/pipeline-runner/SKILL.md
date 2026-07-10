@@ -167,7 +167,7 @@ only event that must re-enter this loop — a spawn that silently dies produces 
 first REFILL, arm ONE session-scoped recurring wake sized to the configured TTL:
 
 ```bash
-TTL_MIN=$(factory config-defaults | jq -r .stallTtlMinutes)   # default 20
+TTL_MIN=$(factory config-defaults | jq -r .stallTtlMinutes)   # default 15
 ```
 
 ```
@@ -210,8 +210,26 @@ REFILL (run at loop entry and after every completion):
     "document"  → run the DOCS STAGE (below); on done, REFILL; on suspend,
                   report the reason + STOP (run is suspended — /factory:resume retries)
     "pause"     → PAUSE CONVERGENCE (below)
-    "work"      → # S1/3c self-heal FIRST, before the ready-fill loop, so a revived
-                  # task reclaims its slot ahead of new work:
+    "work"      → # HARD wall-clock kill FIRST (env.hung, disjoint from env.stale — no
+                  # dedupe needed). The engine's hungSpawnMinutes verdict is final:
+                  # NO liveness check — past the hard cap a still-running agent is
+                  # hung, not slow (Decision 66).
+                  for each id in env.hung:
+                    TaskStop every tracked agent id for it, EVEN IF STILL RUNNING
+                    (not in the table — compaction/context-loss: TaskStop any TaskList
+                    agent you can attribute to it, then proceed the same way)
+                    remove the task from the table (if tracked)
+                    tenv = factory next-action --run <run_id> --task <task>   # WITHOUT --results
+                    case tenv.kind:
+                      "spawn" → spawn per the collection contract + spawn rule below;
+                                add the task back to the table
+                      "done"  → report tenv.outcome (once the engine's re-drive budget
+                                — SPAWN_REDRIVE_CAP — is spent it FAILS the task;
+                                finalize + rescue auto own recovery from there);
+                                REFILL again
+                      "pause" → PAUSE CONVERGENCE
+                  # then the S1/3c advisory self-heal, before the ready-fill loop, so a
+                  # revived task reclaims its slot ahead of new work:
                   for each id in env.stale that IS in the table:
                     check TaskList for whether its tracked agent task-ids are still
                     running. If ANY still is → false positive (a slow-but-alive spawn,

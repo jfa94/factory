@@ -71,7 +71,10 @@ and is stepped verbatim by the runner (the in-session event loop).
   on a fresh spawn it captures the task-branch tip; on a resume that re-enters the
   same `(phase, rung)` before any results were recorded, it resets the shared worktree
   to that tip — discarding only the abandoned producer's partial work — before
-  re-spawning, so a stop-mid-spawn plus `factory resume` is idempotent.
+  re-spawning, so a stop-mid-spawn plus `factory resume` is idempotent. Each such
+  re-entry increments `spawn_in_flight.redrives`; past `SPAWN_REDRIVE_CAP` (2) the
+  task fails `blocked-environmental` rather than looping (Decision 66), so a hung
+  spawn that keeps re-hanging is bounded, not infinite.
 - `handlers.ts` — the phase **reporters** (`preflight`/`tests`/`exec`/`verify`),
   built by `makePhaseHandlers`. Each reads the frozen `PhaseContext` and returns a
   `PhaseResult`; none writes state or spawns. The `producerSpawn` helper dials the

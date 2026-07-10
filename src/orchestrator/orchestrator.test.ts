@@ -263,6 +263,7 @@ describe('nextAction', () => {
                 rung: 0,
                 tip_sha: git.localBranches.get(taskBranch),
                 spawned_at: NOW,
+                redrives: 0,
             })
         } finally {
             await cleanup()
@@ -321,6 +322,46 @@ describe('nextAction', () => {
 
             const run2 = await deps.state.read(runId)
             expect(run2.tasks.T1?.spawn_in_flight?.spawned_at).toBe(LATER)
+            // Each matching re-entry spends one unit of the re-drive budget (Decision 66).
+            expect(run2.tasks.T1?.spawn_in_flight?.redrives).toBe(1)
+
+            const env3 = await nextAction(deps, runId, 'T1')
+            expect(env3).toEqual(env1)
+            const run3 = await deps.state.read(runId)
+            expect(run3.tasks.T1?.spawn_in_flight?.redrives).toBe(2)
+        } finally {
+            await cleanup()
+        }
+    })
+
+    it('fails the task blocked-environmental when the re-drive budget is exhausted (Decision 66)', async () => {
+        const {deps, runId, cleanup} = await makeOrchestratorDeps()
+        try {
+            const git = deps.git as FakeGitClient
+            const env1 = await nextAction(deps, runId, 'T1') // fresh tests spawn, redrives 0
+            if (env1.kind !== 'spawn') {
+                throw new Error('expected tests spawn')
+            }
+            await nextAction(deps, runId, 'T1') // re-drive 1
+            await nextAction(deps, runId, 'T1') // re-drive 2 (SPAWN_REDRIVE_CAP)
+
+            // Third matching re-entry would exceed the cap → the engine fails the task
+            // instead of respawning, and issues NO worktree reset (forensics preserved).
+            const callsBefore = git.calls.length
+            const env4 = await nextAction(deps, runId, 'T1')
+            expect(env4).toMatchObject({
+                kind: 'done',
+                outcome: {outcome: 'failed', failure_class: 'blocked-environmental'},
+            })
+            if (env4.kind !== 'done' || env4.outcome.outcome !== 'failed') {
+                throw new Error('expected failed done envelope')
+            }
+            expect(env4.outcome.reason).toContain('hung spawn')
+            expect(git.calls.slice(callsBefore).filter((c) => c.startsWith('reset --hard'))).toEqual([])
+
+            const run = await deps.state.read(runId)
+            expect(run.tasks.T1?.status).toBe('failed')
+            expect(run.tasks.T1?.spawn_in_flight).toBeUndefined()
         } finally {
             await cleanup()
         }
@@ -334,6 +375,11 @@ describe('nextAction', () => {
             if (env1.kind !== 'spawn') {
                 throw new Error('expected tests spawn')
             }
+            // Spend one re-drive at (tests, 0) so the advance below also pins the natural
+            // budget reset: the fresh exec checkpoint must come back with redrives 0.
+            await nextAction(deps, runId, 'T1')
+            const preAdvance = await deps.state.read(runId)
+            expect(preAdvance.tasks.T1?.spawn_in_flight?.redrives).toBe(1)
 
             // Record tests DONE → exec spawn. The advance changes the phase, so this is a FRESH
             // spawn that OVERWRITES the checkpoint (never a reset against the stale tests entry).
@@ -353,6 +399,7 @@ describe('nextAction', () => {
                 rung: 0,
                 tip_sha: git.localBranches.get(runScopedBranch(runId, 'T1')),
                 spawned_at: NOW,
+                redrives: 0,
             })
         } finally {
             await cleanup()
