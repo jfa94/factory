@@ -139,10 +139,11 @@ export class SpecStore {
 
     /**
      * Delete the canonical spec dir for `(repo, issueNumber)`, if one exists.
-     * Used by `--supersede` to force Phase 1 to regenerate from the PRD rather
-     * than reuse a potentially-broken durable spec. Returns `true` when a dir
-     * was deleted, `false` when nothing matched (idempotent — a missing spec
-     * on supersede is not an error).
+     * Called by `storeSpec` immediately before writing a spec, so a `--supersede`
+     * regeneration replaces the old spec only AFTER the new one passed gate +
+     * review (the old spec — and any run pointing at it — survives the whole
+     * regen loop). Returns `true` when a dir was deleted, `false` when nothing
+     * matched (idempotent — the fresh path matches nothing).
      *
      * @ponytail: only the canonical dataDir spec dir is removed; the in-repo
      * reviewable mirror (`docs/factory/<spec-id>/`) is left in place —

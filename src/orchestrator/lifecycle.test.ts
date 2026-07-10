@@ -613,7 +613,7 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         ).rejects.toThrow(/boom/)
 
         // No stranded active run — the row was never persisted.
-        expect(await state.findActiveBySpec(REPO, '42-checkout')).toBeNull()
+        expect(await state.findActiveByIssue(REPO, 42)).toBeNull()
 
         // The retry (healthy deps) creates fresh — NOT `exists` (which the strand would force).
         const healthy = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
@@ -872,6 +872,68 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         }))
         const r = await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-new'})
         expect(r.kind).toBe('exists')
+    })
+
+    // -------------------------------------------------------------------------
+    // Slug drift — the active run's pointer says '42-checkout' but a regenerated
+    // spec came back '42-payments'. The lookup is issue-keyed (findActiveByIssue),
+    // so every non-fresh intent must still SEE the drifted run.
+    // -------------------------------------------------------------------------
+
+    /** Replace the stored spec with a regenerated one whose slug drifted. */
+    async function driftStoredSpec(): Promise<void> {
+        await store.deleteByIssue(REPO, 42)
+        await store.write(
+            {...makeSpec([{task_id: 't1'}]), spec_id: '42-payments', slug: 'payments'},
+            '# v2\n',
+            makePrd()
+        )
+    }
+
+    it("drifted-slug active run + default intent → kind:'exists' (no silent duplicate create)", async () => {
+        await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
+        await driftStoredSpec()
+        const r = await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-new'})
+        expect(r.kind).toBe('exists')
+        if (r.kind !== 'exists') {
+            throw new Error('narrowing')
+        }
+        expect(r.existing.run_id).toBe('run-old')
+    })
+
+    it('drifted-slug active run + supersede intent → old run found and torn down', async () => {
+        await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
+        await driftStoredSpec()
+
+        const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+        git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+        const r = await resolveOrCreateRun(
+            state,
+            store,
+            {repo: REPO, issue: 42, runId: 'run-new', intent: 'supersede'},
+            {
+                gitClient: git,
+                ghClient: new FakeGhClient(),
+                config: defaultConfig(),
+                targetRoot: '/target',
+                orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-new',
+                owner: 'acme',
+                repo: 'widgets',
+            }
+        )
+        expect(r.kind).toBe('superseded')
+        if (r.kind !== 'superseded') {
+            throw new Error('narrowing')
+        }
+        expect(r.supersededId).toBe('run-old')
+        expect((await state.read('run-old')).status).toBe('superseded')
+    })
+
+    it('drifted-slug weekly-parked run + default intent → still quota-blocked', async () => {
+        await seedWeeklyParked()
+        await driftStoredSpec()
+        const r = await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-new'})
+        expect(r.kind).toBe('pause')
     })
 })
 

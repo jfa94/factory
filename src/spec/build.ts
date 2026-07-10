@@ -73,6 +73,25 @@ export type SpecBuildEnvelope =
       }
     | {
           /**
+           * Quota stop BEFORE any apex spend (shape-aligned with the next-task pause,
+           * src/orchestrator/quota-gate.ts quotaStopFields). TERMINAL for Phase 1: the
+           * runner spawns NOTHING and stops loud. No run exists yet, so nothing is
+           * parked and no state is written; a re-run after the window resets (or with
+           * `--ignore-quota`) starts the loop cleanly. Emitted when (a) the pacer says
+           * the 5h/7d window is breached (or the usage signal is unavailable —
+           * fail-closed) before the generate spawn, or (b) `--supersede` targets a
+           * weekly-parked run (mirrors the `resolveOrCreateRun` weekly wall so the
+           * parked run's spec is never replaced out from under it).
+           */
+          readonly kind: 'pause'
+          readonly repo: string
+          readonly issue: number
+          readonly scope: '5h' | '7d' | 'unavailable'
+          readonly reason: string
+          readonly resets_at_epoch?: number
+      }
+    | {
+          /**
            * Deterministic pre-generation refusal (S9, Decision 47) — the PRD cannot
            * support spec generation. TERMINAL: the runner spawns NOTHING and stops
            * loud; `blockers` tells the PRD author exactly what to add. Zero agent cost.
@@ -169,10 +188,12 @@ function scratchPaths(
  * Reuse-or-begin: on a store hit return the pointer (Δ X — never regen); else fetch
  * the PRD, persist it to the scratch dir, and emit the apex-pinned generate spawn.
  *
- * Pass `regenerate: true` (from `--supersede`) to delete any existing durable spec
- * before the reuse check, forcing Phase 1 to regenerate from the PRD. Deletion is
- * mandatory — regen without delete risks two dirs for the same issue, which
- * `resolveByIssue` treats as a store-integrity error.
+ * Pass `regenerate: true` (from `--supersede`) to SKIP the reuse check and
+ * regenerate from the PRD. The old durable spec is NOT deleted here — it survives
+ * until `storeSpec` replaces it after the new spec passes gate + review, so a
+ * mid-loop failure (or quota pause) leaves the old spec AND any run pointing at it
+ * intact. Replacement-at-store also upholds the one-dir-per-issue invariant
+ * `resolveByIssue` enforces (delete happens atomically-adjacent to the new write).
  */
 export async function resolveSpec(
     deps: SpecBuildDeps,
@@ -180,12 +201,11 @@ export async function resolveSpec(
     issue: number,
     {regenerate = false}: {regenerate?: boolean} = {}
 ): Promise<SpecBuildEnvelope> {
-    if (regenerate) {
-        await deps.store.deleteByIssue(repo, issue)
-    }
-    const existing = await deps.store.resolveByIssue(repo, issue)
-    if (existing) {
-        return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
+    if (!regenerate) {
+        const existing = await deps.store.resolveByIssue(repo, issue)
+        if (existing) {
+            return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
+        }
     }
 
     const prd = await deps.gh.fetchPrd(issue, {repo})
@@ -296,6 +316,14 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     // S9: snapshot the PRD durably beside the spec — the traceability stage reads
     // it at finalize time (no gh re-fetch; scratch prd.json is transient).
     const prd = await readJsonFile<Prd>(prdPath)
+    // Replace any prior spec for this issue ONLY now that the replacement passed
+    // gate + review (a regen's old spec survives the whole loop — see resolveSpec).
+    // Delete-then-write, not write-then-delete: deleteByIssue matches by issue
+    // prefix and would remove the just-written dir; and a crash between the two
+    // degrades to "no spec" (self-healing — the next resolve regenerates), never
+    // to two dirs, which resolveByIssue treats as a store-integrity error.
+    // Idempotent no-op on the fresh path (nothing matches).
+    await deps.store.deleteByIssue(repo, issue)
     const pointer = await deps.store.write(request, generated.specMd, prd)
     return {kind: 'stored', repo, issue, pointer}
 }

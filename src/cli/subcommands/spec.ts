@@ -11,6 +11,7 @@ import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {defaultSpecBuildRoot} from '../../core/state/paths.js'
+import {StateManager} from '../../core/state/index.js'
 import {
     SpecStore,
     RealGhClient,
@@ -29,7 +30,7 @@ export type {SpecBuildDeps, SpecBuildEnvelope}
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede] [--ignore-quota]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
@@ -63,6 +64,32 @@ function wireDeps(): SpecBuildDeps {
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
         scratchRoot: defaultSpecBuildRoot(),
+    }
+}
+
+/**
+ * The `--supersede` weekly-parked pre-check: mirrors the `resolveOrCreateRun` weekly
+ * wall (lifecycle.ts) BEFORE Phase 1 regenerates anything. Without it the regen loop
+ * would replace the parked run's durable spec, and Phase 2's wall would then refuse
+ * the supersede — stranding the parked run with a dangling spec pointer. Read-only;
+ * honors `--ignore-quota` at the call site. Returns null when nothing blocks (no
+ * active run, or an active run supersede may proceed against). Exported for tests.
+ */
+export async function weeklyParkedPause(repo: string, issue: number): Promise<SpecBuildEnvelope | null> {
+    const run = await new StateManager({}).findActiveByIssue(repo, issue)
+    const quota = run?.quota
+    if (run?.status !== 'suspended' || quota?.binding_window !== '7d') {
+        return null
+    }
+    return {
+        kind: 'pause',
+        repo,
+        issue,
+        scope: '7d',
+        reason:
+            `run '${run.run_id}' is weekly-parked (7d quota window); superseding would strand it — ` +
+            `resume with /factory:resume after the window resets, or pass --ignore-quota`,
+        resets_at_epoch: quota.resets_at_epoch,
     }
 }
 
@@ -111,7 +138,7 @@ async function run(argv: string[]): Promise<ExitCode> {
         throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`)
     }
 
-    const args = parseArgs(argv.slice(1), {booleans: ['supersede']})
+    const args = parseArgs(argv.slice(1), {booleans: ['supersede', 'ignore-quota']})
     if (args.flag('help') === true) {
         return emitHelp(SPEC_HELP)
     }
@@ -120,11 +147,21 @@ async function run(argv: string[]): Promise<ExitCode> {
     // optional --repo (may probe git) — so a missing/invalid issue stays a fast USAGE.
     const issue = parseIssue(args.requireFlag('issue'))
     const repo = await resolveSpecRepo(args)
+    const supersede = args.flag('supersede') === true
+    const ignoreQuota = args.flag('ignore-quota') === true
+
+    if (action === 'resolve' && supersede && !ignoreQuota) {
+        const parked = await weeklyParkedPause(repo, issue)
+        if (parked !== null) {
+            emitJson(parked)
+            return specExitCode(parked)
+        }
+    }
 
     const deps = wireDeps()
     const envelope =
         action === 'resolve'
-            ? await resolveSpec(deps, repo, issue, {regenerate: args.flag('supersede') === true})
+            ? await resolveSpec(deps, repo, issue, {regenerate: supersede})
             : await handler(deps, repo, issue)
     emitJson(envelope)
     if (envelope.kind === 'unspecifiable') {

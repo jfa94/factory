@@ -232,7 +232,7 @@ describe('resolveSpec specifiability refusal (S9 — Δ pre-generation, zero age
 })
 
 describe('resolveSpec with regenerate:true (--supersede)', () => {
-    it('deletes the existing spec and emits generate — never reuse', async () => {
+    it('skips the reuse check and emits generate — never reuse', async () => {
         const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
         await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
 
@@ -240,12 +240,14 @@ describe('resolveSpec with regenerate:true (--supersede)', () => {
         expect(env.kind).toBe('generate')
     })
 
-    it('after deletion resolveByIssue returns null', async () => {
+    it('the old durable spec SURVIVES resolve — replaced only when store persists the new one', async () => {
+        // A mid-loop failure (crash, quota pause) must leave the old spec — and any
+        // active run pointing at it — intact. Deletion happens at storeSpec time.
         const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
         await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
 
         await resolveSpec(deps(), REPO, ISSUE, {regenerate: true})
-        expect(await store.resolveByIssue(REPO, ISSUE)).toBeNull()
+        expect((await store.resolveByIssue(REPO, ISSUE))?.spec_id).toBe(`${ISSUE}-email-login`)
     })
 
     it('regenerate:false still reuses an existing spec', async () => {
@@ -259,6 +261,27 @@ describe('resolveSpec with regenerate:true (--supersede)', () => {
     it('regenerate:true with no existing spec is a no-op — still emits generate', async () => {
         const env = await resolveSpec(deps(), REPO, ISSUE, {regenerate: true})
         expect(env.kind).toBe('generate')
+    })
+
+    it('storeSpec replaces a different-slug old spec — no two-dirs integrity error', async () => {
+        // Regen slug drift: the old spec is `123-email-login`, the regenerated one
+        // comes back `123-login-rework`. Store must atomically-adjacently swap them.
+        const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
+
+        await resolveSpec(deps(), REPO, ISSUE, {regenerate: true}) // writes scratch prd.json
+        await writeScratch('generated.json', {...PASS_GENERATED, slug: 'login-rework'})
+        await writeScratch('verdict.json', PASS_VERDICT)
+
+        const env = await storeSpec(deps(), REPO, ISSUE)
+        expect(env.kind).toBe('stored')
+        if (env.kind !== 'stored') {
+            throw new Error('unreachable')
+        }
+        expect(env.pointer.spec_id).toBe(`${ISSUE}-login-rework`)
+        // Exactly one dir remains for the issue — the new one (resolveByIssue would
+        // throw loud on two).
+        expect((await store.resolveByIssue(REPO, ISSUE))?.spec_id).toBe(`${ISSUE}-login-rework`)
     })
 })
 

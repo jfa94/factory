@@ -7626,19 +7626,29 @@ var StateManager = class _StateManager {
     }
   }
   /**
-   * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
+   * Find the single NON-terminal run for `(repo, issueNumber)`, or null. Powers the
    * resolve-or-reuse path of `run create`: a repeated create returns the live run
-   * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
-   * `<issue>-<slug>` — unique within a repo, but not necessarily across repos).
+   * instead of spawning an orphan. Matches by the STABLE issue number, not the exact
+   * `spec_id` — a spec id is `<issue>-<slug>` where the slug is agent-named and can
+   * drift across regenerations, and one issue means at most one active run: the
+   * supersede teardown, the weekly-quota wall, and the no-silent-reuse prompt must
+   * all see a drifted-slug run.
+   *
+   * @throws when ≥2 active runs match — a state defect (duplicates have occurred in
+   *         the wild); silently picking one could tear down or reuse the wrong run.
+   *         Fail loud and let `/factory:resume` repair.
    */
-  async findActiveBySpec(repo, specId) {
+  async findActiveByIssue(repo, issueNumber) {
     const runs = await this.listRuns();
-    for (const r of runs) {
-      if (r.spec.repo === repo && r.spec.spec_id === specId && !isTerminalRunStatus(r.status)) {
-        return r;
-      }
+    const matches = runs.filter(
+      (r) => r.spec.repo === repo && r.spec.issue_number === issueNumber && !isTerminalRunStatus(r.status)
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `findActiveByIssue: ${matches.length} active runs for issue #${issueNumber} in ${repo} (${matches.map((r) => r.run_id).join(", ")}) \u2014 one issue must have at most one active run; repair with /factory:resume`
+      );
     }
-    return null;
+    return matches.length === 1 ? at(matches, 0) : null;
   }
   /**
    * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
@@ -10199,10 +10209,11 @@ var SpecStore = class {
   }
   /**
    * Delete the canonical spec dir for `(repo, issueNumber)`, if one exists.
-   * Used by `--supersede` to force Phase 1 to regenerate from the PRD rather
-   * than reuse a potentially-broken durable spec. Returns `true` when a dir
-   * was deleted, `false` when nothing matched (idempotent — a missing spec
-   * on supersede is not an error).
+   * Called by `storeSpec` immediately before writing a spec, so a `--supersede`
+   * regeneration replaces the old spec only AFTER the new one passed gate +
+   * review (the old spec — and any run pointing at it — survives the whole
+   * regen loop). Returns `true` when a dir was deleted, `false` when nothing
+   * matched (idempotent — the fresh path matches nothing).
    *
    * @ponytail: only the canonical dataDir spec dir is removed; the in-repo
    * reviewable mirror (`docs/factory/<spec-id>/`) is left in place —
@@ -10730,12 +10741,11 @@ function scratchPaths(scratchRoot, repo, issue) {
   };
 }
 async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
-  if (regenerate) {
-    await deps.store.deleteByIssue(repo, issue);
-  }
-  const existing = await deps.store.resolveByIssue(repo, issue);
-  if (existing) {
-    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+  if (!regenerate) {
+    const existing = await deps.store.resolveByIssue(repo, issue);
+    if (existing) {
+      return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+    }
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
   const { prdPath, generatedPath } = scratchPaths(deps.scratchRoot, repo, issue);
@@ -10811,6 +10821,7 @@ async function storeSpec(deps, repo, issue) {
   }
   const request = buildManifest(repo, issue, generated);
   const prd = await readJsonFile(prdPath);
+  await deps.store.deleteByIssue(repo, issue);
   const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }
@@ -16827,7 +16838,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   }
   const pointer = specStore.toPointer(request);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
-    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
+    const existing = await state.findActiveByIssue(pointer.repo, pointer.issue_number);
     if (existing !== null) {
       const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
       if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== "resume") {
@@ -17618,7 +17629,7 @@ var resumeCommand = {
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede] [--ignore-quota]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
@@ -17651,6 +17662,21 @@ function wireDeps() {
     scratchRoot: defaultSpecBuildRoot()
   };
 }
+async function weeklyParkedPause(repo, issue) {
+  const run9 = await new StateManager({}).findActiveByIssue(repo, issue);
+  const quota = run9?.quota;
+  if (run9?.status !== "suspended" || quota?.binding_window !== "7d") {
+    return null;
+  }
+  return {
+    kind: "pause",
+    repo,
+    issue,
+    scope: "7d",
+    reason: `run '${run9.run_id}' is weekly-parked (7d quota window); superseding would strand it \u2014 resume with /factory:resume after the window resets, or pass --ignore-quota`,
+    resets_at_epoch: quota.resets_at_epoch
+  };
+}
 var ACTIONS = {
   resolve: resolveSpec,
   gate: gateSpec,
@@ -17673,14 +17699,23 @@ async function run3(argv) {
   if (handler === void 0) {
     throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`);
   }
-  const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
+  const args = parseArgs(argv.slice(1), { booleans: ["supersede", "ignore-quota"] });
   if (args.flag("help") === true) {
     return emitHelp(SPEC_HELP);
   }
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
+  const supersede = args.flag("supersede") === true;
+  const ignoreQuota = args.flag("ignore-quota") === true;
+  if (action === "resolve" && supersede && !ignoreQuota) {
+    const parked = await weeklyParkedPause(repo, issue);
+    if (parked !== null) {
+      emitJson(parked);
+      return specExitCode(parked);
+    }
+  }
   const deps = wireDeps();
-  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
+  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: supersede }) : await handler(deps, repo, issue);
   emitJson(envelope);
   if (envelope.kind === "unspecifiable") {
     emitError(
