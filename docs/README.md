@@ -120,11 +120,10 @@ contract.
 - [The verifier and the risk-invariant merge gate](./explanation/verifier.md) — the two-layer verifier, the panel, verify-then-fix.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
 - [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
+- [The plugin data dir](./explanation/plugin-data-dir.md) — where run/spec state lives and why it sits outside the target repo.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
 - [Design Decisions](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
 
 ### Domain
 
 - [Glossary](./glossary.md) — the ubiquitous-language terms of the Dark Factory domain.
-  </content>
-  </invoke>

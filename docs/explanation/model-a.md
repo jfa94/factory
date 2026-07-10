@@ -131,4 +131,3 @@ code (`src/orchestrator/record.ts`), so they cannot drift.
   forgery-resistant.
 - `skills/pipeline-runner/SKILL.md` — the runner's Iron Laws and
   control loop.
-  </content>

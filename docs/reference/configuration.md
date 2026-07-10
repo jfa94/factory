@@ -242,4 +242,3 @@ The following bash-era keys are deliberately **absent** and must not be carried
 forward (human-review gates are retired — Decision 5/19; the review-depth axis was
 removed — Decision 25): `humanReviewLevel`, `NEEDS_DISCUSSION`, the exit-42 code,
 and the per-tier review caps.
-</content>

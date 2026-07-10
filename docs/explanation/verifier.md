@@ -255,7 +255,6 @@ merge gate is re-derived from evidence every time it is needed — including ins
 is each individual reviewer's panel verdict (that opinion is itself ground truth);
 the merge gate (unanimity) is computed from those. See
 [derive-dont-store.md](./derive-dont-store.md).
-</content>
 
 ## Why gates exec local bins, never `npx`
 

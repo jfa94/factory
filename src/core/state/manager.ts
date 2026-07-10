@@ -208,8 +208,8 @@ export class StateManager {
 
     /**
      * Create a brand-new run. Mkdirs the run store layout, writes the initial
-     * state.json atomically under the lock, and (best-effort) points `runs/current`
-     * at it. Refuses to clobber an existing run dir.
+     * state.json atomically under the lock, and (best-effort) points the per-repo
+     * `current/<repo-key>` pointer at it. Refuses to clobber an existing run dir.
      */
     async create(args: CreateRunArgs): Promise<RunState> {
         const dir = runDir(this.dataDir, args.run_id)
@@ -229,8 +229,9 @@ export class StateManager {
             status: 'running',
             execution_mode: args.execution_mode ?? 'sequential',
             ship_mode: args.ship_mode ?? 'live',
-            // Stamp the owning session only when known (best-effort) — an absent owner
-            // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+            // Stamp the owning session only when known (best-effort) — an ownerless run
+            // is INVISIBLE to the Stop gate (findActiveByOwner never matches it; there is
+            // no unscoped fallback), so that session's loop can stop freely.
             ...(args.owner_session !== undefined ? {owner_session: args.owner_session} : {}),
             staging_branch: args.staging_branch,
             ...(args.ignore_quota !== undefined ? {ignore_quota: args.ignore_quota} : {}),
@@ -584,11 +585,11 @@ export class StateManager {
     // ---- current symlink ---------------------------------------------------
 
     /**
-     * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
-     *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
-     *     for the human CLI per checkout), and
-     *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
-     *     fallback the degraded hook/stop paths still read).
+     * Repoint the PER-REPO current pointer `current/<repo-key>` → `../runs/<run-id>`
+     * at a freshly-created run (L2.6/L2.7) — the single live pointer, authoritative
+     * for the human CLI per checkout. The legacy GLOBAL `runs/current` link is
+     * RETIRED (Decision 61): nothing reads it; this method only best-effort rms a
+     * leftover from an older engine.
      *
      * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
      * best-effort symlink catch below): if THIS repo's current pointer already names a

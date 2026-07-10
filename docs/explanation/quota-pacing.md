@@ -124,7 +124,7 @@ state-based circuit breaker still applies; only usage pacing is bypassed.)
 
 A 7d breach suspends the run cleanly to be resumed later (Decision 1). To stop a parked
 run from being silently abandoned and replaced while its window is still exhausted,
-`resolveOrCreateRun` (`src/cli/subcommands/run.ts`) treats an active **weekly-parked**
+`resolveOrCreateRun` (`src/orchestrator/lifecycle.ts`) treats an active **weekly-parked**
 run — `status === "suspended"` _and_ `quota.binding_window === "7d"` — as a hard wall:
 it returns a `kind:"pause"` result and `run create` exits `CONFLICT` (3),
 emitting `{kind:"pause", scope:"7d", run_id, status, reason, resets_at_epoch?}`.

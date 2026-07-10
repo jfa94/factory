@@ -90,7 +90,7 @@ That is the Model-A split. Read these two files in order:
 2. `skills/pipeline-runner/SKILL.md` — the runner's full event loop: the
    Iron Laws, the orchestrator surface (`next-task` / `next-action`), the `agent_type`
    each spawn envelope carries (the runner spawns it verbatim — no spawn matrix), and the
-   four phases (preconditions → spec → create → drive → completion).
+   five phases (preconditions → spec → create → drive/the-loop → report).
 
 As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE
 seam — the orchestrator. The runner's inner per-task loop runs `factory next-action --run <id>
@@ -116,4 +116,3 @@ source of truth for behavior — read a module's test file alongside the module.
 - To work on the engine: [Build and verify](./guides/build-and-verify.md).
 - To understand the design: [Model A](./explanation/model-a.md) and the
   [System Overview](./architecture/overview.md).
-  </content>

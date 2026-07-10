@@ -32,4 +32,3 @@ returns `USAGE`; any other thrown error propagates and the entry maps it to
 that the runner reads from the JSON envelope — the CLI still exits `OK` for
 the _act_ of recording the fail (the failure is in the run outcome, not the CLI
 invocation), while an unexpected, unhandled condition exits `ERROR`.
-</content>

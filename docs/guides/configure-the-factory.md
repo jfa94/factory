@@ -74,4 +74,3 @@ change to its default.
   construction — see the [configuration reference](../reference/configuration.md).
 - The trusted-compute-base write-deny is **hardcoded** in the hooks, not
   config-sourced; there is no config key to widen it.
-  </content>

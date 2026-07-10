@@ -47,15 +47,17 @@ export const RUNS_DIR = 'runs'
  * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
  */
 export const WORKTREES_DIR = 'worktrees'
-/** Symlink name pointing at the active run (GLOBAL repo-less pointer for no-cwd consumers). */
+/**
+ * RETIRED global `runs/current` symlink name (Decision 61) — no consumer reads it.
+ * Kept only so `pointCurrentAt` can best-effort rm a leftover from an older engine.
+ */
 export const CURRENT_LINK = 'current'
 /**
  * Subdir name for the PER-REPO current pointers (run-isolation L2.7). A pointer
  * lives at `<dataDir>/current/<repo-key>` → `../runs/<run-id>`, in a tree SEPARATE
  * from `runs/` so {@link runsRoot} enumeration ({@link runDir} scan) is untouched
- * (a sibling dir, never a child of `runs/`). This is the authoritative pointer the
- * human CLI resolves per checkout; the global repo-less `runs/current` stays for
- * no-cwd consumers (statusline ticks, hook-context) — never a CLI fallback.
+ * (a sibling dir, never a child of `runs/`). This is THE authoritative pointer the
+ * human CLI resolves per checkout — the sole live current pointer.
  */
 export const CURRENT_DIR = 'current'
 /** The per-run state file name. */
