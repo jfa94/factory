@@ -107,8 +107,7 @@ const TERMINAL_LINGER_SEC = 30 * 60
 
 /**
  * S11 — the run-progress suffix appended to the displayed statusline, e.g.
- * ` [factory 3/7 exec run-20260704-101500 running]` (done/total tasks, the first
- * in-flight task's phase, run id, run status). Terminal runs show only for
+ * ` 3/7 tasks completed`. Terminal runs show only for
  * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
  *
  * The run is keyed off the PER-REPO current pointer, resolved from the payload's
@@ -140,7 +139,7 @@ async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<s
             run_id?: unknown
             status?: unknown
             ended_at?: unknown
-            tasks?: Record<string, {status?: unknown; phase?: unknown} | undefined>
+            tasks?: Record<string, {status?: unknown} | undefined>
         }
         if (typeof run.run_id !== 'string' || typeof run.status !== 'string') {
             return ''
@@ -156,11 +155,7 @@ async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<s
 
         const tasks = Object.values(run.tasks ?? {})
         const done = tasks.filter((t) => t?.status === 'done').length
-        const inFlight = tasks.find(
-            (t) => t?.status === 'executing' || t?.status === 'reviewing' || t?.status === 'shipping'
-        )
-        const phase = typeof inFlight?.phase === 'string' ? `${inFlight.phase} ` : ''
-        return ` [factory ${done}/${tasks.length} ${phase}${run.run_id} ${run.status}]`
+        return ` ${done}/${tasks.length} tasks completed`
     } catch {
         return '' // no run / unreadable state / anything — the suffix just vanishes.
     }

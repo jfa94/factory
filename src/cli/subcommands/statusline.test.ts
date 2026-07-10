@@ -343,8 +343,8 @@ describe('runStatusline (run-progress suffix, S11)', () => {
         rmSync(dataDir, {recursive: true, force: true})
     })
 
-    it('appends done/total + phase + run id + status for the current run', async () => {
-        expect(await display()).toBe(`[factory 1/3 exec ${RUN} running]`)
+    it('appends done/total for the current run', async () => {
+        expect(await display()).toBe('1/3 tasks completed')
     })
 
     it('shows no suffix when no current-run pointer exists', async () => {
@@ -365,7 +365,7 @@ describe('runStatusline (run-progress suffix, S11)', () => {
             ended_at: endedAt,
             tasks: {a: task({task_id: 'a', status: 'done'})},
         }))
-        expect(await display()).toBe(`[factory 1/1 ${RUN} completed]`)
+        expect(await display()).toBe('1/1 tasks completed')
         // Same run seen 31 min after ended_at → gone.
         expect(await display({}, FIXED_NOW + 31 * 60)).toBe('')
     })
@@ -391,6 +391,6 @@ describe('runStatusline (run-progress suffix, S11)', () => {
             },
         })
         expect(code).toBe(EXIT.OK)
-        expect(displayed).toBe(`${payload} [factory 1/3 exec ${RUN} running]`)
+        expect(displayed).toBe(`${payload} 1/3 tasks completed`)
     })
 })

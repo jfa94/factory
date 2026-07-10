@@ -19836,11 +19836,7 @@ async function renderProgress(deps, payload) {
     }
     const tasks = Object.values(run9.tasks ?? {});
     const done = tasks.filter((t) => t?.status === "done").length;
-    const inFlight = tasks.find(
-      (t) => t?.status === "executing" || t?.status === "reviewing" || t?.status === "shipping"
-    );
-    const phase = typeof inFlight?.phase === "string" ? `${inFlight.phase} ` : "";
-    return ` [factory ${done}/${tasks.length} ${phase}${run9.run_id} ${run9.status}]`;
+    return ` ${done}/${tasks.length} tasks completed`;
   } catch {
     return "";
   }
