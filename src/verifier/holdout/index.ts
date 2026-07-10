@@ -42,7 +42,6 @@ export {
 export {InMemoryHoldoutVerdictStore, FsHoldoutVerdictStore, type HoldoutVerdictStore} from './verdict-store.js'
 
 // Exported fakes for downstream + own unit tests.
-export {FakeHoldoutValidatorRunner, type FakeHoldoutMode} from './fakes.js'
 
 /**
  * Re-derive holdout gate evidence from persisted verdicts. Returns `undefined` if no

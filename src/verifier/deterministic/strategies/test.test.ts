@@ -10,7 +10,7 @@
 import {describe, expect, it} from 'vitest'
 import {defaultConfig, type Config} from '../../../config/schema.js'
 import {at} from '../../../shared/index.js'
-import {FakeCommandRunner, FakeGitProbe, FakeVitest, makeFakeTools, proc} from '../fakes.js'
+import {FakeArgvRunner, FakeGitProbe, FakeVitest, makeFakeTools, proc} from '../fakes.js'
 import {GateContractSchema} from '../gate-contract.js'
 import {validContract} from '../gate-contract.test.js'
 import type {GateRan, GateSkip, StrategyContext} from '../strategy.js'
@@ -146,7 +146,7 @@ describe('testStrategy — contract command (S7, Decision 46)', () => {
 
     it('runs the contracted command FULL — vitest and diff-scoping not consulted', async () => {
         const fakeVitest = new FakeVitest(proc(1)) // would fail if called
-        const command = new FakeCommandRunner(proc(0))
+        const command = new FakeArgvRunner(proc(0))
         // The deno trap: a pure non-vitest diff previously skipped (scope) — with a
         // contracted command the full suite runs instead.
         const tools = makeFakeTools({
@@ -163,7 +163,7 @@ describe('testStrategy — contract command (S7, Decision 46)', () => {
     })
 
     it('contracted command exit≠0 → observed false', async () => {
-        const command = new FakeCommandRunner(proc(1, '', '1 test failed'))
+        const command = new FakeArgvRunner(proc(1, '', '1 test failed'))
         const tools = makeFakeTools({git: probe(['src/foo.test.ts']), command})
         const out = await testStrategy.run({...ctx(tools), contract: denoContract()})
         expect(out.kind).toBe('ran')
@@ -172,7 +172,7 @@ describe('testStrategy — contract command (S7, Decision 46)', () => {
 
     it('contract WITHOUT a test command → vitest path unchanged', async () => {
         const fakeVitest = new FakeVitest(proc(0))
-        const command = new FakeCommandRunner(proc(1)) // would fail if called
+        const command = new FakeArgvRunner(proc(1)) // would fail if called
         const tools = makeFakeTools({git: probe(['src/foo.test.ts']), vitest: fakeVitest, command})
         const contract = GateContractSchema.parse(validContract()) // test contracted, no command
         const out = await testStrategy.run({...ctx(tools), contract})

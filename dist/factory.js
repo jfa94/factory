@@ -1627,8 +1627,8 @@ var EXIT = {
 };
 
 // src/config/load.ts
-import { existsSync as existsSync2, readFileSync } from "node:fs";
-import { basename as basename2, dirname as dirname3, join as join2, resolve, sep } from "node:path";
+import { existsSync as existsSync3, readFileSync } from "node:fs";
+import { basename as basename2, dirname as dirname3, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
 import { homedir } from "node:os";
 
 // src/shared/logging.ts
@@ -6120,6 +6120,42 @@ function isUsageError(err) {
   return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
 }
 
+// src/shared/fs.ts
+import { existsSync as existsSync2, realpathSync } from "node:fs";
+import { access } from "node:fs/promises";
+import { isAbsolute, normalize, resolve, sep } from "node:path";
+async function pathExists(absPath) {
+  try {
+    await access(absPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function canonicalizePath(candidate, cwd = process.cwd()) {
+  const abs = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
+  const normalized = normalize(abs);
+  try {
+    if (existsSync2(normalized)) {
+      return realpathSync(normalized);
+    }
+  } catch {
+  }
+  const parts = normalized.split(sep);
+  for (let cut = parts.length - 1; cut > 0; cut--) {
+    const ancestor = parts.slice(0, cut).join(sep) || sep;
+    try {
+      if (existsSync2(ancestor)) {
+        const realAncestor = realpathSync(ancestor);
+        const tail = parts.slice(cut).join(sep);
+        return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor;
+      }
+    } catch {
+    }
+  }
+  return normalized;
+}
+
 // src/config/schema.ts
 var EffortEnum = external_exports.enum(["low", "medium", "high", "xhigh", "max"]);
 var QualitySchema = external_exports.object({
@@ -6325,7 +6361,7 @@ function expectedDataDir(opts) {
     return null;
   }
   const dataRoot = join2(home, ".claude", "plugins", "data");
-  if (!current.startsWith(dataRoot + sep)) {
+  if (!current.startsWith(dataRoot + sep2)) {
     return null;
   }
   const currentBase = basename2(current);
@@ -6334,13 +6370,13 @@ function expectedDataDir(opts) {
   }
   const pluginFromPath = basename2(dirname3(pluginRoot));
   const marketplaceFromPath = basename2(dirname3(dirname3(pluginRoot)));
-  const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
+  const cacheAnchor = resolve2(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
     return join2(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
   }
   const marketplaceJson = join2(pluginRoot, ".claude-plugin", "marketplace.json");
-  if (existsSync2(marketplaceJson)) {
+  if (existsSync3(marketplaceJson)) {
     try {
       const parsed = parseJson(readFileSync(marketplaceJson, "utf8"), marketplaceJson);
       const name = parsed !== null && typeof parsed === "object" ? parsed.name : void 0;
@@ -6361,12 +6397,12 @@ function inferPluginRoot() {
     const here = new URL(".", import.meta.url).pathname;
     let dir = here;
     for (let i = 0; i < 4; i++) {
-      if (existsSync2(join2(dir, ".claude-plugin"))) {
+      if (existsSync3(join2(dir, ".claude-plugin"))) {
         return dir;
       }
       dir = dirname3(dir);
     }
-    return resolve(here, "..");
+    return resolve2(here, "..");
   } catch (err) {
     log3.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
@@ -6375,13 +6411,13 @@ function inferPluginRoot() {
 function resolvePluginRoot(env = process.env) {
   const fromEnv = env.CLAUDE_PLUGIN_ROOT;
   if (typeof fromEnv === "string" && fromEnv.length > 0) {
-    return resolve(fromEnv);
+    return resolve2(fromEnv);
   }
   return inferPluginRoot();
 }
 function resolveDataDir(opts = {}) {
   if (opts.dataDir != null && opts.dataDir.length > 0) {
-    return resolve(opts.dataDir);
+    return resolve2(opts.dataDir);
   }
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
@@ -6399,14 +6435,14 @@ function resolveDataDir(opts = {}) {
         `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this warning permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
       );
     }
-    return resolve(corrected);
+    return resolve2(corrected);
   }
   if (current == null || current.length === 0) {
     throw new Error(
       'CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>")'
     );
   }
-  return resolve(current);
+  return resolve2(current);
 }
 function configPath(dataDir) {
   return join2(dataDir, "config.json");
@@ -6419,7 +6455,7 @@ function loadConfig(opts = {}) {
     return ConfigSchema.parse({});
   }
   const file = configPath(dataDir);
-  if (!existsSync2(file)) {
+  if (!existsSync3(file)) {
     return ConfigSchema.parse({});
   }
   const raw = parseJson(readFileSync(file, "utf8"), file);
@@ -6427,11 +6463,11 @@ function loadConfig(opts = {}) {
 }
 
 // src/config/save.ts
-import { existsSync as existsSync3, readFileSync as readFileSync2 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync2 } from "node:fs";
 import { mkdir as mkdir4 } from "node:fs/promises";
 function readRawConfig(opts = {}) {
   const file = configPath(resolveDataDir(opts));
-  if (!existsSync3(file)) {
+  if (!existsSync4(file)) {
     return {};
   }
   const parsed = parseJson(readFileSync2(file, "utf8"), file);
@@ -7252,7 +7288,7 @@ function mergeGateBlockReason(reviewers, gateEvidence) {
 
 // src/core/state/manager.ts
 import { mkdir as mkdir5, readFile as readFile3, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { basename as basename3, dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
@@ -7407,12 +7443,12 @@ var StateManager = class _StateManager {
   // ---- create ------------------------------------------------------------
   /**
    * Create a brand-new run. Mkdirs the run store layout, writes the initial
-   * state.json atomically under the lock, and (best-effort) points `runs/current`
-   * at it. Refuses to clobber an existing run dir.
+   * state.json atomically under the lock, and (best-effort) points the per-repo
+   * `current/<repo-key>` pointer at it. Refuses to clobber an existing run dir.
    */
   async create(args) {
     const dir = runDir(this.dataDir, args.run_id);
-    if (existsSync4(this.statePath(args.run_id))) {
+    if (existsSync5(this.statePath(args.run_id))) {
       throw new Error(`state: run '${args.run_id}' already exists`);
     }
     await mkdir5(join4(dir, "holdouts"), { recursive: true });
@@ -7423,8 +7459,9 @@ var StateManager = class _StateManager {
       status: "running",
       execution_mode: args.execution_mode ?? "sequential",
       ship_mode: args.ship_mode ?? "live",
-      // Stamp the owning session only when known (best-effort) — an absent owner
-      // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+      // Stamp the owning session only when known (best-effort) — an ownerless run
+      // is INVISIBLE to the Stop gate (findActiveByOwner never matches it; there is
+      // no unscoped fallback), so that session's loop can stop freely.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
@@ -7438,7 +7475,7 @@ var StateManager = class _StateManager {
       ended_at: null
     });
     await this.withLock(args.run_id, async () => {
-      if (existsSync4(this.statePath(args.run_id))) {
+      if (existsSync5(this.statePath(args.run_id))) {
         throw new Error(`state: run '${args.run_id}' already exists`);
       }
       await atomicWriteFile(this.statePath(args.run_id), stringifyJson(state));
@@ -7466,7 +7503,7 @@ var StateManager = class _StateManager {
    * created" from a genuine read failure without parsing.
    */
   exists(runId) {
-    return existsSync4(this.statePath(runId));
+    return existsSync5(this.statePath(runId));
   }
   /**
    * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
@@ -7487,7 +7524,7 @@ var StateManager = class _StateManager {
    * {@link readCurrentForRepo}.
    */
   async readThroughLink(link) {
-    if (!existsSync4(link)) {
+    if (!existsSync5(link)) {
       return null;
     }
     const statePath = join4(link, "state.json");
@@ -7514,28 +7551,32 @@ var StateManager = class _StateManager {
    * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
    * a bad entry, and never silently.)
    */
-  async listRuns() {
-    let entries;
+  /**
+   * Readdir the runs root, tolerating a missing root (no runs yet → []) and
+   * filtering to directories (excludes the `current` + temp symlinks). The shared
+   * prologue of {@link listRuns} and {@link listStaleRunDirs}.
+   */
+  async runDirEntries() {
     try {
-      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+      const entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch (err) {
       if (isEnoent(err)) {
         return [];
       }
       throw err;
     }
+  }
+  async listRuns() {
     const runs = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
+    for (const name of await this.runDirEntries()) {
       try {
-        runs.push(await this.read(entry.name));
+        runs.push(await this.read(name));
       } catch (err) {
         if (isEnoent(err)) {
           continue;
         }
-        log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log4.warn(`state: skipping unreadable run '${name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
@@ -7550,23 +7591,11 @@ var StateManager = class _StateManager {
    * wreckage — surfaces loudly through targeted reads, never swept here).
    */
   async listStaleRunDirs() {
-    let entries;
-    try {
-      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
-    } catch (err) {
-      if (isEnoent(err)) {
-        return [];
-      }
-      throw err;
-    }
     const stale = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
+    for (const name of await this.runDirEntries()) {
       let raw;
       try {
-        raw = await readFile3(runStatePath(this.dataDir, entry.name), "utf8");
+        raw = await readFile3(runStatePath(this.dataDir, name), "utf8");
       } catch (err) {
         if (isEnoent(err)) {
           continue;
@@ -7577,7 +7606,7 @@ var StateManager = class _StateManager {
       try {
         parsed = JSON.parse(raw);
       } catch {
-        stale.push({ run_id: entry.name, reason: "corrupt-json" });
+        stale.push({ run_id: name, reason: "corrupt-json" });
         continue;
       }
       const obj = parsed;
@@ -7588,7 +7617,7 @@ var StateManager = class _StateManager {
       const branch = obj?.staging_branch;
       const repo = obj?.spec?.repo;
       stale.push({
-        run_id: entry.name,
+        run_id: name,
         reason: `schema-v${JSON.stringify(v)}`,
         ...typeof branch === "string" && branch.length > 0 ? { staging_branch: branch } : {},
         ...typeof repo === "string" && repo.length > 0 ? { repo } : {}
@@ -7732,11 +7761,11 @@ var StateManager = class _StateManager {
   }
   // ---- current symlink ---------------------------------------------------
   /**
-   * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
-   *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
-   *     for the human CLI per checkout), and
-   *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
-   *     fallback the degraded hook/stop paths still read).
+   * Repoint the PER-REPO current pointer `current/<repo-key>` → `../runs/<run-id>`
+   * at a freshly-created run (L2.6/L2.7) — the single live pointer, authoritative
+   * for the human CLI per checkout. The legacy GLOBAL `runs/current` link is
+   * RETIRED (Decision 61): nothing reads it; this method only best-effort rms a
+   * leftover from an older engine.
    *
    * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
    * best-effort symlink catch below): if THIS repo's current pointer already names a
@@ -8807,7 +8836,7 @@ function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
 }
 
 // src/git/worktree.ts
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync6 } from "node:fs";
 var log8 = createLogger("git");
 var GIT_DEFAULTS2 = GitSchema.parse({});
 async function createTaskWorktree(args) {
@@ -8864,13 +8893,12 @@ async function resyncTaskBranchOntoStaging(args) {
 }
 async function removeWorktreeBestEffort(gitClient, path7) {
   const code = await gitClient.worktreeRemove(["--force", path7]);
-  if (code !== 0 && existsSync5(path7)) {
+  if (code !== 0 && existsSync6(path7)) {
     log8.warn(`worktree remove --force ${path7} exited ${code ?? "null"} \u2014 worktree may be leaked`);
   }
 }
 
 // src/git/provision.ts
-import { access } from "node:fs/promises";
 import path from "node:path";
 var log9 = createLogger("provision");
 var LOCKFILE_INSTALL = [
@@ -8879,14 +8907,6 @@ var LOCKFILE_INSTALL = [
   ["package-lock.json", "npm ci"],
   ["npm-shrinkwrap.json", "npm ci"]
 ];
-async function defaultFileExists(absPath) {
-  try {
-    await access(absPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 async function defaultRun(command, cwd) {
   const r = await exec(command, [], { cwd, shell: true });
   return { code: r.code, stderr: r.stderr };
@@ -8903,7 +8923,7 @@ async function resolveSetupCommand(worktreePath, setupCommand, fileExists) {
   return null;
 }
 async function provisionWorktree(args) {
-  const fileExists = args.fileExists ?? defaultFileExists;
+  const fileExists = args.fileExists ?? pathExists;
   const run9 = args.run ?? defaultRun;
   const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
   if (command === null) {
@@ -9339,6 +9359,32 @@ function splitReason(reason) {
   const i = reason.indexOf("\n");
   return i === -1 ? { plain: reason } : { plain: reason.slice(0, i), detail: reason.slice(i + 1) };
 }
+function reasonLines(header, reason) {
+  const { plain, detail } = splitReason(reason);
+  return detail === void 0 ? [header, plain] : [header, plain, "```", detail, "```"];
+}
+function gapRow(g) {
+  return `- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`;
+}
+function failureBlock(f, forPrd) {
+  const lines = [
+    "",
+    `### \`${f.task_id}\` \u2014 ${f.title}`,
+    `- **Class:** \`${f.failure_class}\``,
+    `- **Reason:** ${f.failure_reason}`
+  ];
+  if (forPrd && f.branch !== void 0) {
+    lines.push(`- **Branch:** \`${f.branch}\``);
+  }
+  if (forPrd && f.pr_number !== void 0) {
+    lines.push(`- **PR:** #${f.pr_number}`);
+  }
+  lines.push("- **Unmet acceptance criteria:**");
+  for (const c of f.unmet_criteria) {
+    lines.push(forPrd ? `  - [ ] ${c}` : `  - ${c}`);
+  }
+  return lines;
+}
 function failureCommentMarker(runId) {
   return `<!-- factory:run-failed:${runId} -->`;
 }
@@ -9357,39 +9403,19 @@ function renderFailureComment(report, selfHealEligible = false) {
     );
   }
   if (report.e2e_failure !== void 0) {
-    const { plain, detail } = splitReason(report.e2e_failure);
-    lines.push("", "### End-to-end verification failed", plain);
-    if (detail !== void 0) {
-      lines.push("```", detail, "```");
-    }
+    lines.push("", ...reasonLines("### End-to-end verification failed", report.e2e_failure));
   }
   if (report.e2e_assessment_failure !== void 0) {
-    const { plain, detail } = splitReason(report.e2e_assessment_failure);
-    lines.push("", "### End-to-end setup failed before any task ran", plain);
-    if (detail !== void 0) {
-      lines.push("```", detail, "```");
-    }
+    lines.push("", ...reasonLines("### End-to-end setup failed before any task ran", report.e2e_assessment_failure));
   }
   if (report.traceability_failure !== void 0) {
     lines.push("", "### Unmet PRD requirements", report.traceability_failure);
     for (const g of report.traceability_gaps ?? []) {
-      lines.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+      lines.push(gapRow(g));
     }
   }
   for (const failure of report.failures) {
-    lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
-    lines.push(`- **Class:** \`${failure.failure_class}\``);
-    lines.push(`- **Reason:** ${failure.failure_reason}`);
-    if (failure.branch !== void 0) {
-      lines.push(`- **Branch:** \`${failure.branch}\``);
-    }
-    if (failure.pr_number !== void 0) {
-      lines.push(`- **PR:** #${failure.pr_number}`);
-    }
-    lines.push("- **Unmet acceptance criteria:**");
-    for (const c of failure.unmet_criteria) {
-      lines.push(`  - [ ] ${c}`);
-    }
+    lines.push(...failureBlock(failure, true));
   }
   return lines.join("\n");
 }
@@ -9479,21 +9505,11 @@ function renderPartialReportMarkdown(report) {
     out.push("");
   }
   if (report.e2e_assessment_failure !== void 0) {
-    const { plain, detail } = splitReason(report.e2e_assessment_failure);
-    out.push("## End-to-end setup failed before any task ran");
-    out.push(plain);
-    if (detail !== void 0) {
-      out.push("```", detail, "```");
-    }
+    out.push(...reasonLines("## End-to-end setup failed before any task ran", report.e2e_assessment_failure));
     out.push("");
   }
   if (report.e2e_failure !== void 0) {
-    const { plain, detail } = splitReason(report.e2e_failure);
-    out.push("## End-to-end verification failed");
-    out.push(plain);
-    if (detail !== void 0) {
-      out.push("```", detail, "```");
-    }
+    out.push(...reasonLines("## End-to-end verification failed", report.e2e_failure));
     out.push("");
   }
   if (report.e2e_advisory !== void 0) {
@@ -9509,21 +9525,14 @@ function renderPartialReportMarkdown(report) {
   if (report.traceability_gaps !== void 0) {
     out.push("## PRD requirement gaps");
     for (const g of report.traceability_gaps) {
-      out.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`);
+      out.push(gapRow(g));
     }
     out.push("");
   }
   if (report.failures.length > 0) {
     out.push(`## Failed (${report.failures.length})`);
     for (const f of report.failures) {
-      out.push("");
-      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
-      out.push(`- **Class:** \`${f.failure_class}\``);
-      out.push(`- **Reason:** ${f.failure_reason}`);
-      out.push("- **Unmet acceptance criteria:**");
-      for (const c of f.unmet_criteria) {
-        out.push(`  - ${c}`);
-      }
+      out.push(...failureBlock(f, false));
     }
     out.push("");
   }
@@ -9784,7 +9793,7 @@ function aggregateReviewerValue(runs) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 var log15 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
@@ -9864,7 +9873,7 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync6(file)) {
+    if (!existsSync7(file)) {
       log15.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
@@ -11581,12 +11590,6 @@ var STRYKER_CONFIG_BASENAMES = [
   ".stryker.config.mjs",
   ".stryker.config.cjs"
 ];
-var DEPENDENCY_CRUISER_CONFIG_BASENAMES = [
-  ".dependency-cruiser.json",
-  ".dependency-cruiser.js",
-  ".dependency-cruiser.cjs",
-  ".dependency-cruiser.mjs"
-];
 
 // src/verifier/deterministic/strategies/mutation.ts
 function scorePasses(score, target) {
@@ -11899,14 +11902,6 @@ function assertNotTruncated(r, what) {
     );
   }
 }
-async function pathExists(absPath) {
-  try {
-    await access3(absPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 async function resolveLocalBin(cwd, tool, exists = pathExists) {
   let dir = path3.resolve(cwd);
   for (; ; ) {
@@ -11974,26 +11969,14 @@ var DefaultBuildTool = class {
     return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd, env: this.env }));
   }
 };
-var DefaultSemgrepTool = class {
+var DefaultArgvRunner = class {
   constructor(env = {}) {
     this.env = env;
   }
   async run(command, opts) {
     const [bin, ...rest] = command;
     if (bin === void 0) {
-      throw new Error("DefaultSemgrepTool: empty command");
-    }
-    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
-  }
-};
-var DefaultCommandRunner = class {
-  constructor(env = {}) {
-    this.env = env;
-  }
-  async run(command, opts) {
-    const [bin, ...rest] = command;
-    if (bin === void 0) {
-      throw new Error("DefaultCommandRunner: empty command");
+      throw new Error("DefaultArgvRunner: empty command");
     }
     return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
   }
@@ -12266,11 +12249,11 @@ function defaultGateTools(gateEnv = {}) {
     tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
     eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
     build: new DefaultBuildTool(gateEnv),
-    semgrep: new DefaultSemgrepTool(gateEnv),
+    semgrep: new DefaultArgvRunner(gateEnv),
     stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
     coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
     fs: new DefaultFsProbe(),
-    command: new DefaultCommandRunner(gateEnv)
+    command: new DefaultArgvRunner(gateEnv)
   };
 }
 
@@ -13018,17 +13001,8 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, rung,
 
 // src/verifier/e2e/runner.ts
 import path6 from "node:path";
-import { access as access4 } from "node:fs/promises";
 var E2E_ERROR_DETAIL_MAX_BYTES = 4096;
-async function pathExists2(p) {
-  try {
-    await access4(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function resolveLocalPlaywrightBin(cwd, exists = pathExists2) {
+async function resolveLocalPlaywrightBin(cwd, exists = pathExists) {
   let dir = path6.resolve(cwd);
   for (; ; ) {
     const candidate = path6.join(dir, "node_modules", ".bin", "playwright");
@@ -14478,159 +14452,6 @@ async function isDocsApplicable(repoRoot) {
 // src/orchestrator/record.ts
 import { readFile as readFile13 } from "node:fs/promises";
 import { sep as sep3 } from "node:path";
-
-// src/hooks/tcb.ts
-import { existsSync as existsSync7, realpathSync } from "node:fs";
-import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
-function isAtOrUnder(p, base) {
-  if (p === base) {
-    return true;
-  }
-  return p.startsWith(base.endsWith(sep2) ? base : base + sep2);
-}
-function canonicalizeAnchor(dir) {
-  const normalized = normalize(resolve2(dir));
-  try {
-    if (existsSync7(normalized)) {
-      return realpathSync(normalized);
-    }
-  } catch {
-  }
-  const parts = normalized.split(sep2);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
-    try {
-      if (existsSync7(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep2);
-        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
-      }
-    } catch {
-    }
-  }
-  return normalized;
-}
-function hasComponent(absPath, component) {
-  return absPath.split(sep2).includes(component);
-}
-function hasAdjacentComponents(absPath, parent, child) {
-  const parts = absPath.split(sep2);
-  for (let i = 0; i + 1 < parts.length; i++) {
-    if (parts[i] === parent && parts[i + 1] === child) {
-      return true;
-    }
-  }
-  return false;
-}
-function baseName(absPath) {
-  const parts = absPath.split(sep2).filter((s) => s.length > 0);
-  return parts[parts.length - 1] ?? "";
-}
-var GATE_CONFIG_BASENAMES = /* @__PURE__ */ new Set([...STRYKER_CONFIG_BASENAMES, ...DEPENDENCY_CRUISER_CONFIG_BASENAMES]);
-function buildTcbRules(ctx = {}) {
-  const rules = [];
-  rules.push({
-    category: "ci-workflows",
-    describe: ".github/workflows/** (CI / quality-gate machinery)",
-    test: (p) => hasAdjacentComponents(p, ".github", "workflows")
-  });
-  rules.push({
-    category: "docs-factory",
-    describe: "docs/factory/** (in-repo reviewable spec copy \u2014 F-specloc)",
-    test: (p) => hasAdjacentComponents(p, "docs", "factory")
-  });
-  rules.push({
-    category: "gate-contract",
-    describe: ".factory/gates.json (the committed gate contract \u2014 Decision 46)",
-    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json")
-  });
-  rules.push({
-    category: "gate-config",
-    describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
-    test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))
-  });
-  if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-    const hooksDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "hooks"));
-    rules.push({
-      category: "hooks",
-      describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
-      test: (p) => isAtOrUnder(p, hooksDir)
-    });
-  } else {
-    rules.push({
-      category: "hooks",
-      describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
-      test: (p) => hasComponent(p, "hooks")
-    });
-  }
-  if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-    const e2eDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "e2e"));
-    rules.push({
-      category: "e2e-suite",
-      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
-      test: (p) => isAtOrUnder(p, e2eDir)
-    });
-  } else {
-    rules.push({
-      category: "e2e-suite",
-      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
-      test: (p) => hasComponent(p, "e2e")
-    });
-  }
-  if (ctx.dataDir != null && ctx.dataDir.length > 0) {
-    const runsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "runs"));
-    const specsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "specs"));
-    rules.push({
-      category: "data-runs",
-      describe: "<dataDir>/runs/** (run state, holdouts, reviews \u2014 \u0394 Y)",
-      test: (p) => isAtOrUnder(p, runsDir)
-    });
-    rules.push({
-      category: "data-specs",
-      describe: "<dataDir>/specs/** (durable spec store)",
-      test: (p) => isAtOrUnder(p, specsDir)
-    });
-    const configFile = canonicalizeAnchor(resolve2(ctx.dataDir, "config.json"));
-    rules.push({
-      category: "data-config",
-      describe: "<dataDir>/config.json (operator config \u2014 writing it enables arbitrary shell via setupCommand)",
-      test: (p) => p === configFile
-    });
-  } else {
-    rules.push({
-      category: "data-runs",
-      describe: "**/runs/{holdouts,reviews,state} (run store, dataDir unresolved)",
-      test: (p) => hasComponent(p, "holdouts") || hasComponent(p, "reviews")
-    });
-  }
-  return rules;
-}
-var TCB_DENY = buildTcbRules();
-function canonicalizePath(candidate, cwd = process.cwd()) {
-  const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
-  const normalized = normalize(abs);
-  try {
-    if (existsSync7(normalized)) {
-      return realpathSync(normalized);
-    }
-  } catch {
-  }
-  const parts = normalized.split(sep2);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
-    try {
-      if (existsSync7(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep2);
-        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
-      }
-    } catch {
-    }
-  }
-  return normalized;
-}
-
-// src/orchestrator/record.ts
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -15538,7 +15359,7 @@ async function runTraceabilityRecord(deps, runId, results) {
   return { kind: "suspend", run_id: runId, reason };
 }
 
-// src/quota/circuit-breaker.ts
+// src/orchestrator/circuit-breaker.ts
 var FAILURE_RATIO = 0.15;
 function isNonNegativeFinite(value) {
   return Number.isFinite(value) && value >= 0;
@@ -15587,6 +15408,9 @@ async function applyCircuitBreaker(deps, runId) {
 }
 
 // src/orchestrator/next.ts
+function condemned(run9) {
+  return run9.e2e_phase?.status === "failed" || run9.e2e_assessment?.status === "failed";
+}
 async function wantsDocs(deps, run9) {
   if (run9.docs?.status === "done") {
     return false;
@@ -15594,13 +15418,7 @@ async function wantsDocs(deps, run9) {
   if ((run9.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) {
     return false;
   }
-  if (run9.e2e_phase?.status === "failed") {
-    return false;
-  }
-  if (run9.e2e_assessment?.status === "failed") {
-    return false;
-  }
-  if (run9.traceability?.status === "failed") {
+  if (condemned(run9) || run9.traceability?.status === "failed") {
     return false;
   }
   if (decideFinalize(run9).run_status !== "completed") {
@@ -15623,10 +15441,7 @@ function wantsTraceability(run9) {
       return false;
     }
   }
-  if (run9.e2e_phase?.status === "failed") {
-    return false;
-  }
-  if (run9.e2e_assessment?.status === "failed") {
+  if (condemned(run9)) {
     return false;
   }
   return decideFinalize(run9).run_status === "completed";
@@ -15638,7 +15453,7 @@ function wantsE2e(run9) {
   if (run9.e2e_phase?.status !== void 0) {
     return false;
   }
-  if (run9.e2e_assessment?.status === "failed") {
+  if (condemned(run9)) {
     return false;
   }
   return decideFinalize(run9).run_status === "completed";
@@ -16233,15 +16048,17 @@ async function runSuiteAndDecide(deps, runId) {
   const attempts = (run9.e2e_phase?.attempts ?? 0) + 1;
   const firstPass = attempts === 1;
   const cfg = deps.config.e2e;
+  const failPhase = async (reason) => {
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  };
   if (manifest.length === 0) {
     await markDone(deps, runId, { attempts });
     return { kind: "done", run_id: runId };
   }
   const boot = resolveBootConfig(cfg, run9);
   if (boot === null) {
-    const reason = "e2e suite has no boot config \u2014 the run-start assessment resolved none and no override is set";
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    return failPhase("e2e suite has no boot config \u2014 the run-start assessment resolved none and no override is set");
   }
   const staging = run9.staging_branch;
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
@@ -16262,9 +16079,7 @@ async function runSuiteAndDecide(deps, runId) {
       tool
     );
   } catch (err) {
-    const reason = `e2e critical suite tooling error: ${errText(err)}`;
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    return failPhase(`e2e critical suite tooling error: ${errText(err)}`);
   }
   const throwaway = manifest.filter((e) => e.kind === "throwaway");
   let throwawayResult;
@@ -16280,9 +16095,7 @@ async function runSuiteAndDecide(deps, runId) {
       );
     } catch (err) {
       if (firstPass) {
-        const reason = `e2e throwaway suite tooling error: ${errText(err)}`;
-        await markFailed(deps, runId, reason, attempts);
-        return { kind: "failed", run_id: runId, reason };
+        return failPhase(`e2e throwaway suite tooling error: ${errText(err)}`);
       }
       throwawayThrew = errText(err);
     }
@@ -16293,14 +16106,14 @@ async function runSuiteAndDecide(deps, runId) {
     spec: criticalResult.specs.find((s) => specPathMatches(s.file, entry.spec_path))
   })).filter((m) => m.spec === void 0 || m.spec.status !== "passed" && m.spec.status !== "flaky");
   if (unattributableToolingFailure(criticalResult)) {
-    const reason = "e2e critical suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    return failPhase(
+      "e2e critical suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task"
+    );
   }
   if (firstPass && throwawayResult && unattributableToolingFailure(throwawayResult)) {
-    const reason = "e2e throwaway suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    return failPhase(
+      "e2e throwaway suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task"
+    );
   }
   const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === "failed");
   const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
@@ -16331,9 +16144,9 @@ async function runSuiteAndDecide(deps, runId) {
       }
     }
     if (readjudicated.length > 0) {
-      const reason = `pre-existing e2e spec(s) failing AGAIN after their one adjudication \u2014 treating as a regression: ${readjudicated.join(", ")}`;
-      await markFailed(deps, runId, reason, attempts);
-      return { kind: "failed", run_id: runId, reason };
+      return failPhase(
+        `pre-existing e2e spec(s) failing AGAIN after their one adjudication \u2014 treating as a regression: ${readjudicated.join(", ")}`
+      );
     }
     if (cursorSpecs.length > 0) {
       await deps.state.update(runId, (st) => ({
@@ -16363,9 +16176,7 @@ async function runSuiteAndDecide(deps, runId) {
   const reopenCounts = { ...run9.e2e_phase?.reopen_counts ?? {} };
   const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap);
   if (capExhausted.length > 0) {
-    const reason = `e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(", ")}`;
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
+    return failPhase(`e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(", ")}`);
   }
   const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map((m) => {
     const title = m.spec ? m.spec.title : "did not run (missing from results)";
@@ -18134,24 +17945,25 @@ function specDepsFor(deps, session) {
 async function debugRepo(deps) {
   return resolveRepo({ cwd: deps.cwd, gitClient: deps.gitClient });
 }
-async function debugSpecResolve(deps, runId) {
+async function debugSpecAction(deps, runId, fn) {
   const session = await readSession(deps.dataDir, runId);
   const repo = await debugRepo(deps);
-  return resolveSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+  return fn(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass), session);
+}
+async function debugSpecResolve(deps, runId) {
+  return debugSpecAction(deps, runId, (d, repo, issue) => resolveSpec(d, repo, issue));
 }
 async function debugSpecGate(deps, runId) {
-  const session = await readSession(deps.dataDir, runId);
-  const repo = await debugRepo(deps);
-  return gateSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+  return debugSpecAction(deps, runId, (d, repo, issue) => gateSpec(d, repo, issue));
 }
 async function debugSpecStore(deps, runId) {
-  const session = await readSession(deps.dataDir, runId);
-  const repo = await debugRepo(deps);
-  const envelope = await storeSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
-  if (envelope.kind === "stored") {
-    await writeSession(deps.dataDir, { ...session, specId: envelope.pointer.spec_id });
-  }
-  return envelope;
+  return debugSpecAction(deps, runId, async (d, repo, issue, session) => {
+    const envelope = await storeSpec(d, repo, issue);
+    if (envelope.kind === "stored") {
+      await writeSession(deps.dataDir, { ...session, specId: envelope.pointer.spec_id });
+    }
+    return envelope;
+  });
 }
 async function debugSeed(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
@@ -18200,13 +18012,6 @@ function wireDeps2(overrides = {}) {
     specStore: new SpecStore({ dataDir })
   };
 }
-function parseMaxPasses(raw) {
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new UsageError(`--max-passes must be a positive integer, got '${raw}'`);
-  }
-  return n;
-}
 async function runDebugStart(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["full", "no-ship", "author-e2e"] });
   if (args.flag("help") === true) {
@@ -18221,7 +18026,7 @@ async function runDebugStart(argv, overrides = {}) {
     ...base !== void 0 ? { base } : {},
     noShip: args.flag("no-ship") === true,
     authorE2e: args.flag("author-e2e") === true,
-    ...maxPassesRaw !== void 0 ? { maxPasses: parseMaxPasses(maxPassesRaw) } : {},
+    ...maxPassesRaw !== void 0 ? { maxPasses: Number(maxPassesRaw) } : {},
     ...sessionId !== void 0 ? { sessionId } : {}
   });
   emitJson(envelope);
@@ -19730,7 +19535,7 @@ var missCommand = {
   run: withUsageGuard("miss", runMiss)
 };
 
-// src/cli/subcommands/drive.ts
+// src/cli/subcommands/next-action.ts
 var HELP7 = `factory next-action \u2014 step one task until it needs agents or is terminal
 
 Usage:
@@ -19768,7 +19573,7 @@ async function run7(argv) {
   emitJson(envelope);
   return EXIT.OK;
 }
-var driveCommand = {
+var nextActionCommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
   run: withUsageGuard("next-action", run7)
 };
@@ -20351,7 +20156,7 @@ var cliRegistry = {
   miss: missCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
-  "next-action": driveCommand,
+  "next-action": nextActionCommand,
   "next-task": nextCommand,
   statusline: statuslineCommand,
   autonomy: autonomyCommand

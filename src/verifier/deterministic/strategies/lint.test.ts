@@ -5,7 +5,7 @@
  */
 import {describe, expect, it} from 'vitest'
 import {defaultConfig, type Config} from '../../../config/schema.js'
-import {FakeCommandRunner, FakeEslint, FakeFs, makeFakeTools, proc} from '../fakes.js'
+import {FakeArgvRunner, FakeEslint, FakeFs, makeFakeTools, proc} from '../fakes.js'
 import {GateContractSchema} from '../gate-contract.js'
 import {validContract} from '../gate-contract.test.js'
 import type {GateRan, GateSkip, StrategyContext} from '../strategy.js'
@@ -85,7 +85,7 @@ describe('lintStrategy — contract command (S7, Decision 46)', () => {
 
     it('contracted command replaces eslint — bin/config probes and eslint not consulted', async () => {
         const eslint = new FakeEslint(proc(1)) // would fail if called
-        const command = new FakeCommandRunner(proc(0))
+        const command = new FakeArgvRunner(proc(0))
         const tools = makeFakeTools({fs: new FakeFs([]), eslint, command}) // no eslint at all
         const out = await lintStrategy.run({...ctx(tools), contract: denoContract()})
         expect(out.kind).toBe('ran')
@@ -96,7 +96,7 @@ describe('lintStrategy — contract command (S7, Decision 46)', () => {
     })
 
     it('contracted command exit≠0 → fail-closed', async () => {
-        const command = new FakeCommandRunner(proc(1, '', 'x.ts:1 no-unused-vars'))
+        const command = new FakeArgvRunner(proc(1, '', 'x.ts:1 no-unused-vars'))
         const tools = makeFakeTools({fs: new FakeFs([]), command})
         const out = await lintStrategy.run({...ctx(tools), contract: denoContract()})
         expect(out.kind).toBe('ran')
@@ -104,7 +104,7 @@ describe('lintStrategy — contract command (S7, Decision 46)', () => {
     })
 
     it('contract WITHOUT a lint command → probe/skip path unchanged', async () => {
-        const command = new FakeCommandRunner(proc(0)) // would mask the skip if called
+        const command = new FakeArgvRunner(proc(0)) // would mask the skip if called
         const tools = makeFakeTools({fs: new FakeFs([]), command})
         const contract = GateContractSchema.parse(validContract()) // lint contracted, no command
         const out = await lintStrategy.run({...ctx(tools), contract})

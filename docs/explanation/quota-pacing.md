@@ -51,7 +51,7 @@ producer ladder. Because the type has no constructor for them, "quota never emit
 fail/fail" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
-(`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
+(`src/orchestrator/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
 the pacer. The pure predicate trips on `cumulativeFailures >= effectiveThreshold`,
 where the threshold is **proportional to the task-graph size** (Decision 45):
 `max(maxConsecutiveFailures, ceil(0.15 × totalTasks))` — the config key is the

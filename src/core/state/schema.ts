@@ -61,8 +61,6 @@ export type RunStatus = z.infer<typeof RunStatusEnum>
 
 /** Run statuses that are TERMINAL (no further work will run without a new run). */
 export const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'superseded'] as const
-/** Run statuses that are NON-terminal (work may yet continue / resume). */
-export const NONTERMINAL_RUN_STATUSES = ['running', 'paused', 'suspended'] as const
 
 /** True iff the run status is terminal. The one authority for the split. */
 export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STATUSES)[number] {

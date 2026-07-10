@@ -7,12 +7,15 @@ import {
     isTerminalRunStatus,
     isTerminalTaskStatus,
     TERMINAL_RUN_STATUSES,
-    NONTERMINAL_RUN_STATUSES,
+    RunStatusEnum,
     type RunState,
 } from './schema.js'
 import {nonNull, at} from '../../shared/index.js'
 
 const NOW = '2026-01-01T12:00:00Z'
+
+// Derived complement of the terminal list — the enum minus isTerminalRunStatus.
+const NONTERMINAL_RUN_STATUSES = RunStatusEnum.options.filter((s) => !isTerminalRunStatus(s))
 
 function minimalTask(over: Record<string, unknown> = {}) {
     return {task_id: 't1', ...over}

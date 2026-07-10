@@ -46,3 +46,5 @@ export {UsageError, isUsageError} from './usage-error.js'
 export {nonNull, at, getOrThrow} from './assert.js'
 
 export {isEnoent} from './fs-errors.js'
+
+export {pathExists, canonicalizePath} from './fs.js'

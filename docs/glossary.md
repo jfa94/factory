@@ -440,7 +440,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - Counter-example: one flaky failure that the next attempt recovers from does not trip it.
 - **relationships**: governs a Run; safeguard for unattended operation.
 - **synonyms**: —
-- **code anchor**: `src/quota/circuit-breaker.ts`
+- **code anchor**: `src/orchestrator/circuit-breaker.ts`
 
 ## Roles
 

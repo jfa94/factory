@@ -1195,7 +1195,7 @@ CI — its gate is the factory run itself.
 
 **Date:** 2026-07-03
 
-**Context:** The workflow-mode runtime circuit breaker (`src/quota/circuit-breaker.ts`)
+**Context:** The workflow-mode runtime circuit breaker (`src/orchestrator/circuit-breaker.ts`)
 trips on effective runtime `(wall − paused) >= maxRuntimeMinutes` (default 480). Its
 `paused` term relied on `paused_minutes` being banked at scattered sites — resume and
 rescue-reopen — which only fire when someone drives the loop. A workflow run that a human
@@ -1430,7 +1430,7 @@ were a frozen-default pin no override could ever reach (the apex boundary read
 - **Proportional breaker (C2).** `effectiveThreshold = max(maxConsecutiveFailures,
 ceil(0.15 × totalTasks))`. The existing config key is REINTERPRETED as the floor —
   no rename, default 3 unchanged; ≤20 tasks behave exactly as before, 30 → 5, 40 → 6.
-  `FAILURE_RATIO = 0.15` is a module constant in `src/quota/circuit-breaker.ts`, NOT
+  `FAILURE_RATIO = 0.15` is a module constant in `src/orchestrator/circuit-breaker.ts`, NOT
   config (no speculative knob). `CircuitBreakerInput` gains `totalTasks`, fail-closed
   on malformed input like `cumulativeFailures`; the gate supplies
   `Object.keys(run.tasks).length` (derive-don't-store, as before).

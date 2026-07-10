@@ -1536,12 +1536,12 @@ var require_adapter = __commonJS({
       return newFs;
     }
     function toPromise(method) {
-      return (...args) => new Promise((resolve3, reject) => {
+      return (...args) => new Promise((resolve4, reject) => {
         args.push((err, result) => {
           if (err) {
             reject(err);
           } else {
-            resolve3(result);
+            resolve4(result);
           }
         });
         method(...args);
@@ -1687,7 +1687,7 @@ import { spawn } from "node:child_process";
 var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 function exec(command, args = [], opts = {}) {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
@@ -1744,7 +1744,7 @@ function exec(command, args = [], opts = {}) {
         return;
       }
       settled = true;
-      resolve3({
+      resolve4({
         stdout: Buffer.concat(outChunks).toString("utf8"),
         stderr: Buffer.concat(errChunks).toString("utf8"),
         code,
@@ -1996,6 +1996,33 @@ var UsageError = class extends Error {
 };
 function isUsageError(err) {
   return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+}
+
+// src/shared/fs.ts
+import { existsSync as existsSync2, realpathSync } from "node:fs";
+import { isAbsolute, normalize, resolve, sep } from "node:path";
+function canonicalizePath(candidate, cwd = process.cwd()) {
+  const abs = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
+  const normalized = normalize(abs);
+  try {
+    if (existsSync2(normalized)) {
+      return realpathSync(normalized);
+    }
+  } catch {
+  }
+  const parts = normalized.split(sep);
+  for (let cut = parts.length - 1; cut > 0; cut--) {
+    const ancestor = parts.slice(0, cut).join(sep) || sep;
+    try {
+      if (existsSync2(ancestor)) {
+        const realAncestor = realpathSync(ancestor);
+        const tail = parts.slice(cut).join(sep);
+        return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor;
+      }
+    } catch {
+    }
+  }
+  return normalized;
 }
 
 // src/hooks/token-helpers.ts
@@ -2476,8 +2503,8 @@ async function runBranchProtection(_argv = [], deps = {}) {
 }
 
 // src/config/load.ts
-import { existsSync as existsSync2, readFileSync } from "node:fs";
-import { basename as basename2, dirname as dirname2, join as join2, resolve, sep } from "node:path";
+import { existsSync as existsSync3, readFileSync } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
 import { homedir } from "node:os";
 
 // node_modules/zod/v3/external.js
@@ -6726,7 +6753,7 @@ function expectedDataDir(opts) {
     return null;
   }
   const dataRoot = join2(home, ".claude", "plugins", "data");
-  if (!current.startsWith(dataRoot + sep)) {
+  if (!current.startsWith(dataRoot + sep2)) {
     return null;
   }
   const currentBase = basename2(current);
@@ -6735,13 +6762,13 @@ function expectedDataDir(opts) {
   }
   const pluginFromPath = basename2(dirname2(pluginRoot));
   const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
-  const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
+  const cacheAnchor = resolve2(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
     return join2(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
   }
   const marketplaceJson = join2(pluginRoot, ".claude-plugin", "marketplace.json");
-  if (existsSync2(marketplaceJson)) {
+  if (existsSync3(marketplaceJson)) {
     try {
       const parsed = parseJson(readFileSync(marketplaceJson, "utf8"), marketplaceJson);
       const name = parsed !== null && typeof parsed === "object" ? parsed.name : void 0;
@@ -6762,12 +6789,12 @@ function inferPluginRoot() {
     const here = new URL(".", import.meta.url).pathname;
     let dir = here;
     for (let i = 0; i < 4; i++) {
-      if (existsSync2(join2(dir, ".claude-plugin"))) {
+      if (existsSync3(join2(dir, ".claude-plugin"))) {
         return dir;
       }
       dir = dirname2(dir);
     }
-    return resolve(here, "..");
+    return resolve2(here, "..");
   } catch (err) {
     log4.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
@@ -6775,7 +6802,7 @@ function inferPluginRoot() {
 }
 function resolveDataDir(opts = {}) {
   if (opts.dataDir != null && opts.dataDir.length > 0) {
-    return resolve(opts.dataDir);
+    return resolve2(opts.dataDir);
   }
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
@@ -6793,19 +6820,18 @@ function resolveDataDir(opts = {}) {
         `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this warning permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
       );
     }
-    return resolve(corrected);
+    return resolve2(corrected);
   }
   if (current == null || current.length === 0) {
     throw new Error(
       'CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>")'
     );
   }
-  return resolve(current);
+  return resolve2(current);
 }
 
 // src/hooks/tcb.ts
-import { existsSync as existsSync3, realpathSync } from "node:fs";
-import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
+import { resolve as resolve3, sep as sep3 } from "node:path";
 
 // src/shared/gate-config-names.ts
 var STRYKER_CONFIG_BASENAMES = [
@@ -6838,35 +6864,13 @@ function isAtOrUnder(p, base) {
   if (p === base) {
     return true;
   }
-  return p.startsWith(base.endsWith(sep2) ? base : base + sep2);
-}
-function canonicalizeAnchor(dir) {
-  const normalized = normalize(resolve2(dir));
-  try {
-    if (existsSync3(normalized)) {
-      return realpathSync(normalized);
-    }
-  } catch {
-  }
-  const parts = normalized.split(sep2);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
-    try {
-      if (existsSync3(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep2);
-        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
-      }
-    } catch {
-    }
-  }
-  return normalized;
+  return p.startsWith(base.endsWith(sep3) ? base : base + sep3);
 }
 function hasComponent(absPath, component) {
-  return absPath.split(sep2).includes(component);
+  return absPath.split(sep3).includes(component);
 }
 function hasAdjacentComponents(absPath, parent, child) {
-  const parts = absPath.split(sep2);
+  const parts = absPath.split(sep3);
   for (let i = 0; i + 1 < parts.length; i++) {
     if (parts[i] === parent && parts[i + 1] === child) {
       return true;
@@ -6875,7 +6879,7 @@ function hasAdjacentComponents(absPath, parent, child) {
   return false;
 }
 function baseName(absPath) {
-  const parts = absPath.split(sep2).filter((s) => s.length > 0);
+  const parts = absPath.split(sep3).filter((s) => s.length > 0);
   return parts[parts.length - 1] ?? "";
 }
 var GATE_CONFIG_BASENAMES = /* @__PURE__ */ new Set([...STRYKER_CONFIG_BASENAMES, ...DEPENDENCY_CRUISER_CONFIG_BASENAMES]);
@@ -6902,7 +6906,7 @@ function buildTcbRules(ctx = {}) {
     test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))
   });
   if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-    const hooksDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "hooks"));
+    const hooksDir = canonicalizePath(resolve3(ctx.repoRoot, "hooks"));
     rules.push({
       category: "hooks",
       describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
@@ -6916,7 +6920,7 @@ function buildTcbRules(ctx = {}) {
     });
   }
   if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-    const e2eDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "e2e"));
+    const e2eDir = canonicalizePath(resolve3(ctx.repoRoot, "e2e"));
     rules.push({
       category: "e2e-suite",
       describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
@@ -6930,8 +6934,8 @@ function buildTcbRules(ctx = {}) {
     });
   }
   if (ctx.dataDir != null && ctx.dataDir.length > 0) {
-    const runsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "runs"));
-    const specsDir = canonicalizeAnchor(resolve2(ctx.dataDir, "specs"));
+    const runsDir = canonicalizePath(resolve3(ctx.dataDir, "runs"));
+    const specsDir = canonicalizePath(resolve3(ctx.dataDir, "specs"));
     rules.push({
       category: "data-runs",
       describe: "<dataDir>/runs/** (run state, holdouts, reviews \u2014 \u0394 Y)",
@@ -6942,7 +6946,7 @@ function buildTcbRules(ctx = {}) {
       describe: "<dataDir>/specs/** (durable spec store)",
       test: (p) => isAtOrUnder(p, specsDir)
     });
-    const configFile = canonicalizeAnchor(resolve2(ctx.dataDir, "config.json"));
+    const configFile = canonicalizePath(resolve3(ctx.dataDir, "config.json"));
     rules.push({
       category: "data-config",
       describe: "<dataDir>/config.json (operator config \u2014 writing it enables arbitrary shell via setupCommand)",
@@ -6958,29 +6962,6 @@ function buildTcbRules(ctx = {}) {
   return rules;
 }
 var TCB_DENY = buildTcbRules();
-function canonicalizePath(candidate, cwd = process.cwd()) {
-  const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
-  const normalized = normalize(abs);
-  try {
-    if (existsSync3(normalized)) {
-      return realpathSync(normalized);
-    }
-  } catch {
-  }
-  const parts = normalized.split(sep2);
-  for (let cut = parts.length - 1; cut > 0; cut--) {
-    const ancestor = parts.slice(0, cut).join(sep2) || sep2;
-    try {
-      if (existsSync3(ancestor)) {
-        const realAncestor = realpathSync(ancestor);
-        const tail = parts.slice(cut).join(sep2);
-        return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
-      }
-    } catch {
-    }
-  }
-  return normalized;
-}
 function isTcbProtected(candidatePath, ctx = {}, cwd = process.cwd()) {
   if (candidatePath.length === 0) {
     return null;
@@ -7126,12 +7107,12 @@ async function runWriteProtection(_argv = [], deps = {}) {
 }
 
 // src/hooks/holdout-guard.ts
-import { sep as sep3 } from "node:path";
+import { sep as sep4 } from "node:path";
 var log6 = createLogger("holdout-guard");
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
 var READ_COMMAND_RE = /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
 function isHoldoutPath(canonical) {
-  return canonical.split(sep3).includes("holdouts");
+  return canonical.split(sep4).includes("holdouts");
 }
 function readTargetsOf(input) {
   const ti = input?.tool_input ?? {};
@@ -8177,8 +8158,8 @@ var StateManager = class _StateManager {
   // ---- create ------------------------------------------------------------
   /**
    * Create a brand-new run. Mkdirs the run store layout, writes the initial
-   * state.json atomically under the lock, and (best-effort) points `runs/current`
-   * at it. Refuses to clobber an existing run dir.
+   * state.json atomically under the lock, and (best-effort) points the per-repo
+   * `current/<repo-key>` pointer at it. Refuses to clobber an existing run dir.
    */
   async create(args) {
     const dir = runDir(this.dataDir, args.run_id);
@@ -8193,8 +8174,9 @@ var StateManager = class _StateManager {
       status: "running",
       execution_mode: args.execution_mode ?? "sequential",
       ship_mode: args.ship_mode ?? "live",
-      // Stamp the owning session only when known (best-effort) — an absent owner
-      // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+      // Stamp the owning session only when known (best-effort) — an ownerless run
+      // is INVISIBLE to the Stop gate (findActiveByOwner never matches it; there is
+      // no unscoped fallback), so that session's loop can stop freely.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       staging_branch: args.staging_branch,
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
@@ -8284,28 +8266,32 @@ var StateManager = class _StateManager {
    * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
    * a bad entry, and never silently.)
    */
-  async listRuns() {
-    let entries;
+  /**
+   * Readdir the runs root, tolerating a missing root (no runs yet → []) and
+   * filtering to directories (excludes the `current` + temp symlinks). The shared
+   * prologue of {@link listRuns} and {@link listStaleRunDirs}.
+   */
+  async runDirEntries() {
     try {
-      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+      const entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch (err) {
       if (isEnoent(err)) {
         return [];
       }
       throw err;
     }
+  }
+  async listRuns() {
     const runs = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
+    for (const name of await this.runDirEntries()) {
       try {
-        runs.push(await this.read(entry.name));
+        runs.push(await this.read(name));
       } catch (err) {
         if (isEnoent(err)) {
           continue;
         }
-        log7.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log7.warn(`state: skipping unreadable run '${name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
@@ -8320,23 +8306,11 @@ var StateManager = class _StateManager {
    * wreckage — surfaces loudly through targeted reads, never swept here).
    */
   async listStaleRunDirs() {
-    let entries;
-    try {
-      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
-    } catch (err) {
-      if (isEnoent(err)) {
-        return [];
-      }
-      throw err;
-    }
     const stale = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
+    for (const name of await this.runDirEntries()) {
       let raw;
       try {
-        raw = await readFile(runStatePath(this.dataDir, entry.name), "utf8");
+        raw = await readFile(runStatePath(this.dataDir, name), "utf8");
       } catch (err) {
         if (isEnoent(err)) {
           continue;
@@ -8347,7 +8321,7 @@ var StateManager = class _StateManager {
       try {
         parsed = JSON.parse(raw);
       } catch {
-        stale.push({ run_id: entry.name, reason: "corrupt-json" });
+        stale.push({ run_id: name, reason: "corrupt-json" });
         continue;
       }
       const obj = parsed;
@@ -8358,7 +8332,7 @@ var StateManager = class _StateManager {
       const branch = obj?.staging_branch;
       const repo = obj?.spec?.repo;
       stale.push({
-        run_id: entry.name,
+        run_id: name,
         reason: `schema-v${JSON.stringify(v)}`,
         ...typeof branch === "string" && branch.length > 0 ? { staging_branch: branch } : {},
         ...typeof repo === "string" && repo.length > 0 ? { repo } : {}
@@ -8502,11 +8476,11 @@ var StateManager = class _StateManager {
   }
   // ---- current symlink ---------------------------------------------------
   /**
-   * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
-   *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
-   *     for the human CLI per checkout), and
-   *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
-   *     fallback the degraded hook/stop paths still read).
+   * Repoint the PER-REPO current pointer `current/<repo-key>` → `../runs/<run-id>`
+   * at a freshly-created run (L2.6/L2.7) — the single live pointer, authoritative
+   * for the human CLI per checkout. The legacy GLOBAL `runs/current` link is
+   * RETIRED (Decision 61): nothing reads it; this method only best-effort rms a
+   * leftover from an older engine.
    *
    * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
    * best-effort symlink catch below): if THIS repo's current pointer already names a
@@ -8643,7 +8617,7 @@ var SpawnRequestSchema = external_exports.object({
 });
 
 // src/hooks/hook-context.ts
-import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
+import { isAbsolute as isAbsolute2, relative, sep as sep5 } from "node:path";
 
 // src/git/exec-tools.ts
 function makeRunner(command) {
@@ -8976,10 +8950,10 @@ function runTaskForPath(dataDir, absPath) {
   const rootCanon = canonicalizePath(worktreesRoot(dataDir));
   const pathCanon = canonicalizePath(absPath);
   const rel = relative(rootCanon, pathCanon);
-  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep4}`) || isAbsolute2(rel)) {
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
     return null;
   }
-  const segments = rel.split(sep4);
+  const segments = rel.split(sep5);
   if (segments.length < 2) {
     return null;
   }

@@ -5,7 +5,7 @@
  */
 import {describe, expect, it} from 'vitest'
 import {defaultConfig, type Config} from '../../../config/schema.js'
-import {FakeSemgrep, makeFakeTools, proc} from '../fakes.js'
+import {FakeArgvRunner, makeFakeTools, proc} from '../fakes.js'
 import type {GateRan, GateSkip, StrategyContext} from '../strategy.js'
 import type {GateTools} from '../tools.js'
 import {sastStrategy, validateSecurityCommand} from './sast.js'
@@ -64,19 +64,19 @@ describe('sastStrategy', () => {
     })
 
     it('clean scan (exit 0) → pass', async () => {
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(0))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(0))})
         const out = await sastStrategy.run(ctx(tools, withSecurity('semgrep --config auto')))
         expect((out as GateRan).evidence.observed).toBe(true)
     })
 
     it('findings (exit 1) → fail', async () => {
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(1))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(1))})
         const out = await sastStrategy.run(ctx(tools, withSecurity('semgrep --config auto')))
         expect((out as GateRan).evidence.observed).toBe(false)
     })
 
     it('securityAllowFailures=true → findings non-blocking (observed true, noted)', async () => {
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(1))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(1))})
         const out = await sastStrategy.run(
             ctx(tools, withSecurity('semgrep --config auto', {securityAllowFailures: true}))
         )
@@ -93,7 +93,7 @@ describe('sastStrategy', () => {
     })
 
     it('truncated semgrep output → THROWS', async () => {
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(0, '', '', true))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(0, '', '', true))})
         await expect(sastStrategy.run(ctx(tools, withSecurity('semgrep --config auto')))).rejects.toThrow(/truncated/i)
     })
 
@@ -104,7 +104,7 @@ describe('sastStrategy', () => {
 
     it('securityRedactFindings=true (default) → secret in scanner output is REDACTED in detail', async () => {
         const finding = `rule-id: hardcoded-credential\n  ${SECRET}`
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(1, finding))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(1, finding))})
         const out = await sastStrategy.run(ctx(tools, withSecurity('semgrep --config auto')))
         const ev = (out as GateRan).evidence
         expect(ev.observed).toBe(false) // findings present (exit 1)
@@ -114,7 +114,7 @@ describe('sastStrategy', () => {
 
     it('securityRedactFindings=false → scanner output is surfaced VERBATIM (no scrub)', async () => {
         const finding = `rule-id: hardcoded-credential\n  ${SECRET}`
-        const tools = makeFakeTools({semgrep: new FakeSemgrep(proc(1, finding))})
+        const tools = makeFakeTools({semgrep: new FakeArgvRunner(proc(1, finding))})
         const out = await sastStrategy.run(
             ctx(tools, withSecurity('semgrep --config auto', {securityRedactFindings: false}))
         )

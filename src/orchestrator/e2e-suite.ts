@@ -364,6 +364,12 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     const firstPass = attempts === 1
     const cfg = deps.config.e2e
 
+    /** Persist the failed phase + emit the failed action — the 7 fail exits below. */
+    const failPhase = async (reason: string): Promise<E2eAction> => {
+        await markFailed(deps, runId, reason, attempts)
+        return {kind: 'failed', run_id: runId, reason}
+    }
+
     if (manifest.length === 0) {
         // The author judged nothing in this PRD to be UI-facing — nothing to gate on.
         await markDone(deps, runId, {attempts})
@@ -374,9 +380,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     // a mid-run config/assessment mutation must fail loud, not boot a fabricated app.
     const boot = resolveBootConfig(cfg, run)
     if (boot === null) {
-        const reason = 'e2e suite has no boot config — the run-start assessment resolved none and no override is set'
-        await markFailed(deps, runId, reason, attempts)
-        return {kind: 'failed', run_id: runId, reason}
+        return failPhase('e2e suite has no boot config — the run-start assessment resolved none and no override is set')
     }
 
     const staging = run.staging_branch
@@ -406,9 +410,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
             tool
         )
     } catch (err) {
-        const reason = `e2e critical suite tooling error: ${errText(err)}`
-        await markFailed(deps, runId, reason, attempts)
-        return {kind: 'failed', run_id: runId, reason}
+        return failPhase(`e2e critical suite tooling error: ${errText(err)}`)
     }
     const throwaway = manifest.filter((e) => e.kind === 'throwaway')
     let throwawayResult
@@ -424,9 +426,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
             )
         } catch (err) {
             if (firstPass) {
-                const reason = `e2e throwaway suite tooling error: ${errText(err)}`
-                await markFailed(deps, runId, reason, attempts)
-                return {kind: 'failed', run_id: runId, reason}
+                return failPhase(`e2e throwaway suite tooling error: ${errText(err)}`)
             }
             // Pass 2+ throwaway is non-gating (Decision 39) — fold the crash into the
             // advisory below instead of failing the run.
@@ -449,11 +449,10 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     // spec's status explains can't be attributed to any task — fail the run outright
     // rather than silently absorbing it into a critical-miss reopen.
     if (unattributableToolingFailure(criticalResult)) {
-        const reason =
+        return failPhase(
             'e2e critical suite reported a tooling failure (nonzero exit code or reporter ' +
-            'errors[]) with no individual spec marked failed — refusing to attribute to a task'
-        await markFailed(deps, runId, reason, attempts)
-        return {kind: 'failed', run_id: runId, reason}
+                'errors[]) with no individual spec marked failed — refusing to attribute to a task'
+        )
     }
 
     // Same tooling-failure blind spot as above, but for the throwaway run: a broken
@@ -462,11 +461,10 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     // Only gate on pass 1 — pass 2+ throwaway is already non-gating (Decision 39), so
     // a tooling failure there is folded into the advisory instead (see below).
     if (firstPass && throwawayResult && unattributableToolingFailure(throwawayResult)) {
-        const reason =
+        return failPhase(
             'e2e throwaway suite reported a tooling failure (nonzero exit code or reporter ' +
-            'errors[]) with no individual spec marked failed — refusing to attribute to a task'
-        await markFailed(deps, runId, reason, attempts)
-        return {kind: 'failed', run_id: runId, reason}
+                'errors[]) with no individual spec marked failed — refusing to attribute to a task'
+        )
     }
 
     const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === 'failed')
@@ -506,11 +504,10 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
             }
         }
         if (readjudicated.length > 0) {
-            const reason =
+            return failPhase(
                 'pre-existing e2e spec(s) failing AGAIN after their one adjudication — treating ' +
-                `as a regression: ${readjudicated.join(', ')}`
-            await markFailed(deps, runId, reason, attempts)
-            return {kind: 'failed', run_id: runId, reason}
+                    `as a regression: ${readjudicated.join(', ')}`
+            )
         }
         if (cursorSpecs.length > 0) {
             // Task-attributed reopens (stillPass + any mappable misses) wait for the
@@ -566,9 +563,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     const reopenCounts = {...(run.e2e_phase?.reopen_counts ?? {})}
     const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap)
     if (capExhausted.length > 0) {
-        const reason = `e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(', ')}`
-        await markFailed(deps, runId, reason, attempts)
-        return {kind: 'failed', run_id: runId, reason}
+        return failPhase(`e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(', ')}`)
     }
 
     const feedback =

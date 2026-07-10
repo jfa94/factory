@@ -14,9 +14,8 @@
  * non-zero exit so a broken environment halts at preflight rather than surfacing
  * as an opaque downstream gate failure (Iron Law 3: fail loud, never blind-retry).
  */
-import {access} from 'node:fs/promises'
 import path from 'node:path'
-import {exec, createLogger} from '../shared/index.js'
+import {exec, createLogger, pathExists} from '../shared/index.js'
 
 const log = createLogger('provision')
 
@@ -53,15 +52,6 @@ export interface ProvisionWorktreeArgs {
 /** A {@link provisionWorktree}-shaped function, for injection into the preflight handler. */
 export type ProvisionWorktreeFn = (args: ProvisionWorktreeArgs) => Promise<void>
 
-async function defaultFileExists(absPath: string): Promise<boolean> {
-    try {
-        await access(absPath)
-        return true
-    } catch {
-        return false
-    }
-}
-
 async function defaultRun(command: string, cwd: string): Promise<ProvisionRunResult> {
     // The command is trusted — operator `quality.setupCommand` or a fixed
     // lockfile-install string — so the `shell` escape hatch is acceptable here.
@@ -97,7 +87,7 @@ export async function resolveSetupCommand(
  * non-zero exit.
  */
 export async function provisionWorktree(args: ProvisionWorktreeArgs): Promise<void> {
-    const fileExists = args.fileExists ?? defaultFileExists
+    const fileExists = args.fileExists ?? pathExists
     const run = args.run ?? defaultRun
 
     const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists)

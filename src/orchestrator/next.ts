@@ -104,6 +104,17 @@ export type NextTask =
       })
 
 /**
+ * A failed e2e phase or run-start assessment condemns the run — finalize will
+ * override its terminal status to `failed` (Decisions 39/40), so no later phase
+ * should spend apex on it. (A failed traceability audit condemns the run too,
+ * but its `failed` marker doubles as a crash-retry cursor — wantsTraceability
+ * owns that discrimination, so it is deliberately NOT folded in here.)
+ */
+function condemned(run: RunState): boolean {
+    return run.e2e_phase?.status === 'failed' || run.e2e_assessment?.status === 'failed'
+}
+
+/**
  * True iff a fully-terminal run still needs its docs phase: prospective status
  * `completed`, docs not already `done`, and docs applicable to the target repo.
  * The caller MUST guarantee all tasks are terminal — decideFinalize throws otherwise.
@@ -119,16 +130,9 @@ async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean
     if ((run.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) {
         return false
     } // cap: treat docs as done
-    if (run.e2e_phase?.status === 'failed') {
-        return false
-    }
-    // A failed assessment (Decision 40) also condemns the run — same rationale.
-    if (run.e2e_assessment?.status === 'failed') {
-        return false
-    }
-    // A failed traceability audit (S9) condemns the run too — never pay the docs
-    // Opus on a run finalize is about to override to `failed`.
-    if (run.traceability?.status === 'failed') {
+    // A failed traceability audit (S9) condemns the run just like e2e — never pay
+    // the docs Opus on a run finalize is about to override to `failed`.
+    if (condemned(run) || run.traceability?.status === 'failed') {
         return false
     }
     if (decideFinalize(run).run_status !== 'completed') {
@@ -166,10 +170,7 @@ function wantsTraceability(run: RunState): boolean {
         } // concluded: crash cap
         // else: crash below the cap — re-fire the audit.
     }
-    if (run.e2e_phase?.status === 'failed') {
-        return false
-    }
-    if (run.e2e_assessment?.status === 'failed') {
+    if (condemned(run)) {
         return false
     }
     return decideFinalize(run).run_status === 'completed'
@@ -196,7 +197,7 @@ function wantsE2e(run: RunState): boolean {
     } // "done" or "failed" — concluded
     // A failed assessment condemns the run to finalize→failed (Decision 40) — spawning
     // the author against a repo the assessor just proved un-bootable is pointless.
-    if (run.e2e_assessment?.status === 'failed') {
+    if (condemned(run)) {
         return false
     }
     return decideFinalize(run).run_status === 'completed'

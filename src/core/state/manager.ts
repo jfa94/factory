@@ -337,28 +337,33 @@ export class StateManager {
      * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
      * a bad entry, and never silently.)
      */
-    async listRuns(): Promise<RunState[]> {
-        let entries
+    /**
+     * Readdir the runs root, tolerating a missing root (no runs yet → []) and
+     * filtering to directories (excludes the `current` + temp symlinks). The shared
+     * prologue of {@link listRuns} and {@link listStaleRunDirs}.
+     */
+    private async runDirEntries(): Promise<string[]> {
         try {
-            entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
+            const entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
+            return entries.filter((e) => e.isDirectory()).map((e) => e.name)
         } catch (err) {
             if (isEnoent(err)) {
                 return []
             }
             throw err
         }
+    }
+
+    async listRuns(): Promise<RunState[]> {
         const runs: RunState[] = []
-        for (const entry of entries) {
-            if (!entry.isDirectory()) {
-                continue
-            } // excludes the `current` + temp symlinks
+        for (const name of await this.runDirEntries()) {
             try {
-                runs.push(await this.read(entry.name))
+                runs.push(await this.read(name))
             } catch (err) {
                 if (isEnoent(err)) {
                     continue
                 } // no state.json yet
-                log.warn(`state: skipping unreadable run '${entry.name}': ${(err as Error).message}`)
+                log.warn(`state: skipping unreadable run '${name}': ${(err as Error).message}`)
             }
         }
         return runs.sort((a, b) => b.run_id.localeCompare(a.run_id))
@@ -374,23 +379,11 @@ export class StateManager {
      * wreckage — surfaces loudly through targeted reads, never swept here).
      */
     async listStaleRunDirs(): Promise<StaleRunDir[]> {
-        let entries
-        try {
-            entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
-        } catch (err) {
-            if (isEnoent(err)) {
-                return []
-            }
-            throw err
-        }
         const stale: StaleRunDir[] = []
-        for (const entry of entries) {
-            if (!entry.isDirectory()) {
-                continue
-            }
+        for (const name of await this.runDirEntries()) {
             let raw: string
             try {
-                raw = await readFile(runStatePath(this.dataDir, entry.name), 'utf8')
+                raw = await readFile(runStatePath(this.dataDir, name), 'utf8')
             } catch (err) {
                 if (isEnoent(err)) {
                     continue
@@ -401,7 +394,7 @@ export class StateManager {
             try {
                 parsed = JSON.parse(raw)
             } catch {
-                stale.push({run_id: entry.name, reason: 'corrupt-json'})
+                stale.push({run_id: name, reason: 'corrupt-json'})
                 continue
             }
             const obj = parsed as Record<string, unknown> | null
@@ -412,7 +405,7 @@ export class StateManager {
             const branch = obj?.staging_branch
             const repo = (obj?.spec as Record<string, unknown> | undefined)?.repo
             stale.push({
-                run_id: entry.name,
+                run_id: name,
                 reason: `schema-v${JSON.stringify(v)}`,
                 ...(typeof branch === 'string' && branch.length > 0 ? {staging_branch: branch} : {}),
                 ...(typeof repo === 'string' && repo.length > 0 ? {repo} : {}),

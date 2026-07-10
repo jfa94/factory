@@ -14,7 +14,7 @@
 import {access, mkdtemp, readFile, rm, symlink} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
-import {at, exec, type ExecResult} from '../../shared/index.js'
+import {at, exec, pathExists, type ExecResult} from '../../shared/index.js'
 import {escapeStrykerGlob} from './scope.js'
 
 /** Common per-call options shared by the CLI wrappers. */
@@ -255,15 +255,6 @@ function assertNotTruncated(r: ExecResult, what: string): void {
     }
 }
 
-async function pathExists(absPath: string): Promise<boolean> {
-    try {
-        await access(absPath)
-        return true
-    } catch {
-        return false
-    }
-}
-
 /** The closed set of external command-gate tools resolved via `node_modules/.bin`. */
 export type GateTool = 'vitest' | 'tsc' | 'eslint' | 'stryker'
 
@@ -411,27 +402,18 @@ export class DefaultBuildTool implements BuildTool {
     }
 }
 
-/** Default SemgrepTool: run the already-validated argv directly. */
-export class DefaultSemgrepTool implements SemgrepTool {
+/**
+ * Default SemgrepTool + CommandRunner: run an already-validated argv directly.
+ * One class serves both seams — the contracts are identical (argv in, ProcResult
+ * out); only the call sites' allowlist provenance differs.
+ */
+export class DefaultArgvRunner implements SemgrepTool, CommandRunner {
     constructor(private readonly env: Record<string, string> = {}) {}
 
     async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
         const [bin, ...rest] = command
         if (bin === undefined) {
-            throw new Error('DefaultSemgrepTool: empty command')
-        }
-        return toProc(await exec(bin, rest, {cwd: opts.cwd, env: this.env}))
-    }
-}
-
-/** Default CommandRunner: run the already-validated contract argv directly. */
-export class DefaultCommandRunner implements CommandRunner {
-    constructor(private readonly env: Record<string, string> = {}) {}
-
-    async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
-        const [bin, ...rest] = command
-        if (bin === undefined) {
-            throw new Error('DefaultCommandRunner: empty command')
+            throw new Error('DefaultArgvRunner: empty command')
         }
         return toProc(await exec(bin, rest, {cwd: opts.cwd, env: this.env}))
     }
@@ -818,10 +800,10 @@ export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTool
         tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
         eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
         build: new DefaultBuildTool(gateEnv),
-        semgrep: new DefaultSemgrepTool(gateEnv),
+        semgrep: new DefaultArgvRunner(gateEnv),
         stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
         coverage: new DefaultCoverageTool(defaultLocalBinResolver, gateEnv),
         fs: new DefaultFsProbe(),
-        command: new DefaultCommandRunner(gateEnv),
+        command: new DefaultArgvRunner(gateEnv),
     }
 }
