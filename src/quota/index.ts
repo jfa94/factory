@@ -8,7 +8,6 @@
  *   - window       : pure two-window position + threshold math.
  *   - pacer        : the pure two-window decision → {@link QuotaDecision}.
  *   - checkpoint   : typed RunState patches honoring the quota-IFF-paused invariant.
- *   - circuit-breaker : the pure run-level hard-abort predicate (distinct from pacing).
  *   - router       : the narrowed quota-router (producer dial only).
  *   - resume       : the human-invoked resume seam (no v2 scheduler).
  */
@@ -34,8 +33,6 @@ export type {QuotaDecision} from './pacer.js'
 // Checkpoint patches
 export {buildCheckpoint, buildUnavailableCheckpoint, clearCheckpoint} from './checkpoint.js'
 export type {CheckpointableDecision, CheckpointPatch, ClearCheckpointPatch} from './checkpoint.js'
-
-// Circuit breaker: no re-export — orchestrator/circuit-breaker-gate deep-imports './circuit-breaker.js'
 
 // Quota-router (producer dial only)
 export {selectProducerModel} from './router.js'

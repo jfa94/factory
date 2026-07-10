@@ -51,7 +51,7 @@ producer ladder. Because the type has no constructor for them, "quota never emit
 fail/fail" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
-(`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
+(`src/orchestrator/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
 the pacer. The pure predicate trips on `cumulativeFailures >= effectiveThreshold`,
 where the threshold is **proportional to the task-graph size** (Decision 45):
 `max(maxConsecutiveFailures, ceil(0.15 × totalTasks))` — the config key is the
@@ -124,7 +124,7 @@ state-based circuit breaker still applies; only usage pacing is bypassed.)
 
 A 7d breach suspends the run cleanly to be resumed later (Decision 1). To stop a parked
 run from being silently abandoned and replaced while its window is still exhausted,
-`resolveOrCreateRun` (`src/cli/subcommands/run.ts`) treats an active **weekly-parked**
+`resolveOrCreateRun` (`src/orchestrator/lifecycle.ts`) treats an active **weekly-parked**
 run — `status === "suspended"` _and_ `quota.binding_window === "7d"` — as a hard wall:
 it returns a `kind:"pause"` result and `run create` exits `CONFLICT` (3),
 emitting `{kind:"pause", scope:"7d", run_id, status, reason, resets_at_epoch?}`.

@@ -208,8 +208,8 @@ export class StateManager {
 
     /**
      * Create a brand-new run. Mkdirs the run store layout, writes the initial
-     * state.json atomically under the lock, and (best-effort) points `runs/current`
-     * at it. Refuses to clobber an existing run dir.
+     * state.json atomically under the lock, and (best-effort) points the per-repo
+     * `current/<repo-key>` pointer at it. Refuses to clobber an existing run dir.
      */
     async create(args: CreateRunArgs): Promise<RunState> {
         const dir = runDir(this.dataDir, args.run_id)
@@ -229,8 +229,9 @@ export class StateManager {
             status: 'running',
             execution_mode: args.execution_mode ?? 'sequential',
             ship_mode: args.ship_mode ?? 'live',
-            // Stamp the owning session only when known (best-effort) — an absent owner
-            // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+            // Stamp the owning session only when known (best-effort) — an ownerless run
+            // is INVISIBLE to the Stop gate (findActiveByOwner never matches it; there is
+            // no unscoped fallback), so that session's loop can stop freely.
             ...(args.owner_session !== undefined ? {owner_session: args.owner_session} : {}),
             staging_branch: args.staging_branch,
             ...(args.ignore_quota !== undefined ? {ignore_quota: args.ignore_quota} : {}),
@@ -336,28 +337,33 @@ export class StateManager {
      * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
      * a bad entry, and never silently.)
      */
-    async listRuns(): Promise<RunState[]> {
-        let entries
+    /**
+     * Readdir the runs root, tolerating a missing root (no runs yet → []) and
+     * filtering to directories (excludes the `current` + temp symlinks). The shared
+     * prologue of {@link listRuns} and {@link listStaleRunDirs}.
+     */
+    private async runDirEntries(): Promise<string[]> {
         try {
-            entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
+            const entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
+            return entries.filter((e) => e.isDirectory()).map((e) => e.name)
         } catch (err) {
             if (isEnoent(err)) {
                 return []
             }
             throw err
         }
+    }
+
+    async listRuns(): Promise<RunState[]> {
         const runs: RunState[] = []
-        for (const entry of entries) {
-            if (!entry.isDirectory()) {
-                continue
-            } // excludes the `current` + temp symlinks
+        for (const name of await this.runDirEntries()) {
             try {
-                runs.push(await this.read(entry.name))
+                runs.push(await this.read(name))
             } catch (err) {
                 if (isEnoent(err)) {
                     continue
                 } // no state.json yet
-                log.warn(`state: skipping unreadable run '${entry.name}': ${(err as Error).message}`)
+                log.warn(`state: skipping unreadable run '${name}': ${(err as Error).message}`)
             }
         }
         return runs.sort((a, b) => b.run_id.localeCompare(a.run_id))
@@ -373,23 +379,11 @@ export class StateManager {
      * wreckage — surfaces loudly through targeted reads, never swept here).
      */
     async listStaleRunDirs(): Promise<StaleRunDir[]> {
-        let entries
-        try {
-            entries = await readdir(runsRoot(this.dataDir), {withFileTypes: true})
-        } catch (err) {
-            if (isEnoent(err)) {
-                return []
-            }
-            throw err
-        }
         const stale: StaleRunDir[] = []
-        for (const entry of entries) {
-            if (!entry.isDirectory()) {
-                continue
-            }
+        for (const name of await this.runDirEntries()) {
             let raw: string
             try {
-                raw = await readFile(runStatePath(this.dataDir, entry.name), 'utf8')
+                raw = await readFile(runStatePath(this.dataDir, name), 'utf8')
             } catch (err) {
                 if (isEnoent(err)) {
                     continue
@@ -400,7 +394,7 @@ export class StateManager {
             try {
                 parsed = JSON.parse(raw)
             } catch {
-                stale.push({run_id: entry.name, reason: 'corrupt-json'})
+                stale.push({run_id: name, reason: 'corrupt-json'})
                 continue
             }
             const obj = parsed as Record<string, unknown> | null
@@ -411,7 +405,7 @@ export class StateManager {
             const branch = obj?.staging_branch
             const repo = (obj?.spec as Record<string, unknown> | undefined)?.repo
             stale.push({
-                run_id: entry.name,
+                run_id: name,
                 reason: `schema-v${JSON.stringify(v)}`,
                 ...(typeof branch === 'string' && branch.length > 0 ? {staging_branch: branch} : {}),
                 ...(typeof repo === 'string' && repo.length > 0 ? {repo} : {}),
@@ -584,11 +578,11 @@ export class StateManager {
     // ---- current symlink ---------------------------------------------------
 
     /**
-     * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
-     *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
-     *     for the human CLI per checkout), and
-     *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
-     *     fallback the degraded hook/stop paths still read).
+     * Repoint the PER-REPO current pointer `current/<repo-key>` → `../runs/<run-id>`
+     * at a freshly-created run (L2.6/L2.7) — the single live pointer, authoritative
+     * for the human CLI per checkout. The legacy GLOBAL `runs/current` link is
+     * RETIRED (Decision 61): nothing reads it; this method only best-effort rms a
+     * leftover from an older engine.
      *
      * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
      * best-effort symlink catch below): if THIS repo's current pointer already names a

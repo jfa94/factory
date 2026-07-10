@@ -284,4 +284,3 @@ runtime from `[header, payload, signature]` tuples so the source file itself
 carries no committed JWT-shaped string. A garbled entry fails **closed** — it
 simply stops matching, so the token is scanned like any other and still blocks;
 it can never open a hole.
-</content>

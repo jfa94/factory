@@ -53,7 +53,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK
 }
 
-export const driveCommand: Subcommand = {
+export const nextActionCommand: Subcommand = {
     describe: 'Step one task: run deterministic steps, emit spawn/terminal/quota envelope',
     run: withUsageGuard('next-action', run),
 }

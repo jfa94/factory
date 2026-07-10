@@ -108,4 +108,3 @@ calls `process.exit`. Hooks follow the same pattern via `src/hooks/main.ts`.
 The plugin version is `package.json#version`. Bump it per the significance of your
 change (patch for fixes/refactors, minor for new backward-compatible capabilities,
 major for breaking changes).
-</content>

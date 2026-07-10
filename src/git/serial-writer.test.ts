@@ -36,6 +36,8 @@ describe('Δ L — serial writer (#1)', () => {
             dataDir,
             // tight lock window so the test is fast
             lock: {stale: 5_000, retries: 200, retryMinTimeout: 1, retryMaxTimeout: 20},
+            // no-op sleep so the merge-queue landing poll is instant in tests
+            mergeQueuePoll: {maxTries: 3, sleep: () => Promise.resolve()},
         })
     }
 
@@ -125,7 +127,10 @@ describe('Δ L — serial writer (#1)', () => {
         // App-level squash NEVER arms --delete-branch (worktree-safety, see below).
         expect(ghApp.merges).toEqual([{number: 300, auto: false, deleteBranch: false}])
 
-        // native merge-queue present → --auto (GitHub serializes)
+        // native merge-queue present → --auto (GitHub serializes), then the
+        // serializer POLLS until the queue actually lands the PR (an enqueue is a
+        // promise to merge, not a merge). 1st prView = readSettledPr; the queue
+        // lands it on the 2nd poll read.
         const ghMq = new FakeGhClient({
             prs: [openPr(301, 'factory/run-1/t1')],
             protection: {
@@ -137,11 +142,41 @@ describe('Δ L — serial writer (#1)', () => {
                 },
             },
         })
+        ghMq.setMergeabilitySequence(301, {}, {state: 'OPEN'}, {state: 'MERGED'})
         const mqOut = await serializer(ghMq).merge(301)
         expect(mqOut).toEqual({merged: true, via: 'merge-queue', number: 301})
         // merge-queue defers the merge server-side, so --delete-branch is safe there
         // (GitHub deletes the head post-merge; no local `git branch -D` at enqueue).
         expect(ghMq.merges).toEqual([{number: 301, auto: true, deleteBranch: true}])
+    })
+
+    it('merge-queue enqueue that never lands exhausts the poll budget → merged:false (ship wait-retries)', async () => {
+        // Regression: merge() used to report merged:true AT ENQUEUE — the queue can
+        // kick the PR out (CI failure) and the task was still recorded done with an
+        // unmerged PR (silent partial delivery).
+        const gh = new FakeGhClient({
+            prs: [openPr(302, 'factory/run-1/t1')],
+            protection: {
+                staging: {enabled: true, requiredStatusChecks: ['ci'], strictUpToDate: true, hasMergeQueue: true},
+            },
+        })
+        const out = await serializer(gh).merge(302) // PR stays OPEN forever
+        expect(out).toEqual({merged: false, reason: 'not-mergeable', number: 302})
+        expect(gh.merges).toEqual([{number: 302, auto: true, deleteBranch: true}]) // enqueue DID happen
+    })
+
+    it('merge-queue kicks the PR out (CLOSED) → merged:false immediately, no budget burn', async () => {
+        const gh = new FakeGhClient({
+            prs: [openPr(303, 'factory/run-1/t1')],
+            protection: {
+                staging: {enabled: true, requiredStatusChecks: ['ci'], strictUpToDate: true, hasMergeQueue: true},
+            },
+        })
+        gh.setMergeabilitySequence(303, {}, {state: 'CLOSED'})
+        const out = await serializer(gh).merge(303)
+        expect(out).toEqual({merged: false, reason: 'not-mergeable', number: 303})
+        // 1 readSettledPr view + 1 poll view that saw CLOSED — no further polling.
+        expect(gh.calls.filter((c) => c === 'pr view 303').length).toBe(2)
     })
 
     it('second merge re-verifies up-to-date against the post-first-merge staging tip (re-read inside lock)', async () => {

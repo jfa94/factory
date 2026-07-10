@@ -100,4 +100,3 @@ See [Configure the factory](./configure-the-factory.md) and the
 
 - Inspect or change settings: [Configure the factory](./configure-the-factory.md).
 - Start a pipeline: [Run the pipeline](./run-the-pipeline.md).
-  </content>

@@ -293,6 +293,41 @@ function splitReason(reason: string): {plain: string; detail?: string} {
     return i === -1 ? {plain: reason} : {plain: reason.slice(0, i), detail: reason.slice(i + 1)}
 }
 
+/** Render a split reason under a header: plain first line, technical detail fenced. */
+function reasonLines(header: string, reason: string): string[] {
+    const {plain, detail} = splitReason(reason)
+    return detail === undefined ? [header, plain] : [header, plain, '```', detail, '```']
+}
+
+/** One PRD-audit gap row (S9), shared by the PRD comment and the report body. */
+function gapRow(g: TraceabilityVerdictRow): string {
+    return `- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`
+}
+
+/**
+ * The per-failure markdown block shared by the PRD comment and the report body.
+ * `forPrd` adds the branch/PR links and checkbox criteria the PRD comment carries.
+ */
+function failureBlock(f: FailureLine, forPrd: boolean): string[] {
+    const lines = [
+        '',
+        `### \`${f.task_id}\` — ${f.title}`,
+        `- **Class:** \`${f.failure_class}\``,
+        `- **Reason:** ${f.failure_reason}`,
+    ]
+    if (forPrd && f.branch !== undefined) {
+        lines.push(`- **Branch:** \`${f.branch}\``)
+    }
+    if (forPrd && f.pr_number !== undefined) {
+        lines.push(`- **PR:** #${f.pr_number}`)
+    }
+    lines.push('- **Unmet acceptance criteria:**')
+    for (const c of f.unmet_criteria) {
+        lines.push(forPrd ? `  - [ ] ${c}` : `  - ${c}`)
+    }
+    return lines
+}
+
 /**
  * The hidden HTML-comment marker that tags the PRD failure comment with its run id.
  * Single source of truth for both the renderer (which embeds it) and finalize's
@@ -339,39 +374,19 @@ export function renderFailureComment(report: PartialRunReport, selfHealEligible 
         )
     }
     if (report.e2e_failure !== undefined) {
-        const {plain, detail} = splitReason(report.e2e_failure)
-        lines.push('', '### End-to-end verification failed', plain)
-        if (detail !== undefined) {
-            lines.push('```', detail, '```')
-        }
+        lines.push('', ...reasonLines('### End-to-end verification failed', report.e2e_failure))
     }
     if (report.e2e_assessment_failure !== undefined) {
-        const {plain, detail} = splitReason(report.e2e_assessment_failure)
-        lines.push('', '### End-to-end setup failed before any task ran', plain)
-        if (detail !== undefined) {
-            lines.push('```', detail, '```')
-        }
+        lines.push('', ...reasonLines('### End-to-end setup failed before any task ran', report.e2e_assessment_failure))
     }
     if (report.traceability_failure !== undefined) {
         lines.push('', '### Unmet PRD requirements', report.traceability_failure)
         for (const g of report.traceability_gaps ?? []) {
-            lines.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`)
+            lines.push(gapRow(g))
         }
     }
     for (const failure of report.failures) {
-        lines.push('', `### \`${failure.task_id}\` — ${failure.title}`)
-        lines.push(`- **Class:** \`${failure.failure_class}\``)
-        lines.push(`- **Reason:** ${failure.failure_reason}`)
-        if (failure.branch !== undefined) {
-            lines.push(`- **Branch:** \`${failure.branch}\``)
-        }
-        if (failure.pr_number !== undefined) {
-            lines.push(`- **PR:** #${failure.pr_number}`)
-        }
-        lines.push('- **Unmet acceptance criteria:**')
-        for (const c of failure.unmet_criteria) {
-            lines.push(`  - [ ] ${c}`)
-        }
+        lines.push(...failureBlock(failure, true))
     }
     return lines.join('\n')
 }
@@ -482,22 +497,12 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
     }
 
     if (report.e2e_assessment_failure !== undefined) {
-        const {plain, detail} = splitReason(report.e2e_assessment_failure)
-        out.push('## End-to-end setup failed before any task ran')
-        out.push(plain)
-        if (detail !== undefined) {
-            out.push('```', detail, '```')
-        }
+        out.push(...reasonLines('## End-to-end setup failed before any task ran', report.e2e_assessment_failure))
         out.push('')
     }
 
     if (report.e2e_failure !== undefined) {
-        const {plain, detail} = splitReason(report.e2e_failure)
-        out.push('## End-to-end verification failed')
-        out.push(plain)
-        if (detail !== undefined) {
-            out.push('```', detail, '```')
-        }
+        out.push(...reasonLines('## End-to-end verification failed', report.e2e_failure))
         out.push('')
     }
 
@@ -516,7 +521,7 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
     if (report.traceability_gaps !== undefined) {
         out.push('## PRD requirement gaps')
         for (const g of report.traceability_gaps) {
-            out.push(`- **${g.requirement}** (\`${g.verdict}\`): ${g.evidence}`)
+            out.push(gapRow(g))
         }
         out.push('')
     }
@@ -524,14 +529,7 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
     if (report.failures.length > 0) {
         out.push(`## Failed (${report.failures.length})`)
         for (const f of report.failures) {
-            out.push('')
-            out.push(`### \`${f.task_id}\` — ${f.title}`)
-            out.push(`- **Class:** \`${f.failure_class}\``)
-            out.push(`- **Reason:** ${f.failure_reason}`)
-            out.push('- **Unmet acceptance criteria:**')
-            for (const c of f.unmet_criteria) {
-                out.push(`  - ${c}`)
-            }
+            out.push(...failureBlock(f, false))
         }
         out.push('')
     }

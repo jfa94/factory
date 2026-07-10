@@ -82,18 +82,8 @@ export class FakeBuild extends FakeProcTool implements BuildTool {
     }
 }
 
-/** Scripted SemgrepTool. Records the argv it was handed (post-allowlist). */
-export class FakeSemgrep implements SemgrepTool {
-    readonly calls: (readonly string[])[] = []
-    constructor(private readonly result: ProcResult) {}
-    run(command: readonly string[], _opts: ToolRunOpts): Promise<ProcResult> {
-        this.calls.push(command)
-        return Promise.resolve(this.result)
-    }
-}
-
-/** Scripted CommandRunner. Records the contract argv it was handed. */
-export class FakeCommandRunner implements CommandRunner {
+/** Scripted SemgrepTool + CommandRunner. Records the argv it was handed. */
+export class FakeArgvRunner implements SemgrepTool, CommandRunner {
     readonly calls: (readonly string[])[] = []
     constructor(private readonly result: ProcResult) {}
     run(command: readonly string[], _opts: ToolRunOpts): Promise<ProcResult> {
@@ -315,7 +305,7 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
         tsc: opts.tsc ?? new FakeTsc(proc(0)),
         eslint: opts.eslint ?? new FakeEslint(proc(0)),
         build: opts.build ?? new FakeBuild(proc(0)),
-        semgrep: opts.semgrep ?? new FakeSemgrep(proc(0)),
+        semgrep: opts.semgrep ?? new FakeArgvRunner(proc(0)),
         stryker: opts.stryker ?? new FakeStryker(strykerResult({code: 0, score: 100})),
         coverage:
             opts.coverage ??
@@ -324,6 +314,6 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
                 base: measured({lines: 100, branches: 100, functions: 100, statements: 100}),
             }),
         fs: opts.fs ?? new FakeFs(),
-        command: opts.command ?? new FakeCommandRunner(proc(0)),
+        command: opts.command ?? new FakeArgvRunner(proc(0)),
     }
 }

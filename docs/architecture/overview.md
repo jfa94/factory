@@ -243,4 +243,3 @@ Some invariants must hold at tool-use time, before any CLI call. These are the
 holdout-answer-key read guard, the secret-commit guard, branch protection, the
 test-writer scope + ship gating guard, and the stop/subagent-stop gates. See
 [reference/hooks.md](../reference/hooks.md).
-</content>

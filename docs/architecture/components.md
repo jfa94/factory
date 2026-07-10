@@ -203,4 +203,3 @@ interfaces (`src/cli/registry-types.ts`, `src/hooks/registry-types.ts`), and the
 back-compat) exist to break import cycles. The no-circular-dependency bar is
 enforced as a `verify` gate (`check:circular`, `madge --circular`) — the engine
 holds itself to the same rule it scaffolds into target repos.
-</content>

@@ -7,12 +7,15 @@ import {
     isTerminalRunStatus,
     isTerminalTaskStatus,
     TERMINAL_RUN_STATUSES,
-    NONTERMINAL_RUN_STATUSES,
+    RunStatusEnum,
     type RunState,
 } from './schema.js'
 import {nonNull, at} from '../../shared/index.js'
 
 const NOW = '2026-01-01T12:00:00Z'
+
+// Derived complement of the terminal list — the enum minus isTerminalRunStatus.
+const NONTERMINAL_RUN_STATUSES = RunStatusEnum.options.filter((s) => !isTerminalRunStatus(s))
 
 function minimalTask(over: Record<string, unknown> = {}) {
     return {task_id: 't1', ...over}
@@ -215,6 +218,24 @@ describe('cross-field invariants are enforced (not just documented)', () => {
             minimalRun({status: 'suspended', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}})
         )
         expect(suspended.quota?.binding_window).toBe('7d')
+        const halted = parseRunState(minimalRun({status: 'suspended', quota: {binding_window: 'unavailable'}}))
+        expect(halted.quota?.binding_window).toBe('unavailable')
+    })
+
+    it('rejects a mis-paired quota window↔status (5h⇒paused, 7d|unavailable⇒suspended)', () => {
+        // buildCheckpoint is the only writer and always pairs; a mis-paired row is a
+        // hand-edit or a new writer skipping the pairing — reject at parse time.
+        expect(() =>
+            parseRunState(
+                minimalRun({status: 'suspended', quota: {binding_window: '5h', resets_at_epoch: 1_900_000_000}})
+            )
+        ).toThrow(/quota/)
+        expect(() =>
+            parseRunState(minimalRun({status: 'paused', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}}))
+        ).toThrow(/quota/)
+        expect(() => parseRunState(minimalRun({status: 'paused', quota: {binding_window: 'unavailable'}}))).toThrow(
+            /quota/
+        )
     })
 })
 

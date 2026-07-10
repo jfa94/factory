@@ -40,6 +40,14 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 const DEFAULT_MERGEABILITY_POLL_MAX_TRIES = 5
 const DEFAULT_MERGEABILITY_POLL_INTERVAL_MS = 2_000
 
+// Merge-queue landing poll: an `--auto` enqueue is a PROMISE to merge, not a
+// merge — the queue runs CI (minutes, not seconds) and can kick the PR out.
+// 30 tries * 10s = ~5min ceiling. Holding the merge lock that long is safe:
+// proper-lockfile auto-refreshes the lockfile mtime (update = stale/2), so the
+// lock never goes stale under a live holder.
+const DEFAULT_MERGE_QUEUE_POLL_MAX_TRIES = 30
+const DEFAULT_MERGE_QUEUE_POLL_INTERVAL_MS = 10_000
+
 /**
  * Lock tuning — the shared {@link FileLockTuning}; kept as a local alias so the
  * re-export from `./index.ts` stays stable.
@@ -88,6 +96,8 @@ export interface MergeSerializerOptions extends DataDirOptions {
     lock?: Partial<MergeLockTuning>
     /** Override the transient-UNKNOWN mergeability poll bounds (Issue #1). */
     mergeabilityPoll?: MergeabilityPollOptions
+    /** Override the merge-queue landing poll bounds (default 30 × 10s ≈ 5min). */
+    mergeQueuePoll?: MergeabilityPollOptions
 }
 
 /**
@@ -107,6 +117,9 @@ export class MergeSerializer {
     private readonly mergeabilityPollMaxTries: number
     private readonly mergeabilityPollIntervalMs: number
     private readonly mergeabilityPollSleep: (ms: number) => Promise<void>
+    private readonly mergeQueuePollMaxTries: number
+    private readonly mergeQueuePollIntervalMs: number
+    private readonly mergeQueuePollSleep: (ms: number) => Promise<void>
 
     constructor(opts: MergeSerializerOptions) {
         this.ghClient = opts.ghClient
@@ -119,6 +132,9 @@ export class MergeSerializer {
         this.mergeabilityPollMaxTries = opts.mergeabilityPoll?.maxTries ?? DEFAULT_MERGEABILITY_POLL_MAX_TRIES
         this.mergeabilityPollIntervalMs = opts.mergeabilityPoll?.intervalMs ?? DEFAULT_MERGEABILITY_POLL_INTERVAL_MS
         this.mergeabilityPollSleep = opts.mergeabilityPoll?.sleep ?? realSleep
+        this.mergeQueuePollMaxTries = opts.mergeQueuePoll?.maxTries ?? DEFAULT_MERGE_QUEUE_POLL_MAX_TRIES
+        this.mergeQueuePollIntervalMs = opts.mergeQueuePoll?.intervalMs ?? DEFAULT_MERGE_QUEUE_POLL_INTERVAL_MS
+        this.mergeQueuePollSleep = opts.mergeQueuePoll?.sleep ?? realSleep
     }
 
     private lockfilePath(): string {
@@ -193,8 +209,8 @@ export class MergeSerializer {
             }
             if (hasMergeQueue) {
                 await this.ghClient.prMergeSquash(prNumber, {auto: true, deleteBranch: true})
-                log.info(`PR #${prNumber} enqueued via native merge-queue`)
-                return {merged: true, via: 'merge-queue', number: prNumber}
+                log.info(`PR #${prNumber} enqueued via native merge-queue — polling until the queue lands it`)
+                return this.awaitQueueMerge(prNumber)
             }
 
             // App-level squash NOW only when GitHub confirms the PR is actually mergeable.
@@ -253,6 +269,35 @@ export class MergeSerializer {
             pr = await this.ghClient.prView(prNumber, fields)
         }
         return pr
+    }
+
+    /**
+     * After a merge-queue `--auto` enqueue, poll until GitHub actually LANDS the
+     * PR (`state === 'MERGED'`). An enqueue is a promise to merge, not a merge —
+     * the queue can kick the PR out (CI failure) leaving it OPEN/CLOSED forever;
+     * reporting `merged: true` at enqueue recorded a possibly-unmerged PR as done
+     * (silent partial delivery). Exhaustion / a CLOSED PR → `not-mergeable`: ship
+     * turns that into a bounded wait-retry, and a later drive re-enters merge()'s
+     * idempotent MERGED-resume branch if the queue landed it in the meantime.
+     */
+    private async awaitQueueMerge(prNumber: number): Promise<MergeOutcome> {
+        for (let tries = 0; tries < this.mergeQueuePollMaxTries; tries++) {
+            await this.mergeQueuePollSleep(this.mergeQueuePollIntervalMs)
+            const pr = await this.ghClient.prView(prNumber, ['number', 'state'])
+            if (pr.state === 'MERGED') {
+                log.info(`PR #${prNumber} landed via native merge-queue`)
+                return {merged: true, via: 'merge-queue', number: prNumber}
+            }
+            if (pr.state === 'CLOSED') {
+                log.warn(`PR #${prNumber} was CLOSED without merging — the queue kicked it out`)
+                return {merged: false, reason: 'not-mergeable', number: prNumber}
+            }
+        }
+        log.warn(
+            `PR #${prNumber} still unmerged after the merge-queue poll budget ` +
+                `(${this.mergeQueuePollMaxTries} × ${this.mergeQueuePollIntervalMs}ms) — refusing to report success`
+        )
+        return {merged: false, reason: 'not-mergeable', number: prNumber}
     }
 
     /**

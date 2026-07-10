@@ -168,4 +168,3 @@ receives only whole PRDs (Decision 34), any fail makes the run `failed`: `develo
 is left untouched and the PRD stays open, with the run's `staging-<run-id>` branch
 banked for [rescue](../guides/rescue-a-stalled-run.md). Nothing is papered over. See
 [../guides/run-the-pipeline.md](../guides/run-the-pipeline.md).
-</content>

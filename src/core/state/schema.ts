@@ -61,8 +61,6 @@ export type RunStatus = z.infer<typeof RunStatusEnum>
 
 /** Run statuses that are TERMINAL (no further work will run without a new run). */
 export const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'superseded'] as const
-/** Run statuses that are NON-terminal (work may yet continue / resume). */
-export const NONTERMINAL_RUN_STATUSES = ['running', 'paused', 'suspended'] as const
 
 /** True iff the run status is terminal. The one authority for the split. */
 export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STATUSES)[number] {
@@ -990,13 +988,20 @@ function reasonIffFailed(
 }
 
 function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
-    const quotaStatuses: readonly RunStatus[] = ['paused', 'suspended']
-    if (run.quota != null && !quotaStatuses.includes(run.status)) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['quota'],
-            message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`,
-        })
+    // Window⇒status pairing: buildCheckpoint (the only writer) pauses on 5h and
+    // suspends on 7d/unavailable — a mis-paired row is a hand-edit or a new writer
+    // skipping the pairing, so reject it at parse time.
+    if (run.quota != null) {
+        const wanted: RunStatus = run.quota.binding_window === '5h' ? 'paused' : 'suspended'
+        if (run.status !== wanted) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['quota'],
+                message:
+                    `run '${run.run_id}' carries a '${run.quota.binding_window}' quota checkpoint but status is ` +
+                    `'${run.status}' (a '${run.quota.binding_window}' checkpoint pairs with '${wanted}')`,
+            })
+        }
     }
 
     // Terminal ⇔ ended: a terminal run must carry ended_at, and a live one must not —

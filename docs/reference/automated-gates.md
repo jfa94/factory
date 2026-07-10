@@ -299,4 +299,3 @@ _availability_ is policy-gated separately: `review.requireCrossVendor: "block"` 
 to `verdict:"error"` ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)).
 (`/factory:debug`'s whole-scope `runPanel` is deliberately outside this
 check — it is not a task merge gate.)
-</content>

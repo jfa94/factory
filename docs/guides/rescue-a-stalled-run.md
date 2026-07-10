@@ -265,4 +265,3 @@ any `current` pointer naming it are deleted (reported under `stale_cleaned`). Se
 Since Decision 55, per-run staging protection is created with `allow_deletions: true`,
 so a leftover branch you spot by hand also deletes with a plain `git push --delete`
 without stripping its protection rule first.
-</content>

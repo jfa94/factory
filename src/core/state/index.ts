@@ -12,7 +12,6 @@ export {
     // run status
     RunStatusEnum,
     TERMINAL_RUN_STATUSES,
-    NONTERMINAL_RUN_STATUSES,
     isTerminalRunStatus,
     // task status
     TaskStatusEnum,

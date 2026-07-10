@@ -401,11 +401,15 @@ export class FakeGhClient implements GhClient {
     /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
     private readonly checksQueue = new Map<number, ChecksState[]>()
     /**
-     * Per-PR mergeable/mergeStateStatus override sequence; each prView call shifts
-     * one (the last value sticks) — models GitHub settling `UNKNOWN` after a beat
-     * (Issue #1: the mergeability-poll regression coverage), mirroring `checksQueue`.
+     * Per-PR mergeable/mergeStateStatus/state override sequence; each prView call
+     * shifts one (the last value sticks) — models GitHub settling `UNKNOWN` after a
+     * beat (Issue #1) and a merge-queue landing/kicking an enqueued PR, mirroring
+     * `checksQueue`.
      */
-    private readonly mergeabilityQueue = new Map<number, Pick<PullRequest, 'mergeable' | 'mergeStateStatus'>[]>()
+    private readonly mergeabilityQueue = new Map<
+        number,
+        Partial<Pick<PullRequest, 'mergeable' | 'mergeStateStatus' | 'state'>>[]
+    >()
     private readonly defaultChecks: ChecksState
     private numberCounter = 100
     private readonly truncate: boolean
@@ -466,7 +470,10 @@ export class FakeGhClient implements GhClient {
      * `number`. The last entry sticks (mirrors `setChecks`) — use to simulate GitHub
      * reporting `UNKNOWN` for a beat before settling to a terminal state.
      */
-    setMergeabilitySequence(number: number, ...states: Pick<PullRequest, 'mergeable' | 'mergeStateStatus'>[]): void {
+    setMergeabilitySequence(
+        number: number,
+        ...states: Partial<Pick<PullRequest, 'mergeable' | 'mergeStateStatus' | 'state'>>[]
+    ): void {
         this.mergeabilityQueue.set(number, [...states])
     }
 

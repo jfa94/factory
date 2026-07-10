@@ -2,7 +2,7 @@
  * Unit tests for applyCircuitBreaker — the orchestrator-layer wiring of the pure breaker.
  *
  * Focus: the DERIVATION the gate owns (the pure predicate's thresholds are already
- * covered in quota/circuit-breaker.test.ts): the failure count includes ONLY
+ * covered in circuit-breaker.test.ts): the failure count includes ONLY
  * capability-budget failures, excluding blocked-environmental cascades and
  * spec-defect wedges.
  *

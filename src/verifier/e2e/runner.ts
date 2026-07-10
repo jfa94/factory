@@ -19,8 +19,7 @@
  * flat {@link E2eResults} this returns.
  */
 import path from 'node:path'
-import {access} from 'node:fs/promises'
-import {exec} from '../../shared/index.js'
+import {exec, pathExists} from '../../shared/index.js'
 
 /** Options for a single {@link runE2e} invocation. */
 export interface E2eRunOpts {
@@ -97,15 +96,6 @@ export interface E2eProcResult {
 /** Injectable Playwright CLI wrapper (cf. `VitestTool`) — unit tests fake this. */
 export interface PlaywrightTool {
     run(opts: E2eRunOpts): Promise<E2eProcResult>
-}
-
-async function pathExists(p: string): Promise<boolean> {
-    try {
-        await access(p)
-        return true
-    } catch {
-        return false
-    }
 }
 
 /** A cwd→local-bin resolver, injectable so {@link DefaultPlaywrightTool} unit-tests without fs. */

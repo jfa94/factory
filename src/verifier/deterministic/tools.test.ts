@@ -23,7 +23,7 @@ import {
     DefaultBuildTool,
     DefaultEslintTool,
     DefaultGitProbe,
-    DefaultSemgrepTool,
+    DefaultArgvRunner,
     DefaultStrykerTool,
     DefaultTscTool,
     DefaultVitestTool,
@@ -349,9 +349,9 @@ describe('gate env injection (CI parity — quality.gateEnv)', () => {
         expect(lastOpts()).toEqual({cwd: '/wt', env: GATE_ENV})
     })
 
-    it('DefaultSemgrepTool spawns the security command with the injected env', async () => {
+    it('DefaultArgvRunner spawns the security command with the injected env', async () => {
         execMock.mockResolvedValue(res(''))
-        await new DefaultSemgrepTool(GATE_ENV).run(['semgrep', '--config', 'auto'], {cwd: '/wt'})
+        await new DefaultArgvRunner(GATE_ENV).run(['semgrep', '--config', 'auto'], {cwd: '/wt'})
         const [cmd, args] = [at(execMock.mock.calls, 0)[0], at(execMock.mock.calls, 0)[1]]
         expect(cmd).toBe('semgrep')
         expect(args).toEqual(['--config', 'auto'])

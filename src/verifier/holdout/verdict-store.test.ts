@@ -120,6 +120,16 @@ describe('FsHoldoutVerdictStore', () => {
         await expect(store.get(RUN_ID, TASK_ID, RUNG)).rejects.toThrow()
     })
 
+    it('has() rethrows a non-ENOENT read failure instead of masking it as absence', async () => {
+        // A DIRECTORY at the verdict path makes readFile fail with EISDIR — an
+        // environment fault, not absence; swallowing it would silently re-spawn
+        // a paid holdout panel.
+        const path = join(runDir(dataDir, RUN_ID), 'holdouts', `${TASK_ID}.r${RUNG}.verdicts.json`)
+        await mkdir(path, {recursive: true})
+        const store = new FsHoldoutVerdictStore(dataDir)
+        await expect(store.has(RUN_ID, TASK_ID, RUNG)).rejects.toThrow()
+    })
+
     it('a stale pre-rung-keyed file (<task>.verdicts.json) is invisible to the rung-keyed reader', async () => {
         // A run created before the rung-keyed layout leaves the old task-keyed file on
         // disk; the reader must fail closed (absent → panel re-spawn), never read it.

@@ -48,17 +48,21 @@
  * on disk, realpath-resolved before matching, so `./`, `..`, and symlink
  * escapes all collapse to the same canonical path the rule matches.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- read-only path canonicalization (realpath/exists) for the TCB guard's own decision; no writes, the paths are the ones under evaluation */
-import {existsSync, realpathSync} from 'node:fs'
-import {isAbsolute, normalize, resolve, sep} from 'node:path'
+
+import {resolve, sep} from 'node:path'
+import {canonicalizePath} from '../shared/index.js'
 import {STRYKER_CONFIG_BASENAMES, DEPENDENCY_CRUISER_CONFIG_BASENAMES} from '../shared/gate-config-names.js'
 import type {TcbCategory, TcbRule, TcbMatch, TcbContext} from '../types/tcb.js'
 
 // The TCB structural types (TcbCategory, TcbRule, TcbMatch, TcbContext) now live
 // in the foundational `src/types/tcb.ts` leaf — imported above and re-exported
 // here so the type facade points DOWN (hooks → types) while existing consumers
-// (write-protection, hooks/index, types/index) still resolve them from `./tcb.js`.
+// (write-protection, types/index) still resolve them from `./tcb.js`.
 export type {TcbCategory, TcbRule, TcbMatch, TcbContext}
+
+// canonicalizePath moved to src/shared/fs.ts; re-exported so hook-internal
+// consumers keep resolving it from './tcb.js'.
+export {canonicalizePath}
 
 /** Normalize a path segment test: is `p` equal to `base` or under `base/`? */
 function isAtOrUnder(p: string, base: string): boolean {
@@ -66,40 +70,6 @@ function isAtOrUnder(p: string, base: string): boolean {
         return true
     }
     return p.startsWith(base.endsWith(sep) ? base : base + sep)
-}
-
-/**
- * Canonicalize a rule ANCHOR (a known-directory path). Candidates are
- * realpath-resolved by {@link canonicalizePath} before matching, so an anchor
- * must be resolved the SAME way or a symlinked repoRoot/dataDir (e.g. macOS
- * `/tmp` → `/private/tmp`) would make every `isAtOrUnder` anchor miss. We
- * realpath the deepest existing ancestor and re-append any non-existent tail —
- * identical treatment to a candidate — so the two always meet on the same
- * canonical prefix.
- */
-function canonicalizeAnchor(dir: string): string {
-    const normalized = normalize(resolve(dir))
-    try {
-        if (existsSync(normalized)) {
-            return realpathSync(normalized)
-        }
-    } catch {
-        /* fall through */
-    }
-    const parts = normalized.split(sep)
-    for (let cut = parts.length - 1; cut > 0; cut--) {
-        const ancestor = parts.slice(0, cut).join(sep) || sep
-        try {
-            if (existsSync(ancestor)) {
-                const realAncestor = realpathSync(ancestor)
-                const tail = parts.slice(cut).join(sep)
-                return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor
-            }
-        } catch {
-            /* keep walking up */
-        }
-    }
-    return normalized
 }
 
 /** Does the absolute path contain the given path component (e.g. ".github")? */
@@ -195,7 +165,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     // 3. The guard hooks themselves: `hooks/**`. Anchored to the repoRoot when
     //    known (so only THIS repo's hooks dir is protected), else component-based.
     if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-        const hooksDir = canonicalizeAnchor(resolve(ctx.repoRoot, 'hooks'))
+        const hooksDir = canonicalizePath(resolve(ctx.repoRoot, 'hooks'))
         rules.push({
             category: 'hooks',
             describe: 'hooks/** (the guard hooks — editing one disables the boundary)',
@@ -220,7 +190,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     //     run. This rule stays literal — reading config to widen it would be the
     //     circular trust the TCB refuses.
     if (ctx.repoRoot != null && ctx.repoRoot.length > 0) {
-        const e2eDir = canonicalizeAnchor(resolve(ctx.repoRoot, 'e2e'))
+        const e2eDir = canonicalizePath(resolve(ctx.repoRoot, 'e2e'))
         rules.push({
             category: 'e2e-suite',
             describe: 'e2e/** (committed critical e2e suite — Decision 39)',
@@ -237,8 +207,8 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
     //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
     if (ctx.dataDir != null && ctx.dataDir.length > 0) {
-        const runsDir = canonicalizeAnchor(resolve(ctx.dataDir, 'runs'))
-        const specsDir = canonicalizeAnchor(resolve(ctx.dataDir, 'specs'))
+        const runsDir = canonicalizePath(resolve(ctx.dataDir, 'runs'))
+        const specsDir = canonicalizePath(resolve(ctx.dataDir, 'specs'))
         rules.push({
             category: 'data-runs',
             describe: '<dataDir>/runs/** (run state, holdouts, reviews — Δ Y)',
@@ -249,7 +219,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
             describe: '<dataDir>/specs/** (durable spec store)',
             test: (p) => isAtOrUnder(p, specsDir),
         })
-        const configFile = canonicalizeAnchor(resolve(ctx.dataDir, 'config.json'))
+        const configFile = canonicalizePath(resolve(ctx.dataDir, 'config.json'))
         rules.push({
             category: 'data-config',
             describe: '<dataDir>/config.json (operator config — writing it enables arbitrary shell via setupCommand)',
@@ -275,41 +245,6 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
  * pass a context via {@link isTcbProtected} so the absolute store paths match.
  */
 export const TCB_DENY: readonly TcbRule[] = buildTcbRules()
-
-/**
- * Canonicalize a candidate path for matching: resolve to absolute (relative to
- * `cwd`), normalize away `./` and `..`, then realpath-resolve if it (or its
- * nearest existing parent) exists — defeating symlink escapes. A non-existent
- * path falls back to its normalized absolute form (the write may be a create).
- */
-export function canonicalizePath(candidate: string, cwd: string = process.cwd()): string {
-    const abs = isAbsolute(candidate) ? candidate : resolve(cwd, candidate)
-    const normalized = normalize(abs)
-    // Realpath the deepest existing ancestor so a symlinked parent dir is resolved
-    // even when the leaf file does not yet exist (a create through a symlink).
-    try {
-        if (existsSync(normalized)) {
-            return realpathSync(normalized)
-        }
-    } catch {
-        /* realpath can race; fall through to the normalized form */
-    }
-    // Walk up to the nearest existing ancestor, realpath it, re-append the tail.
-    const parts = normalized.split(sep)
-    for (let cut = parts.length - 1; cut > 0; cut--) {
-        const ancestor = parts.slice(0, cut).join(sep) || sep
-        try {
-            if (existsSync(ancestor)) {
-                const realAncestor = realpathSync(ancestor)
-                const tail = parts.slice(cut).join(sep)
-                return tail.length > 0 ? resolve(realAncestor, tail) : realAncestor
-            }
-        } catch {
-            /* keep walking up */
-        }
-    }
-    return normalized
-}
 
 /**
  * Is `candidatePath` a protected TCB path? Returns the matching {@link TcbMatch}

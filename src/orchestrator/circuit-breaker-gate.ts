@@ -1,6 +1,6 @@
 /**
  * The run-level CIRCUIT-BREAKER gate — the orchestrator-layer wiring of the pure
- * {@link evaluate} predicate (`quota/circuit-breaker.ts`) into the run orchestrator.
+ * {@link evaluate} predicate (`./circuit-breaker.ts`) into the run orchestrator.
  * Mirrors the {@link import("./quota-gate.js").applyQuotaGate} DI shape: a narrow
  * deps subset, evaluated over fresh state by `runId`, returning a structured verdict
  * or null to proceed. Never writes state — turning a trip into failures is the CALLER's
@@ -26,7 +26,7 @@
  * pure breaker can scale its threshold proportionally — `maxConsecutiveFailures` is
  * the configurable FLOOR.
  */
-import {evaluate, type CircuitBreakerResult} from '../quota/circuit-breaker.js'
+import {evaluate, type CircuitBreakerResult} from './circuit-breaker.js'
 import type {Config, StateManager} from './deps.js'
 
 /** A tripped breaker verdict (the human reason) — the gate's only non-null return. */

@@ -7,12 +7,11 @@
  * Moved verbatim from the (since-deleted) CLI single-step subcommands:
  *   - src/cli/transition.ts      → TransitionEnvelope, persistStepCursor, readJsonInput
  *   - src/cli/subcommands/record-producer.ts → producerPhaseInfo, applyRecordProducer
- *   - src/cli/subcommands/record-holdout.ts  → RecordHoldoutInput, RecordHoldoutEnvelope,
- *                                               applyRecordHoldout
+ *   - src/cli/subcommands/record-holdout.ts  → RecordHoldoutEnvelope, applyRecordHoldout
  *   - src/cli/subcommands/record-reviews.ts  → VerifierVerdictInput, ReviewerVerifications,
  *                                               RecordReviewsInput, RecordReviewsEnvelope,
  *                                               buildWorktreeSource, makeReplayRunnerFactory,
- *                                               applyRecordReviews, REPLAY_IDENTITY
+ *                                               applyRecordReviews
  *
  * Signature adjustments from the move (only):
  *   - applyRecordReviews: was (deps: CliDeps, verdictStore, taskId, input);
@@ -29,7 +28,7 @@ import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
 import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
 import {taskWorktreePath} from './paths.js'
-import {canonicalizePath} from '../hooks/tcb.js'
+import {canonicalizePath} from '../shared/index.js'
 import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
 import {classifyFailure, ESCALATION_CAP, parseProducerStatus} from '../producer/index.js'
 import {nextPhase, phaseToInFlightStatus} from '../types/index.js'
@@ -165,11 +164,6 @@ export async function applyRecordProducer(
 // applyRecordHoldout  (from record-holdout.ts)
 // ---------------------------------------------------------------------------
 
-/** The input file shape: the raw holdout-validator agent output. */
-export interface RecordHoldoutInput {
-    readonly raw: string
-}
-
 /** The holdout-validation evidence document `applyRecordHoldout` records. */
 export interface RecordHoldoutEnvelope {
     readonly run_id: string
@@ -223,7 +217,7 @@ export async function applyRecordHoldout(
 // ---------------------------------------------------------------------------
 
 /** A fixed, reviewer-independent identity for the replay verifier (D27 independence). */
-export const REPLAY_IDENTITY = 'runner-replay'
+const REPLAY_IDENTITY = 'runner-replay'
 
 /** One pre-recorded finding-verifier verdict (runner-collected, out-of-band). */
 export interface VerifierVerdictInput {

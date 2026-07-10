@@ -2,7 +2,7 @@
  * `factory next-action` — unit tests for the per-task orchestrator CLI shell.
  *
  * Surfaces:
- *   1. arg/usage edges (short-circuit before wiring) via driveCommand;
+ *   1. arg/usage edges (short-circuit before wiring) via nextActionCommand;
  *   2. --results parse errors surfaced as EXIT.USAGE;
  *   3. happy-path JSON envelope passthrough via a seeded tmp run.
  */
@@ -11,7 +11,7 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {driveCommand} from './drive.js'
+import {nextActionCommand} from './next-action.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {captureStream} from '../test-helpers.js'
 import {makeOrchestratorDeps, makePrd, makeSpec} from '../../orchestrator/orchestrator-fixtures.js'
@@ -23,7 +23,7 @@ describe('drive arg/usage edges', () => {
     it('--help prints help and exits OK', async () => {
         const stdout = captureStream(process.stdout)
         try {
-            const code = await driveCommand.run(['--help'])
+            const code = await nextActionCommand.run(['--help'])
             expect(code).toBe(EXIT.OK)
             expect(stdout.read()).toMatch(/result_key/)
         } finally {
@@ -32,15 +32,15 @@ describe('drive arg/usage edges', () => {
     })
 
     it('missing --run is a usage error', async () => {
-        expect(await driveCommand.run(['--task', 'T1'])).toBe(EXIT.USAGE)
+        expect(await nextActionCommand.run(['--task', 'T1'])).toBe(EXIT.USAGE)
     })
 
     it('missing --task is a usage error', async () => {
-        expect(await driveCommand.run(['--run', 'run-1'])).toBe(EXIT.USAGE)
+        expect(await nextActionCommand.run(['--run', 'run-1'])).toBe(EXIT.USAGE)
     })
 
     it('unknown --ship-mode is a usage error', async () => {
-        expect(await driveCommand.run(['--run', 'run-1', '--task', 'T1', '--ship-mode', 'turbo'])).toBe(EXIT.USAGE)
+        expect(await nextActionCommand.run(['--run', 'run-1', '--task', 'T1', '--ship-mode', 'turbo'])).toBe(EXIT.USAGE)
     })
 })
 
@@ -66,7 +66,7 @@ describe('drive --results parse errors', () => {
     it('--results= (empty string) is a usage error (requires a file path)', async () => {
         const stderr = captureStream(process.stderr)
         try {
-            const code = await driveCommand.run(['--run', 'run-1', '--task', 'T1', '--results='])
+            const code = await nextActionCommand.run(['--run', 'run-1', '--task', 'T1', '--results='])
             expect(code).toBe(EXIT.USAGE)
             expect(stderr.read()).toContain('requires a file path')
         } finally {
@@ -78,7 +78,7 @@ describe('drive --results parse errors', () => {
         const missingPath = join(dir, 'no-such-file.json')
         const stderr = captureStream(process.stderr)
         try {
-            const code = await driveCommand.run(['--run', 'run-1', '--task', 'T1', '--results', missingPath])
+            const code = await nextActionCommand.run(['--run', 'run-1', '--task', 'T1', '--results', missingPath])
             expect(code).toBe(EXIT.USAGE)
             expect(stderr.read()).toContain(missingPath)
         } finally {
@@ -91,7 +91,7 @@ describe('drive --results parse errors', () => {
         await writeFile(bad, JSON.stringify({not_a_fold_key: true}), 'utf8')
         const stderr = captureStream(process.stderr)
         try {
-            const code = await driveCommand.run(['--run', 'run-1', '--task', 'T1', '--results', bad])
+            const code = await nextActionCommand.run(['--run', 'run-1', '--task', 'T1', '--results', bad])
             expect(code).toBe(EXIT.USAGE)
             expect(stderr.read()).toContain(bad)
             expect(stderr.read()).toContain('result_key')
@@ -136,7 +136,7 @@ describe('drive happy path', () => {
         const saved = process.env.CLAUDE_PLUGIN_DATA
         process.env.CLAUDE_PLUGIN_DATA = deps.dataDir
         try {
-            const code = await driveCommand.run(['--run', runId, '--task', 'T1'])
+            const code = await nextActionCommand.run(['--run', runId, '--task', 'T1'])
             expect(code).toBe(EXIT.OK)
             const out = stdout.read()
             expect(out.length).toBeGreaterThan(0)
@@ -193,7 +193,7 @@ describe('drive happy path', () => {
         const saved = process.env.CLAUDE_PLUGIN_DATA
         process.env.CLAUDE_PLUGIN_DATA = deps.dataDir
         try {
-            const code = await driveCommand.run(['--run', runId, '--task', 'T1'])
+            const code = await nextActionCommand.run(['--run', runId, '--task', 'T1'])
             expect(code).toBe(EXIT.OK)
             const out = stdout.read()
             expect(out.length).toBeGreaterThan(0)

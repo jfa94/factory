@@ -28,7 +28,7 @@ import {rescueCommand} from './subcommands/rescue.js'
 import {reconcileCommand} from './subcommands/reconcile.js'
 import {scoreCommand} from './subcommands/score.js'
 import {missCommand} from './subcommands/miss.js'
-import {driveCommand} from './subcommands/drive.js'
+import {nextActionCommand} from './subcommands/next-action.js'
 import {nextCommand} from './subcommands/next.js'
 import {statuslineCommand} from './subcommands/statusline.js'
 import {autonomyCommand} from './subcommands/autonomy.js'
@@ -56,7 +56,7 @@ export const cliRegistry: Record<string, Subcommand> = {
     miss: missCommand,
     state: stateCommand,
     scaffold: scaffoldCommand,
-    'next-action': driveCommand,
+    'next-action': nextActionCommand,
     'next-task': nextCommand,
     statusline: statuslineCommand,
     autonomy: autonomyCommand,

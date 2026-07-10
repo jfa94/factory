@@ -340,6 +340,7 @@ export async function debugStart(deps: DebugDeps, opts: DebugStartOptions = {}):
         throw new UsageError('debug start: pass exactly one of --base or --full')
     }
     const base = opts.full === true ? EMPTY_TREE_SHA : (opts.base ?? 'HEAD~1')
+    // The ONE --max-passes validator: CLI and programmatic callers all route here.
     const maxPasses = opts.maxPasses ?? DEFAULT_MAX_PASSES
     if (!Number.isInteger(maxPasses) || maxPasses <= 0) {
         throw new UsageError(`--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`)
@@ -494,18 +495,29 @@ async function debugRepo(deps: DebugDeps): Promise<string> {
     return resolveRepo({cwd: deps.cwd, gitClient: deps.gitClient})
 }
 
-/** `factory debug spec resolve` — pass-through to the UNCHANGED `resolveSpec`. */
-export async function debugSpecResolve(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
+/**
+ * Shared head of the three `factory debug spec <action>` pass-throughs: read the
+ * session, derive the repo, wire the debug spec deps, and call `fn` with the
+ * pass's synthetic issue number. The spec-seam functions themselves are UNCHANGED.
+ */
+async function debugSpecAction(
+    deps: DebugDeps,
+    runId: string,
+    fn: (specDeps: SpecBuildDeps, repo: string, issue: number, session: DebugSession) => Promise<SpecBuildEnvelope>
+): Promise<SpecBuildEnvelope> {
     const session = await readSession(deps.dataDir, runId)
     const repo = await debugRepo(deps)
-    return resolveSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
+    return fn(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass), session)
+}
+
+/** `factory debug spec resolve` — pass-through to the UNCHANGED `resolveSpec`. */
+export async function debugSpecResolve(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
+    return debugSpecAction(deps, runId, (d, repo, issue) => resolveSpec(d, repo, issue))
 }
 
 /** `factory debug spec gate` — pass-through to the UNCHANGED `gateSpec`. */
 export async function debugSpecGate(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
-    const session = await readSession(deps.dataDir, runId)
-    const repo = await debugRepo(deps)
-    return gateSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
+    return debugSpecAction(deps, runId, (d, repo, issue) => gateSpec(d, repo, issue))
 }
 
 /**
@@ -514,13 +526,13 @@ export async function debugSpecGate(deps: DebugDeps, runId: string): Promise<Spe
  * `seed` can find it.
  */
 export async function debugSpecStore(deps: DebugDeps, runId: string): Promise<SpecBuildEnvelope> {
-    const session = await readSession(deps.dataDir, runId)
-    const repo = await debugRepo(deps)
-    const envelope = await storeSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass))
-    if (envelope.kind === 'stored') {
-        await writeSession(deps.dataDir, {...session, specId: envelope.pointer.spec_id})
-    }
-    return envelope
+    return debugSpecAction(deps, runId, async (d, repo, issue, session) => {
+        const envelope = await storeSpec(d, repo, issue)
+        if (envelope.kind === 'stored') {
+            await writeSession(deps.dataDir, {...session, specId: envelope.pointer.spec_id})
+        }
+        return envelope
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -612,14 +624,6 @@ function wireDeps(overrides: DebugOverrides = {}): DebugDeps {
     }
 }
 
-function parseMaxPasses(raw: string): number {
-    const n = Number(raw)
-    if (!Number.isInteger(n) || n <= 0) {
-        throw new UsageError(`--max-passes must be a positive integer, got '${raw}'`)
-    }
-    return n
-}
-
 /** `factory debug start` — parse flags, wire deps, run the testable core, emit. */
 export async function runDebugStart(argv: string[], overrides: DebugOverrides = {}): Promise<ExitCode> {
     const args = parseArgs(argv, {booleans: ['full', 'no-ship', 'author-e2e']})
@@ -636,7 +640,7 @@ export async function runDebugStart(argv: string[], overrides: DebugOverrides = 
         ...(base !== undefined ? {base} : {}),
         noShip: args.flag('no-ship') === true,
         authorE2e: args.flag('author-e2e') === true,
-        ...(maxPassesRaw !== undefined ? {maxPasses: parseMaxPasses(maxPassesRaw)} : {}),
+        ...(maxPassesRaw !== undefined ? {maxPasses: Number(maxPassesRaw)} : {}),
         ...(sessionId !== undefined ? {sessionId} : {}),
     })
     emitJson(envelope)
