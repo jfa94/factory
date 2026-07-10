@@ -215,6 +215,24 @@ describe('cross-field invariants are enforced (not just documented)', () => {
             minimalRun({status: 'suspended', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}})
         )
         expect(suspended.quota?.binding_window).toBe('7d')
+        const halted = parseRunState(minimalRun({status: 'suspended', quota: {binding_window: 'unavailable'}}))
+        expect(halted.quota?.binding_window).toBe('unavailable')
+    })
+
+    it('rejects a mis-paired quota window↔status (5h⇒paused, 7d|unavailable⇒suspended)', () => {
+        // buildCheckpoint is the only writer and always pairs; a mis-paired row is a
+        // hand-edit or a new writer skipping the pairing — reject at parse time.
+        expect(() =>
+            parseRunState(
+                minimalRun({status: 'suspended', quota: {binding_window: '5h', resets_at_epoch: 1_900_000_000}})
+            )
+        ).toThrow(/quota/)
+        expect(() =>
+            parseRunState(minimalRun({status: 'paused', quota: {binding_window: '7d', resets_at_epoch: 1_900_000_000}}))
+        ).toThrow(/quota/)
+        expect(() => parseRunState(minimalRun({status: 'paused', quota: {binding_window: 'unavailable'}}))).toThrow(
+            /quota/
+        )
     })
 })
 

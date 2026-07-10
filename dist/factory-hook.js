@@ -7958,13 +7958,15 @@ function reasonIffFailed(ctx, opts) {
   }
 }
 function refineRunCrossFields(run, ctx) {
-  const quotaStatuses = ["paused", "suspended"];
-  if (run.quota != null && !quotaStatuses.includes(run.status)) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["quota"],
-      message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`
-    });
+  if (run.quota != null) {
+    const wanted = run.quota.binding_window === "5h" ? "paused" : "suspended";
+    if (run.status !== wanted) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["quota"],
+        message: `run '${run.run_id}' carries a '${run.quota.binding_window}' quota checkpoint but status is '${run.status}' (a '${run.quota.binding_window}' checkpoint pairs with '${wanted}')`
+      });
+    }
   }
   if (isTerminalRunStatus(run.status) !== (run.ended_at != null)) {
     ctx.addIssue({

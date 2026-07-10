@@ -629,7 +629,7 @@ describe('docs-ready gate', () => {
             await state.update(runId, (s) => ({
                 ...s,
                 status: 'suspended',
-                quota: {binding_window: '5h' as const, resets_at_epoch: 1_700_018_000},
+                quota: {binding_window: '7d' as const, resets_at_epoch: 1_700_018_000},
                 traceability: TRACED,
                 docs: {status: 'failed', reason: 'prior', ended_at: DONE_AT},
             }))
@@ -788,7 +788,7 @@ describe('e2e-ready gate (Decision 39)', () => {
                 e2e: true,
                 e2e_assessment: ASSESSED,
                 status: 'suspended',
-                quota: {binding_window: '5h' as const, resets_at_epoch: 1_700_018_000},
+                quota: {binding_window: '7d' as const, resets_at_epoch: 1_700_018_000},
                 e2e_phase: {
                     manifest: [{task_ids: ['T1'], spec_path: 'e2e/x.spec.ts', kind: 'critical'}],
                     reopen_counts: {T1: 1},

@@ -7048,13 +7048,15 @@ function reasonIffFailed(ctx, opts) {
   }
 }
 function refineRunCrossFields(run9, ctx) {
-  const quotaStatuses = ["paused", "suspended"];
-  if (run9.quota != null && !quotaStatuses.includes(run9.status)) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["quota"],
-      message: `run '${run9.run_id}' carries a quota checkpoint but status is '${run9.status}' (a quota checkpoint is valid only while paused|suspended)`
-    });
+  if (run9.quota != null) {
+    const wanted = run9.quota.binding_window === "5h" ? "paused" : "suspended";
+    if (run9.status !== wanted) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["quota"],
+        message: `run '${run9.run_id}' carries a '${run9.quota.binding_window}' quota checkpoint but status is '${run9.status}' (a '${run9.quota.binding_window}' checkpoint pairs with '${wanted}')`
+      });
+    }
   }
   if (isTerminalRunStatus(run9.status) !== (run9.ended_at != null)) {
     ctx.addIssue({
@@ -8948,6 +8950,8 @@ var GIT_DEFAULTS4 = GitSchema.parse({});
 var realSleep2 = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
 var DEFAULT_MERGEABILITY_POLL_MAX_TRIES = 5;
 var DEFAULT_MERGEABILITY_POLL_INTERVAL_MS = 2e3;
+var DEFAULT_MERGE_QUEUE_POLL_MAX_TRIES = 30;
+var DEFAULT_MERGE_QUEUE_POLL_INTERVAL_MS = 1e4;
 var MERGE_LOCK_DEFAULTS = {
   ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
@@ -8966,6 +8970,9 @@ var MergeSerializer = class {
   mergeabilityPollMaxTries;
   mergeabilityPollIntervalMs;
   mergeabilityPollSleep;
+  mergeQueuePollMaxTries;
+  mergeQueuePollIntervalMs;
+  mergeQueuePollSleep;
   constructor(opts) {
     this.ghClient = opts.ghClient;
     this.owner = opts.owner;
@@ -8977,6 +8984,9 @@ var MergeSerializer = class {
     this.mergeabilityPollMaxTries = opts.mergeabilityPoll?.maxTries ?? DEFAULT_MERGEABILITY_POLL_MAX_TRIES;
     this.mergeabilityPollIntervalMs = opts.mergeabilityPoll?.intervalMs ?? DEFAULT_MERGEABILITY_POLL_INTERVAL_MS;
     this.mergeabilityPollSleep = opts.mergeabilityPoll?.sleep ?? realSleep2;
+    this.mergeQueuePollMaxTries = opts.mergeQueuePoll?.maxTries ?? DEFAULT_MERGE_QUEUE_POLL_MAX_TRIES;
+    this.mergeQueuePollIntervalMs = opts.mergeQueuePoll?.intervalMs ?? DEFAULT_MERGE_QUEUE_POLL_INTERVAL_MS;
+    this.mergeQueuePollSleep = opts.mergeQueuePoll?.sleep ?? realSleep2;
   }
   lockfilePath() {
     return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
@@ -9026,8 +9036,8 @@ var MergeSerializer = class {
       }
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
-        log11.info(`PR #${prNumber} enqueued via native merge-queue`);
-        return { merged: true, via: "merge-queue", number: prNumber };
+        log11.info(`PR #${prNumber} enqueued via native merge-queue \u2014 polling until the queue lands it`);
+        return this.awaitQueueMerge(prNumber);
       }
       const mergeableNow = pr.mergeStateStatus === "CLEAN" || pr.mergeStateStatus === "HAS_HOOKS" || pr.mergeStateStatus === "UNSTABLE";
       if (!mergeableNow) {
@@ -9064,6 +9074,33 @@ var MergeSerializer = class {
       pr = await this.ghClient.prView(prNumber, fields);
     }
     return pr;
+  }
+  /**
+   * After a merge-queue `--auto` enqueue, poll until GitHub actually LANDS the
+   * PR (`state === 'MERGED'`). An enqueue is a promise to merge, not a merge —
+   * the queue can kick the PR out (CI failure) leaving it OPEN/CLOSED forever;
+   * reporting `merged: true` at enqueue recorded a possibly-unmerged PR as done
+   * (silent partial delivery). Exhaustion / a CLOSED PR → `not-mergeable`: ship
+   * turns that into a bounded wait-retry, and a later drive re-enters merge()'s
+   * idempotent MERGED-resume branch if the queue landed it in the meantime.
+   */
+  async awaitQueueMerge(prNumber) {
+    for (let tries = 0; tries < this.mergeQueuePollMaxTries; tries++) {
+      await this.mergeQueuePollSleep(this.mergeQueuePollIntervalMs);
+      const pr = await this.ghClient.prView(prNumber, ["number", "state"]);
+      if (pr.state === "MERGED") {
+        log11.info(`PR #${prNumber} landed via native merge-queue`);
+        return { merged: true, via: "merge-queue", number: prNumber };
+      }
+      if (pr.state === "CLOSED") {
+        log11.warn(`PR #${prNumber} was CLOSED without merging \u2014 the queue kicked it out`);
+        return { merged: false, reason: "not-mergeable", number: prNumber };
+      }
+    }
+    log11.warn(
+      `PR #${prNumber} still unmerged after the merge-queue poll budget (${this.mergeQueuePollMaxTries} \xD7 ${this.mergeQueuePollIntervalMs}ms) \u2014 refusing to report success`
+    );
+    return { merged: false, reason: "not-mergeable", number: prNumber };
   }
   /**
    * Delete the merged PR's remote head ref — BEST EFFORT. The squash-merge has
@@ -12960,8 +12997,11 @@ var FsHoldoutVerdictStore = class {
     try {
       await readFile11(this.path(runId, taskId, rung), "utf8");
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if (isEnoent(err)) {
+        return false;
+      }
+      throw err;
     }
   }
 };

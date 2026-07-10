@@ -25,7 +25,7 @@ import {mkdir, readFile} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
 import {z} from 'zod'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
-import {validateId} from '../../shared/index.js'
+import {isEnoent, validateId} from '../../shared/index.js'
 import {parseJson, stringifyJson} from '../../shared/json.js'
 import {runDir} from '../../core/state/index.js'
 import type {HoldoutVerdict} from './validate.js'
@@ -124,8 +124,11 @@ export class FsHoldoutVerdictStore implements HoldoutVerdictStore {
         try {
             await readFile(this.path(runId, taskId, rung), 'utf8')
             return true
-        } catch {
-            return false
+        } catch (err) {
+            if (isEnoent(err)) {
+                return false
+            }
+            throw err
         }
     }
 }
