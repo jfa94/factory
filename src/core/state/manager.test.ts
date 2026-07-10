@@ -282,7 +282,7 @@ describe('concurrency: ≥3 writers do not corrupt state', () => {
     }, 30_000)
 })
 
-describe('enumeration: listRuns / findActiveBySpec (resolve-or-reuse)', () => {
+describe('enumeration: listRuns / findActiveByIssue (resolve-or-reuse)', () => {
     const specA: SpecPointer = {repo: 'acme/widgets', spec_id: '42-checkout', issue_number: 42}
     const specB: SpecPointer = {repo: 'acme/widgets', spec_id: '7-search', issue_number: 7}
 
@@ -329,33 +329,44 @@ describe('enumeration: listRuns / findActiveBySpec (resolve-or-reuse)', () => {
         await expect(m.read('run-bad')).rejects.toThrow()
     })
 
-    it('findActiveBySpec returns the non-terminal run matching (repo, spec_id)', async () => {
+    it('findActiveByIssue returns the non-terminal run matching (repo, issue)', async () => {
         const m = mgr()
         await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
-        const found = await m.findActiveBySpec(specA.repo, specA.spec_id)
+        const found = await m.findActiveByIssue(specA.repo, specA.issue_number)
         expect(found?.run_id).toBe('run-1')
     })
 
-    it('findActiveBySpec matches on BOTH repo and spec_id', async () => {
+    it('findActiveByIssue matches on BOTH repo and issue', async () => {
         const m = mgr()
         await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
-        expect(await m.findActiveBySpec('other/repo', specA.spec_id)).toBeNull()
-        expect(await m.findActiveBySpec(specA.repo, '999-nope')).toBeNull()
+        expect(await m.findActiveByIssue('other/repo', specA.issue_number)).toBeNull()
+        expect(await m.findActiveByIssue(specA.repo, 999)).toBeNull()
     })
 
-    it('findActiveBySpec ignores terminal runs (a finalized run is not reusable)', async () => {
+    it('findActiveByIssue matches a run whose slug drifted from a regenerated spec', async () => {
+        // The run was created under spec `42-checkout`; a --supersede regeneration
+        // minted `42-checkout-rework`. The issue number — not the slug — is the key.
+        const m = mgr()
+        await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
+        const found = await m.findActiveByIssue(specA.repo, 42)
+        expect(found?.run_id).toBe('run-1')
+        expect(found?.spec.spec_id).toBe('42-checkout') // original id, not the drifted one
+    })
+
+    it('findActiveByIssue ignores terminal runs (a finalized run is not reusable)', async () => {
         const m = mgr()
         await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
         await m.finalize('run-1', 'completed')
-        expect(await m.findActiveBySpec(specA.repo, specA.spec_id)).toBeNull()
+        expect(await m.findActiveByIssue(specA.repo, specA.issue_number)).toBeNull()
     })
 
-    it('findActiveBySpec returns the newest when several non-terminal runs match', async () => {
+    it('findActiveByIssue fails LOUD when several non-terminal runs match (state defect)', async () => {
         const m = mgr()
         await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
         await m.create({run_id: 'run-2', staging_branch: 'staging-run-2', spec: specA})
-        const found = await m.findActiveBySpec(specA.repo, specA.spec_id)
-        expect(found?.run_id).toBe('run-2')
+        await expect(m.findActiveByIssue(specA.repo, specA.issue_number)).rejects.toThrow(
+            /2 active runs for issue #42.*factory:resume/s
+        )
     })
 })
 

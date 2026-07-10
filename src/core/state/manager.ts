@@ -453,19 +453,31 @@ export class StateManager {
     }
 
     /**
-     * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
+     * Find the single NON-terminal run for `(repo, issueNumber)`, or null. Powers the
      * resolve-or-reuse path of `run create`: a repeated create returns the live run
-     * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
-     * `<issue>-<slug>` — unique within a repo, but not necessarily across repos).
+     * instead of spawning an orphan. Matches by the STABLE issue number, not the exact
+     * `spec_id` — a spec id is `<issue>-<slug>` where the slug is agent-named and can
+     * drift across regenerations, and one issue means at most one active run: the
+     * supersede teardown, the weekly-quota wall, and the no-silent-reuse prompt must
+     * all see a drifted-slug run.
+     *
+     * @throws when ≥2 active runs match — a state defect (duplicates have occurred in
+     *         the wild); silently picking one could tear down or reuse the wrong run.
+     *         Fail loud and let `/factory:resume` repair.
      */
-    async findActiveBySpec(repo: string, specId: string): Promise<RunState | null> {
+    async findActiveByIssue(repo: string, issueNumber: number): Promise<RunState | null> {
         const runs = await this.listRuns() // newest-first
-        for (const r of runs) {
-            if (r.spec.repo === repo && r.spec.spec_id === specId && !isTerminalRunStatus(r.status)) {
-                return r
-            }
+        const matches = runs.filter(
+            (r) => r.spec.repo === repo && r.spec.issue_number === issueNumber && !isTerminalRunStatus(r.status)
+        )
+        if (matches.length > 1) {
+            throw new Error(
+                `findActiveByIssue: ${matches.length} active runs for issue #${issueNumber} in ${repo} ` +
+                    `(${matches.map((r) => r.run_id).join(', ')}) — one issue must have at most one ` +
+                    `active run; repair with /factory:resume`
+            )
         }
-        return null
+        return matches.length === 1 ? at(matches, 0) : null
     }
 
     /**

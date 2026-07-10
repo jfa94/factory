@@ -10,6 +10,7 @@ import {join} from 'node:path'
 
 import {resolveSpec, gateSpec, storeSpec, buildManifest, type SpecBuildDeps} from './build.js'
 import {SpecStore, SPEC_DEFAULTS, type GhClient, type Prd} from './index.js'
+import {fakeUsageSignal, type UsageReading} from '../quota/index.js'
 import {loadConfig} from '../config/index.js'
 import {stringifyJson} from '../shared/json.js'
 import {specBuildDir} from '../core/state/paths.js'
@@ -109,6 +110,24 @@ const FAIL_VERDICT = {
 
 let dataDir: string
 
+/** Frozen epoch SECONDS — the unit the quota pacer windows are computed in. */
+const NOW = 1_700_000_000
+
+/** Build a usage reading; both windows fresh + future-reset unless overridden. */
+function usageReading(opts: {five: number; seven: number}): UsageReading {
+    return {
+        kind: 'available',
+        fiveHour: {utilizationPct: opts.five, resetsAtEpoch: NOW + 18_000},
+        sevenDay: {utilizationPct: opts.seven, resetsAtEpoch: NOW + 604_800},
+        capturedAt: NOW,
+    }
+}
+
+const USAGE_OK = usageReading({five: 0, seven: 0})
+const USAGE_OVER_5H = usageReading({five: 21, seven: 0}) // hour-1 cap 20, 21 > 20 → pause
+const USAGE_OVER_7D = usageReading({five: 0, seven: 21}) // day-1 cap 20, 21 > 20 → suspend
+const USAGE_UNAVAILABLE: UsageReading = {kind: 'unavailable', reason: 'usage-cache-missing'}
+
 /** A fake gh that returns the fixed PRD without spawning the real binary. */
 const fakeGh: GhClient = {
     fetchPrd(issueNumber: number): Promise<Prd> {
@@ -127,11 +146,18 @@ function deps(): SpecBuildDeps {
         store: new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')}),
         gh: fakeGh,
         config: loadConfig({dataDir}),
+        usage: fakeUsageSignal(USAGE_OK),
+        now: () => NOW,
         // Scratch root shares the test's own tmp dataDir (fine here — tests don't
         // need scratch/durable separated, just isolated per-test, which dataDir
         // already is). Production wires this to defaultSpecBuildRoot() instead.
         scratchRoot: dataDir,
     }
+}
+
+/** Deps whose usage signal returns a fixed (typically over-quota) reading. */
+function depsWithUsage(reading: UsageReading): SpecBuildDeps {
+    return {...deps(), usage: fakeUsageSignal(reading)}
 }
 
 /** Deps whose gh returns a custom PRD body (specifiability-gate tests). */
@@ -232,7 +258,7 @@ describe('resolveSpec specifiability refusal (S9 — Δ pre-generation, zero age
 })
 
 describe('resolveSpec with regenerate:true (--supersede)', () => {
-    it('deletes the existing spec and emits generate — never reuse', async () => {
+    it('skips the reuse check and emits generate — never reuse', async () => {
         const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
         await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
 
@@ -240,12 +266,14 @@ describe('resolveSpec with regenerate:true (--supersede)', () => {
         expect(env.kind).toBe('generate')
     })
 
-    it('after deletion resolveByIssue returns null', async () => {
+    it('the old durable spec SURVIVES resolve — replaced only when store persists the new one', async () => {
+        // A mid-loop failure (crash, quota pause) must leave the old spec — and any
+        // active run pointing at it — intact. Deletion happens at storeSpec time.
         const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
         await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
 
         await resolveSpec(deps(), REPO, ISSUE, {regenerate: true})
-        expect(await store.resolveByIssue(REPO, ISSUE)).toBeNull()
+        expect((await store.resolveByIssue(REPO, ISSUE))?.spec_id).toBe(`${ISSUE}-email-login`)
     })
 
     it('regenerate:false still reuses an existing spec', async () => {
@@ -259,6 +287,27 @@ describe('resolveSpec with regenerate:true (--supersede)', () => {
     it('regenerate:true with no existing spec is a no-op — still emits generate', async () => {
         const env = await resolveSpec(deps(), REPO, ISSUE, {regenerate: true})
         expect(env.kind).toBe('generate')
+    })
+
+    it('storeSpec replaces a different-slug old spec — no two-dirs integrity error', async () => {
+        // Regen slug drift: the old spec is `123-email-login`, the regenerated one
+        // comes back `123-login-rework`. Store must atomically-adjacently swap them.
+        const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
+
+        await resolveSpec(deps(), REPO, ISSUE, {regenerate: true}) // writes scratch prd.json
+        await writeScratch('generated.json', {...PASS_GENERATED, slug: 'login-rework'})
+        await writeScratch('verdict.json', PASS_VERDICT)
+
+        const env = await storeSpec(deps(), REPO, ISSUE)
+        expect(env.kind).toBe('stored')
+        if (env.kind !== 'stored') {
+            throw new Error('unreachable')
+        }
+        expect(env.pointer.spec_id).toBe(`${ISSUE}-login-rework`)
+        // Exactly one dir remains for the issue — the new one (resolveByIssue would
+        // throw loud on two).
+        expect((await store.resolveByIssue(REPO, ISSUE))?.spec_id).toBe(`${ISSUE}-login-rework`)
     })
 })
 
@@ -391,6 +440,178 @@ describe('storeSpec', () => {
         void alignment
         await writeScratch('verdict.json', {...PASS_VERDICT, per_dimension: missingDim})
         await expect(storeSpec(deps(), REPO, ISSUE)).rejects.toThrow()
+    })
+})
+
+// ---------------------------------------------------------------------------
+// Entry quota gate (resolveSpec ONLY) — no apex spend STARTS over quota; the
+// loop's continuation cost is bounded by attempts.json, never mid-loop gated.
+// ---------------------------------------------------------------------------
+
+describe('resolveSpec quota gate (entry-only)', () => {
+    it('over the 7d curve on a fresh PRD → pause scope 7d with the reset horizon (no spawn)', async () => {
+        const env = await resolveSpec(depsWithUsage(USAGE_OVER_7D), REPO, ISSUE)
+        expect(env).toMatchObject({
+            kind: 'pause',
+            repo: REPO,
+            issue: ISSUE,
+            scope: '7d',
+            resets_at_epoch: NOW + 604_800,
+        })
+        expect('spawn' in env).toBe(false)
+    })
+
+    it('over the 5h curve → pause scope 5h', async () => {
+        const env = await resolveSpec(depsWithUsage(USAGE_OVER_5H), REPO, ISSUE)
+        expect(env).toMatchObject({kind: 'pause', scope: '5h', resets_at_epoch: NOW + 18_000})
+    })
+
+    it('an unavailable usage reading fails CLOSED → pause scope unavailable, no reset horizon', async () => {
+        const env = await resolveSpec(depsWithUsage(USAGE_UNAVAILABLE), REPO, ISSUE)
+        expect(env.kind).toBe('pause')
+        if (env.kind !== 'pause') {
+            throw new Error('unreachable')
+        }
+        expect(env.scope).toBe('unavailable')
+        expect(env.resets_at_epoch).toBeUndefined()
+        expect(Object.keys(env).sort()).toEqual(['issue', 'kind', 'reason', 'repo', 'scope'])
+    })
+
+    it('an existing spec still REUSES over quota (reuse is free — never pauses)', async () => {
+        const store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd, PRD)
+
+        const env = await resolveSpec(depsWithUsage(USAGE_OVER_7D), REPO, ISSUE)
+        expect(env.kind).toBe('reuse')
+    })
+
+    it('an unspecifiable PRD beats the pause (the author learns the PRD is broken even over quota)', async () => {
+        const env = await resolveSpec(
+            {...depsWithBody(TRIVIAL_BODY), usage: fakeUsageSignal(USAGE_OVER_7D)},
+            REPO,
+            ISSUE
+        )
+        expect(env.kind).toBe('unspecifiable')
+    })
+
+    it('ignoreQuota:true skips the gate entirely → generate', async () => {
+        const env = await resolveSpec(depsWithUsage(USAGE_OVER_7D), REPO, ISSUE, {ignoreQuota: true})
+        expect(env.kind).toBe('generate')
+    })
+
+    it('gate and store are NOT quota-gated (a mid-loop pause would waste the paid generator spawn)', async () => {
+        await resolveSpec(deps(), REPO, ISSUE) // healthy entry
+        await writeScratch('generated.json', PASS_GENERATED)
+        expect((await gateSpec(depsWithUsage(USAGE_OVER_7D), REPO, ISSUE)).kind).toBe('review')
+
+        await writeScratch('verdict.json', PASS_VERDICT)
+        expect((await storeSpec(depsWithUsage(USAGE_OVER_7D), REPO, ISSUE)).kind).toBe('stored')
+    })
+})
+
+// ---------------------------------------------------------------------------
+// Engine-owned regen bound (attempts.json) — Model A: the ENGINE cuts the loop,
+// the runner counts nothing.
+// ---------------------------------------------------------------------------
+
+describe('engine-owned regen bound (attempts.json)', () => {
+    function depsWithMaxRegens(max: number): SpecBuildDeps {
+        const base = deps()
+        return {...base, config: {...base.config, spec: {...base.config.spec, maxRegenIterations: max}}}
+    }
+
+    async function readAttemptsFile(): Promise<unknown> {
+        const {readFile} = await import('node:fs/promises')
+        return JSON.parse(await readFile(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), 'utf8'))
+    }
+
+    it('each revise increments the counter (gate source)', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 1})
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 2})
+    })
+
+    it('over maxRegenIterations → terminal spec-defect with iterations + blockers', async () => {
+        const d = depsWithMaxRegens(1)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // 1/1 consumed
+        const env = await gateSpec(d, REPO, ISSUE) // would be regen #2 > 1
+        expect(env.kind).toBe('spec-defect')
+        if (env.kind !== 'spec-defect') {
+            throw new Error('unreachable')
+        }
+        expect(env.source).toBe('gate')
+        expect(env.iterations).toBe(1)
+        expect(env.max_iterations).toBe(1)
+        expect(env.blockers.length).toBeGreaterThan(0)
+        // Terminal: no spawn rides along.
+        expect('spawn' in env).toBe(false)
+    })
+
+    it('gate and review revises share ONE counter (bounds TOTAL regenerations)', async () => {
+        const d = depsWithMaxRegens(2)
+        await resolveSpec(d, REPO, ISSUE)
+
+        await writeScratch('generated.json', FAIL_GENERATED)
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // gate: 1/2
+
+        await writeScratch('generated.json', PASS_GENERATED)
+        await writeScratch('verdict.json', FAIL_VERDICT)
+        expect((await storeSpec(d, REPO, ISSUE)).kind).toBe('revise') // review: 2/2
+
+        const env = await storeSpec(d, REPO, ISSUE) // regen #3 > 2
+        expect(env.kind).toBe('spec-defect')
+        if (env.kind !== 'spec-defect') {
+            throw new Error('unreachable')
+        }
+        expect(env.source).toBe('review')
+        expect(env.iterations).toBe(2)
+    })
+
+    it('a fresh resolve emitting generate RESETS the counter', async () => {
+        const d = depsWithMaxRegens(1)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // 1/1 consumed
+
+        // A new build loop for the same issue starts at zero.
+        await resolveSpec(d, REPO, ISSUE)
+        expect(await readAttemptsFile()).toEqual({iterations: 0})
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise')
+    })
+
+    it('a missing attempts.json counts as 0 (scratch wipe already breaks the loop via generated.json)', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+        await rm(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), {force: true})
+
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 1})
+    })
+
+    it('the spec-defect envelope carries EXACTLY {kind, repo, issue, source, iterations, max_iterations, reason, blockers}', async () => {
+        const d = depsWithMaxRegens(0)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        const env = await gateSpec(d, REPO, ISSUE)
+        expect(env.kind).toBe('spec-defect')
+        expect(Object.keys(env).sort()).toEqual([
+            'blockers',
+            'issue',
+            'iterations',
+            'kind',
+            'max_iterations',
+            'reason',
+            'repo',
+            'source',
+        ])
     })
 })
 

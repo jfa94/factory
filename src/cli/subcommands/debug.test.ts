@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtemp, rm, readFile} from 'node:fs/promises'
+import {mkdtemp, rm, readFile, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {
@@ -19,6 +19,7 @@ import {nonNull} from '../../shared/index.js'
 import {FakeGitClient} from '../../git/index.js'
 import {loadConfig} from '../../config/index.js'
 import {StateManager} from '../../core/state/index.js'
+import {usageCachePath} from '../../quota/index.js'
 import {specBuildDir, defaultSpecBuildRoot} from '../../core/state/paths.js'
 import {SpecStore, buildManifest} from '../../spec/index.js'
 import {makePrd} from '../../orchestrator/orchestrator-fixtures.js'
@@ -56,6 +57,18 @@ beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'debug-seam-'))
     cwd = await mkdtemp(join(tmpdir(), 'debug-worktree-'))
     gitClient = makeGitClient()
+    // The debug spec pass-through wires the REAL StatuslineUsageSignal; the
+    // entry quota gate in resolveSpec fails closed without a healthy cache.
+    const now = Math.floor(Date.now() / 1000)
+    await writeFile(
+        usageCachePath(dataDir),
+        JSON.stringify({
+            five_hour: {used_percentage: 0, resets_at: now + 18_000},
+            seven_day: {used_percentage: 0, resets_at: now + 604_800},
+            captured_at: now,
+        }),
+        'utf8'
+    )
     // `SpecStore.write` (via `storeSpec`) mirrors spec.md/tasks.json into
     // `<docsRoot>/factory/<spec-id>/`, defaulting `docsRoot` to `process.cwd()`
     // (production is cwd-rooted in the target-repo checkout — see

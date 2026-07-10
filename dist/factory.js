@@ -7657,19 +7657,29 @@ var StateManager = class _StateManager {
     }
   }
   /**
-   * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
+   * Find the single NON-terminal run for `(repo, issueNumber)`, or null. Powers the
    * resolve-or-reuse path of `run create`: a repeated create returns the live run
-   * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
-   * `<issue>-<slug>` — unique within a repo, but not necessarily across repos).
+   * instead of spawning an orphan. Matches by the STABLE issue number, not the exact
+   * `spec_id` — a spec id is `<issue>-<slug>` where the slug is agent-named and can
+   * drift across regenerations, and one issue means at most one active run: the
+   * supersede teardown, the weekly-quota wall, and the no-silent-reuse prompt must
+   * all see a drifted-slug run.
+   *
+   * @throws when ≥2 active runs match — a state defect (duplicates have occurred in
+   *         the wild); silently picking one could tear down or reuse the wrong run.
+   *         Fail loud and let `/factory:resume` repair.
    */
-  async findActiveBySpec(repo, specId) {
+  async findActiveByIssue(repo, issueNumber) {
     const runs = await this.listRuns();
-    for (const r of runs) {
-      if (r.spec.repo === repo && r.spec.spec_id === specId && !isTerminalRunStatus(r.status)) {
-        return r;
-      }
+    const matches = runs.filter(
+      (r) => r.spec.repo === repo && r.spec.issue_number === issueNumber && !isTerminalRunStatus(r.status)
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `findActiveByIssue: ${matches.length} active runs for issue #${issueNumber} in ${repo} (${matches.map((r) => r.run_id).join(", ")}) \u2014 one issue must have at most one active run; repair with /factory:resume`
+      );
     }
-    return null;
+    return matches.length === 1 ? at(matches, 0) : null;
   }
   /**
    * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
@@ -10245,10 +10255,11 @@ var SpecStore = class {
   }
   /**
    * Delete the canonical spec dir for `(repo, issueNumber)`, if one exists.
-   * Used by `--supersede` to force Phase 1 to regenerate from the PRD rather
-   * than reuse a potentially-broken durable spec. Returns `true` when a dir
-   * was deleted, `false` when nothing matched (idempotent — a missing spec
-   * on supersede is not an error).
+   * Called by `storeSpec` immediately before writing a spec, so a `--supersede`
+   * regeneration replaces the old spec only AFTER the new one passed gate +
+   * review (the old spec — and any run pointing at it — survives the whole
+   * regen loop). Returns `true` when a dir was deleted, `false` when nothing
+   * matched (idempotent — the fresh path matches nothing).
    *
    * @ponytail: only the canonical dataDir spec dir is removed; the in-repo
    * reviewable mirror (`docs/factory/<spec-id>/`) is left in place —
@@ -10767,24 +10778,71 @@ import { join as join8 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
+var ATTEMPTS_FILE = "attempts.json";
 function scratchPaths(scratchRoot, repo, issue) {
   const dir = specBuildDir(scratchRoot, repo, issue);
   return {
     prdPath: join8(dir, PRD_FILE2),
     generatedPath: join8(dir, GENERATED_FILE),
-    verdictPath: join8(dir, VERDICT_FILE)
+    verdictPath: join8(dir, VERDICT_FILE),
+    attemptsPath: join8(dir, ATTEMPTS_FILE)
   };
 }
-async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
-  if (regenerate) {
-    await deps.store.deleteByIssue(repo, issue);
+async function readAttempts(attemptsPath) {
+  try {
+    const raw = await readJsonFile(attemptsPath);
+    const n = raw.iterations;
+    return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
   }
-  const existing = await deps.store.resolveByIssue(repo, issue);
-  if (existing) {
-    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+}
+async function consumeRegenOrDefect(deps, repo, issue, { source, blockers }) {
+  const { attemptsPath } = scratchPaths(deps.scratchRoot, repo, issue);
+  const max = deps.config.spec.maxRegenIterations;
+  const prior = await readAttempts(attemptsPath);
+  if (prior >= max) {
+    const stage = source === "gate" ? "the deterministic gates" : "review";
+    return {
+      kind: "spec-defect",
+      repo,
+      issue,
+      source,
+      iterations: prior,
+      max_iterations: max,
+      reason: `spec regeneration bound exhausted (${prior}/${max}) \u2014 the spec never passed ${stage}; the PRD likely needs rework`,
+      blockers
+    };
+  }
+  await atomicWriteFile(attemptsPath, stringifyJson({ iterations: prior + 1 }));
+  return null;
+}
+async function quotaPause(deps, repo, issue, ignoreQuota) {
+  if (ignoreQuota) {
+    return null;
+  }
+  const decision = evaluate(await deps.usage.read(), deps.config, deps.now());
+  if (decision.kind === "proceed") {
+    return null;
+  }
+  return {
+    kind: "pause",
+    repo,
+    issue,
+    scope: decision.kind === "pause-5h" ? "5h" : decision.kind === "suspend-7d" ? "7d" : "unavailable",
+    reason: decision.reason,
+    ...decision.kind === "unavailable-halt" ? {} : { resets_at_epoch: decision.resetsAtEpoch }
+  };
+}
+async function resolveSpec(deps, repo, issue, { regenerate = false, ignoreQuota = false } = {}) {
+  if (!regenerate) {
+    const existing = await deps.store.resolveByIssue(repo, issue);
+    if (existing) {
+      return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+    }
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.scratchRoot, repo, issue);
+  const { prdPath, generatedPath, attemptsPath } = scratchPaths(deps.scratchRoot, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
   const specifiability = specifiabilityGate(prd.body);
   if (!specifiability.passed) {
@@ -10796,6 +10854,11 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
       blockers: specifiability.blockers
     };
   }
+  const pause = await quotaPause(deps, repo, issue, ignoreQuota);
+  if (pause) {
+    return pause;
+  }
+  await atomicWriteFile(attemptsPath, stringifyJson({ iterations: 0 }));
   return {
     kind: "generate",
     repo,
@@ -10812,6 +10875,10 @@ async function gateSpec(deps, repo, issue) {
   const generated = parseGenerateResult(await readJsonFile(generatedPath));
   const gates = runSpecGates(prd, generated.tasks);
   if (!gates.passed) {
+    const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "gate", blockers: gates.blockers });
+    if (defect) {
+      return defect;
+    }
     return {
       kind: "revise",
       repo,
@@ -10843,6 +10910,10 @@ async function storeSpec(deps, repo, issue) {
   });
   if (decision.decision === "NEEDS_REVISION") {
     const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
+    const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "review", blockers });
+    if (defect) {
+      return defect;
+    }
     const prd2 = await readJsonFile(prdPath);
     return {
       kind: "revise",
@@ -10857,6 +10928,7 @@ async function storeSpec(deps, repo, issue) {
   }
   const request = buildManifest(repo, issue, generated);
   const prd = await readJsonFile(prdPath);
+  await deps.store.deleteByIssue(repo, issue);
   const pointer = await deps.store.write(request, generated.specMd, prd);
   return { kind: "stored", repo, issue, pointer };
 }
@@ -16678,7 +16750,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   }
   const pointer = specStore.toPointer(request);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
-    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
+    const existing = await state.findActiveByIssue(pointer.repo, pointer.issue_number);
     if (existing !== null) {
       const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
       if (weeklyParked && opts.ignoreQuota !== true && opts.intent !== "resume") {
@@ -17469,16 +17541,18 @@ var resumeCommand = {
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede] [--ignore-quota]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
 --repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
 value that disagrees with the remote fails loud.
 
-The in-session runner drives the agent spawns + the bounded regen loop; each
-action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
-through the OS temp dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict}.json
+The in-session runner drives the agent spawns; the ENGINE bounds the regen loop
+(scratch attempts.json; over spec.maxRegenIterations \u2192 terminal spec-defect, exit 1)
+and quota-gates resolve (pause envelope; --ignore-quota overrides). Each action emits
+ONE JSON envelope naming the next step. Scratch JSON is threaded through the OS temp
+dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict,attempts}.json
 (transient pre-validation agent output, never the plugin data dir).
 
 Actions:
@@ -17499,7 +17573,24 @@ function wireDeps() {
     store: new SpecStore({ dataDir }),
     gh: new RealGhClient({ bodyMaxBytes: config.spec.prdBodyMaxBytes }),
     config,
+    usage: new StatuslineUsageSignal({ dataDir }),
+    now: nowEpoch,
     scratchRoot: defaultSpecBuildRoot()
+  };
+}
+async function weeklyParkedPause(repo, issue) {
+  const run9 = await new StateManager({}).findActiveByIssue(repo, issue);
+  const quota = run9?.quota;
+  if (run9?.status !== "suspended" || quota?.binding_window !== "7d") {
+    return null;
+  }
+  return {
+    kind: "pause",
+    repo,
+    issue,
+    scope: "7d",
+    reason: `run '${run9.run_id}' is weekly-parked (7d quota window); superseding would strand it \u2014 resume with /factory:resume after the window resets, or pass --ignore-quota`,
+    resets_at_epoch: quota.resets_at_epoch
   };
 }
 var ACTIONS = {
@@ -17524,14 +17615,23 @@ async function run3(argv) {
   if (handler === void 0) {
     throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`);
   }
-  const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
+  const args = parseArgs(argv.slice(1), { booleans: ["supersede", "ignore-quota"] });
   if (args.flag("help") === true) {
     return emitHelp(SPEC_HELP);
   }
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
+  const supersede = args.flag("supersede") === true;
+  const ignoreQuota = args.flag("ignore-quota") === true;
+  if (action === "resolve" && supersede && !ignoreQuota) {
+    const parked = await weeklyParkedPause(repo, issue);
+    if (parked !== null) {
+      emitJson(parked);
+      return specExitCode(parked);
+    }
+  }
   const deps = wireDeps();
-  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
+  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: supersede, ignoreQuota }) : await handler(deps, repo, issue);
   emitJson(envelope);
   if (envelope.kind === "unspecifiable") {
     emitError(
@@ -17539,10 +17639,16 @@ async function run3(argv) {
 ` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
     );
   }
+  if (envelope.kind === "spec-defect") {
+    emitError(
+      `spec regeneration bound exhausted for #${issue} (${envelope.iterations}/${envelope.max_iterations}) \u2014 rework the PRD (or raise spec.maxRegenIterations) and re-run; latest blockers:
+` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
+    );
+  }
   return specExitCode(envelope);
 }
 function specExitCode(envelope) {
-  return envelope.kind === "unspecifiable" ? EXIT.ERROR : EXIT.OK;
+  return envelope.kind === "unspecifiable" || envelope.kind === "spec-defect" ? EXIT.ERROR : EXIT.OK;
 }
 var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
@@ -17735,6 +17841,8 @@ function wireDebugSpecDeps(report, dataDirOverride) {
     store: new SpecStore({ dataDir }),
     gh: new ReportGhClient(report),
     config,
+    usage: new StatuslineUsageSignal({ dataDir }),
+    now: nowEpoch,
     scratchRoot: defaultSpecBuildRoot()
   };
 }

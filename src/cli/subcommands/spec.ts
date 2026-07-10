@@ -11,6 +11,9 @@ import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {defaultSpecBuildRoot} from '../../core/state/paths.js'
+import {StateManager} from '../../core/state/index.js'
+import {StatuslineUsageSignal} from '../../quota/index.js'
+import {nowEpoch} from '../../shared/time.js'
 import {
     SpecStore,
     RealGhClient,
@@ -29,16 +32,18 @@ export type {SpecBuildDeps, SpecBuildEnvelope}
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede] [--ignore-quota]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
 --repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
 value that disagrees with the remote fails loud.
 
-The in-session runner drives the agent spawns + the bounded regen loop; each
-action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
-through the OS temp dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict}.json
+The in-session runner drives the agent spawns; the ENGINE bounds the regen loop
+(scratch attempts.json; over spec.maxRegenIterations → terminal spec-defect, exit 1)
+and quota-gates resolve (pause envelope; --ignore-quota overrides). Each action emits
+ONE JSON envelope naming the next step. Scratch JSON is threaded through the OS temp
+dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict,attempts}.json
 (transient pre-validation agent output, never the plugin data dir).
 
 Actions:
@@ -62,7 +67,35 @@ function wireDeps(): SpecBuildDeps {
         store: new SpecStore({dataDir}),
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
+        usage: new StatuslineUsageSignal({dataDir}),
+        now: nowEpoch,
         scratchRoot: defaultSpecBuildRoot(),
+    }
+}
+
+/**
+ * The `--supersede` weekly-parked pre-check: mirrors the `resolveOrCreateRun` weekly
+ * wall (lifecycle.ts) BEFORE Phase 1 regenerates anything. Without it the regen loop
+ * would replace the parked run's durable spec, and Phase 2's wall would then refuse
+ * the supersede — stranding the parked run with a dangling spec pointer. Read-only;
+ * honors `--ignore-quota` at the call site. Returns null when nothing blocks (no
+ * active run, or an active run supersede may proceed against). Exported for tests.
+ */
+export async function weeklyParkedPause(repo: string, issue: number): Promise<SpecBuildEnvelope | null> {
+    const run = await new StateManager({}).findActiveByIssue(repo, issue)
+    const quota = run?.quota
+    if (run?.status !== 'suspended' || quota?.binding_window !== '7d') {
+        return null
+    }
+    return {
+        kind: 'pause',
+        repo,
+        issue,
+        scope: '7d',
+        reason:
+            `run '${run.run_id}' is weekly-parked (7d quota window); superseding would strand it — ` +
+            `resume with /factory:resume after the window resets, or pass --ignore-quota`,
+        resets_at_epoch: quota.resets_at_epoch,
     }
 }
 
@@ -111,7 +144,7 @@ async function run(argv: string[]): Promise<ExitCode> {
         throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`)
     }
 
-    const args = parseArgs(argv.slice(1), {booleans: ['supersede']})
+    const args = parseArgs(argv.slice(1), {booleans: ['supersede', 'ignore-quota']})
     if (args.flag('help') === true) {
         return emitHelp(SPEC_HELP)
     }
@@ -120,11 +153,21 @@ async function run(argv: string[]): Promise<ExitCode> {
     // optional --repo (may probe git) — so a missing/invalid issue stays a fast USAGE.
     const issue = parseIssue(args.requireFlag('issue'))
     const repo = await resolveSpecRepo(args)
+    const supersede = args.flag('supersede') === true
+    const ignoreQuota = args.flag('ignore-quota') === true
+
+    if (action === 'resolve' && supersede && !ignoreQuota) {
+        const parked = await weeklyParkedPause(repo, issue)
+        if (parked !== null) {
+            emitJson(parked)
+            return specExitCode(parked)
+        }
+    }
 
     const deps = wireDeps()
     const envelope =
         action === 'resolve'
-            ? await resolveSpec(deps, repo, issue, {regenerate: args.flag('supersede') === true})
+            ? await resolveSpec(deps, repo, issue, {regenerate: supersede, ignoreQuota})
             : await handler(deps, repo, issue)
     emitJson(envelope)
     if (envelope.kind === 'unspecifiable') {
@@ -133,17 +176,26 @@ async function run(argv: string[]): Promise<ExitCode> {
                 envelope.blockers.map((b) => `  - ${b}`).join('\n')
         )
     }
+    if (envelope.kind === 'spec-defect') {
+        emitError(
+            `spec regeneration bound exhausted for #${issue} ` +
+                `(${envelope.iterations}/${envelope.max_iterations}) — rework the PRD (or raise ` +
+                `spec.maxRegenIterations) and re-run; latest blockers:\n` +
+                envelope.blockers.map((b) => `  - ${b}`).join('\n')
+        )
+    }
     return specExitCode(envelope)
 }
 
 /**
- * Envelope → exit code (S9): `unspecifiable` is the one non-zero spec outcome —
- * a terminal refusal, not a loop step. The frozen exit enum has no
- * "needs-human" code (see src/shared/exit-codes.ts); ERROR is correct — the
- * envelope `kind` on stdout is the machine discriminator.
+ * Envelope → exit code (S9): the two terminal refusals — `unspecifiable`
+ * (pre-generation) and `spec-defect` (regen bound exhausted) — are the only
+ * non-zero spec outcomes; everything else is a loop step. The frozen exit enum
+ * has no "needs-human" code (see src/shared/exit-codes.ts); ERROR is correct —
+ * the envelope `kind` on stdout is the machine discriminator.
  */
 export function specExitCode(envelope: SpecBuildEnvelope): ExitCode {
-    return envelope.kind === 'unspecifiable' ? EXIT.ERROR : EXIT.OK
+    return envelope.kind === 'unspecifiable' || envelope.kind === 'spec-defect' ? EXIT.ERROR : EXIT.OK
 }
 
 export const specCommand: Subcommand = {

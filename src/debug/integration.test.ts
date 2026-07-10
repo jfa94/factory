@@ -49,6 +49,7 @@ import {defaultConfig, type Config} from '../config/index.js'
 import {StateManager} from '../core/state/index.js'
 import {SpecStore, type SpecManifest} from '../spec/index.js'
 import {stringifyJson} from '../shared/json.js'
+import {usageCachePath} from '../quota/index.js'
 import {specBuildDir, defaultSpecBuildRoot} from '../core/state/paths.js'
 import type {ReviewerVerifications} from '../orchestrator/record.js'
 import type {PlaywrightTool, E2eProcResult} from '../verifier/e2e/index.js'
@@ -89,6 +90,18 @@ beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'debug-integ-data-'))
     cwd = await mkdtemp(join(tmpdir(), 'debug-integ-worktree-'))
     gitClient = makeGitClient()
+    // The debug spec pass-through wires the REAL StatuslineUsageSignal; the
+    // entry quota gate in resolveSpec fails closed without a healthy cache.
+    const now = Math.floor(Date.now() / 1000)
+    await writeFile(
+        usageCachePath(dataDir),
+        JSON.stringify({
+            five_hour: {used_percentage: 0, resets_at: now + 18_000},
+            seven_day: {used_percentage: 0, resets_at: now + 604_800},
+            captured_at: now,
+        }),
+        'utf8'
+    )
     // storeSpec mirrors spec.md/tasks.json under <docsRoot>/factory/<spec-id>/,
     // docsRoot defaulting to process.cwd() (production is cwd-rooted in the
     // debug worktree) — chdir so any real write lands in the temp worktree,

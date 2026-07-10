@@ -271,7 +271,7 @@ export type ResolveOrCreateResult =
  * deleting a protected ref) + `staging-<run-id>` branch (auto-closing its task PRs),
  * THEN mark it `superseded`. Terminal write is LAST — the resume-safe convention
  * {@link finalizeRun} uses: a teardown throw (401/403/5xx; already-gone 404/422 is
- * tolerated by the gh client) leaves the old run NON-terminal, so `findActiveBySpec`
+ * tolerated by the gh client) leaves the old run NON-terminal, so `findActiveByIssue`
  * still resolves it and re-running `run --supersede` retries the whole step idempotently,
  * leaving NO orphaned protected branch. (Finalizing FIRST would strand it: a terminal
  * `superseded` run is excluded from the active scan, so nothing ever re-tears its branch
@@ -290,7 +290,8 @@ async function supersedeRun(state: StateManager, existing: RunState, stagingDeps
 
 /**
  * Resolve the spec, then (unless `opts.intent === "fresh"`) inspect the active run for
- * this `(repo, spec_id)` and return a discriminated result (Decision 35):
+ * this `(repo, issue)` — issue-matched so a slug-drifted regen still finds the run it
+ * must supersede/park/report — and return a discriminated result (Decision 35):
  *
  * - `{ kind: "created" }` — no active run; a fresh run was created.
  * - `{ kind: "exists" }` — an active run exists and no flag was given; the CALLER
@@ -301,7 +302,10 @@ async function supersedeRun(state: StateManager, existing: RunState, stagingDeps
  * The scan→create is serialized under a per-(repo, spec_id) lock so two concurrent
  * same-spec creates can't both observe "no active run" and mint two orphan runs —
  * the per-run clobber guard in {@link StateManager.create} only catches a same
- * run_id collision, not a same-spec one.
+ * run_id collision, not a same-spec one. (The lock stays spec_id-keyed — its parent
+ * must be an existing spec dir, and the store holds ONE spec per issue, so two
+ * concurrent same-issue creates resolve the same spec_id and still serialize; an
+ * explicit `--spec-id` racing an `--issue` create is a pre-existing unlocked edge.)
  *
  * `stagingDeps` is forwarded to {@link createRunFromManifest} on the fresh-create
  * path to cut + protect the per-run staging branch (Decision 33), and is required
@@ -323,7 +327,10 @@ export async function resolveOrCreateRun(
     }
     const pointer = specStore.toPointer(request)
     return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
-        const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id)
+        // Match by the STABLE issue number, not exact spec_id: a --supersede
+        // regeneration can drift the agent-named slug, and the old run must still
+        // be found (superseded / parked / reported) under its original spec_id.
+        const existing = await state.findActiveByIssue(pointer.repo, pointer.issue_number)
         if (existing !== null) {
             // Weekly quota is a hard wall: a 7d-parked run can't be created-fresh or
             // superseded without --ignore-quota. The `binding_window === "7d"` guard

@@ -21,13 +21,13 @@ arguments:
       description: 'Park the fully-created run (suspended, no quota checkpoint) for human spec sign-off BEFORE any agent runs (S9, Decision 47). The envelope names the spec.md to review; `/factory:resume` IS the sign-off. CREATE-ONLY, default off'
       required: false
     - name: '--supersede'
-      description: 'If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)'
+      description: 'If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — Phase 1 regenerates from the PRD; the old durable spec survives until the new one passes gate + review (`spec store` replaces it). Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)'
       required: false
     - name: '--resume'
       description: 'If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run with its PERSISTED ship intent; never pass --no-ship alongside it'
       required: false
     - name: '--ignore-quota'
-      description: 'Bypass the weekly-quota hard stop: allows creating or superseding a run even when the existing run is 7d-parked. Persisted on the run so subsequent steps skip the quota gate too. Use only to override a mistaken suspend or after a manual quota reset.'
+      description: "Bypass quota pacing end to end: skips Phase 1's spec-entry quota gate (a fresh PRD otherwise pauses before the generator spawn) and the weekly-quota hard stop on create/supersede. Persisted on the run so subsequent steps skip the quota gate too. Use only to override a mistaken suspend or after a manual quota reset."
       required: false
 ---
 
@@ -60,9 +60,10 @@ never let a ship flag ride a resume hand-off. Always pass `--session-id
 gate then keeps the autonomous loop alive only here and lets other sessions stop freely
 (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails
 LOUD otherwise. When `--supersede` is set, forward it to Phase 1's `factory spec resolve` call
-so the stale durable spec is deleted before the reuse check — Phase 1 will always regenerate
-from the PRD in this case (never reuse). `--supersede` has no effect on the spec when combined
-with `--spec-id` (Phase 1 is skipped).
+so the reuse check is skipped — Phase 1 will always regenerate from the PRD in this case
+(never reuse); the OLD durable spec survives until `spec store` replaces it after the new
+spec passes gate + review. Forward `--ignore-quota` to `spec resolve` too. `--supersede` has
+no effect on the spec when combined with `--spec-id` (Phase 1 is skipped).
 
 Forward `--approve-spec` verbatim too. When set, the `created`/`superseded` envelope
 carries `spec_approval` and the run is already parked (`suspended`, no quota checkpoint) —
@@ -71,9 +72,18 @@ carries `spec_approval` and the run is already parked (`suspended`, no quota che
 clears suspensions once it proceeds, which would silently un-park the run). Resume IS the
 sign-off (S9, Decision 47).
 
-If Phase 1's `spec resolve` emits `{kind:"unspecifiable"}` (exit 1), the PRD cannot support
-spec generation — STOP before any agent spawn, relay `blockers` verbatim, and tell the user
-to edit the PRD issue and re-run (zero agent cost; S9, Decision 47):
+Three Phase-1 envelopes are terminal — STOP, spawn nothing:
+
+- `{kind:"unspecifiable"}` (exit 1): the PRD cannot support spec generation — relay
+  `blockers` verbatim, tell the user to edit the PRD issue and re-run (zero agent cost;
+  S9, Decision 47).
+- `{kind:"pause"}` (exit 0): quota pacing stopped the spec build BEFORE any apex spend
+  (or `--supersede` targeted a weekly-parked run). No run exists yet, nothing is parked —
+  report `scope`/`reason`/`resets_at_epoch` (convert to a local time) and tell the user to
+  re-run after the reset, or with `--ignore-quota` to override.
+- `{kind:"spec-defect"}` (exit 1): the engine exhausted the regen bound
+  (`iterations`/`max_iterations`) — relay `reason` + `blockers` verbatim; the PRD needs
+  rework.
 
 ```
 Skill(pipeline-runner)
@@ -118,10 +128,11 @@ the prompt), ask with one `AskUserQuestion` before doing anything destructive:
 
 - **Continue (resume)** → run `/factory:resume --run <existing.run_id>` — re-enter the
   existing run where it left off (its staging branch + merged work are intact).
-- **Supersede (fresh)** → re-run `factory run create … --supersede`: the durable spec is
-  deleted and regenerated from the PRD (Phase 1), the old run is marked `superseded`, its
-  `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts with the new spec.
-  Then drive the fresh run.
+- **Supersede (fresh)** → re-run `factory run create … --supersede`: the spec is
+  regenerated from the PRD (Phase 1 — the old spec is replaced only once the new one
+  passes gate + review), the old run is marked `superseded`, its `staging/<run-id>`
+  branch + task PRs are deleted, and a fresh run starts with the new spec. Then drive
+  the fresh run.
 - **Cancel the prompt** → stop here; leave the existing run untouched and `running` (this
   declines to start a fresh run — it does NOT abandon the existing one).
 

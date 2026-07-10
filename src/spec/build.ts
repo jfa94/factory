@@ -16,19 +16,22 @@
  * State is threaded through a TRANSIENT scratch dir, `specBuildDir(scratchRoot,repo,issue)`,
  * rooted at the OS temp dir (`defaultSpecBuildRoot()`) — NOT the plugin dataDir the
  * durable stores use, since this holds only pre-validation agent output, never
- * durable state. It holds three files: `prd.json` (written by `resolve`),
- * `generated.json` (written by the runner after spawning the generator), and
- * `verdict.json` (written by the runner after spawning the reviewer). Every action
- * takes a (repo, issue) pair and recomputes the scratch dir, so the runner never
- * threads paths by hand — each envelope also echoes the concrete paths.
+ * durable state. It holds four files: `prd.json` (written by `resolve`),
+ * `generated.json` (written by the runner after spawning the generator),
+ * `verdict.json` (written by the runner after spawning the reviewer), and
+ * `attempts.json` (the ENGINE-owned regen counter — reset by `resolve`,
+ * consumed at both revise sites). Every action takes a (repo, issue) pair and
+ * recomputes the scratch dir, so the runner never threads paths by hand — each
+ * envelope also echoes the concrete paths.
  *
- * Loop (runner-owned):
+ * Loop (runner-sequenced, ENGINE-bounded):
  *   resolve → reuse(pointer)  → DONE (go straight to `run create`)
  *           → generate(spawn) → [spawn generator → write generated.json] → gate
- *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate          (≤ max_iterations)
+ *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate
  *           → review(spawn)   → [spawn reviewer → write verdict.json] → store
- *   store   → revise(reason)  → [re-spawn generator] → gate                         (≤ max_iterations)
+ *   store   → revise(reason)  → [re-spawn generator] → gate
  *           → stored(pointer) → DONE (go to `run create`)
+ *   Either revise site past config.spec.maxRegenIterations → spec-defect (TERMINAL).
  *
  * Mirrors {@link import("./pipeline.js").runSpecPipeline} exactly (same
  * gates, same 56/60+floor adjudication, same request construction) — the only
@@ -54,6 +57,7 @@ import {
     type GenerateResult,
 } from './agents.js'
 import type {Config, SpecPointer} from '../types/index.js'
+import {evaluate as evaluateQuota, type UsageSignal} from '../quota/index.js'
 import {parseSpecManifest, type SpecManifest} from './schema.js'
 import {nowIso} from '../shared/time.js'
 
@@ -61,6 +65,8 @@ import {nowIso} from '../shared/time.js'
 const PRD_FILE = 'prd.json'
 const GENERATED_FILE = 'generated.json'
 const VERDICT_FILE = 'verdict.json'
+/** Engine-owned regen counter (`{"iterations": n}`) — see {@link consumeRegenOrDefect}. */
+const ATTEMPTS_FILE = 'attempts.json'
 
 /** The single JSON document each `factory spec` action emits — the runner's contract. */
 export type SpecBuildEnvelope =
@@ -70,6 +76,25 @@ export type SpecBuildEnvelope =
           readonly repo: string
           readonly issue: number
           readonly pointer: SpecPointer
+      }
+    | {
+          /**
+           * Quota stop BEFORE any apex spend (shape-aligned with the next-task pause,
+           * src/orchestrator/quota-gate.ts quotaStopFields). TERMINAL for Phase 1: the
+           * runner spawns NOTHING and stops loud. No run exists yet, so nothing is
+           * parked and no state is written; a re-run after the window resets (or with
+           * `--ignore-quota`) starts the loop cleanly. Emitted when (a) the pacer says
+           * the 5h/7d window is breached (or the usage signal is unavailable —
+           * fail-closed) before the generate spawn, or (b) `--supersede` targets a
+           * weekly-parked run (mirrors the `resolveOrCreateRun` weekly wall so the
+           * parked run's spec is never replaced out from under it).
+           */
+          readonly kind: 'pause'
+          readonly repo: string
+          readonly issue: number
+          readonly scope: '5h' | '7d' | 'unavailable'
+          readonly reason: string
+          readonly resets_at_epoch?: number
       }
     | {
           /**
@@ -122,6 +147,22 @@ export type SpecBuildEnvelope =
           readonly generated_path: string
       }
     | {
+          /**
+           * The regen loop exhausted `config.spec.maxRegenIterations` without a spec
+           * that passes gate + review — TERMINAL, ENGINE-enforced (Model A: the runner
+           * counts nothing). The runner spawns NOTHING and stops loud; `blockers` is
+           * the latest round's feedback — the PRD (or the spec dial) needs human rework.
+           */
+          readonly kind: 'spec-defect'
+          readonly repo: string
+          readonly issue: number
+          readonly source: 'gate' | 'review'
+          readonly iterations: number
+          readonly max_iterations: number
+          readonly reason: string
+          readonly blockers: readonly string[]
+      }
+    | {
           /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
           readonly kind: 'stored'
           readonly repo: string
@@ -134,6 +175,10 @@ export interface SpecBuildDeps {
     readonly store: SpecStore
     readonly gh: GhClient
     readonly config: Config
+    /** Usage signal for the ENTRY quota gate — read by `resolveSpec` only. */
+    readonly usage: UsageSignal
+    /** Epoch-SECONDS clock for the pacer (injected for testability). */
+    readonly now: () => number
     /**
      * Root for the transient generate/review scratch files (NOT the plugin dataDir —
      * `store`/`config` already carry their own dataDir closure independently).
@@ -143,7 +188,7 @@ export interface SpecBuildDeps {
     readonly scratchRoot: string
 }
 
-/** Resolve the three scratch paths for a (repo, issue) build. */
+/** Resolve the scratch paths for a (repo, issue) build. */
 function scratchPaths(
     scratchRoot: string,
     repo: string,
@@ -152,12 +197,91 @@ function scratchPaths(
     prdPath: string
     generatedPath: string
     verdictPath: string
+    attemptsPath: string
 } {
     const dir = specBuildDir(scratchRoot, repo, issue)
     return {
         prdPath: join(dir, PRD_FILE),
         generatedPath: join(dir, GENERATED_FILE),
         verdictPath: join(dir, VERDICT_FILE),
+        attemptsPath: join(dir, ATTEMPTS_FILE),
+    }
+}
+
+/**
+ * Read the regen counter; a missing/unreadable/garbage file reads as 0. This
+ * cannot extend a LIVE loop (a scratch wipe already breaks it via
+ * generated.json) — it only restarts the budget together with the files.
+ */
+async function readAttempts(attemptsPath: string): Promise<number> {
+    try {
+        const raw = await readJsonFile<{iterations?: unknown}>(attemptsPath)
+        const n = raw.iterations
+        return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 0
+    } catch {
+        return 0
+    }
+}
+
+/**
+ * Engine-owned regen bound (Model A — the runner counts nothing): consume ONE
+ * regeneration from the shared attempts counter, or cut the loop. Gate and
+ * review revises draw from the SAME counter, so `config.spec.maxRegenIterations`
+ * bounds TOTAL regenerations per build. Returns null when the revise may
+ * proceed (counter bumped), else the terminal `spec-defect` envelope.
+ */
+async function consumeRegenOrDefect(
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    {source, blockers}: {source: 'gate' | 'review'; blockers: readonly string[]}
+): Promise<SpecBuildEnvelope | null> {
+    const {attemptsPath} = scratchPaths(deps.scratchRoot, repo, issue)
+    const max = deps.config.spec.maxRegenIterations
+    const prior = await readAttempts(attemptsPath)
+    if (prior >= max) {
+        const stage = source === 'gate' ? 'the deterministic gates' : 'review'
+        return {
+            kind: 'spec-defect',
+            repo,
+            issue,
+            source,
+            iterations: prior,
+            max_iterations: max,
+            reason: `spec regeneration bound exhausted (${prior}/${max}) — the spec never passed ${stage}; the PRD likely needs rework`,
+            blockers,
+        }
+    }
+    await atomicWriteFile(attemptsPath, stringifyJson({iterations: prior + 1}))
+    return null
+}
+
+/**
+ * The entry quota check: same reading→decision mapping as the run-level
+ * `applyQuotaGate` (src/orchestrator/quota-gate.ts) but with NO state write —
+ * Phase 1 has no run to park. Returns null on proceed (or ignoreQuota), else
+ * the terminal `pause` envelope.
+ */
+async function quotaPause(
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    ignoreQuota: boolean
+): Promise<SpecBuildEnvelope | null> {
+    if (ignoreQuota) {
+        return null
+    }
+    const decision = evaluateQuota(await deps.usage.read(), deps.config, deps.now())
+    if (decision.kind === 'proceed') {
+        return null
+    }
+    return {
+        kind: 'pause',
+        repo,
+        issue,
+        scope: decision.kind === 'pause-5h' ? '5h' : decision.kind === 'suspend-7d' ? '7d' : 'unavailable',
+        reason: decision.reason,
+        ...(decision.kind === 'unavailable-halt' ? {} : {resets_at_epoch: decision.resetsAtEpoch}),
     }
 }
 
@@ -169,27 +293,28 @@ function scratchPaths(
  * Reuse-or-begin: on a store hit return the pointer (Δ X — never regen); else fetch
  * the PRD, persist it to the scratch dir, and emit the apex-pinned generate spawn.
  *
- * Pass `regenerate: true` (from `--supersede`) to delete any existing durable spec
- * before the reuse check, forcing Phase 1 to regenerate from the PRD. Deletion is
- * mandatory — regen without delete risks two dirs for the same issue, which
- * `resolveByIssue` treats as a store-integrity error.
+ * Pass `regenerate: true` (from `--supersede`) to SKIP the reuse check and
+ * regenerate from the PRD. The old durable spec is NOT deleted here — it survives
+ * until `storeSpec` replaces it after the new spec passes gate + review, so a
+ * mid-loop failure (or quota pause) leaves the old spec AND any run pointing at it
+ * intact. Replacement-at-store also upholds the one-dir-per-issue invariant
+ * `resolveByIssue` enforces (delete happens atomically-adjacent to the new write).
  */
 export async function resolveSpec(
     deps: SpecBuildDeps,
     repo: string,
     issue: number,
-    {regenerate = false}: {regenerate?: boolean} = {}
+    {regenerate = false, ignoreQuota = false}: {regenerate?: boolean; ignoreQuota?: boolean} = {}
 ): Promise<SpecBuildEnvelope> {
-    if (regenerate) {
-        await deps.store.deleteByIssue(repo, issue)
-    }
-    const existing = await deps.store.resolveByIssue(repo, issue)
-    if (existing) {
-        return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
+    if (!regenerate) {
+        const existing = await deps.store.resolveByIssue(repo, issue)
+        if (existing) {
+            return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
+        }
     }
 
     const prd = await deps.gh.fetchPrd(issue, {repo})
-    const {prdPath, generatedPath} = scratchPaths(deps.scratchRoot, repo, issue)
+    const {prdPath, generatedPath, attemptsPath} = scratchPaths(deps.scratchRoot, repo, issue)
     await atomicWriteFile(prdPath, stringifyJson(prd))
 
     // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
@@ -204,6 +329,20 @@ export async function resolveSpec(
             blockers: specifiability.blockers,
         }
     }
+
+    // ENTRY quota gate (Decision 24 curve, same mapping as applyQuotaGate but with
+    // no state write — no run exists yet). Deliberately the ONLY quota check in
+    // the seam: reuse is free, `unspecifiable` beats pause (the author learns the
+    // PRD is broken even over quota), and a mid-loop gate at gate/store would
+    // discard the already-paid generator spawn — continuation is bounded by the
+    // attempts counter instead. Fail-closed: an unobservable reading pauses.
+    const pause = await quotaPause(deps, repo, issue, ignoreQuota)
+    if (pause) {
+        return pause
+    }
+
+    // A generate spawn starts a FRESH build loop — reset the regen budget.
+    await atomicWriteFile(attemptsPath, stringifyJson({iterations: 0}))
 
     return {
         kind: 'generate',
@@ -233,6 +372,10 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
 
     const gates = runSpecGates(prd, generated.tasks)
     if (!gates.passed) {
+        const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'gate', blockers: gates.blockers})
+        if (defect) {
+            return defect
+        }
         return {
             kind: 'revise',
             repo,
@@ -277,6 +420,10 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     })
     if (decision.decision === 'NEEDS_REVISION') {
         const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason]
+        const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'review', blockers})
+        if (defect) {
+            return defect
+        }
         // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
         // generator patches the prior spec against the reviewer's blockers, not re-derives it.
         const prd = await readJsonFile<Prd>(prdPath)
@@ -296,6 +443,14 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     // S9: snapshot the PRD durably beside the spec — the traceability stage reads
     // it at finalize time (no gh re-fetch; scratch prd.json is transient).
     const prd = await readJsonFile<Prd>(prdPath)
+    // Replace any prior spec for this issue ONLY now that the replacement passed
+    // gate + review (a regen's old spec survives the whole loop — see resolveSpec).
+    // Delete-then-write, not write-then-delete: deleteByIssue matches by issue
+    // prefix and would remove the just-written dir; and a crash between the two
+    // degrades to "no spec" (self-healing — the next resolve regenerates), never
+    // to two dirs, which resolveByIssue treats as a store-integrity error.
+    // Idempotent no-op on the fresh path (nothing matches).
+    await deps.store.deleteByIssue(repo, issue)
     const pointer = await deps.store.write(request, generated.specMd, prd)
     return {kind: 'stored', repo, issue, pointer}
 }

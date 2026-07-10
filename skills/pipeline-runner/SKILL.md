@@ -44,22 +44,33 @@ from the `origin` remote of the current checkout; pass `--repo <o/n>` only to
 override. Run the bounded generate ⇄ review loop until `reuse` or `stored`:
 
 Pass `--supersede` to `resolve` when the invoking command forwarded it — `resolve`
-will delete the stale durable spec so the loop always emits `generate` (never `reuse`).
+skips the reuse check so the loop always emits `generate` (never `reuse`). The old
+durable spec SURVIVES the whole loop; `spec store` replaces it only after the new
+spec passes gate + review. If the issue's active run is weekly-parked (7d quota
+window), `resolve --supersede` emits `pause` instead of regenerating — superseding
+would strand the parked run. Forward the invoking command's `--ignore-quota` to
+`resolve` verbatim.
 
 ```
-env = factory spec resolve [--repo <o/n>] --issue <n> [--supersede]
+env = factory spec resolve [--repo <o/n>] --issue <n> [--supersede] [--ignore-quota]
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
+  pause → STOP unconditionally (ALL scopes — 5h, 7d, unavailable: no run or heartbeat
+      exists in Phase 1, so there is nothing to park). Spawn NOTHING. Report
+      env.scope/env.reason/env.resets_at_epoch to the user; re-run after the window
+      resets, or with --ignore-quota to override.
   unspecifiable → STOP LOUD (exit 1; zero agent cost). Surface env.blockers to the
       user verbatim — the PRD needs editing before the factory can spec it. Spawn NOTHING.
-  generate → remember env.max_iterations (the loop bound)
-      spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
+  spec-defect → STOP LOUD (exit 1). The ENGINE exhausted the regen bound
+      (env.iterations/env.max_iterations); surface env.reason + env.blockers verbatim —
+      the PRD needs rework. Spawn NOTHING.
+  generate → spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
-  revise → (count iterations; > the remembered max_iterations → STOP LOUD, spec-defect)
-      spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
+  revise → spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
       (env.spawn.context already carries the prior spec + the blockers to fix — the
        agent PATCHES it; it does NOT re-author from scratch. Do not hand-assemble context.)
+      (the ENGINE counts regenerations in scratch attempts.json — the runner counts nothing)
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
   review → spawn env.spawn.agent_type VERBATIM (worktree, opus) with env.spawn.context embedded
