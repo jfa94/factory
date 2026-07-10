@@ -418,6 +418,112 @@ describe('storeSpec', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Engine-owned regen bound (attempts.json) — Model A: the ENGINE cuts the loop,
+// the runner counts nothing.
+// ---------------------------------------------------------------------------
+
+describe('engine-owned regen bound (attempts.json)', () => {
+    function depsWithMaxRegens(max: number): SpecBuildDeps {
+        const base = deps()
+        return {...base, config: {...base.config, spec: {...base.config.spec, maxRegenIterations: max}}}
+    }
+
+    async function readAttemptsFile(): Promise<unknown> {
+        const {readFile} = await import('node:fs/promises')
+        return JSON.parse(await readFile(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), 'utf8'))
+    }
+
+    it('each revise increments the counter (gate source)', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 1})
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 2})
+    })
+
+    it('over maxRegenIterations → terminal spec-defect with iterations + blockers', async () => {
+        const d = depsWithMaxRegens(1)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // 1/1 consumed
+        const env = await gateSpec(d, REPO, ISSUE) // would be regen #2 > 1
+        expect(env.kind).toBe('spec-defect')
+        if (env.kind !== 'spec-defect') {
+            throw new Error('unreachable')
+        }
+        expect(env.source).toBe('gate')
+        expect(env.iterations).toBe(1)
+        expect(env.max_iterations).toBe(1)
+        expect(env.blockers.length).toBeGreaterThan(0)
+        // Terminal: no spawn rides along.
+        expect('spawn' in env).toBe(false)
+    })
+
+    it('gate and review revises share ONE counter (bounds TOTAL regenerations)', async () => {
+        const d = depsWithMaxRegens(2)
+        await resolveSpec(d, REPO, ISSUE)
+
+        await writeScratch('generated.json', FAIL_GENERATED)
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // gate: 1/2
+
+        await writeScratch('generated.json', PASS_GENERATED)
+        await writeScratch('verdict.json', FAIL_VERDICT)
+        expect((await storeSpec(d, REPO, ISSUE)).kind).toBe('revise') // review: 2/2
+
+        const env = await storeSpec(d, REPO, ISSUE) // regen #3 > 2
+        expect(env.kind).toBe('spec-defect')
+        if (env.kind !== 'spec-defect') {
+            throw new Error('unreachable')
+        }
+        expect(env.source).toBe('review')
+        expect(env.iterations).toBe(2)
+    })
+
+    it('a fresh resolve emitting generate RESETS the counter', async () => {
+        const d = depsWithMaxRegens(1)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise') // 1/1 consumed
+
+        // A new build loop for the same issue starts at zero.
+        await resolveSpec(d, REPO, ISSUE)
+        expect(await readAttemptsFile()).toEqual({iterations: 0})
+        expect((await gateSpec(d, REPO, ISSUE)).kind).toBe('revise')
+    })
+
+    it('a missing attempts.json counts as 0 (scratch wipe already breaks the loop via generated.json)', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+        await rm(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), {force: true})
+
+        expect((await gateSpec(deps(), REPO, ISSUE)).kind).toBe('revise')
+        expect(await readAttemptsFile()).toEqual({iterations: 1})
+    })
+
+    it('the spec-defect envelope carries EXACTLY {kind, repo, issue, source, iterations, max_iterations, reason, blockers}', async () => {
+        const d = depsWithMaxRegens(0)
+        await resolveSpec(d, REPO, ISSUE)
+        await writeScratch('generated.json', FAIL_GENERATED)
+
+        const env = await gateSpec(d, REPO, ISSUE)
+        expect(env.kind).toBe('spec-defect')
+        expect(Object.keys(env).sort()).toEqual([
+            'blockers',
+            'issue',
+            'iterations',
+            'kind',
+            'max_iterations',
+            'reason',
+            'repo',
+            'source',
+        ])
+    })
+})
+
+// ---------------------------------------------------------------------------
 // Envelope exact shapes + durable round-trip (WS-D gap-fill)
 // ---------------------------------------------------------------------------
 

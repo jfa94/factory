@@ -32,7 +32,7 @@ describe('specCommand (dispatch)', () => {
 })
 
 describe('specExitCode', () => {
-    it('unspecifiable → EXIT.ERROR; every other envelope → EXIT.OK', () => {
+    it('unspecifiable + spec-defect → EXIT.ERROR; every other envelope → EXIT.OK', () => {
         const unspecifiable: SpecBuildEnvelope = {
             kind: 'unspecifiable',
             repo: REPO,
@@ -42,6 +42,18 @@ describe('specExitCode', () => {
         }
         expect(specExitCode(unspecifiable)).toBe(EXIT.ERROR)
 
+        const specDefect: SpecBuildEnvelope = {
+            kind: 'spec-defect',
+            repo: REPO,
+            issue: 1,
+            source: 'review',
+            iterations: 3,
+            max_iterations: 3,
+            reason: 'spec regeneration bound exhausted (3/3)',
+            blockers: ['granularity too coarse'],
+        }
+        expect(specExitCode(specDefect)).toBe(EXIT.ERROR)
+
         const reuse: SpecBuildEnvelope = {
             kind: 'reuse',
             repo: REPO,
@@ -49,6 +61,15 @@ describe('specExitCode', () => {
             pointer: {repo: REPO, spec_id: '1-x', issue_number: 1},
         }
         expect(specExitCode(reuse)).toBe(EXIT.OK)
+
+        const pause: SpecBuildEnvelope = {
+            kind: 'pause',
+            repo: REPO,
+            issue: 1,
+            scope: '7d',
+            reason: 'weekly window breached',
+        }
+        expect(specExitCode(pause)).toBe(EXIT.OK)
     })
 })
 

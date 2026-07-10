@@ -170,17 +170,26 @@ async function run(argv: string[]): Promise<ExitCode> {
                 envelope.blockers.map((b) => `  - ${b}`).join('\n')
         )
     }
+    if (envelope.kind === 'spec-defect') {
+        emitError(
+            `spec regeneration bound exhausted for #${issue} ` +
+                `(${envelope.iterations}/${envelope.max_iterations}) — rework the PRD (or raise ` +
+                `spec.maxRegenIterations) and re-run; latest blockers:\n` +
+                envelope.blockers.map((b) => `  - ${b}`).join('\n')
+        )
+    }
     return specExitCode(envelope)
 }
 
 /**
- * Envelope → exit code (S9): `unspecifiable` is the one non-zero spec outcome —
- * a terminal refusal, not a loop step. The frozen exit enum has no
- * "needs-human" code (see src/shared/exit-codes.ts); ERROR is correct — the
- * envelope `kind` on stdout is the machine discriminator.
+ * Envelope → exit code (S9): the two terminal refusals — `unspecifiable`
+ * (pre-generation) and `spec-defect` (regen bound exhausted) — are the only
+ * non-zero spec outcomes; everything else is a loop step. The frozen exit enum
+ * has no "needs-human" code (see src/shared/exit-codes.ts); ERROR is correct —
+ * the envelope `kind` on stdout is the machine discriminator.
  */
 export function specExitCode(envelope: SpecBuildEnvelope): ExitCode {
-    return envelope.kind === 'unspecifiable' ? EXIT.ERROR : EXIT.OK
+    return envelope.kind === 'unspecifiable' || envelope.kind === 'spec-defect' ? EXIT.ERROR : EXIT.OK
 }
 
 export const specCommand: Subcommand = {

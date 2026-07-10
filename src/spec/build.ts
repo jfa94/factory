@@ -16,19 +16,22 @@
  * State is threaded through a TRANSIENT scratch dir, `specBuildDir(scratchRoot,repo,issue)`,
  * rooted at the OS temp dir (`defaultSpecBuildRoot()`) — NOT the plugin dataDir the
  * durable stores use, since this holds only pre-validation agent output, never
- * durable state. It holds three files: `prd.json` (written by `resolve`),
- * `generated.json` (written by the runner after spawning the generator), and
- * `verdict.json` (written by the runner after spawning the reviewer). Every action
- * takes a (repo, issue) pair and recomputes the scratch dir, so the runner never
- * threads paths by hand — each envelope also echoes the concrete paths.
+ * durable state. It holds four files: `prd.json` (written by `resolve`),
+ * `generated.json` (written by the runner after spawning the generator),
+ * `verdict.json` (written by the runner after spawning the reviewer), and
+ * `attempts.json` (the ENGINE-owned regen counter — reset by `resolve`,
+ * consumed at both revise sites). Every action takes a (repo, issue) pair and
+ * recomputes the scratch dir, so the runner never threads paths by hand — each
+ * envelope also echoes the concrete paths.
  *
- * Loop (runner-owned):
+ * Loop (runner-sequenced, ENGINE-bounded):
  *   resolve → reuse(pointer)  → DONE (go straight to `run create`)
  *           → generate(spawn) → [spawn generator → write generated.json] → gate
- *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate          (≤ max_iterations)
+ *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate
  *           → review(spawn)   → [spawn reviewer → write verdict.json] → store
- *   store   → revise(reason)  → [re-spawn generator] → gate                         (≤ max_iterations)
+ *   store   → revise(reason)  → [re-spawn generator] → gate
  *           → stored(pointer) → DONE (go to `run create`)
+ *   Either revise site past config.spec.maxRegenIterations → spec-defect (TERMINAL).
  *
  * Mirrors {@link import("./pipeline.js").runSpecPipeline} exactly (same
  * gates, same 56/60+floor adjudication, same request construction) — the only
@@ -61,6 +64,8 @@ import {nowIso} from '../shared/time.js'
 const PRD_FILE = 'prd.json'
 const GENERATED_FILE = 'generated.json'
 const VERDICT_FILE = 'verdict.json'
+/** Engine-owned regen counter (`{"iterations": n}`) — see {@link consumeRegenOrDefect}. */
+const ATTEMPTS_FILE = 'attempts.json'
 
 /** The single JSON document each `factory spec` action emits — the runner's contract. */
 export type SpecBuildEnvelope =
@@ -141,6 +146,22 @@ export type SpecBuildEnvelope =
           readonly generated_path: string
       }
     | {
+          /**
+           * The regen loop exhausted `config.spec.maxRegenIterations` without a spec
+           * that passes gate + review — TERMINAL, ENGINE-enforced (Model A: the runner
+           * counts nothing). The runner spawns NOTHING and stops loud; `blockers` is
+           * the latest round's feedback — the PRD (or the spec dial) needs human rework.
+           */
+          readonly kind: 'spec-defect'
+          readonly repo: string
+          readonly issue: number
+          readonly source: 'gate' | 'review'
+          readonly iterations: number
+          readonly max_iterations: number
+          readonly reason: string
+          readonly blockers: readonly string[]
+      }
+    | {
           /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
           readonly kind: 'stored'
           readonly repo: string
@@ -162,7 +183,7 @@ export interface SpecBuildDeps {
     readonly scratchRoot: string
 }
 
-/** Resolve the three scratch paths for a (repo, issue) build. */
+/** Resolve the scratch paths for a (repo, issue) build. */
 function scratchPaths(
     scratchRoot: string,
     repo: string,
@@ -171,13 +192,63 @@ function scratchPaths(
     prdPath: string
     generatedPath: string
     verdictPath: string
+    attemptsPath: string
 } {
     const dir = specBuildDir(scratchRoot, repo, issue)
     return {
         prdPath: join(dir, PRD_FILE),
         generatedPath: join(dir, GENERATED_FILE),
         verdictPath: join(dir, VERDICT_FILE),
+        attemptsPath: join(dir, ATTEMPTS_FILE),
     }
+}
+
+/**
+ * Read the regen counter; a missing/unreadable/garbage file reads as 0. This
+ * cannot extend a LIVE loop (a scratch wipe already breaks it via
+ * generated.json) — it only restarts the budget together with the files.
+ */
+async function readAttempts(attemptsPath: string): Promise<number> {
+    try {
+        const raw = await readJsonFile<{iterations?: unknown}>(attemptsPath)
+        const n = raw.iterations
+        return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 0
+    } catch {
+        return 0
+    }
+}
+
+/**
+ * Engine-owned regen bound (Model A — the runner counts nothing): consume ONE
+ * regeneration from the shared attempts counter, or cut the loop. Gate and
+ * review revises draw from the SAME counter, so `config.spec.maxRegenIterations`
+ * bounds TOTAL regenerations per build. Returns null when the revise may
+ * proceed (counter bumped), else the terminal `spec-defect` envelope.
+ */
+async function consumeRegenOrDefect(
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    {source, blockers}: {source: 'gate' | 'review'; blockers: readonly string[]}
+): Promise<SpecBuildEnvelope | null> {
+    const {attemptsPath} = scratchPaths(deps.scratchRoot, repo, issue)
+    const max = deps.config.spec.maxRegenIterations
+    const prior = await readAttempts(attemptsPath)
+    if (prior >= max) {
+        const stage = source === 'gate' ? 'the deterministic gates' : 'review'
+        return {
+            kind: 'spec-defect',
+            repo,
+            issue,
+            source,
+            iterations: prior,
+            max_iterations: max,
+            reason: `spec regeneration bound exhausted (${prior}/${max}) — the spec never passed ${stage}; the PRD likely needs rework`,
+            blockers,
+        }
+    }
+    await atomicWriteFile(attemptsPath, stringifyJson({iterations: prior + 1}))
+    return null
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +280,7 @@ export async function resolveSpec(
     }
 
     const prd = await deps.gh.fetchPrd(issue, {repo})
-    const {prdPath, generatedPath} = scratchPaths(deps.scratchRoot, repo, issue)
+    const {prdPath, generatedPath, attemptsPath} = scratchPaths(deps.scratchRoot, repo, issue)
     await atomicWriteFile(prdPath, stringifyJson(prd))
 
     // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
@@ -224,6 +295,9 @@ export async function resolveSpec(
             blockers: specifiability.blockers,
         }
     }
+
+    // A generate spawn starts a FRESH build loop — reset the regen budget.
+    await atomicWriteFile(attemptsPath, stringifyJson({iterations: 0}))
 
     return {
         kind: 'generate',
@@ -253,6 +327,10 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
 
     const gates = runSpecGates(prd, generated.tasks)
     if (!gates.passed) {
+        const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'gate', blockers: gates.blockers})
+        if (defect) {
+            return defect
+        }
         return {
             kind: 'revise',
             repo,
@@ -297,6 +375,10 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     })
     if (decision.decision === 'NEEDS_REVISION') {
         const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason]
+        const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'review', blockers})
+        if (defect) {
+            return defect
+        }
         // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
         // generator patches the prior spec against the reviewer's blockers, not re-derives it.
         const prd = await readJsonFile<Prd>(prdPath)
