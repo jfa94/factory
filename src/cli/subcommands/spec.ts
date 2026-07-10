@@ -39,9 +39,11 @@ Usage:
 --repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
 value that disagrees with the remote fails loud.
 
-The in-session runner drives the agent spawns + the bounded regen loop; each
-action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
-through the OS temp dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict}.json
+The in-session runner drives the agent spawns; the ENGINE bounds the regen loop
+(scratch attempts.json; over spec.maxRegenIterations → terminal spec-defect, exit 1)
+and quota-gates resolve (pause envelope; --ignore-quota overrides). Each action emits
+ONE JSON envelope naming the next step. Scratch JSON is threaded through the OS temp
+dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict,attempts}.json
 (transient pre-validation agent output, never the plugin data dir).
 
 Actions:

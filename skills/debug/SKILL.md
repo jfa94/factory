@@ -207,6 +207,12 @@ these debug-only deltas:
   renders an Acceptance Criteria section (one criterion per confirmed blocker), so
   it passes the specifiability gate by construction. If it ever fires anyway, Iron
   Law 3 applies — STOP LOUD, spawn nothing.
+- `pause` IS reachable — `resolve` runs the same entry quota gate as real specs
+  (fail-closed on a missing/stale usage cache). STOP unconditionally, spawn
+  nothing, report `scope`/`reason`/`resets_at_epoch`; re-run the debug session
+  after the window resets (debug has no `--ignore-quota` override).
+- `spec-defect` (regen bound exhausted) → STOP LOUD, spawn nothing, surface
+  `reason` + `blockers` — the confirmed findings likely need human triage.
 - `debug spec resolve|gate|store` is LOUD (`Error`, not `UsageError`) if `review
 --record` has not run yet this pass — "run 'debug review --record' first".
 
