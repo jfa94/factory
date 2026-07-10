@@ -57,6 +57,7 @@ import {
     type GenerateResult,
 } from './agents.js'
 import type {Config, SpecPointer} from '../types/index.js'
+import {evaluate as evaluateQuota, type UsageSignal} from '../quota/index.js'
 import {parseSpecManifest, type SpecManifest} from './schema.js'
 import {nowIso} from '../shared/time.js'
 
@@ -174,6 +175,10 @@ export interface SpecBuildDeps {
     readonly store: SpecStore
     readonly gh: GhClient
     readonly config: Config
+    /** Usage signal for the ENTRY quota gate — read by `resolveSpec` only. */
+    readonly usage: UsageSignal
+    /** Epoch-SECONDS clock for the pacer (injected for testability). */
+    readonly now: () => number
     /**
      * Root for the transient generate/review scratch files (NOT the plugin dataDir —
      * `store`/`config` already carry their own dataDir closure independently).
@@ -251,6 +256,35 @@ async function consumeRegenOrDefect(
     return null
 }
 
+/**
+ * The entry quota check: same reading→decision mapping as the run-level
+ * `applyQuotaGate` (src/orchestrator/quota-gate.ts) but with NO state write —
+ * Phase 1 has no run to park. Returns null on proceed (or ignoreQuota), else
+ * the terminal `pause` envelope.
+ */
+async function quotaPause(
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    ignoreQuota: boolean
+): Promise<SpecBuildEnvelope | null> {
+    if (ignoreQuota) {
+        return null
+    }
+    const decision = evaluateQuota(await deps.usage.read(), deps.config, deps.now())
+    if (decision.kind === 'proceed') {
+        return null
+    }
+    return {
+        kind: 'pause',
+        repo,
+        issue,
+        scope: decision.kind === 'pause-5h' ? '5h' : decision.kind === 'suspend-7d' ? '7d' : 'unavailable',
+        reason: decision.reason,
+        ...(decision.kind === 'unavailable-halt' ? {} : {resets_at_epoch: decision.resetsAtEpoch}),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // resolve
 // ---------------------------------------------------------------------------
@@ -270,7 +304,7 @@ export async function resolveSpec(
     deps: SpecBuildDeps,
     repo: string,
     issue: number,
-    {regenerate = false}: {regenerate?: boolean} = {}
+    {regenerate = false, ignoreQuota = false}: {regenerate?: boolean; ignoreQuota?: boolean} = {}
 ): Promise<SpecBuildEnvelope> {
     if (!regenerate) {
         const existing = await deps.store.resolveByIssue(repo, issue)
@@ -294,6 +328,17 @@ export async function resolveSpec(
             prd_path: prdPath,
             blockers: specifiability.blockers,
         }
+    }
+
+    // ENTRY quota gate (Decision 24 curve, same mapping as applyQuotaGate but with
+    // no state write — no run exists yet). Deliberately the ONLY quota check in
+    // the seam: reuse is free, `unspecifiable` beats pause (the author learns the
+    // PRD is broken even over quota), and a mid-loop gate at gate/store would
+    // discard the already-paid generator spawn — continuation is bounded by the
+    // attempts counter instead. Fail-closed: an unobservable reading pauses.
+    const pause = await quotaPause(deps, repo, issue, ignoreQuota)
+    if (pause) {
+        return pause
     }
 
     // A generate spawn starts a FRESH build loop — reset the regen budget.

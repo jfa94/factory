@@ -10732,15 +10732,63 @@ import { join as join8 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
+var ATTEMPTS_FILE = "attempts.json";
 function scratchPaths(scratchRoot, repo, issue) {
   const dir = specBuildDir(scratchRoot, repo, issue);
   return {
     prdPath: join8(dir, PRD_FILE2),
     generatedPath: join8(dir, GENERATED_FILE),
-    verdictPath: join8(dir, VERDICT_FILE)
+    verdictPath: join8(dir, VERDICT_FILE),
+    attemptsPath: join8(dir, ATTEMPTS_FILE)
   };
 }
-async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
+async function readAttempts(attemptsPath) {
+  try {
+    const raw = await readJsonFile(attemptsPath);
+    const n = raw.iterations;
+    return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+async function consumeRegenOrDefect(deps, repo, issue, { source, blockers }) {
+  const { attemptsPath } = scratchPaths(deps.scratchRoot, repo, issue);
+  const max = deps.config.spec.maxRegenIterations;
+  const prior = await readAttempts(attemptsPath);
+  if (prior >= max) {
+    const stage = source === "gate" ? "the deterministic gates" : "review";
+    return {
+      kind: "spec-defect",
+      repo,
+      issue,
+      source,
+      iterations: prior,
+      max_iterations: max,
+      reason: `spec regeneration bound exhausted (${prior}/${max}) \u2014 the spec never passed ${stage}; the PRD likely needs rework`,
+      blockers
+    };
+  }
+  await atomicWriteFile(attemptsPath, stringifyJson({ iterations: prior + 1 }));
+  return null;
+}
+async function quotaPause(deps, repo, issue, ignoreQuota) {
+  if (ignoreQuota) {
+    return null;
+  }
+  const decision = evaluate(await deps.usage.read(), deps.config, deps.now());
+  if (decision.kind === "proceed") {
+    return null;
+  }
+  return {
+    kind: "pause",
+    repo,
+    issue,
+    scope: decision.kind === "pause-5h" ? "5h" : decision.kind === "suspend-7d" ? "7d" : "unavailable",
+    reason: decision.reason,
+    ...decision.kind === "unavailable-halt" ? {} : { resets_at_epoch: decision.resetsAtEpoch }
+  };
+}
+async function resolveSpec(deps, repo, issue, { regenerate = false, ignoreQuota = false } = {}) {
   if (!regenerate) {
     const existing = await deps.store.resolveByIssue(repo, issue);
     if (existing) {
@@ -10748,7 +10796,7 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
     }
   }
   const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.scratchRoot, repo, issue);
+  const { prdPath, generatedPath, attemptsPath } = scratchPaths(deps.scratchRoot, repo, issue);
   await atomicWriteFile(prdPath, stringifyJson(prd));
   const specifiability = specifiabilityGate(prd.body);
   if (!specifiability.passed) {
@@ -10760,6 +10808,11 @@ async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
       blockers: specifiability.blockers
     };
   }
+  const pause = await quotaPause(deps, repo, issue, ignoreQuota);
+  if (pause) {
+    return pause;
+  }
+  await atomicWriteFile(attemptsPath, stringifyJson({ iterations: 0 }));
   return {
     kind: "generate",
     repo,
@@ -10776,6 +10829,10 @@ async function gateSpec(deps, repo, issue) {
   const generated = parseGenerateResult(await readJsonFile(generatedPath));
   const gates = runSpecGates(prd, generated.tasks);
   if (!gates.passed) {
+    const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "gate", blockers: gates.blockers });
+    if (defect) {
+      return defect;
+    }
     return {
       kind: "revise",
       repo,
@@ -10807,6 +10864,10 @@ async function storeSpec(deps, repo, issue) {
   });
   if (decision.decision === "NEEDS_REVISION") {
     const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
+    const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "review", blockers });
+    if (defect) {
+      return defect;
+    }
     const prd2 = await readJsonFile(prdPath);
     return {
       kind: "revise",
@@ -17659,6 +17720,8 @@ function wireDeps() {
     store: new SpecStore({ dataDir }),
     gh: new RealGhClient({ bodyMaxBytes: config.spec.prdBodyMaxBytes }),
     config,
+    usage: new StatuslineUsageSignal({ dataDir }),
+    now: nowEpoch,
     scratchRoot: defaultSpecBuildRoot()
   };
 }
@@ -17715,7 +17778,7 @@ async function run3(argv) {
     }
   }
   const deps = wireDeps();
-  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: supersede }) : await handler(deps, repo, issue);
+  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: supersede, ignoreQuota }) : await handler(deps, repo, issue);
   emitJson(envelope);
   if (envelope.kind === "unspecifiable") {
     emitError(
@@ -17723,10 +17786,16 @@ async function run3(argv) {
 ` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
     );
   }
+  if (envelope.kind === "spec-defect") {
+    emitError(
+      `spec regeneration bound exhausted for #${issue} (${envelope.iterations}/${envelope.max_iterations}) \u2014 rework the PRD (or raise spec.maxRegenIterations) and re-run; latest blockers:
+` + envelope.blockers.map((b) => `  - ${b}`).join("\n")
+    );
+  }
   return specExitCode(envelope);
 }
 function specExitCode(envelope) {
-  return envelope.kind === "unspecifiable" ? EXIT.ERROR : EXIT.OK;
+  return envelope.kind === "unspecifiable" || envelope.kind === "spec-defect" ? EXIT.ERROR : EXIT.OK;
 }
 var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
@@ -17919,6 +17988,8 @@ function wireDebugSpecDeps(report, dataDirOverride) {
     store: new SpecStore({ dataDir }),
     gh: new ReportGhClient(report),
     config,
+    usage: new StatuslineUsageSignal({ dataDir }),
+    now: nowEpoch,
     scratchRoot: defaultSpecBuildRoot()
   };
 }

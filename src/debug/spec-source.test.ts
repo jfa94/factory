@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtemp, rm} from 'node:fs/promises'
+import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {
@@ -11,6 +11,7 @@ import {
     type BuildDebugReportInput,
 } from './spec-source.js'
 import {resolveSpec, specifiabilityGate} from '../spec/index.js'
+import {usageCachePath} from '../quota/index.js'
 import {defaultSpecBuildRoot, specBuildDir} from '../core/state/paths.js'
 import type {Finding} from '../verifier/judgment/finding.js'
 
@@ -210,6 +211,18 @@ describe('integration: resolveSpec accepts wireDebugSpecDeps unchanged', () => {
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'debug-spec-source-integration-'))
+        // wireDebugSpecDeps wires the REAL StatuslineUsageSignal; resolveSpec's
+        // entry quota gate fails closed without a healthy usage cache.
+        const now = Math.floor(Date.now() / 1000)
+        await writeFile(
+            usageCachePath(dataDir),
+            JSON.stringify({
+                five_hour: {used_percentage: 0, resets_at: now + 18_000},
+                seven_day: {used_percentage: 0, resets_at: now + 604_800},
+                captured_at: now,
+            }),
+            'utf8'
+        )
     })
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})

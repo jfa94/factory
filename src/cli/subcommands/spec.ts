@@ -12,6 +12,8 @@ import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
 import {defaultSpecBuildRoot} from '../../core/state/paths.js'
 import {StateManager} from '../../core/state/index.js'
+import {StatuslineUsageSignal} from '../../quota/index.js'
+import {nowEpoch} from '../../shared/time.js'
 import {
     SpecStore,
     RealGhClient,
@@ -63,6 +65,8 @@ function wireDeps(): SpecBuildDeps {
         store: new SpecStore({dataDir}),
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
+        usage: new StatuslineUsageSignal({dataDir}),
+        now: nowEpoch,
         scratchRoot: defaultSpecBuildRoot(),
     }
 }
@@ -161,7 +165,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     const deps = wireDeps()
     const envelope =
         action === 'resolve'
-            ? await resolveSpec(deps, repo, issue, {regenerate: supersede})
+            ? await resolveSpec(deps, repo, issue, {regenerate: supersede, ignoreQuota})
             : await handler(deps, repo, issue)
     emitJson(envelope)
     if (envelope.kind === 'unspecifiable') {

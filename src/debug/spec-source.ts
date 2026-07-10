@@ -29,6 +29,8 @@
 import type {Config} from '../config/index.js'
 import {loadConfig, resolveDataDir} from '../config/index.js'
 import {defaultSpecBuildRoot} from '../core/state/paths.js'
+import {StatuslineUsageSignal} from '../quota/index.js'
+import {nowEpoch} from '../shared/time.js'
 import {SpecStore, type GhClient, type Prd, type SpecBuildDeps} from '../spec/index.js'
 import type {Finding} from '../verifier/judgment/finding.js'
 
@@ -188,6 +190,8 @@ export function wireDebugSpecDeps(
         store: new SpecStore({dataDir}),
         gh: new ReportGhClient(report),
         config,
+        usage: new StatuslineUsageSignal({dataDir}),
+        now: nowEpoch,
         scratchRoot: defaultSpecBuildRoot(),
     }
 }
