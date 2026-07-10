@@ -290,17 +290,24 @@ file policy**:
   `factory scaffold` overwrites it (reported under `files_updated`). This is the
   propagation path — a template fix (e.g. the 2026-06-18 mutation-shard rebalance)
   reaches downstream repos without a manual delete-and-re-scaffold.
-- **SEED** — files the project owns after first write: `.stryker.config.json`,
-  `.dependency-cruiser.cjs`, `eslint.config.mjs`. **Scaffold-once, then
-  project-owned**: copied verbatim only when absent (a load-safe baseline), and an
-  existing file is reported under `files_present` — never read, compared,
-  overwritten, or flagged. There is no `files_outdated` bucket (retired): a SEED
-  file that has grown into a richer project config (e.g. an `eslint.config.mjs`
-  that imports `typescript-eslint`/plugins, or a `.dependency-cruiser.cjs` with
-  extra boundary rules) is **recognized as current, not stale**. This is what
-  preserves the never-fail-close lint property — a fresh repo only ever receives
-  the dependency-free baseline (which loads before any plugin is installed), while
-  an established repo's full config is left untouched.
+- **SEED** — files the project owns once it touches them: `.stryker.config.json`,
+  `.dependency-cruiser.cjs`, `eslint.config.mjs`, `playwright.config.ts`,
+  `e2e/example.spec.ts`. Copied verbatim when absent (a load-safe baseline). Once
+  present, a seed is auto-refreshed on template change **only while provably
+  pristine**: scaffold records the sha256 of each seed's content as written into
+  the committed `.factory/scaffold.lock`, and a re-scaffold overwrites a seed
+  (reported under `files_updated`, lock re-stamped) only when its on-disk bytes
+  still match that recorded hash. Anything else — customized bytes, a missing lock
+  entry (repo scaffolded before the lock existed), an unparsable lock, even a git
+  line-ending rewrite — reads as **project-owned**: reported under
+  `files_present`, never overwritten (fail safe: bad data can never cause a
+  clobber). There is no `files_outdated` bucket (retired): a SEED file that has
+  grown into a richer project config (e.g. an `eslint.config.mjs` that imports
+  `typescript-eslint`/plugins, or a `.dependency-cruiser.cjs` with extra boundary
+  rules) is **recognized as current, not stale**. This is what preserves the
+  never-fail-close lint property — a fresh repo only ever receives the
+  dependency-free baseline (which loads before any plugin is installed), while an
+  established repo's full config is left untouched.
 - **MERGE** — `.gitignore` and `.claude/settings.json` are reconciled
   non-destructively (append missing entries / merge keys). The `.gitignore`
   guarantee makes the in-repo split **explicit**: each per-machine `.claude/` child
@@ -316,28 +323,40 @@ file policy**:
 Scaffolding files are project-specific artifacts. They belong in the user's
 repository, versioned and visible to teammates.
 
-**Why auto-update only the MANAGED tier?**
+**Why unconditional auto-update only for the MANAGED tier?**
 
 The CI workflow + shard helper encode plugin-owned pipeline machinery, not project
 preferences; customizing them is unsupported by contract, and git is the safety net
-(an auto-overwrite shows up in `git diff`). User-owned configs (SEED) are still never
-clobbered — the original "overwriting would destroy customizations" concern applies
-to exactly that tier.
+(an auto-overwrite shows up in `git diff`). SEED refresh is gated on proof of
+pristineness because the original "overwriting would destroy customizations" concern
+applies to exactly that tier.
 
-**Known limitation — SEED rules do not propagate (deliberate).**
+**The scaffold lock — how "pristine" is proven (`.factory/scaffold.lock`).**
 
-Because a present SEED file is never read, compared, or overwritten
-(`applyTemplate`, `src/cli/subcommands/scaffold.ts`), a _new_ baseline rule added to
-a shipped SEED template — e.g. an extra boundary rule in `.dependency-cruiser.cjs` or
-a tightened `.stryker.config.json` threshold — does **not** reach repos that were
-already scaffolded. Their existing copy is recognized as current. This is the
+`{version: 1, seeds: {"<rel>": "<sha256>"}}`, written by `applyTemplate`
+(`src/cli/subcommands/scaffold.ts` + `scaffold-lock.ts`) ONLY when scaffold itself
+writes a seed, committed so pristine tracking travels with the repo, and persisted
+immediately after the seed pass — before the gate-contract/protection steps, whose
+refusal paths throw after seeds have already landed on disk. A stale entry
+(customized seed) is kept: harmless, and reverting the file to the exact
+scaffold-written bytes re-adopts it. The lock is TCB-protected (`scaffold-lock`
+rule, `src/hooks/tcb.ts`): a producer that could forge an entry hashing the repo's
+customized gate config would schedule it for silent "pristine" reversion to the
+weaker plugin baseline on the operator's next scaffold.
+
+**Known limitation — customized SEED files do not receive template updates
+(deliberate).**
+
+A _new_ baseline rule added to a shipped SEED template does **not** reach a repo
+whose copy was customized — or predates the lock (cold start: no entry can prove
+pristineness, so the file is treated as project-owned forever). This is the
 unavoidable cost of the project-ownership guarantee: the same rule that refuses to
 clobber a repo's grown-up config also refuses to back-fill plugin baseline changes
-into it. There is deliberately **no** drift-detection or merge mechanism for SEED
-files — adding one would reintroduce exactly the clobber risk this tier exists to
-prevent. A repo that wants a refreshed baseline opts in explicitly by deleting its
-SEED file and re-running `factory scaffold` (which then re-copies the current
-template). Plugin-owned machinery that _must_ stay in lockstep belongs in the MANAGED
+into it. There is deliberately **no** merge mechanism for SEED files — one would
+reintroduce exactly the clobber risk this tier exists to prevent. Such a repo opts
+into a refreshed baseline explicitly by deleting its SEED file and re-running
+`factory scaffold` (which re-copies the current template and re-adopts it into the
+lock). Plugin-owned machinery that _must_ stay in lockstep belongs in the MANAGED
 tier, not SEED.
 
 ---

@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile20;
-      function readFile20(path7, options, cb) {
+      fs2.readFile = readFile21;
+      function readFile21(path7, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path7, options, cb);
@@ -546,8 +546,8 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$writeFile = fs2.writeFile;
-      fs2.writeFile = writeFile5;
-      function writeFile5(path7, data, options, cb) {
+      fs2.writeFile = writeFile6;
+      function writeFile6(path7, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$writeFile(path7, data, options, cb);
@@ -18344,10 +18344,10 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
-import { existsSync as existsSync10 } from "node:fs";
+import { mkdir as mkdir13, readFile as readFile18, writeFile as writeFile5 } from "node:fs/promises";
+import { existsSync as existsSync11 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname9, join as join26, relative } from "node:path";
+import { dirname as dirname10, join as join27, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/ci/inject-gate-env.ts
@@ -18794,6 +18794,48 @@ async function ensureGateContract(opts) {
   return { status: "created", stack: contract.stack, contract };
 }
 
+// src/cli/subcommands/scaffold-lock.ts
+import { createHash as createHash2 } from "node:crypto";
+import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
+import { existsSync as existsSync10 } from "node:fs";
+import { dirname as dirname9, join as join26 } from "node:path";
+var SCAFFOLD_LOCK_REL = ".factory/scaffold.lock";
+function sha256Hex(text) {
+  return createHash2("sha256").update(text, "utf8").digest("hex");
+}
+async function loadScaffoldLock(targetRoot) {
+  const path7 = join26(targetRoot, SCAFFOLD_LOCK_REL);
+  const empty = { version: 1, seeds: {} };
+  if (!existsSync10(path7)) {
+    return { lock: empty, existed: false, invalid: false };
+  }
+  try {
+    const parsed = JSON.parse(await readFile17(path7, "utf8"));
+    const seeds = typeof parsed === "object" && parsed !== null ? parsed.seeds : null;
+    if (typeof seeds !== "object" || seeds === null) {
+      return { lock: empty, existed: true, invalid: true };
+    }
+    const valid = {};
+    for (const [rel, hash] of Object.entries(seeds)) {
+      if (typeof hash === "string") {
+        valid[rel] = hash;
+      }
+    }
+    return { lock: { version: 1, seeds: valid }, existed: true, invalid: false };
+  } catch {
+    return { lock: empty, existed: true, invalid: true };
+  }
+}
+async function saveScaffoldLock(targetRoot, lock2) {
+  const path7 = join26(targetRoot, SCAFFOLD_LOCK_REL);
+  const seeds = {};
+  for (const [rel, hash] of Object.entries(lock2.seeds).sort(([a], [b]) => a.localeCompare(b))) {
+    seeds[rel] = hash;
+  }
+  await mkdir12(dirname9(path7), { recursive: true });
+  await writeFile4(path7, JSON.stringify({ version: 1, seeds }, null, 2) + "\n", "utf8");
+}
+
 // src/cli/subcommands/scaffold.ts
 var log34 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
@@ -18823,7 +18865,12 @@ committed per-gate applicability agreement. Refuses below the floor (test + type
 build equivalents must be contractable). COMMIT the file \u2014 'factory run' requires
 it tracked. The contract is seed-like: an existing valid gates.json is never
 touched \u2014 delete it and re-scaffold to pick up new resolution rules (e.g. the
-S8 coverage flip).`;
+S8 coverage flip).
+
+Re-scaffold refreshes OUTDATED files: managed files (the CI net) on any drift, and
+seed configs ONLY while pristine \u2014 untouched since scaffold wrote them, per the
+committed .factory/scaffold.lock hash record. A customized seed is project-owned
+and never overwritten; delete it and re-scaffold to re-adopt the latest baseline.`;
 var GITIGNORE_ENTRIES = [
   "# Claude Code local state (factory scaffold guarantee)",
   ".claude/worktrees/",
@@ -18851,13 +18898,13 @@ var GITIGNORE_ENTRIES = [
   "*.worktree"
 ];
 function resolveTemplatesDir() {
-  let dir = dirname9(fileURLToPath(import.meta.url));
+  let dir = dirname10(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join26(dir, "templates");
-    if (existsSync10(join26(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join27(dir, "templates");
+    if (existsSync11(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir) {
       break;
     }
@@ -18875,43 +18922,69 @@ var TEMPLATE_MANIFEST = [
   { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
   // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
   // (scaffold never installs packages) and the config's webServer.command is a TODO
-  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
+  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e") —
+  // and must STAY "./e2e" in any template edit: pristine auto-refresh propagates
+  // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
+  // refuses an --e2e run whose config declares any other testDir.
   { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
   { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true }
 ];
-async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
+async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, transform) {
   const segs = entry.rel.split("/");
-  const src = join26(templatesDir, ...segs);
-  const dest = join26(targetRoot, ...segs);
-  if (!existsSync10(src)) {
+  const src = join27(templatesDir, ...segs);
+  const dest = join27(targetRoot, ...segs);
+  if (!existsSync11(src)) {
     log34.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
-    const text = await readFile17(src, "utf8");
+    const text = await readFile18(src, "utf8");
     return transform ? transform(text) : text;
   };
-  if (!existsSync10(dest)) {
-    await mkdir12(dirname9(dest), { recursive: true });
-    await writeFile4(dest, await render(), "utf8");
+  if (!existsSync11(dest)) {
+    const rendered2 = await render();
+    await mkdir13(dirname10(dest), { recursive: true });
+    await writeFile5(dest, rendered2, "utf8");
+    if (entry.policy === "seed" && lock2) {
+      lock2.seeds[entry.rel] = sha256Hex(rendered2);
+      lock2.dirty = true;
+    }
     lists.created.push(entry.rel);
     return;
   }
   if (entry.policy === "seed") {
+    const recorded = lock2?.seeds[entry.rel];
+    if (recorded !== void 0) {
+      const destText2 = await readFile18(dest, "utf8");
+      if (sha256Hex(destText2) === recorded) {
+        const rendered2 = await render();
+        if (rendered2 === destText2) {
+          lists.present.push(entry.rel);
+          return;
+        }
+        await writeFile5(dest, rendered2, "utf8");
+        if (lock2) {
+          lock2.seeds[entry.rel] = sha256Hex(rendered2);
+          lock2.dirty = true;
+        }
+        lists.updated.push(entry.rel);
+        return;
+      }
+    }
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile17(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile18(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  await writeFile4(dest, rendered, "utf8");
+  await writeFile5(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync10(join26(targetRoot, "pnpm-lock.yaml"));
-  const raw = await readFile17(join26(targetRoot, "package.json"), "utf8");
+  const pnpm = existsSync11(join27(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile18(join27(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
     pkg = JSON.parse(raw);
@@ -18920,27 +18993,27 @@ async function readWorkflowFacts(targetRoot) {
   }
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync10(join26(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync11(join27(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
   };
 }
 async function ensureIgnoreFile(root, filename, entries, lists) {
-  const path7 = join26(root, filename);
+  const path7 = join27(root, filename);
   const rel = relative(root, path7);
-  if (!existsSync10(path7)) {
-    await writeFile4(path7, entries.join("\n") + "\n", "utf8");
+  if (!existsSync11(path7)) {
+    await writeFile5(path7, entries.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile17(path7, "utf8");
+  const current = await readFile18(path7, "utf8");
   const missing = entries.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep4 = current.endsWith("\n") ? "" : "\n";
-  await writeFile4(path7, current + sep4 + missing.join("\n") + "\n", "utf8");
+  await writeFile5(path7, current + sep4 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function ensureGitignore(root, lists) {
@@ -18955,7 +19028,9 @@ async function ensurePrettierignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync10(join26(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync11(join27(opts.targetRoot, "package.json"));
+  const lockLoad = await loadScaffoldLock(opts.targetRoot);
+  const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
     if (CI_NET_RELS.includes(entry.rel)) {
       continue;
@@ -18963,7 +19038,19 @@ async function runScaffold(opts) {
     if (entry.nodeOnly === true && !isNodePackage) {
       continue;
     }
-    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock2);
+  }
+  if (lock2.dirty || lockLoad.invalid) {
+    const toSave = { version: 1, seeds: lock2.seeds };
+    await saveScaffoldLock(opts.targetRoot, toSave);
+    if (lockLoad.existed) {
+      lists.present.push(SCAFFOLD_LOCK_REL);
+    } else {
+      lists.created.push(SCAFFOLD_LOCK_REL);
+      log34.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
+    }
+  } else if (lockLoad.existed) {
+    lists.present.push(SCAFFOLD_LOCK_REL);
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -18989,7 +19076,7 @@ async function runScaffold(opts) {
         renderQualityGate(text, { contract: gates.contract, ...facts }),
         opts.config.quality.gateEnv
       ) : void 0;
-      await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
+      await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, void 0, transform);
     }
     await ensurePrettierignore(opts.targetRoot, lists);
   } else {
@@ -18998,7 +19085,7 @@ async function runScaffold(opts) {
     );
   }
   if (lists.updated.length > 0) {
-    log34.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`);
+    log34.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(", ")}`);
   }
   if (await recommendFastCheck(opts.targetRoot)) {
     log34.info(
@@ -19822,8 +19909,8 @@ var nextCommand = {
 };
 
 // src/cli/subcommands/statusline.ts
-import { readFile as readFile18 } from "node:fs/promises";
-import { join as join27 } from "node:path";
+import { readFile as readFile19 } from "node:fs/promises";
+import { join as join28 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -19876,7 +19963,7 @@ async function renderProgress(deps, payload) {
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const gitClient = deps.gitClient ?? new DefaultGitClient();
     const repo = await resolveRepo({ cwd, gitClient });
-    const raw = await readFile18(join27(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
+    const raw = await readFile19(join28(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run9 = JSON.parse(raw);
     if (typeof run9.run_id !== "string" || typeof run9.status !== "string") {
       return "";
@@ -19969,9 +20056,9 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync11 } from "node:fs";
-import { readFile as readFile19 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { existsSync as existsSync12 } from "node:fs";
+import { readFile as readFile20 } from "node:fs/promises";
+import { join as join29 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log38 = createLogger("autonomy");
 var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -20009,7 +20096,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join28(dataDir, "merged-settings.json");
+  return join29(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -20091,12 +20178,12 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path7 = join28(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync11(path7)) {
+  const path7 = join29(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync12(path7)) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile19(path7, "utf8"));
+    const parsed = JSON.parse(await readFile20(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") {
       return parsed.version;
     }
@@ -20108,12 +20195,12 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join28(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync11(userSettingsPath)) {
+  if (existsSync12(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile19(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile20(userSettingsPath, "utf8"));
       if (isObject2(parsed)) {
         userSettings = parsed;
       } else {
@@ -20123,8 +20210,8 @@ async function runAutonomyEnsure(opts = {}) {
       log38.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join28(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile19(templatePath, "utf8");
+  const templatePath = join29(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile20(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -20160,7 +20247,7 @@ function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path7.length > 0 && existsSync11(path7),
+    mergedSettingsPresent: path7.length > 0 && existsSync12(path7),
     mergedSettingsPath: path7
   };
   if (opts.json === true) {
@@ -20184,11 +20271,11 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path7}` : "absen
   return Promise.resolve(status.autonomous ? EXIT.OK : EXIT.ERROR);
 }
 async function readOnDiskVersion(path7) {
-  if (!existsSync11(path7)) {
+  if (!existsSync12(path7)) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile19(path7, "utf8"));
+    const parsed = JSON.parse(await readFile20(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -20229,7 +20316,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path7 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path7.length > 0 && existsSync11(path7);
+  const mergedSettingsPresent = path7.length > 0 && existsSync12(path7);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path7) : void 0;
   const decision = decideAutonomyPreflight({

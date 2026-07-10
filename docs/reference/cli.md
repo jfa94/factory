@@ -103,8 +103,15 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
-protection, settings }`. SEED gate configs are scaffold-once / project-owned — an
-existing one is reported under `files_present`, never flagged (no `files_outdated`).
+protection, settings }`. `files_updated` carries the outdated files auto-refreshed
+this run: managed CI-net files on any drift, and SEED gate configs **only while
+pristine** — their bytes still matching the hash the committed
+`.factory/scaffold.lock` recorded when scaffold wrote them
+([Decision 15](../explanation/decisions.md#decision-15-project-scaffolding)). A
+customized seed (or one with no lock entry — e.g. scaffolded before the lock
+existed) is project-owned: reported under `files_present`, never overwritten, never
+flagged (no `files_outdated`). Delete a seed and re-scaffold to re-adopt the latest
+baseline.
 
 ## `spec <resolve|gate|store>`
 

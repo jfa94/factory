@@ -50,6 +50,11 @@ This is idempotent. It:
   one source of truth. An empty `gateEnv` leaves the marker untouched;
 - copies `.github/workflows/quality-gate.yml` (the CI net), and — when the target is a Node
   package — `.stryker.config.json` + `.dependency-cruiser.cjs` (gate configs);
+- **refreshes outdated files**: managed CI-net files are overwritten on any drift from the
+  shipped template; seed gate configs are overwritten only while PRISTINE — untouched since
+  scaffold wrote them, proven via the committed `.factory/scaffold.lock` hash record. A
+  customized seed is project-owned and never touched (delete it and re-scaffold to re-adopt
+  the latest baseline). Refreshes land in `files_updated`;
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits (or non-destructively MERGES into) the target repo's `.claude/settings.json` — the
   factory permission allow-list (the `factory` CLI, git/gh, the agent tools, the data dir) plus
@@ -86,7 +91,8 @@ Do not proceed against an unprotected repo.
 
 Report:
 
-- Files created by scaffold vs. already present.
+- Files created by scaffold vs. already present, plus any outdated files auto-refreshed
+  (`files_updated`). Remind the user to COMMIT `.factory/scaffold.lock` alongside the seeds.
 - Protection on `develop`: enabled / strict-up-to-date / required checks / whether just provisioned.
 
 Then remind the user:

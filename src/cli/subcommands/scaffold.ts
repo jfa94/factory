@@ -45,6 +45,7 @@ import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
 import {injectGateEnvIntoWorkflow, renderQualityGate} from '../../ci/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
+import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
 import {GATE_CONTRACT_REL} from '../../verifier/deterministic/gate-contract.js'
 import type {GateContractStack} from '../../verifier/deterministic/gate-contract.js'
 import {UsageError} from '../../shared/usage-error.js'
@@ -79,7 +80,12 @@ committed per-gate applicability agreement. Refuses below the floor (test + type
 build equivalents must be contractable). COMMIT the file — 'factory run' requires
 it tracked. The contract is seed-like: an existing valid gates.json is never
 touched — delete it and re-scaffold to pick up new resolution rules (e.g. the
-S8 coverage flip).`
+S8 coverage flip).
+
+Re-scaffold refreshes OUTDATED files: managed files (the CI net) on any drift, and
+seed configs ONLY while pristine — untouched since scaffold wrote them, per the
+committed .factory/scaffold.lock hash record. A customized seed is project-owned
+and never overwritten; delete it and re-scaffold to re-adopt the latest baseline.`
 
 /**
  * The `.gitignore` lines scaffold guarantees. Two invariants drive the list:
@@ -157,9 +163,11 @@ export interface ScaffoldReport {
     readonly files_created: string[]
     readonly files_present: string[]
     /**
-     * Plugin-MANAGED template files (the CI net) that drifted from the shipped
-     * template and were AUTO-OVERWRITTEN on this run. The plugin is their sole
-     * author; git is the safety net (the change shows in `git diff`).
+     * Template files AUTO-OVERWRITTEN on this run because they were outdated:
+     * plugin-MANAGED files (the CI net) that drifted from the shipped template,
+     * plus PRISTINE seeds (bytes still matching their `.factory/scaffold.lock`
+     * hash) whose shipped template moved. Git is the safety net (the change
+     * shows in `git diff`); customized seeds are never touched.
      */
     readonly files_updated: string[]
     readonly protection: {
@@ -209,11 +217,14 @@ export function resolveTemplatesDir(): string {
  *     Auto-overwritten when it drifts from the shipped template so a template fix
  *     reaches already-scaffolded repos on the next `factory scaffold`. Git is the
  *     safety net; customizing a managed file is unsupported by contract.
- *   - `seed` — scaffold-once, then PROJECT-OWNED. Copied verbatim only when ABSENT
- *     (a load-safe baseline); once present the project owns it. An existing file is
- *     reported `present` and never read, compared, overwritten, or re-flagged
- *     (Decision 15) — so a repo that has grown its own richer config (e.g. an
- *     eslint.config.mjs that imports plugins) is recognized as current, not stale.
+ *   - `seed` — PROJECT-OWNED once touched by the project. Copied verbatim when
+ *     ABSENT (a load-safe baseline). Once present, a seed is auto-refreshed ONLY
+ *     while provably PRISTINE — its bytes still sha256-match the `.factory/scaffold.lock`
+ *     entry recorded when scaffold wrote it (Decision 15). Any customization (or a
+ *     missing lock entry: cold start, garbage lock) makes it project-owned forever:
+ *     reported `present`, never overwritten — a repo that has grown its own richer
+ *     config (e.g. an eslint.config.mjs that imports plugins) is recognized as
+ *     current, not stale. Delete the file and re-scaffold to re-adopt the baseline.
  */
 type TemplatePolicy = 'managed' | 'seed'
 
@@ -244,7 +255,10 @@ const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
     {rel: 'eslint.config.mjs', policy: 'seed', nodeOnly: true},
     // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
     // (scaffold never installs packages) and the config's webServer.command is a TODO
-    // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
+    // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e") —
+    // and must STAY "./e2e" in any template edit: pristine auto-refresh propagates
+    // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
+    // refuses an --e2e run whose config declares any other testDir.
     {rel: 'playwright.config.ts', policy: 'seed', nodeOnly: true},
     {rel: 'e2e/example.spec.ts', policy: 'seed', nodeOnly: true},
 ]
@@ -256,11 +270,21 @@ interface FileLists {
     readonly updated: string[]
 }
 
+/** Mutable scaffold-lock state threaded through the seed pass (see scaffold-lock.ts). */
+interface LockState {
+    readonly seeds: Record<string, string>
+    dirty: boolean
+}
+
 /**
  * Apply one {@link TemplateEntry}, landing it in exactly one bucket:
- *   - absent           → write the rendered template in (`created`)
- *   - present + seed    → project-owned: report `present`, never read/compare/overwrite
- *   - present + managed → refresh on drift (`updated`), else `present`
+ *   - absent           → write the rendered template in (`created`; seeds record
+ *                        their content hash into the scaffold lock)
+ *   - present + seed    → PRISTINE (bytes still match the lock hash): refresh on
+ *                        template drift (`updated`), else `present`. Customized /
+ *                        no lock entry: project-owned `present`, never overwritten
+ *   - present + managed → refresh on drift vs the rendered template (`updated`),
+ *                        else `present`
  *
  * `transform` renders the template text before write/compare (managed files only,
  * e.g. injecting the resolved gateEnv into `quality-gate.yml`). Because drift is
@@ -272,6 +296,7 @@ async function applyTemplate(
     templatesDir: string,
     targetRoot: string,
     lists: FileLists,
+    lock?: LockState,
     transform?: (text: string) => string
 ): Promise<void> {
     const segs = entry.rel.split('/')
@@ -286,23 +311,52 @@ async function applyTemplate(
         return transform ? transform(text) : text
     }
     if (!existsSync(dest)) {
+        const rendered = await render()
         await mkdir(dirname(dest), {recursive: true})
-        await writeFile(dest, await render(), 'utf8')
+        await writeFile(dest, rendered, 'utf8')
+        if (entry.policy === 'seed' && lock) {
+            lock.seeds[entry.rel] = sha256Hex(rendered)
+            lock.dirty = true
+        }
         lists.created.push(entry.rel)
         return
     }
-    // A present SEED file is PROJECT-OWNED: never read, compared, overwritten, or
-    // re-flagged. A repo's grown-up config (e.g. an eslint.config.mjs that imports
-    // plugins) is recognized as current, not stale (Decision 15).
+    // A present SEED file auto-refreshes ONLY while provably PRISTINE: its bytes
+    // still sha256-match the scaffold-lock entry recorded when scaffold wrote it.
+    // Everything else — customized bytes, no lock entry (cold start: scaffolded
+    // before the lock existed), garbage lock — is PROJECT-OWNED: reported `present`
+    // and never overwritten. A repo's grown-up config (e.g. an eslint.config.mjs
+    // that imports plugins) is recognized as current, not stale (Decision 15).
     //
-    // KNOWN, DELIBERATE LIMITATION: this also means a NEW baseline rule added to a
-    // shipped SEED template (e.g. an extra .dependency-cruiser.cjs boundary rule) does
-    // NOT propagate to already-scaffolded repos — their copy is left as-is. That is the
-    // price of the project-ownership guarantee; there is intentionally no SEED
-    // drift-detection (it would reintroduce the clobber risk this tier prevents). A repo
-    // opts into a refreshed baseline by deleting the file and re-scaffolding. Machinery
-    // that must stay in lockstep belongs in the MANAGED tier. See Decision 15.
+    // KNOWN, DELIBERATE LIMITATION: a NEW baseline rule added to a shipped SEED
+    // template therefore does NOT propagate to a repo whose copy was customized (or
+    // predates the lock) — that is the price of the project-ownership guarantee.
+    // Such a repo opts into a refreshed baseline by deleting the file and
+    // re-scaffolding (which re-adopts it into the lock). Note git line-ending
+    // rewrites (autocrlf/.gitattributes) change bytes on disk and read as
+    // "customized" — fail safe, never a clobber. Machinery that must stay in
+    // lockstep belongs in the MANAGED tier. See Decision 15.
     if (entry.policy === 'seed') {
+        const recorded = lock?.seeds[entry.rel]
+        if (recorded !== undefined) {
+            const destText = await readFile(dest, 'utf8')
+            if (sha256Hex(destText) === recorded) {
+                const rendered = await render()
+                if (rendered === destText) {
+                    lists.present.push(entry.rel)
+                    return
+                }
+                await writeFile(dest, rendered, 'utf8')
+                if (lock) {
+                    lock.seeds[entry.rel] = sha256Hex(rendered)
+                    lock.dirty = true
+                }
+                lists.updated.push(entry.rel)
+                return
+            }
+        }
+        // Stale lock entries are KEPT: harmless (the hash never matches again), and
+        // reverting the file to the exact scaffold-written bytes re-adopts it.
         lists.present.push(entry.rel)
         return
     }
@@ -408,10 +462,13 @@ async function ensurePrettierignore(root: string, lists: FileLists): Promise<voi
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
     const lists: FileLists = {created: [], present: [], updated: []}
 
-    // 1. SEED template artifacts (Δ Z): copy-once + user-owned; `nodeOnly` configs
-    //    apply only to a Node-package target. Seeds go FIRST so the freshly seeded
-    //    eslint config participates in the npm lint resolution below.
+    // 1. SEED template artifacts (Δ Z): baseline when absent, auto-refreshed only
+    //    while pristine per the scaffold lock; `nodeOnly` configs apply only to a
+    //    Node-package target. Seeds go FIRST so the freshly seeded eslint config
+    //    participates in the npm lint resolution below.
     const isNodePackage = existsSync(join(opts.targetRoot, 'package.json'))
+    const lockLoad = await loadScaffoldLock(opts.targetRoot)
+    const lock: LockState = {seeds: {...lockLoad.lock.seeds}, dirty: false}
     for (const entry of TEMPLATE_MANIFEST) {
         if (CI_NET_RELS.includes(entry.rel)) {
             continue // the managed CI net renders AFTER the contract (pass 2)
@@ -419,7 +476,24 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         if (entry.nodeOnly === true && !isNodePackage) {
             continue
         }
-        await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists)
+        await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock)
+    }
+    // Persist the lock NOW — the gate-contract / protection steps below can throw
+    // (refusal paths) AFTER seeds already landed on disk, and losing the recorded
+    // hashes would strand those seeds as permanently "customized". A garbage lock
+    // is rewritten valid; a lock that would be empty and didn't exist is skipped
+    // (no `{seeds:{}}` noise on non-node targets where every seed is skipped).
+    if (lock.dirty || lockLoad.invalid) {
+        const toSave: ScaffoldLock = {version: 1, seeds: lock.seeds}
+        await saveScaffoldLock(opts.targetRoot, toSave)
+        if (lockLoad.existed) {
+            lists.present.push(SCAFFOLD_LOCK_REL)
+        } else {
+            lists.created.push(SCAFFOLD_LOCK_REL)
+            log.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) — COMMIT it alongside the seeds`)
+        }
+    } else if (lockLoad.existed) {
+        lists.present.push(SCAFFOLD_LOCK_REL)
     }
 
     // 2. The GATE CONTRACT (S7, Decision 46): resolve the stack + write
@@ -460,7 +534,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
                               opts.config.quality.gateEnv
                           )
                     : undefined
-            await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform)
+            await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, undefined, transform)
         }
         // The shard script above is an esbuild bundle in the plugin's own style —
         // exclude it from the target's prettier pass the same way the plugin repo does.
@@ -471,10 +545,10 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
                 `npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`
         )
     }
-    // Surface auto-updated plugin-managed files (e.g. the CI workflow refreshed in a
-    // previously-scaffolded repo) — these are the propagation path, worth a loud line.
+    // Surface auto-updated files (managed CI net on drift + pristine seeds on
+    // template change) — these are the propagation path, worth a loud line.
     if (lists.updated.length > 0) {
-        log.info(`auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(', ')}`)
+        log.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(', ')}`)
     }
     // S8 PBT advisory (never blocks, never installs): fast-check unlocks the
     // test-writer's property-based tests.

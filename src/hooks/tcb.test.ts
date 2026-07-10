@@ -178,7 +178,24 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         expect(isTcbProtected(traversal, ctx())?.rule.category).toBe('gate-contract')
     })
 
-    it('D46: a sibling file under .factory/ is NOT protected (scoped exactly to gates.json)', () => {
+    it('D15: ADVERSARIAL — a producer write to .factory/scaffold.lock is DENIED', () => {
+        // Forging a lock entry that hashes the repo's CUSTOMIZED gate config would
+        // schedule it for "pristine" reversion to the weaker plugin baseline on the
+        // operator's next scaffold — a delayed gate-weakening proxy.
+        const p = join(repoRoot, '.factory', 'scaffold.lock')
+        mkdirSync(join(repoRoot, '.factory'), {recursive: true})
+        writeFileSync(p, '{}')
+        expect(isTcbProtected(p, ctx())?.rule.category).toBe('scaffold-lock')
+    })
+
+    it('D15: the scaffold-lock deny is context-free (absolute-path Bash write still denied)', () => {
+        const p = join(repoRoot, '.factory', 'scaffold.lock')
+        mkdirSync(join(repoRoot, '.factory'), {recursive: true})
+        writeFileSync(p, '{}')
+        expect(isTcbProtected(p)?.rule.category).toBe('scaffold-lock')
+    })
+
+    it('D46: a sibling file under .factory/ is NOT protected (scoped exactly to gates.json + scaffold.lock)', () => {
         const p = join(repoRoot, '.factory', 'notes.md')
         mkdirSync(join(repoRoot, '.factory'), {recursive: true})
         writeFileSync(p, 'x')
@@ -243,6 +260,7 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         expect(categories).toContain('docs-factory')
         expect(categories).toContain('e2e-suite')
         expect(categories).toContain('gate-contract')
+        expect(categories).toContain('scaffold-lock')
     })
 
     it('canonicalizePath collapses ./ and .. for a non-existent leaf (create case)', () => {

@@ -6921,6 +6921,11 @@ function buildTcbRules(ctx = {}) {
     test: (p) => hasAdjacentComponents(p, ".factory", "gates.json")
   });
   rules.push({
+    category: "scaffold-lock",
+    describe: ".factory/scaffold.lock (seed pristine-tracking \u2014 Decision 15)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "scaffold.lock")
+  });
+  rules.push({
     category: "gate-config",
     describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
     test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))

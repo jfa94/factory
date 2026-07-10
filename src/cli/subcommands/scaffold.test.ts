@@ -5,12 +5,13 @@
  * exercised without touching the host repo or the network.
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtemp, rm, readFile, writeFile, mkdir} from 'node:fs/promises'
+import {mkdtemp, rm, readFile, writeFile, mkdir, cp} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
 import {runScaffold, resolveTemplatesDir, scaffoldCommand, resolveScaffoldRepo} from './scaffold.js'
+import {sha256Hex} from './scaffold-lock.js'
 import {parseArgs} from '../args.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {defaultConfig} from '../../config/index.js'
@@ -487,6 +488,153 @@ describe('runScaffold', () => {
             } finally {
                 await rm(deno, {recursive: true, force: true})
             }
+        })
+    })
+
+    describe('scaffold lock — pristine seed auto-refresh (Decision 15)', () => {
+        const lockPath = () => join(root, '.factory', 'scaffold.lock')
+        const readLock = async () =>
+            JSON.parse(await readFile(lockPath(), 'utf8')) as {version: number; seeds: Record<string, string>}
+
+        /** A private mutable copy of the real templates dir, for "the plugin shipped a newer template" cases. */
+        async function copyTemplates(): Promise<string> {
+            const dir = await mkdtemp(join(tmpdir(), 'factory-templates-'))
+            await cp(templatesDir, dir, {recursive: true})
+            return dir
+        }
+
+        it('first scaffold records a hash per applied seed, matching the on-disk bytes', async () => {
+            const report = await runScaffold(baseArgs())
+            expect(report.files_created).toContain('.factory/scaffold.lock')
+            const lock = await readLock()
+            expect(Object.keys(lock.seeds).sort()).toEqual([
+                '.dependency-cruiser.cjs',
+                '.stryker.config.json',
+                'e2e/example.spec.ts',
+                'eslint.config.mjs',
+                'playwright.config.ts',
+            ])
+            for (const [rel, hash] of Object.entries(lock.seeds)) {
+                const onDisk = await readFile(join(root, ...rel.split('/')), 'utf8')
+                expect(sha256Hex(onDisk)).toBe(hash)
+            }
+        })
+
+        it('auto-replaces a PRISTINE seed when the shipped template moves — propagation path', async () => {
+            await runScaffold(baseArgs())
+            const mutated = await copyTemplates()
+            try {
+                const newTemplate = '{ "mutate": ["src/**/*.ts"], "thresholds": { "break": 80 } }\n'
+                await writeFile(join(mutated, '.stryker.config.json'), newTemplate, 'utf8')
+
+                const report = await runScaffold({...baseArgs(), templatesDir: mutated})
+                expect(report.files_updated).toContain('.stryker.config.json')
+                expect(await readFile(join(root, '.stryker.config.json'), 'utf8')).toBe(newTemplate)
+                // The lock now records the NEW content — a third run is quiet.
+                expect((await readLock()).seeds['.stryker.config.json']).toBe(sha256Hex(newTemplate))
+                const third = await runScaffold({...baseArgs(), templatesDir: mutated})
+                expect(third.files_updated).toEqual([])
+            } finally {
+                await rm(mutated, {recursive: true, force: true})
+            }
+        })
+
+        it('never touches a CUSTOMIZED seed even when the template moves; stale entry retained', async () => {
+            await runScaffold(baseArgs())
+            const customized = '{ "thresholds": { "break": 95 } }\n'
+            await writeFile(join(root, '.stryker.config.json'), customized, 'utf8')
+            const staleHash = (await readLock()).seeds['.stryker.config.json']
+
+            const mutated = await copyTemplates()
+            try {
+                await writeFile(join(mutated, '.stryker.config.json'), '{ "new": true }\n', 'utf8')
+                const report = await runScaffold({...baseArgs(), templatesDir: mutated})
+                expect(report.files_updated).not.toContain('.stryker.config.json')
+                expect(report.files_present).toContain('.stryker.config.json')
+                expect(await readFile(join(root, '.stryker.config.json'), 'utf8')).toBe(customized)
+                // The stale entry is KEPT: reverting the file to the exact
+                // scaffold-written bytes re-adopts it into pristine tracking.
+                expect((await readLock()).seeds['.stryker.config.json']).toBe(staleHash)
+            } finally {
+                await rm(mutated, {recursive: true, force: true})
+            }
+        })
+
+        it('cold start: a pre-lock seed is project-owned — untouched, no entry recorded', async () => {
+            // The repo was scaffolded before the lock existed: seed present, no lock.
+            const preExisting = '{ "thresholds": { "break": 90 } }\n'
+            await writeFile(join(root, '.stryker.config.json'), preExisting, 'utf8')
+
+            const report = await runScaffold(baseArgs())
+            expect(report.files_present).toContain('.stryker.config.json')
+            expect(await readFile(join(root, '.stryker.config.json'), 'utf8')).toBe(preExisting)
+            // Other seeds were freshly created and ARE recorded; this one is not.
+            expect((await readLock()).seeds).not.toHaveProperty('.stryker.config.json')
+            expect((await readLock()).seeds).toHaveProperty('eslint.config.mjs')
+        })
+
+        it('a GARBAGE lock fails safe (seeds read as customized) and is rewritten valid', async () => {
+            await runScaffold(baseArgs())
+            await writeFile(lockPath(), 'not json{{{', 'utf8')
+
+            const mutated = await copyTemplates()
+            try {
+                await writeFile(join(mutated, '.stryker.config.json'), '{ "new": true }\n', 'utf8')
+                const report = await runScaffold({...baseArgs(), templatesDir: mutated})
+                // No hashes → nothing is provably pristine → nothing overwritten.
+                expect(report.files_updated).toEqual([])
+                // The garbage was repaired to a valid (empty) lock.
+                const lock = await readLock()
+                expect(lock.version).toBe(1)
+                expect(lock.seeds).toEqual({})
+            } finally {
+                await rm(mutated, {recursive: true, force: true})
+            }
+        })
+
+        it('delete-and-rescaffold re-adopts a seed into pristine tracking', async () => {
+            await runScaffold(baseArgs())
+            await rm(join(root, '.stryker.config.json'))
+            const report = await runScaffold(baseArgs())
+            expect(report.files_created).toContain('.stryker.config.json')
+            const onDisk = await readFile(join(root, '.stryker.config.json'), 'utf8')
+            expect((await readLock()).seeds['.stryker.config.json']).toBe(sha256Hex(onDisk))
+        })
+
+        it('non-node target: no seeds apply → no lock file is written', async () => {
+            const deno = await mkdtemp(join(tmpdir(), 'factory-scaffold-deno-lock-'))
+            try {
+                await writeFile(join(deno, 'deno.json'), JSON.stringify({tasks: {}}) + '\n', 'utf8')
+                await runScaffold({...baseArgs(), targetRoot: deno})
+                expect(existsSync(join(deno, '.factory', 'scaffold.lock'))).toBe(false)
+            } finally {
+                await rm(deno, {recursive: true, force: true})
+            }
+        })
+
+        it('the lock survives a gate-contract refusal (saved before the contract step)', async () => {
+            // npm fixture WITHOUT stryker → seeds land, then the contract refuses.
+            await writeFile(
+                join(root, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    scripts: {build: 'b'},
+                    devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
+                }),
+                'utf8'
+            )
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/--waive mutation/)
+            const lock = await readLock()
+            expect(Object.keys(lock.seeds)).toContain('.stryker.config.json')
+        })
+
+        it('is idempotent: a second unchanged run leaves the lock byte-identical', async () => {
+            await runScaffold(baseArgs())
+            const first = await readFile(lockPath(), 'utf8')
+            const second = await runScaffold(baseArgs())
+            expect(second.files_updated).toEqual([])
+            expect(second.files_present).toContain('.factory/scaffold.lock')
+            expect(await readFile(lockPath(), 'utf8')).toBe(first)
         })
     })
 

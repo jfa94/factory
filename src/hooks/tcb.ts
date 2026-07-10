@@ -43,6 +43,11 @@
  *   - `.factory/gates.json`         — the committed gate contract (Decision 46). An
  *                                     implementer that could edit it could contract a
  *                                     gate's command to a no-op and pass every gate.
+ *   - `.factory/scaffold.lock`      — the seed pristine-tracking record (Decision 15).
+ *                                     An implementer that could forge an entry hashing
+ *                                     the repo's CUSTOMIZED gate config would schedule
+ *                                     it for silent reversion to the weaker plugin
+ *                                     baseline on the operator's next scaffold.
  *
  * Matching defeats evasion: a candidate path is normalized AND, when it exists
  * on disk, realpath-resolved before matching, so `./`, `..`, and symlink
@@ -151,6 +156,16 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
         category: 'gate-contract',
         describe: '.factory/gates.json (the committed gate contract — Decision 46)',
         test: (p) => hasAdjacentComponents(p, '.factory', 'gates.json'),
+    })
+
+    // 1d. The scaffold lock (Decision 15): `.factory/scaffold.lock`. A producer that
+    //     could forge an entry hashing the repo's CUSTOMIZED gate config would make
+    //     the next operator scaffold "pristine-replace" it with the weaker plugin
+    //     baseline — a delayed gate-weakening proxy. Same anchoring as 1c.
+    rules.push({
+        category: 'scaffold-lock',
+        describe: '.factory/scaffold.lock (seed pristine-tracking — Decision 15)',
+        test: (p) => hasAdjacentComponents(p, '.factory', 'scaffold.lock'),
     })
 
     // 2. Gate/CI config files at the repo root (matched by basename so the rule is
