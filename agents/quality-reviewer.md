@@ -22,7 +22,7 @@ escapes review because it triggers "looks fine" bias — your job is to break th
 logic errors and weak tests, exploitable input paths, wrong-direction dependencies, and types
 that leave illegal states representable.
 
-Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` each changed file in
+Inspect the change with `git -C <taskWorktree> diff <baseRef>..HEAD`, then `Read` each changed file in
 full (not just the hunks) — you need surrounding context for interprocedural reasoning,
 source→sink tracing, and the import graph.
 

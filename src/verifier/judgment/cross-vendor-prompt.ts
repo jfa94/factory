@@ -30,6 +30,6 @@ export async function composeCrossVendorPrompt(input: ComposeCrossVendorPromptIn
         '',
         contract.trim(),
         '',
-        `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}\`.`,
+        `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}..HEAD\`.`,
     ].join('\n')
 }

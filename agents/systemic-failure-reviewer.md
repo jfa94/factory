@@ -22,7 +22,7 @@ is wrong. Your scope is the _absence_ of a cross-flow recovery/convergence path,
 violations, invariant-restoration gaps, and cross-stage contract chains. You own what no
 single-site reviewer can see.
 
-Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` each changed file
+Inspect the change with `git -C <taskWorktree> diff <baseRef>..HEAD`, then `Read` each changed file
 in full — systemic bugs only become visible once you hold the full flow in context.
 
 <EXTREMELY-IMPORTANT>

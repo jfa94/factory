@@ -23,11 +23,14 @@ Your prompt gives you a **task worktree path** and the **base ref** that worktre
 from (the per-run staging branch, e.g. `origin/staging-<run-id>`). Inspect the change with:
 
 ```bash
-git -C <taskWorktree> diff <baseRef>
+git -C <taskWorktree> diff <baseRef>..HEAD
 ```
 
 Use the exact `<baseRef>` from your prompt — never a bare `origin/staging`, which
 namespace-collides after a repo branch rename and resolves to the wrong (or no) commit.
+Diff against `HEAD`, never the bare working tree — a deterministic gate (e.g. `build`)
+can regenerate files and leave the worktree dirty; that churn is never committed and
+never ships, so it is out of scope.
 
 Read the actual files in that worktree to confirm anything you flag. You have read-only
 intent: report, do not modify.

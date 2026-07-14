@@ -459,7 +459,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    isolation `"worktree"`, model mapped from each agent's `model`,
    `maxTurns` OMITTED — reviewer entries never carry `max_turns`; each
    reviewer's own frontmatter governs). Each prompt: inspect via
-   `git -C <tenv.worktree> diff <tenv.base_ref>` and emit ONE RawReview JSON exactly per
+   `git -C <tenv.worktree> diff <tenv.base_ref>..HEAD` and emit ONE RawReview JSON exactly per
    `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
    reviewer via its frontmatter `skills:` — do not restate the shape).
 
@@ -491,7 +491,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    reviewer BELIEVED: its `description` (reasoning), its `severity` (confidence), or its
    `reviewer` (identity). Anti-anchoring: the verifier must judge the bare claim against
    the code, not be led toward the finder's prior. Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
-<tenv.base_ref>`) same as every other reviewer. It returns
+<tenv.base_ref>..HEAD`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
     ```json

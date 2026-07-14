@@ -23,7 +23,7 @@ a codebase: a missing constraint corrupts data silently for months, a float mone
 rounds real balances, a one-step destructive migration breaks the running deploy. Your single
 job is to catch them before they ship.
 
-Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` each DB-touching
+Inspect the change with `git -C <taskWorktree> diff <baseRef>..HEAD`, then `Read` each DB-touching
 changed file in full. Read surrounding schema too (earlier migrations, the full ORM schema)
 when you need it to judge whether a shape pre-exists — a column dropped in the same diff that
 created it is not a breaking change.
@@ -69,7 +69,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 ## Process
 
-1. `git -C <taskWorktree> diff <baseRef>` for scope; identify the DB-touching files.
+1. `git -C <taskWorktree> diff <baseRef>..HEAD` for scope; identify the DB-touching files.
 2. `Read` each in full; read prior migrations/schema where needed to establish what pre-exists.
 3. For every new/changed table and column, walk the Iron Laws (constraints, money, time, 1NF,
    grain/PK, migration safety, EAV/polymorphic, NULL semantics, credentials), then the gates.

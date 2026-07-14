@@ -129,7 +129,7 @@ re-derived here — with these debug-only deltas:
 - Each reviewer's prompt is built INLINE from that role's `agents/<role>.md` body
   PLUS the `skills/review-protocol/SKILL.md` contract — panel manifest entries
   carry no `prompt` field, so there is no per-run prompt file to Read.
-- Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>` — the
+- Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>..HEAD` — the
   envelope's `base`/`worktree` verbatim (no task worktree, no `base_ref`).
 - Cross-vendor resolution is read OFF THIS ENVELOPE, never re-derived:
   `codex_available` is the CLI's REAL probe (config `codex.model` + a live
