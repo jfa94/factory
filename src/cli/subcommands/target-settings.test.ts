@@ -47,7 +47,7 @@ const DATA_DIR = '/Users/jo/.claude/plugins/data/factory-jfa94'
 const TILDE_BASE = '~/.claude/plugins/data/factory-jfa94'
 const RULES: TargetDataDirRules = buildTargetDataDirRules({dataDir: DATA_DIR, home: HOME})
 
-const BAKED_ALLOW = [`Read(${TILDE_BASE}/**)`, `Write(${TILDE_BASE}/**)`, `Edit(${TILDE_BASE}/**)`]
+const BAKED_ALLOW = [`Read(${TILDE_BASE}/**)`, `Edit(${TILDE_BASE}/**)`]
 
 let root: string
 
@@ -174,6 +174,26 @@ describe('mergeTargetSettings', () => {
         expect(changed).toBe(false)
         const allow = (twice.permissions as {allow: string[]}).allow
         expect(new Set(allow).size).toBe(allow.length) // no duplicates on re-merge
+    })
+
+    it('strips a dead path-form Write(...) rule an older scaffold baked, keeping bare Write', () => {
+        // Claude Code matches only Edit(path) rules for file-editing tools; a
+        // Write(path) rule is dead and triggers a session-start warning.
+        const existing = {
+            permissions: {allow: ['Write', `Write(${TILDE_BASE}/**)`, 'Write(/tmp/**)']},
+        }
+        const {settings, changed} = mergeTargetSettings(existing, RULES)
+        expect(changed).toBe(true)
+        const allow = (settings.permissions as {allow: string[]}).allow
+        expect(allow).toContain('Write') // bare tool rule untouched
+        expect(allow.filter((e) => /^Write\(.+\)$/.test(e))).toEqual([])
+        expect(allow).toContain(`Edit(${TILDE_BASE}/**)`) // the live twin is (re)added
+    })
+
+    it('never emits a path-form Write(...) rule', () => {
+        const {settings} = mergeTargetSettings({}, RULES)
+        const allow = (settings.permissions as {allow: string[]}).allow
+        expect(allow.filter((e) => /^Write\(.+\)$/.test(e))).toEqual([])
     })
 
     it('NEVER writes permissions.additionalDirectories — that entry belongs ONLY in settings.local.json', () => {

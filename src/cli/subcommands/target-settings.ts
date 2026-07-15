@@ -60,7 +60,7 @@ const log = createLogger('cli:target-settings')
  *                                 producer + reviewer (and the runner's
  *                                 Agent() spawns) use.
  *
- * The data-dir-SCOPED rules (`Read|Write|Edit(<data-dir>/**)`) are NOT here —
+ * The data-dir-SCOPED rules (`Read|Edit(<data-dir>/**)`) are NOT here —
  * they are baked per-install from the CLI-resolved data dir by
  * {@link buildTargetDataDirRules} (see below for why).
  */
@@ -78,8 +78,16 @@ export const FACTORY_TARGET_BASE_ALLOWLIST: readonly string[] = [
     'Agent',
 ]
 
-/** The verbs scoped to the data dir in the baked `Read|Write|Edit(<dir>/**)` rules. */
-const DATA_DIR_VERBS = ['Read', 'Write', 'Edit'] as const
+/**
+ * The verbs scoped to the data dir in the baked `Read|Edit(<dir>/**)` rules.
+ * No `Write`: Claude Code's file permission checks match only `Edit(path)` rules
+ * (they cover ALL file-editing tools); a path-form `Write(...)` rule is dead and
+ * triggers a session-start warning.
+ */
+const DATA_DIR_VERBS = ['Read', 'Edit'] as const
+
+/** Path-form `Write(...)` rules — dead (see {@link DATA_DIR_VERBS}), stripped on merge. */
+const DEAD_WRITE_RULE = /^Write\(.+\)$/
 
 /**
  * The baked, per-install data-dir permission strings. Built from the CLI-resolved
@@ -89,7 +97,7 @@ const DATA_DIR_VERBS = ['Read', 'Write', 'Edit'] as const
  */
 export interface TargetDataDirRules {
     /**
-     * Base path for the `Read|Write|Edit(<base>/**)` allow globs. The `~`-tilde
+     * Base path for the `Read|Edit(<base>/**)` allow globs. The `~`-tilde
      * form when the data dir is under `$HOME` (git-safe in a committed
      * `.claude/settings.json` — no username leaked; Claude Code expands `~/` in
      * Read/Write/Edit globs), else the absolute path.
@@ -124,7 +132,7 @@ export function buildTargetDataDirRules(opts: {
     }
 }
 
-/** The three baked `Read|Write|Edit(<base>/**)` allow rules for a resolved dir. */
+/** The baked `Read|Edit(<base>/**)` allow rules for a resolved dir. */
 function dataDirAllowRules(allowGlobBase: string): string[] {
     return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`)
 }
@@ -161,9 +169,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * and never mutates it.
  *
  * `permissions.allow` UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST}
- * + the baked data-dir rules from `dataDirRules`), order-preserving, deduped.
- * `changed` is additions-only. Idempotent: re-merging an already-baked settings
- * reports `changed:false`.
+ * + the baked data-dir rules from `dataDirRules`), order-preserving, deduped,
+ * after stripping any dead path-form `Write(...)` rule an older scaffold baked
+ * ({@link DEAD_WRITE_RULE} — bare `Write` is kept). Idempotent: re-merging an
+ * already-baked settings reports `changed:false`.
  *
  * Deliberately does NOT touch `permissions.additionalDirectories` — that entry is
  * always absolute (never tilde-expanded by Claude Code) and so must never land in
@@ -181,11 +190,12 @@ export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRu
     const currentAllow = Array.isArray(permissions.allow)
         ? permissions.allow.filter((e): e is string => typeof e === 'string')
         : []
+    const keptAllow = currentAllow.filter((e) => !DEAD_WRITE_RULE.test(e))
     const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)]
-    const have = new Set(currentAllow)
+    const have = new Set(keptAllow)
     const additions = targetAllow.filter((e) => !have.has(e))
-    if (additions.length > 0) {
-        permissions.allow = [...currentAllow, ...additions]
+    if (additions.length > 0 || keptAllow.length !== currentAllow.length) {
+        permissions.allow = [...keptAllow, ...additions]
         settings.permissions = permissions
         changed = true
     }

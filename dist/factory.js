@@ -18733,7 +18733,8 @@ var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Glob",
   "Agent"
 ];
-var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
+var DATA_DIR_VERBS = ["Read", "Edit"];
+var DEAD_WRITE_RULE = /^Write\(.+\)$/;
 function buildTargetDataDirRules(opts) {
   return {
     allowGlobBase: tildeShorten(opts.dataDir, opts.home),
@@ -18751,11 +18752,12 @@ function mergeTargetSettings(existing, dataDirRules) {
   let changed = false;
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
+  const keptAllow = currentAllow.filter((e) => !DEAD_WRITE_RULE.test(e));
   const targetAllow = [...FACTORY_TARGET_BASE_ALLOWLIST, ...dataDirAllowRules(dataDirRules.allowGlobBase)];
-  const have = new Set(currentAllow);
+  const have = new Set(keptAllow);
   const additions = targetAllow.filter((e) => !have.has(e));
-  if (additions.length > 0) {
-    permissions.allow = [...currentAllow, ...additions];
+  if (additions.length > 0 || keptAllow.length !== currentAllow.length) {
+    permissions.allow = [...keptAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
   }

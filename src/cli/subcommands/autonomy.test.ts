@@ -609,21 +609,27 @@ describe('the real templates/settings.autonomous.json', () => {
         }
         const deny = template.permissions.deny
         for (const pattern of [
-            'Write(**/.git/**)',
             'Edit(**/.git/**)',
-            'Write(~/.ssh/**)',
             'Edit(~/.ssh/**)',
-            'Write(~/.aws/**)',
             'Edit(~/.aws/**)',
-            'Write(~/.gitconfig)',
             'Edit(~/.gitconfig)',
-            'Write(~/.npmrc)',
             'Edit(~/.npmrc)',
-            'Write(~/.claude.json)',
             'Edit(~/.claude.json)',
         ]) {
             expect(deny).toContain(pattern)
         }
+    })
+
+    it('carries NO path-form Write(...) rules — only Edit(path) is matched by file permission checks', async () => {
+        // A Write(path) rule is dead: in allow it is noise (session-start warning),
+        // in deny it is silently unenforced. The Edit(...) twins are the real rules.
+        const templatePath = fileURLToPath(new URL('../../../templates/settings.autonomous.json', import.meta.url))
+        const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+            permissions: {allow: string[]; deny: string[]}
+        }
+        const deadWrite = (e: string): boolean => /^Write\(.+\)$/.test(e)
+        expect(template.permissions.allow.filter(deadWrite)).toEqual([])
+        expect(template.permissions.deny.filter(deadWrite)).toEqual([])
     })
 
     it('still denies node -e / python -c (kept over-broad on purpose — see Decision doc)', async () => {
