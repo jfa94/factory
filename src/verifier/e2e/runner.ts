@@ -46,7 +46,7 @@ export interface E2eRunOpts {
     readonly grep?: string
     /**
      * `--config <path>` — an alternate Playwright config, e.g. the generated
-     * throwaway-spec config (whose `testDir` points at the out-of-repo throwaway
+     * throwaway-spec config (whose `testDir` points at the gitignored throwaway
      * dir; the run worktree's own committed config only covers the critical suite).
      */
     readonly config?: string

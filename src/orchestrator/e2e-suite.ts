@@ -328,7 +328,7 @@ export async function recordAdjudication(
 /** Where the generated throwaway-suite Playwright config lives — inside the run
  * worktree (never committed, never staged) so its own `require("@playwright/test")`
  * resolves via THAT worktree's `node_modules`, even though `testDir` inside it
- * points at the out-of-repo throwaway dir. */
+ * points at the gitignored throwaway dir. */
 function throwawayConfigPath(worktree: string): string {
     return join(worktree, '.factory-e2e-throwaway.config.cjs')
 }

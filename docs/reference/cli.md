@@ -434,7 +434,7 @@ returned envelope's `kind` tells the runner whether an agent is needed:
   (`resolveBootConfig` = `e2e.startCommand`/`e2e.baseURL` override ?? the values the run-start
   assessment wrote into `playwright.config.ts`, D10), explore each user-facing task, author
   **critical** journey specs into the worktree's `e2e.testDir` (committed) plus **throwaway**
-  specs into `throwaway_dir` (out-of-repo, never committed), self-validate them green against
+  specs into `throwaway_dir` (gitignored, never committed), self-validate them green against
   staging, and return a manifest of `{task_ids, spec_path, kind, title}` rows (`title` is the
   human-readable journey name, D12) — **without pushing**. On a **re-entry** (after a reopened
   task settles back to terminal) it does not spawn — it re-runs the already-authored suite

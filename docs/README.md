@@ -70,7 +70,8 @@ classified outcome — never a quiet success.
 | Runner surface    | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions           |
 | Deterministic CLI | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: orchestrator + reporters + writers |
 | Hook guards       | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time            |
-| Run / spec state  | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo              |
+| Run / spec state  | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Engine-only; lives **outside** the target repo |
+| Task worktrees    | `<repo-root>/.claude/worktrees/<run>/<task>/` (gitignored)          | Agent-writable; results at `<run>/.results/`   |
 
 See [architecture/overview.md](./architecture/overview.md) for the full picture.
 

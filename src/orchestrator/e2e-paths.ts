@@ -31,7 +31,8 @@ export function e2eBaseProofWorktreePath(workDir: string, runId: string): string
     return join(workDir, runId, '.e2e-base-proof')
 }
 
-/** The run's ephemeral, out-of-repo throwaway-spec directory — never committed, discarded at run end. */
+/** The run's ephemeral throwaway-spec directory — gitignored (under the repo's
+ * `.claude/worktrees/`, D67), so never committed; discarded at run end. */
 export function e2eThrowawayDir(workDir: string, runId: string): string {
     return join(workDir, runId, '.e2e-throwaway')
 }

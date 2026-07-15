@@ -24,7 +24,7 @@ what it means:**
 - **Committed** (target repo's `e2e/` by default, config `e2e.testDir`) = **critical**.
   Thin, journey-oriented, load-bearing — it gates this run and every future `--e2e` run.
   Must pass the fail-first proof (below) before it is ever merged.
-- **Ephemeral** (an out-of-repo run directory, never committed) = **throwaway**. One per
+- **Ephemeral** (a gitignored run directory, never committed) = **throwaway**. One per
   user-facing task, broader coverage, exists only to shake out issues in _this_ run.
   Discarded when the run ends. No proof required — but still write it honestly; a
   false-green throwaway hides a real bug just as effectively as a false-green critical

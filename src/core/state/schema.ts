@@ -589,7 +589,7 @@ export type TraceabilityPhase = z.infer<typeof TraceabilityPhaseSchema>
 /**
  * Criticality by PERSISTENCE, not tags (Decision 39). `critical` specs are
  * committed to the target repo's `e2e/` (proven via the fail-first proof, gate
- * the run + CI); `throwaway` specs live only in the run's ephemeral out-of-repo
+ * the run + CI); `throwaway` specs live only in the run's ephemeral, gitignored
  * dir (advisory, discarded at run end). Nothing is annotated inside the spec file
  * itself — this enum only labels a manifest row, it is never written into the
  * Playwright test source.
