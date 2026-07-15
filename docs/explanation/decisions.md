@@ -419,16 +419,16 @@ that gates every other autonomous-only rail (Decision 13/29).
 
 Every narrowing has been tried and produces the same failure mode: the pipeline halts on a command the allow-list did not anticipate, and there is no operator to approve it. The cost of one missed allow rule is a stalled run; the cost of one missed deny rule is bounded by the hook layer.
 
-**`additionalDirectories` (working-directory boundary):** Both the autonomous merged-settings (E2) and the scaffolded target `.claude/settings.json` (E1) declare a `permissions.additionalDirectories` entry plus `Read|Write|Edit(<data-dir>/**)` allow rules covering the data dir. The allow-list grants the _tool_, but Claude Code's working-directory boundary is an independent check: a built-in file tool (Read/Write/Edit) touching a path outside the launch directory still prompts the user to "add" the directory. The plugin writes to out-of-tree paths under the data dir (`results/`, `worktrees/`, `runs/`, `specs/`); declaring the single data-dir parent grants recursive access so those writes never trip the boundary — fatal in autonomous mode, where no human is present to approve the prompt.
+**`additionalDirectories` (working-directory boundary):** The autonomous merged-settings (E2) declares a `permissions.additionalDirectories` entry plus `Read|Write|Edit(<data-dir>/**)` allow rules covering the data dir. The allow-list grants the _tool_, but Claude Code's working-directory boundary is an independent check: a built-in file tool (Read/Write/Edit) touching a path outside the launch directory still prompts the user to "add" the directory. The plugin writes to out-of-tree paths under the data dir (`runs/`, `specs/`); declaring the single data-dir parent grants recursive access so those writes never trip the boundary — fatal in autonomous mode, where no human is present to approve the prompt. E1 (the scaffolded target repo) declares the equivalent entry too, but — corrected below — in a separate GITIGNORED file, never in the committed `.claude/settings.json`.
 
 **Why these rules are BAKED, never `${CLAUDE_PLUGIN_DATA}` (2026-06-20 fix):** Both emitters resolve the canonical data dir at emit time and write a _concrete path_ into the rule — they do **not** ship the literal `${CLAUDE_PLUGIN_DATA}` placeholder and trust Claude Code to expand it. Two independent reasons:
 
 - Env-var interpolation inside permission rules is **undocumented / unsupported** by Claude Code. Only `~/` (in `Read/Write/Edit` globs) and absolute paths are documented to work; a `${VAR}` rule stays literal and matches nothing.
 - `CLAUDE_PLUGIN_DATA` is **session-globally corruptible**: a co-installed plugin's `SessionStart` hook can re-export its own data dir into `$CLAUDE_ENV_FILE` (observed with the Codex plugin), which Claude Code sources for the whole session. A placeholder rule would then resolve to the _other_ plugin's dir.
 
-So E2 substitutes the placeholder to the resolved absolute path at `factory autonomy ensure` time (`substitutePlaceholders` + `resolveDataDir`), and E1's `factory scaffold` bakes the `~`-tilde form for the `Read/Write/Edit` allow globs (git-safe in a committed `.claude/settings.json`; absolute fallback when the dir is outside `$HOME`) via `buildTargetDataDirRules` (`src/cli/subcommands/target-settings.ts`). Both run through `resolveDataDir()`, which canonicalizes the foreign-plugin leak (`expectedDataDir`), so the emitted rule keeps matching even when the env var is hijacked. The scaffold merge also **migrates** any stale literal-`${CLAUDE_PLUGIN_DATA}` rules a repo carries from an older scaffold (exact-string strip → re-bake), so the prompt-on-every-write regression self-heals on the next `factory scaffold`.
+So E2 substitutes the placeholder to the resolved absolute path at `factory autonomy ensure` time (`substitutePlaceholders` + `resolveDataDir`), and E1's `factory scaffold` bakes the `~`-tilde form for the `Read/Write/Edit` allow globs (git-safe in a committed `.claude/settings.json`; absolute fallback when the dir is outside `$HOME`) via `buildTargetDataDirRules` (`src/cli/subcommands/target-settings.ts`). Both run through `resolveDataDir()`, which canonicalizes the foreign-plugin leak (`expectedDataDir`), so the emitted rule keeps matching even when the env var is hijacked. Correction (2026-07-14): the `permissions.allow` merge (`mergeTargetSettings`) is, and always has been, a **pure additive union** — it does not strip a stale literal-`${CLAUDE_PLUGIN_DATA}` allow rule left by an old scaffold. Such a rule is inert (it matches nothing, since Claude Code never expands it) but is not actively removed; this paragraph previously claimed a migration that the code never implemented.
 
-**`additionalDirectories` is baked ABSOLUTE, never tilde (2026-07-06 fix):** `~/` expansion in `additionalDirectories` is not documented and verified live to NOT work — a scaffolded repo with the tilde entry still prompted on a test-writer `Write` into `<data-dir>/worktrees/<run>/<task>` (run-20260630-095544). E1 therefore bakes `additionalDirectories` with the absolute data dir (trading the `$HOME` leak for a rule that matches) while keeping the allow globs tilde-form, and the merge migrates the old tilde entry away exactly like the placeholder era (`TargetDataDirRules.staleAdditionalDirs`). E2 was never affected (its placeholder substitutes to the absolute path).
+**`.claude/settings.json` / `.claude/settings.local.json` split, and `additionalDirectories` baked ABSOLUTE (2026-07-14 fix, corrects the 2026-07-06 fix below):** `~/` expansion in `additionalDirectories` is not documented and verified live to NOT work — a scaffolded repo with the tilde entry still prompted on a test-writer `Write` into `<data-dir>/worktrees/<run>/<task>` (run-20260630-095544). The 2026-07-06 fix baked `additionalDirectories` absolute but left it in the COMMITTED `.claude/settings.json` — which leaks `$HOME`/username into git and is wrong on any other machine or CI. `factory scaffold` now splits the emit in two: `.claude/settings.json` (committed) carries the allow-list + tilde-form data-dir globs + `worktree.baseRef` and **never** carries `additionalDirectories`; the new, GITIGNORED `.claude/settings.local.json` carries the absolute `additionalDirectories` entry, written by `mergeLocalSettings` (`src/cli/subcommands/target-settings.ts`) with genuine prune-then-add semantics — it strips any factory-managed stale entry (a literal `${CLAUDE_PLUGIN_DATA}` placeholder, a tilde form, or a previously-baked absolute path that moved) and re-adds the current one, while leaving the user's own unrelated entries untouched. Because `factory scaffold` re-runs idempotently on every `/factory:run` preflight (Phase 0, `skills/pipeline-runner/SKILL.md`), a stale entry self-heals on the next run with no separate migration step. E2 was never affected (its placeholder substitutes to the absolute path, and it was never git-committed).
 
 **Scope:** This design applies only to autonomous mode (sessions launched with `templates/settings.autonomous.json`, identified by `FACTORY_AUTONOMOUS_MODE=1`). Since autonomy is now mandatory for a run (Decision 29), every _pipeline_ session is an autonomous one; an interactive session can still use the user's normal (tighter) settings for non-pipeline work, but `factory run create`/`resume` will refuse to start there.
 
@@ -2572,7 +2572,17 @@ Decision 63's dial-pinning pass.
 
 ---
 
-## Decision 65 — `bypassPermissions` Relaunch + Deny-List Shrink to Honest Accident-Prevention
+## Decision 65 — Deny-List Shrink to Honest Accident-Prevention
+
+> **The relaunch half of this decision was superseded by [Decision 67](#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees)
+> on 2026-07-15.** As originally written this decision had two halves: a permission-mode
+> override on the autonomous relaunch command, and the deny-list shrink below. Decision 67
+> removed the need for the override by moving the writes out from under the protected path
+> entirely, so the relaunch command carries no override and `factory autonomy ensure` emits a
+> plain `claude --worktree --settings <path>`. **The deny-list shrink below is unchanged and
+> still in force.** The original relaunch rationale is preserved in this repo's git history
+> (commit `aeb780a`); it is paraphrased rather than quoted here because the flag it named is
+> explicitly not this project's goal and a live-looking snippet invites cargo-culting.
 
 **Problem:** A live run (`run-20260709-095909`, task `legal-001`) stalled on permission
 _prompts_ — "edit and create sensitive files" and "allow Claude to edit its own settings" —
@@ -2584,36 +2594,26 @@ operator to answer a prompt, so every prompt is an unattended stall — the #1 p
 
 **Root cause:** Claude Code's built-in protected-path check protects the whole `.claude/`
 tree except `.claude/worktrees`. This plugin's data dir lives under `~/.claude/plugins/data/`,
-and its worktrees sit under `.../data/<plugin>/worktrees/...` — a sibling path, not the
+and its worktrees sat under `.../data/<plugin>/worktrees/...` — a sibling path, not the
 exempted one — so every Edit/Write there hit the built-in prompt regardless of
 `permissions.allow`/`additionalDirectories` (that check runs _before_ allow-rules are
-consulted).
+consulted). This root cause is correct and is what Decision 67 ultimately fixed at the source.
 
-**Choice:** The autonomous relaunch command (`factory autonomy ensure` /
-`runAutonomyEnsure`/`runAutonomyStatus` in `src/cli/subcommands/autonomy.ts`) now appends
-`--permission-mode bypassPermissions`:
-
-```
-claude --worktree --settings <merged-settings-path> --permission-mode bypassPermissions
-```
-
-**Why this is not the security regression it sounds like:** `bypassPermissions` only
-suppresses the prompt-on-allow path (including the protected-path Edit/Write prompt). It
-does **not** disable `permissions.deny`, does **not** skip any hook in
-`hooks/hooks.json`/`dist/factory-hook.js`, and does **not** suppress explicit `ask` rules or
-Claude Code's own `rm -rf /` / `rm -rf ~` circuit-breaker. The only delta bypass adds is
-protected-path Edit/Write going prompt → allow. In an unattended run a prompt was never a
-real gate — nobody was there to answer it — so this converts a silent stall into the
-correct binary outcome.
+**Original choice (superseded):** append a permission-mode override to the autonomous
+relaunch command, suppressing the protected-path prompt after the fact. It worked, and in an
+unattended run it was defensible — a prompt nobody can answer is not a gate, so converting it
+to a binary outcome was strictly better than stalling. But it treated the symptom: the writes
+were still landing on a path the platform protects. Decision 67 moves them onto the exempted
+path instead, which is why the override is gone rather than merely discouraged.
 
 **Course correction — this decision also walks back a first attempt in the same session.**
-An earlier pass solved the reported prompts with this same `bypassPermissions` flag, but then
-_added_ ~16 new `permissions.deny` entries and a ~180-line scoped-recursive-`rm` hook
+An earlier pass solved the reported prompts with that same override, but then _added_ ~16 new
+`permissions.deny` entries and a ~180-line scoped-recursive-`rm` hook
 (`dangerousRmTargets`/`protectedRmRoots` in `src/hooks/write-protection.ts`) on top of an
 already-121-entry deny-list. User feedback: this added layers when the goal was to simplify.
 On review, the added hook solved nothing the reported prompts needed — `rm` was exactly as
-protected after bypass as before it, since bypass never touches Bash deny rules. That hook and
-its 16 deny additions are **reverted** by this decision.
+protected with the override as without it, since a permission-mode override never touches Bash
+deny rules. That hook and its 16 deny additions are **reverted** by this decision.
 
 **The deny-list is reframed and cut from 121 entries to ~57** (`templates/settings.autonomous.json`),
 on a single thesis:
@@ -2685,8 +2685,10 @@ this safely is exactly what an OS sandbox (`sandbox.*` allowlists) is for; see b
   symlinked into `~/.claude/hooks/`) independently emits a permission `ask` on a
   false-positive string match (the word "credentials" inside a heredoc body) — a third
   prompt source in the original report. Out of scope here: it lives in the user's global
-  config, and this change is scoped to be self-contained to this repo. It likely survives
-  bypass too, since bypass still fires explicit `ask` rules.
+  config, and this change is scoped to be self-contained to this repo. Still open after
+  Decision 67: that decision relocated the factory's own writes off the protected path, which
+  is not where this hook's false positive comes from — it string-matches heredoc _bodies_
+  regardless of target path.
 - **OS sandbox adoption** (`sandbox.*`, macOS Seatbelt): the genuinely stronger,
   injection-resistant boundary, the only way to safely relax the interpreter-eval denies, and
   the only way to implement the worktree-only sandbox rejected above. Not pursued now — it
@@ -2750,6 +2752,101 @@ recovery is now kill+re-drive instead of liveness-check.
 **Relationship:** Closes the last structural stall in the Close-the-Loop line
 (Decision 61/62): S1/3c handled silent DEATH; this handles silent HANGING. Mirrors the
 `MERGE_RESYNC_CAP` bounded-budget shape and hands over to Decision 48/60's bounded self-heal.
+
+---
+
+## Decision 67 — Task Worktrees + Results Relocate into the Target Repo's `.claude/worktrees/`
+
+**Date:** 2026-07-15
+
+**Problem:** An **interactive** run prompted on every agent Write/Edit under
+`~/.claude/plugins/data/factory-<id>/results/<run>/<task>-exec-r1.json` — "…which is a
+sensitive file." Same root cause Decision 65 diagnosed in autonomous mode: Claude Code's
+built-in protected-path check covers the whole `~/.claude/` tree **except**
+`.claude/worktrees/`, and it runs _before_ `permissions.allow`/`additionalDirectories` are
+consulted, so no allow-rule can reach it. Decision 65 suppressed the prompt with a
+permission-mode override on the relaunch command. The user rejected that as the fix here:
+"I don't want to launch sessions with bypass permissions. That's the entire point of the
+permissive settings file." So the prompt has to never fire, not be suppressed after the fact.
+
+**Root cause of the root cause:** the escape hatch was already in the codebase and already
+load-bearing. The orchestrator's own staging worktree has lived at
+`<repo>/.claude/worktrees/orchestrator-<run_id>` since Decision 2 and has never tripped the
+prompt. Task worktrees and results just weren't in that tree — they sat under
+`$CLAUDE_PLUGIN_DATA/{worktrees,results}/`, a sibling path with no exemption.
+
+**Choice:** move them into the tree the orchestrator worktree already uses.
+
+|                   | before                                                | after                                                |
+| ----------------- | ----------------------------------------------------- | ---------------------------------------------------- |
+| task worktree     | `<dataDir>/worktrees/<run>/<task>/`                   | `<repoRoot>/.claude/worktrees/<run>/<task>/`         |
+| scratch worktrees | `<dataDir>/worktrees/<run>/.docs`, `.trace`, `.e2e-*` | `<repoRoot>/.claude/worktrees/<run>/.docs`, …        |
+| results           | `<dataDir>/results/<run>/*.json`                      | `<repoRoot>/.claude/worktrees/<run>/.results/*.json` |
+
+Run/spec **state** (`runs/`, `specs/`) stays in `$CLAUDE_PLUGIN_DATA` — it is TCB-write-denied
+and only the engine writes it, via Node `fs`, which the permission system never sees. The
+split is exactly "agent-writable → target repo, engine-only → data dir."
+
+No new env var and no marketplace-id math: the target repo _is_ the namespace (the same
+guarantee `orchestrator-<run_id>/` already relies on), and `.claude/worktrees/` is already an
+unconditional `GITIGNORE_ENTRIES` entry in every scaffolded repo.
+
+**`mainWorktreeRoot()`, not `showToplevel()` — a real bug avoided by construction.** The new
+root is resolved via `git rev-parse --path-format=absolute --git-common-dir` +
+`dirname` (`src/git/git-client.ts`), plumbed once through `loadCliDeps` as
+`deps.workDir` (`src/cli/wiring.ts`). `showToplevel()` would have been the cheap-looking
+choice and is wrong: from Phase 3 onward the runner's cwd is `$ORCH` — itself a linked
+worktree — so `showToplevel()` returns `$ORCH`, nesting every task worktree _inside_ the
+orchestrator worktree. `git worktree remove --force "$ORCH"` at teardown would then delete
+still-registered child directories and leave git's admin entries dangling.
+`--git-common-dir` resolves the true main root from any linked worktree.
+
+**The hook re-roots, it does not de-root.** `runTaskForPath` (`src/hooks/hook-context.ts`)
+keeps its required root parameter; only the root's _value_ changed (git-derived `workDir`, not
+`dataDir`). Dropping the parameter for a bare `.claude/worktrees/` segment scan would have
+been a live regression, not a simplification: `decideWriteScope` fires on **every**
+Edit/Write/MultiEdit system-wide, and `.claude/worktrees/` is also where Claude Code's own
+native `--worktree` feature puts unrelated worktrees in _any_ repo. An unanchored scan would
+read a user's unrelated native worktree as a factory task write, `loadRunById` would throw, and
+the guard would deny a completely unrelated edit. `src/hooks/pipeline-guards.test.ts` pins
+this: a `.claude/worktrees/<validId>/<validId>/…` path under a _different_ repo root than
+`deps.cwd`'s must pass through, not deny.
+
+`decideWriteScope` also gained a cheap path-aware pre-filter (a `.claude` segment immediately
+followed by a `worktrees` segment, compared via `sep` so it is correct on Windows) that returns
+before any git call or `resolveDataDir`. The common case is now **cheaper** than before: the
+old code called `resolveDataDir` unconditionally.
+
+**Consequence — the permission-mode override is deleted, not merely discouraged.** With the
+relocation, zero agent-side writes land under `~/.claude/` outside the exemption, so the
+override in Decision 65's relaunch command had nothing left to suppress. `factory autonomy
+ensure` now emits a plain `claude --worktree --settings <path>`. The
+`Read|Write|Edit(<dataDir>/**)` allow rules **stay**: `Read` is load-bearing (agents read the
+stored spec), and the `Write`/`Edit` pair costs nothing, while removing it could only convert a
+future in-tree write into an unattended stall. This was verified by static analysis rather than
+the live smoke test originally planned — the claim is a universal ("no agent-side write under
+the data dir"), which a passing run samples but cannot establish. The autonomy tests assert the
+relaunch command by **exact equality**, so re-appending any flag fails them.
+
+**Breaking: between-runs upgrade only.** Worktree paths are deterministic and recomputed each
+call, never persisted (`src/orchestrator/paths.ts`), so nothing on disk records which scheme a
+run uses. Upgrading the binary mid-run means the next `next-task`/`next-action` recomputes the
+new location and won't find the existing worktree — a loud git error (`ensureOnStaging` against
+a missing path), not silent corruption. No `run.engine_version` guard was built; add one only
+if mid-run upgrades turn out to be a real operational pattern. Old on-disk
+`~/.claude/plugins/data/factory-*/{worktrees,results}` are left in place — same
+"leaving it is harmless" philosophy as the orchestrator worktree's own teardown.
+
+**Note for a full manual reset:** ephemeral worktree/results data now lives in the target repo,
+so a full reset needs both `rm -rf ~/.claude/plugins/data/factory-*` (state) **and**
+`git worktree prune` + `rm -rf <repo>/.claude/worktrees` per target repo.
+
+**Relationship:** Fixes at the source what [Decision 65](#decision-65--deny-list-shrink-to-honest-accident-prevention)
+worked around, and supersedes that decision's relaunch half (its deny-list shrink stands).
+Extends Decision 2's `.claude/worktrees/` convention from the orchestrator worktree to every
+worktree. The PreToolUse `.claude/` guard in `templates/settings.autonomous.json` already
+carved out `(^|/)\.claude/worktrees/` unconditionally — written to mirror this exemption, it
+had simply never been fed a matching path.
 
 ---
 

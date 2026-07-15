@@ -7413,6 +7413,9 @@ async function runSecretGuard(_argv = [], deps = {}) {
   return decisionToExitCode(decision);
 }
 
+// src/hooks/pipeline-guards.ts
+import { join as join5 } from "node:path";
+
 // src/verifier/deterministic/scope.ts
 function isTestPath(file) {
   if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
@@ -8077,7 +8080,6 @@ import { basename as basename3, dirname as dirname3, join as join4 } from "node:
 import { join as join3 } from "node:path";
 var SPECS_DIR = "specs";
 var RUNS_DIR = "runs";
-var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
 var CURRENT_DIR = "current";
 var STATE_FILE = "state.json";
@@ -8093,9 +8095,6 @@ function repoKey(repo) {
 }
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
-}
-function worktreesRoot(dataDir) {
-  return join3(dataDir, WORKTREES_DIR);
 }
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
@@ -8680,6 +8679,7 @@ async function runOrThrow(command, runner, args, opts) {
 }
 
 // src/git/git-client.ts
+import { dirname as dirname4 } from "node:path";
 var log8 = createLogger("git");
 var DefaultGitClient = class {
   runner;
@@ -8752,6 +8752,10 @@ var DefaultGitClient = class {
   async showToplevel(opts) {
     const r = await this.execOrThrow(["rev-parse", "--show-toplevel"], opts);
     return r.stdout.trim();
+  }
+  async mainWorktreeRoot(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--path-format=absolute", "--git-common-dir"], opts);
+    return dirname4(r.stdout.trim());
   }
   async remoteUrl(remote, opts) {
     const r = await this.exec(["remote", "get-url", remote], opts);
@@ -8989,11 +8993,11 @@ async function loadOwnerScopedRun(opts = {}) {
   const active = runs.find((r) => !isTerminalRunStatus(r.status));
   return active === void 0 ? null : { dataDir, run: active };
 }
-function runTaskForPath(dataDir, absPath) {
-  if (dataDir.length === 0 || absPath.length === 0) {
+function runTaskForPath(worktreesRoot, absPath) {
+  if (worktreesRoot.length === 0 || absPath.length === 0) {
     return null;
   }
-  const rootCanon = canonicalizePath(worktreesRoot(dataDir));
+  const rootCanon = canonicalizePath(worktreesRoot);
   const pathCanon = canonicalizePath(absPath);
   const rel = relative(rootCanon, pathCanon);
   if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
@@ -9057,22 +9061,42 @@ function isGhPrCreate(cmd) {
 function isGhPrMerge(cmd) {
   return GH_PR_MERGE_RE.test(cmd);
 }
+function isPlausiblyUnderClaudeWorktrees(p) {
+  const segments = p.split(/[/\\]/);
+  for (let i = 0; i + 1 < segments.length; i++) {
+    if (segments[i] === ".claude" && segments[i + 1] === "worktrees") {
+      return true;
+    }
+  }
+  return false;
+}
 async function decideWriteScope(input, deps) {
   const targets = filePathsOf(input);
-  if (targets.length === 0) {
+  if (targets.length === 0 || !targets.some(isPlausiblyUnderClaudeWorktrees)) {
     return null;
   }
-  let dataDir;
+  const gitClient = deps.gitClient ?? new DefaultGitClient();
+  const cwd = deps.cwd ?? input?.cwd;
+  let workDir;
   try {
-    dataDir = resolveDataDir(deps);
+    workDir = join5(await gitClient.mainWorktreeRoot(cwd !== void 0 ? { cwd } : {}), ".claude", "worktrees");
   } catch {
     return null;
   }
   const loadRunById = deps.loadRunById ?? ((dir, runId) => new StateManager({ ...deps, dataDir: dir }).read(runId));
   for (const target of targets) {
-    const ref = runTaskForPath(dataDir, target);
+    const ref = runTaskForPath(workDir, target);
     if (ref === null) {
       continue;
+    }
+    let dataDir;
+    try {
+      dataDir = resolveDataDir(deps);
+    } catch {
+      return deny(
+        "test_writer_scope_broken",
+        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', but the plugin data dir cannot be resolved; failing closed.`
+      );
     }
     let run;
     try {

@@ -7329,7 +7329,6 @@ var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
 var DOCS_FACTORY_DIR = "factory";
 var RUNS_DIR = "runs";
-var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
 var CURRENT_DIR = "current";
 var STATE_FILE = "state.json";
@@ -7347,9 +7346,6 @@ function repoKey(repo) {
 }
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
-}
-function worktreesRoot(dataDir) {
-  return join3(dataDir, WORKTREES_DIR);
 }
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
@@ -8047,7 +8043,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -8286,6 +8282,7 @@ async function runOrThrow(command, runner, args, opts) {
 }
 
 // src/git/git-client.ts
+import { dirname as dirname5 } from "node:path";
 var log5 = createLogger("git");
 var DefaultGitClient = class {
   runner;
@@ -8358,6 +8355,10 @@ var DefaultGitClient = class {
   async showToplevel(opts) {
     const r = await this.execOrThrow(["rev-parse", "--show-toplevel"], opts);
     return r.stdout.trim();
+  }
+  async mainWorktreeRoot(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--path-format=absolute", "--git-common-dir"], opts);
+    return dirname5(r.stdout.trim());
   }
   async remoteUrl(remote, opts) {
     const r = await this.exec(["remote", "get-url", remote], opts);
@@ -12994,7 +12995,7 @@ function splitHoldout(criteria, percent, seed) {
 
 // src/verifier/holdout/store.ts
 import { mkdir as mkdir7, readFile as readFile10 } from "node:fs/promises";
-import { dirname as dirname5, join as join10 } from "node:path";
+import { dirname as dirname6, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -13031,7 +13032,7 @@ var FsHoldoutStore = class {
   }
   async put(runId, record) {
     const path7 = this.path(runId, record.task_id);
-    await mkdir7(dirname5(path7), { recursive: true });
+    await mkdir7(dirname6(path7), { recursive: true });
     await atomicWriteFile(path7, stringifyJson(record));
   }
   async get(runId, taskId) {
@@ -13054,7 +13055,7 @@ var FsHoldoutStore = class {
 
 // src/verifier/holdout/verdict-store.ts
 import { mkdir as mkdir8, readFile as readFile11 } from "node:fs/promises";
-import { dirname as dirname6, join as join11 } from "node:path";
+import { dirname as dirname7, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -13071,7 +13072,7 @@ var FsHoldoutVerdictStore = class {
   }
   async put(runId, taskId, rung, verdicts) {
     const path7 = this.path(runId, taskId, rung);
-    await mkdir8(dirname6(path7), { recursive: true });
+    await mkdir8(dirname7(path7), { recursive: true });
     await atomicWriteFile(path7, stringifyJson([...verdicts]));
   }
   async get(runId, taskId, rung) {
@@ -14209,10 +14210,10 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 
 // src/orchestrator/paths.ts
 import { join as join12 } from "node:path";
-function taskWorktreePath(dataDir, runId, taskId) {
+function taskWorktreePath(workDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(worktreesRoot(dataDir), runId, taskId);
+  return join12(workDir, runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -14225,7 +14226,7 @@ function taskExemptReader(deps, worktree) {
 
 // src/orchestrator/gate-context.ts
 function buildGateContext(deps, runId, taskId, baseRef) {
-  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   return {
     runId,
     taskId,
@@ -14306,7 +14307,7 @@ function makePhaseHandlers(deps) {
       // concrete PATCH instructions rather than re-nuking the implementation.
       ...confirmedBlockers !== void 0 ? { confirmedBlockers } : {}
     });
-    const worktree = taskWorktreePath(deps.dataDir, runId, specTask.task_id);
+    const worktree = taskWorktreePath(deps.workDir, runId, specTask.task_id);
     const request = parseSpawnRequest({
       resume_phase: resumePhase,
       agents: [
@@ -14336,7 +14337,7 @@ function makePhaseHandlers(deps) {
      */
     async preflight(ctx) {
       const task = requireTask3(ctx, "preflight");
-      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
+      const worktree = taskWorktreePath(deps.workDir, ctx.run.run_id, task.task_id);
       const staging = ctx.run.staging_branch;
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
@@ -14422,7 +14423,7 @@ function makePhaseHandlers(deps) {
      */
     async verify(ctx) {
       const task = requireTask3(ctx, "verify");
-      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
+      const worktree = taskWorktreePath(deps.workDir, ctx.run.run_id, task.task_id);
       const gateCtx = buildGateContext(deps, ctx.run.run_id, task.task_id, ctx.run.staging_branch);
       const gate = await new GateRunner().run(gateCtx);
       const dbApplicable = await touchesDatabase(deps.tools.git, gateCtx.baseRef, { cwd: worktree });
@@ -14713,7 +14714,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
-  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   const baseRef = run9.staging_branch;
   const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
   const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
@@ -14917,7 +14918,7 @@ async function shipTask(deps, ctx) {
   const runId = ctx.run.run_id;
   const specTask = specTaskOf(deps.spec, task.task_id);
   const branch = runScopedBranch(runId, task.task_id);
-  const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id);
+  const cwd = taskWorktreePath(deps.workDir, runId, task.task_id);
   try {
     await deps.git.push("origin", branch, { setUpstream: true, cwd });
   } catch (err) {
@@ -15016,7 +15017,7 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
     return void 0;
   }
   const record = await deps.holdout.get(runId, taskId);
-  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   return {
     kind: "holdout-validate",
     task_id: taskId,
@@ -15062,7 +15063,7 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
   return env.step;
 }
 async function resyncShipRetry(deps, runId, taskId, stagingBranch, reason) {
-  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   if (!await deps.git.worktreeExists(worktree)) {
     const step = await failStep(
       deps,
@@ -15158,7 +15159,7 @@ async function nextAction(deps, runId, taskId, results) {
       case "spawn-agents": {
         const spawnPhase = asSpawnPhase(phase);
         const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
-        const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+        const worktree = taskWorktreePath(deps.workDir, runId, taskId);
         const base_ref = `origin/${run9.staging_branch}`;
         const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
@@ -15275,8 +15276,8 @@ function specTaskLines(spec) {
 // src/orchestrator/docs.ts
 var DOCS_MODEL = "sonnet";
 var MAX_DOCS_ATTEMPTS = 2;
-function docsWorktreePath(dataDir, runId) {
-  return join15(dataDir, "worktrees", runId, ".docs");
+function docsWorktreePath(workDir, runId) {
+  return join15(workDir, runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -15294,7 +15295,7 @@ async function runDocsEmit(deps, runId) {
   const staging = run9.staging_branch;
   const base = deps.config.git.baseBranch;
   const docsBranch = `docs-${runId}`;
-  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const worktree = docsWorktreePath(deps.workDir, runId);
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
   await deps.git.fetch("origin", base);
@@ -15321,7 +15322,7 @@ async function runDocsRecord(deps, runId, results) {
   const run9 = await deps.state.read(runId);
   const staging = run9.staging_branch;
   const docsBranch = `docs-${runId}`;
-  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const worktree = docsWorktreePath(deps.workDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
     await publishToStaging(deps.git, staging, docsBranch);
@@ -15348,8 +15349,8 @@ async function runDocsRecord(deps, runId, results) {
 import { join as join16 } from "node:path";
 var TRACE_MODEL = "sonnet";
 var MAX_TRACE_ATTEMPTS = 2;
-function traceWorktreePath(dataDir, runId) {
-  return join16(dataDir, "worktrees", runId, ".trace");
+function traceWorktreePath(workDir, runId) {
+  return join16(workDir, runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -15389,7 +15390,7 @@ async function runTraceabilityEmit(deps, runId) {
   const run9 = await deps.state.read(runId);
   const staging = run9.staging_branch;
   const base = deps.config.git.baseBranch;
-  const worktree = traceWorktreePath(deps.dataDir, runId);
+  const worktree = traceWorktreePath(deps.workDir, runId);
   const baseRef = `origin/${base}`;
   const requirements = await readRequirements(deps, runId);
   await deps.git.fetch("origin", staging);
@@ -15422,7 +15423,7 @@ var TraceabilityResultsSchema = external_exports.object({
 }).strict();
 async function runTraceabilityRecord(deps, runId, results) {
   const run9 = await deps.state.read(runId);
-  const worktree = traceWorktreePath(deps.dataDir, runId);
+  const worktree = traceWorktreePath(deps.workDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "done") {
     const requirements = await readRequirements(deps, runId);
@@ -15753,20 +15754,20 @@ var E2eResultsSchema = external_exports.object({
 
 // src/orchestrator/e2e-paths.ts
 import { join as join17 } from "node:path";
-function e2eWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-author");
+function e2eWorktreePath(workDir, runId) {
+  return join17(workDir, runId, ".e2e-author");
 }
-function e2eRunWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-run");
+function e2eRunWorktreePath(workDir, runId) {
+  return join17(workDir, runId, ".e2e-run");
 }
-function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-base-proof");
+function e2eBaseProofWorktreePath(workDir, runId) {
+  return join17(workDir, runId, ".e2e-base-proof");
 }
-function e2eThrowawayDir(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-throwaway");
+function e2eThrowawayDir(workDir, runId) {
+  return join17(workDir, runId, ".e2e-throwaway");
 }
-function e2eAdjudicateWorktreePath(dataDir, runId) {
-  return join17(dataDir, "worktrees", runId, ".e2e-adjudicate");
+function e2eAdjudicateWorktreePath(workDir, runId) {
+  return join17(workDir, runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -15803,15 +15804,15 @@ import { isAbsolute as isAbsolute2 } from "node:path";
 
 // src/orchestrator/e2e-shared.ts
 import { copyFile, mkdir as mkdir9, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname7 } from "node:path";
+import { dirname as dirname8 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
-    await mkdir9(dirname7(to), { recursive: true });
+    await mkdir9(dirname8(to), { recursive: true });
     await copyFile(from, to);
   }
   async writeConfig(path7, contents) {
-    await mkdir9(dirname7(path7), { recursive: true });
+    await mkdir9(dirname8(path7), { recursive: true });
     await writeFile2(path7, contents);
   }
 };
@@ -15875,7 +15876,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   const cfg = deps.config.e2e;
   const files = deps.files ?? new DefaultE2eFileOps();
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
-  const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId);
+  const wtPath = e2eBaseProofWorktreePath(deps.workDir, runId);
   const base = `origin/${deps.config.git.baseBranch}`;
   await ensureStageWorktree(deps.git, {
     worktree: wtPath,
@@ -16002,7 +16003,7 @@ async function prepareAdjudicatorSpawn(deps, run9, runId, boot) {
   }
   const staging = run9.staging_branch;
   const branch = adjudicateBranchName(runId);
-  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+  const worktree = e2eAdjudicateWorktreePath(deps.workDir, runId);
   await deps.git.fetch("origin", staging);
   await ensureStageWorktree(deps.git, {
     worktree,
@@ -16058,7 +16059,7 @@ async function retryAdjudicatorOrFail(deps, runId, worktree, reason, emit2) {
   return emit2(deps, runId);
 }
 async function recordAdjudication(deps, runId, run9, results, emit2) {
-  const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId);
+  const worktree = e2eAdjudicateWorktreePath(deps.workDir, runId);
   const phase = nonNull(run9.e2e_phase);
   const cursor = nonNull(phase.adjudication);
   const outcome = parseProducerStatus(results.status);
@@ -16187,7 +16188,7 @@ async function runSuiteAndDecide(deps, runId) {
     return failPhase("e2e suite has no boot config \u2014 the run-start assessment resolved none and no override is set");
   }
   const staging = run9.staging_branch;
-  const worktree = e2eRunWorktreePath(deps.dataDir, runId);
+  const worktree = e2eRunWorktreePath(deps.workDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
   await ensureStageWorktree(deps.git, {
@@ -16211,7 +16212,7 @@ async function runSuiteAndDecide(deps, runId) {
   let throwawayResult;
   let throwawayThrew;
   if (throwaway.length > 0) {
-    const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+    const throwawayDir = e2eThrowawayDir(deps.workDir, runId);
     const configPath2 = throwawayConfigPath(worktree);
     await (deps.files ?? new DefaultE2eFileOps()).writeConfig(configPath2, throwawayConfigContents(throwawayDir));
     try {
@@ -16356,7 +16357,7 @@ async function prepareAuthorSpawn(deps, run9, runId, boot, testDir) {
   const staging = run9.staging_branch;
   const base = deps.config.git.baseBranch;
   const branch = e2eBranchName(runId);
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const worktree = e2eWorktreePath(deps.workDir, runId);
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
   await ensureStageWorktree(deps.git, {
@@ -16369,7 +16370,7 @@ async function prepareAuthorSpawn(deps, run9, runId, boot, testDir) {
       setupCommand: deps.config.quality.setupCommand
     })
   });
-  const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+  const throwawayDir = e2eThrowawayDir(deps.workDir, runId);
   return {
     kind: "spawn",
     expects: "author-results",
@@ -16422,7 +16423,7 @@ async function retryAuthorOrFail(deps, runId, worktree, reason, emit2) {
   return emit2(deps, runId);
 }
 async function recordAuthorResults(deps, runId, results, emit2) {
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const worktree = e2eWorktreePath(deps.workDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status === "error") {
     return retryAuthorOrFail(deps, runId, worktree, `e2e-author: ${outcome.reason}`, emit2);
@@ -16535,8 +16536,8 @@ import { join as join20 } from "node:path";
 var log31 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
-function assessmentWorktreePath(dataDir, runId) {
-  return join20(dataDir, "worktrees", runId, ".e2e-assess");
+function assessmentWorktreePath(workDir, runId) {
+  return join20(workDir, runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -16595,7 +16596,7 @@ async function runAssessmentEmit(deps, runId) {
   }
   const staging = run9.staging_branch;
   const branch = assessBranchName(runId);
-  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  const worktree = assessmentWorktreePath(deps.workDir, runId);
   await deps.git.fetch("origin", staging);
   await ensureStageWorktree(deps.git, {
     worktree,
@@ -16627,7 +16628,7 @@ function defaultAssessment() {
   return { affected_specs: [] };
 }
 async function failAssessment(deps, runId, reason, attempts) {
-  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  const worktree = assessmentWorktreePath(deps.workDir, runId);
   await removeWorktreeBestEffort(deps.git, worktree);
   const run9 = await deps.state.read(runId);
   const open2 = Object.values(run9.tasks).filter((t) => !isTerminalTaskStatus(t.status));
@@ -16666,7 +16667,7 @@ async function retryOrFail(deps, runId, reason, attempts) {
   return runAssessmentEmit(deps, runId);
 }
 async function runAssessmentRecord(deps, runId, results) {
-  const worktree = assessmentWorktreePath(deps.dataDir, runId);
+  const worktree = assessmentWorktreePath(deps.workDir, runId);
   const run9 = await deps.state.read(runId);
   const attempts = (run9.e2e_assessment?.attempts ?? 0) + 1;
   if (results.status === "boot-impossible" || results.status === "machinery-impossible") {
@@ -16870,9 +16871,10 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 }
 
 // src/cli/subcommands/run.ts
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 
 // src/cli/wiring.ts
+import { join as join21 } from "node:path";
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
     throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
@@ -16901,14 +16903,17 @@ async function loadCliDeps(opts) {
   const run9 = await state.read(opts.runId);
   const spec = await new SpecStore(dirOpts).read(run9.spec.repo, run9.spec.spec_id);
   const { owner, repo } = splitRepo(run9.spec.repo);
+  const git = new DefaultGitClient();
+  const workDir = join21(await git.mainWorktreeRoot({ cwd: process.cwd() }), ".claude", "worktrees");
   return {
     config,
     spec,
-    git: new DefaultGitClient(),
+    git,
     gh: new DefaultGhClient(),
     tools: defaultGateTools(config.quality.gateEnv),
     holdout: new FsHoldoutStore(dataDir),
     dataDir,
+    workDir,
     owner,
     repo,
     // The explicit `--ship-mode` flag overrides; otherwise honor the value
@@ -17017,13 +17022,13 @@ function decideAutonomyPreflight(input) {
 
 // src/orchestrator/preflight.ts
 import { readFile as readFile14 } from "node:fs/promises";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 var TCB_COVERED_TEST_DIRS = ["e2e", "./e2e"];
 async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile14(join21(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -17044,7 +17049,7 @@ async function assertE2ePrereqs(cwd) {
   }
   let configRaw;
   try {
-    configRaw = await readFile14(join21(cwd, "playwright.config.ts"), "utf8");
+    configRaw = await readFile14(join22(cwd, "playwright.config.ts"), "utf8");
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -17291,7 +17296,7 @@ async function runCreate(argv, overrides = {}) {
     ghClient,
     config,
     targetRoot: cwd,
-    orchestratorWorktreePath: join22(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
+    orchestratorWorktreePath: join23(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
@@ -17344,7 +17349,7 @@ async function runCreate(argv, overrides = {}) {
     return {
       run: parked,
       spec_approval: {
-        spec_path: join22(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
+        spec_path: join23(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -17996,10 +18001,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join23(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join24(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join23(dataDir, "debug", runId, `pass-${pass}`);
+  return join24(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -18071,8 +18076,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join23(passDir, "findings.json");
-  const reportPath = join23(passDir, "findings.md");
+  const findingsPath = join24(passDir, "findings.json");
+  const reportPath = join24(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -18347,7 +18352,7 @@ var stateCommand = {
 import { mkdir as mkdir13, readFile as readFile18, writeFile as writeFile5 } from "node:fs/promises";
 import { existsSync as existsSync11 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname10, join as join27, relative } from "node:path";
+import { dirname as dirname11, join as join28, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/ci/inject-gate-env.ts
@@ -18550,7 +18555,7 @@ function renderQualityGate(template, opts) {
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir10, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 var log33 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -18591,14 +18596,6 @@ function mergeTargetSettings(existing, dataDirRules) {
     settings.permissions = permissions;
     changed = true;
   }
-  const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const haveDirs = new Set(currentDirs);
-  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
-  if (dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
-    settings.permissions = permissions;
-    changed = true;
-  }
   const worktree = isObject(settings.worktree) ? settings.worktree : {};
   if (worktree.baseRef !== "head") {
     worktree.baseRef = "head";
@@ -18607,36 +18604,69 @@ function mergeTargetSettings(existing, dataDirRules) {
   }
   return { settings, changed };
 }
-async function ensureTargetSettings(opts) {
-  const dir = join24(opts.targetRoot, ".claude");
-  const path7 = join24(dir, "settings.json");
-  const created = !existsSync8(path7);
-  let existing = {};
-  if (!created) {
-    const raw = await readFile15(path7, "utf8");
-    const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
-    if (isObject(parsed)) {
-      existing = parsed;
-    } else {
-      log33.warn(
-        `${path7} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
-      );
-    }
+function staleLocalDirs(dataDirRules) {
+  return /* @__PURE__ */ new Set(["${CLAUDE_PLUGIN_DATA}", dataDirRules.allowGlobBase, dataDirRules.additionalDir]);
+}
+function mergeLocalSettings(existing, dataDirRules) {
+  const settings = structuredClone(existing);
+  const permissions = isObject(settings.permissions) ? settings.permissions : {};
+  const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
+  const stale = staleLocalDirs(dataDirRules);
+  const nextDirs = [...currentDirs.filter((e) => !stale.has(e)), dataDirRules.additionalDir];
+  const changed = JSON.stringify(nextDirs) !== JSON.stringify(currentDirs);
+  if (changed) {
+    permissions.additionalDirectories = nextDirs;
+    settings.permissions = permissions;
   }
+  return { settings, changed };
+}
+async function readExistingSettings(path7) {
+  if (!existsSync8(path7)) {
+    return {};
+  }
+  const raw = await readFile15(path7, "utf8");
+  const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
+  if (isObject(parsed)) {
+    return parsed;
+  }
+  log33.warn(
+    `${path7} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+  );
+  return {};
+}
+async function ensureTargetSettings(opts) {
+  const dir = join25(opts.targetRoot, ".claude");
+  const path7 = join25(dir, "settings.json");
+  const localPath = join25(dir, "settings.local.json");
+  const created = !existsSync8(path7);
+  const localCreated = !existsSync8(localPath);
+  const [existing, existingLocal] = await Promise.all([readExistingSettings(path7), readExistingSettings(localPath)]);
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
-  if (created || changed) {
+  const { settings: localSettings, changed: localChanged } = mergeLocalSettings(existingLocal, opts.dataDirRules);
+  if (created || changed || localCreated || localChanged) {
     await mkdir10(dir, { recursive: true });
+  }
+  if (created || changed) {
     await atomicWriteFile(path7, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path7 };
+  if (localCreated || localChanged) {
+    await atomicWriteFile(localPath, stringifyJson(localSettings));
+  }
+  return {
+    settings,
+    changed,
+    created,
+    path: path7,
+    local: { settings: localSettings, changed: localChanged, created: localCreated, path: localPath }
+  };
 }
 
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { mkdir as mkdir11, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname8, join as join25 } from "node:path";
+import { dirname as dirname9, join as join26 } from "node:path";
 function detectStack(targetRoot) {
-  const has = (f) => existsSync9(join25(targetRoot, f));
+  const has = (f) => existsSync9(join26(targetRoot, f));
   const hasPkg = has("package.json");
   const hasDeno = has("deno.json") || has("deno.jsonc");
   const hasNodeLock = has("pnpm-lock.yaml") || has("package-lock.json") || has("yarn.lock") || has("bun.lockb");
@@ -18652,7 +18682,7 @@ function detectStack(targetRoot) {
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join25(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join26(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -18666,9 +18696,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync9(join25(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join25(targetRoot, file), "utf8");
+  const raw = await readFile16(join26(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -18686,7 +18716,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync9(join25(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -18696,7 +18726,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join25(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -18718,11 +18748,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join25(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync9(join25(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -18788,8 +18818,8 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack, contract: load.contract };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join25(opts.targetRoot, GATE_CONTRACT_REL);
-  await mkdir11(dirname8(dest), { recursive: true });
+  const dest = join26(opts.targetRoot, GATE_CONTRACT_REL);
+  await mkdir11(dirname9(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack, contract };
 }
@@ -18798,13 +18828,13 @@ async function ensureGateContract(opts) {
 import { createHash as createHash2 } from "node:crypto";
 import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync10 } from "node:fs";
-import { dirname as dirname9, join as join26 } from "node:path";
+import { dirname as dirname10, join as join27 } from "node:path";
 var SCAFFOLD_LOCK_REL = ".factory/scaffold.lock";
 function sha256Hex(text) {
   return createHash2("sha256").update(text, "utf8").digest("hex");
 }
 async function loadScaffoldLock(targetRoot) {
-  const path7 = join26(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join27(targetRoot, SCAFFOLD_LOCK_REL);
   const empty = { version: 1, seeds: {} };
   if (!existsSync10(path7)) {
     return { lock: empty, existed: false, invalid: false };
@@ -18827,12 +18857,12 @@ async function loadScaffoldLock(targetRoot) {
   }
 }
 async function saveScaffoldLock(targetRoot, lock2) {
-  const path7 = join26(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join27(targetRoot, SCAFFOLD_LOCK_REL);
   const seeds = {};
   for (const [rel, hash] of Object.entries(lock2.seeds).sort(([a], [b]) => a.localeCompare(b))) {
     seeds[rel] = hash;
   }
-  await mkdir12(dirname9(path7), { recursive: true });
+  await mkdir12(dirname10(path7), { recursive: true });
   await writeFile4(path7, JSON.stringify({ version: 1, seeds }, null, 2) + "\n", "utf8");
 }
 
@@ -18898,13 +18928,13 @@ var GITIGNORE_ENTRIES = [
   "*.worktree"
 ];
 function resolveTemplatesDir() {
-  let dir = dirname10(fileURLToPath(import.meta.url));
+  let dir = dirname11(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join27(dir, "templates");
-    if (existsSync11(join27(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join28(dir, "templates");
+    if (existsSync11(join28(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname10(dir);
+    const parent = dirname11(dir);
     if (parent === dir) {
       break;
     }
@@ -18931,8 +18961,8 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, transform) {
   const segs = entry.rel.split("/");
-  const src = join27(templatesDir, ...segs);
-  const dest = join27(targetRoot, ...segs);
+  const src = join28(templatesDir, ...segs);
+  const dest = join28(targetRoot, ...segs);
   if (!existsSync11(src)) {
     log34.warn(`template missing, skipping: ${src}`);
     return;
@@ -18943,7 +18973,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   };
   if (!existsSync11(dest)) {
     const rendered2 = await render();
-    await mkdir13(dirname10(dest), { recursive: true });
+    await mkdir13(dirname11(dest), { recursive: true });
     await writeFile5(dest, rendered2, "utf8");
     if (entry.policy === "seed" && lock2) {
       lock2.seeds[entry.rel] = sha256Hex(rendered2);
@@ -18983,8 +19013,8 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync11(join27(targetRoot, "pnpm-lock.yaml"));
-  const raw = await readFile18(join27(targetRoot, "package.json"), "utf8");
+  const pnpm = existsSync11(join28(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile18(join28(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
     pkg = JSON.parse(raw);
@@ -18993,13 +19023,13 @@ async function readWorkflowFacts(targetRoot) {
   }
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync11(join27(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync11(join28(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
   };
 }
 async function ensureIgnoreFile(root, filename, entries, lists) {
-  const path7 = join27(root, filename);
+  const path7 = join28(root, filename);
   const rel = relative(root, path7);
   if (!existsSync11(path7)) {
     await writeFile5(path7, entries.join("\n") + "\n", "utf8");
@@ -19028,7 +19058,7 @@ async function ensurePrettierignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync11(join27(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync11(join28(opts.targetRoot, "package.json"));
   const lockLoad = await loadScaffoldLock(opts.targetRoot);
   const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
@@ -19135,7 +19165,11 @@ async function runScaffold(opts) {
       required_status_checks: state.requiredStatusChecks,
       provisioned
     },
-    settings: { created: settings.created, changed: settings.changed },
+    settings: {
+      created: settings.created,
+      changed: settings.changed,
+      local: { created: settings.local.created, changed: settings.local.changed }
+    },
     stack: gates.stack,
     gates_contract: gates.status
   };
@@ -19910,7 +19944,7 @@ var nextCommand = {
 
 // src/cli/subcommands/statusline.ts
 import { readFile as readFile19 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -19963,7 +19997,7 @@ async function renderProgress(deps, payload) {
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const gitClient = deps.gitClient ?? new DefaultGitClient();
     const repo = await resolveRepo({ cwd, gitClient });
-    const raw = await readFile19(join28(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
+    const raw = await readFile19(join29(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run9 = JSON.parse(raw);
     if (typeof run9.run_id !== "string" || typeof run9.status !== "string") {
       return "";
@@ -20058,7 +20092,7 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync12 } from "node:fs";
 import { readFile as readFile20 } from "node:fs/promises";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log38 = createLogger("autonomy");
 var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -20071,7 +20105,7 @@ ensure     Merges templates/settings.autonomous.json with your existing settings
            baked, statusLine wired to \`factory statusline\`) and prints the relaunch
            command:
 
-             claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
+             claude --worktree --settings <merged-settings.json>
 
 status     Reports whether THIS session is autonomous and whether merged-settings.json
            exists. Exits 0 when autonomous, 1 when not (never throws).
@@ -20096,7 +20130,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join29(dataDir, "merged-settings.json");
+  return join30(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -20178,7 +20212,7 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path7 = join29(pluginRoot, ".claude-plugin", "plugin.json");
+  const path7 = join30(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync12(path7)) {
     return void 0;
   }
@@ -20195,7 +20229,7 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join29(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join30(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync12(userSettingsPath)) {
@@ -20210,7 +20244,7 @@ async function runAutonomyEnsure(opts = {}) {
       log38.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join29(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join30(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile20(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
@@ -20223,7 +20257,7 @@ async function runAutonomyEnsure(opts = {}) {
   });
   const path7 = mergedSettingsPath(dataDir);
   await atomicWriteFile(path7, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path7} --permission-mode bypassPermissions`;
+  const relaunchCommand = `claude --worktree --settings ${path7}`;
   write(
     `Wrote autonomous settings \u2192 ${path7}
 Relaunch the session in autonomous mode with:
@@ -20263,7 +20297,7 @@ merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path7.l
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
 merged-settings: ${status.mergedSettingsPresent ? `present at ${path7}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path7} --permission-mode bypassPermissions
+  claude --worktree --settings ${path7}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );

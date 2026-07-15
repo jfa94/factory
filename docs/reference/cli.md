@@ -228,7 +228,7 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
 unattended by design; `/factory:run` calls [`factory autonomy preflight`](#autonomy-preflight)
-first, which auto-scaffolds and prints the `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
+first, which auto-scaffolds and prints the `claude --worktree --settings <merged-settings.json>`
 relaunch command when needed (`ensure`/`status` remain the manual primitives). See
 [Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)
 and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
@@ -1076,18 +1076,21 @@ factory autonomy ensure [--user-settings <path>]
 Prints a human-readable relaunch message to stdout that includes the command
 
 ```
-claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
+claude --worktree --settings <merged-settings.json>
 ```
 
-— not a `{kind:…}` envelope. The `--permission-mode bypassPermissions` flag suppresses
-Claude Code's built-in protected-path _prompt_ for writes under the plugin's data dir
-(which lives under `~/.claude/`, outside the exempted `.claude/worktrees`), converting an
-unattended stall into the correct binary outcome. It does **not** disable
-`permissions.deny`, any hook, or the `rm -rf /` / `rm -rf ~` circuit-breaker. The real
-security boundary stays the path-resolving hook layer (branch-protection, secret-guard,
-pipeline-guards, holdout-guard, write-protection); the template's `deny` block is
-deliberately short — accident-prevention for a non-adversarial agent, not a containment
-boundary. See [Decision 65](../explanation/decisions.md#decision-65--bypasspermissions-relaunch--deny-list-shrink-to-honest-accident-prevention).
+— not a `{kind:…}` envelope. The command carries **no permission-mode override**: the
+merged settings are permissive by design and that is the entire mechanism. Task worktrees
+and results live under the target repo's `.claude/worktrees/` — the one subtree Claude
+Code's built-in protected-path check exempts — and nothing else agent-side writes under
+`~/.claude/` (the plugin's data dir holds run/spec state, which only the engine writes,
+via Node `fs`, which the permission system never sees). The real security boundary stays
+the path-resolving hook layer (branch-protection, secret-guard, pipeline-guards,
+holdout-guard, write-protection); the template's `deny` block is deliberately short —
+accident-prevention for a non-adversarial agent, not a containment boundary. See
+[Decision 67](../explanation/decisions.md#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees)
+for the relocation and [Decision 65](../explanation/decisions.md#decision-65--deny-list-shrink-to-honest-accident-prevention)
+for the deny-list.
 
 ### `autonomy status`
 
@@ -1134,8 +1137,8 @@ plugin version:
 | yes         | present       | plugin unknowable | **proceed** (`version-unknowable` — no churn)                 |
 
 On a halt it delegates to `ensure` (the single writer path) to (re)materialize the settings,
-prints the same `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
-relaunch block ([see `ensure`](#autonomy-ensure) for what the flag does) plus a one-line
+prints the same `claude --worktree --settings <merged-settings.json>`
+relaunch block ([see `ensure`](#autonomy-ensure)) plus a one-line
 reason, and **exits 1**. On proceed it writes nothing and **exits 0**. Like `status`, it is
 infallible on the decision path (an unresolvable data/root dir degrades to a halt-with-message,
 never a throw). The relaunch itself is irreducible — Claude Code reads settings only at launch,
