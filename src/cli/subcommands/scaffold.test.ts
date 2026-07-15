@@ -136,7 +136,10 @@ describe('runScaffold', () => {
 
         // E1: a target-repo .claude/settings.json is emitted with the factory
         // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
-        // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
+        // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder,
+        // and NO additionalDirectories (Decision 17, corrected: that entry is
+        // always absolute and lives ONLY in the gitignored settings.local.json,
+        // never in this committed file).
         expect(report.settings.created).toBe(true)
         const settingsRaw = await readFile(join(root, '.claude', 'settings.json'), 'utf8')
         expect(settingsRaw).not.toContain('${CLAUDE_PLUGIN_DATA}') // the bug we fixed
@@ -145,10 +148,19 @@ describe('runScaffold', () => {
         const allow = (settings.permissions as {allow: string[]}).allow
         expect(allow).toContain('Bash(factory:*)')
         expect(allow).toContain(`Read(${DATA_DIR_RULES.allowGlobBase}/**)`) // baked, resolved dir
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(DATA_DIR_RULES.additionalDir)
+        expect(settings.permissions).not.toHaveProperty('additionalDirectories')
         expect(settings).not.toHaveProperty('statusLine')
         expect(report.files_created).toContain('.claude/settings.json')
+        // settings.local.json is gitignored — never listed as a committable file.
+        expect(report.files_created).not.toContain('.claude/settings.local.json')
+
+        // The sibling GITIGNORED .claude/settings.local.json carries the ABSOLUTE
+        // additionalDirectories entry instead.
+        expect(report.settings.local.created).toBe(true)
+        const localRaw = await readFile(join(root, '.claude', 'settings.local.json'), 'utf8')
+        const local = JSON.parse(localRaw) as Record<string, unknown>
+        const dirs = (local.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toContain(DATA_DIR_RULES.additionalDir)
     })
 
     it('E1: merges non-destructively into an existing target .claude/settings.json', async () => {

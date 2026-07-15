@@ -112,6 +112,7 @@ function greenProbe(): FakeGitProbe {
 
 describe('makePhaseHandlers (Model-A reporters)', () => {
     let dataDir: string
+    let workDir: string
     let state: StateManager
     let holdout: InMemoryHoldoutStore
     let git: FakeGitClient
@@ -119,6 +120,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-handlers-'))
+        workDir = await mkdtemp(join(tmpdir(), 'factory-handlers-workdir-'))
         state = new StateManager({
             dataDir,
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
@@ -135,6 +137,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
 
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})
+        await rm(workDir, {recursive: true, force: true})
     })
 
     /** Seed a single task and return the frozen PhaseContext the engine would hand a reporter. */
@@ -181,6 +184,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'live',
@@ -196,7 +200,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         const result = await handlers.preflight(ctx)
 
         expect(result).toEqual({kind: 'advance', to: 'tests'})
-        const wtPath = taskWorktreePath(dataDir, RUN_ID, 't-multi')
+        const wtPath = taskWorktreePath(workDir, RUN_ID, 't-multi')
         expect(git.worktrees.get(wtPath)).toBe('factory/run-1/t-multi')
     })
 
@@ -207,7 +211,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         const ctx = await ctxFor({task_id: 't-multi'})
         await handlers.preflight(ctx)
 
-        const wtPath = taskWorktreePath(dataDir, RUN_ID, 't-multi')
+        const wtPath = taskWorktreePath(workDir, RUN_ID, 't-multi')
         // The worktree add startPoint must be origin/staging/<run-id>, not origin/staging.
         expect(perRunGit.calls).toContain(`worktree add -b factory/run-1/t-multi ${wtPath} origin/staging-run-1`)
     })
@@ -228,7 +232,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         const result = await handlers.preflight(ctx)
 
         expect(result).toEqual({kind: 'advance', to: 'tests'})
-        expect(calls).toEqual([{path: taskWorktreePath(dataDir, RUN_ID, 't-prov'), setupCommand: 'npm ci'}])
+        expect(calls).toEqual([{path: taskWorktreePath(workDir, RUN_ID, 't-prov'), setupCommand: 'npm ci'}])
     })
 
     it('preflight is REPLAY-SAFE: a resume after a provisioning failure re-creates and reaches provision again, not a worktree-add fatal', async () => {
@@ -248,7 +252,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         // First preflight: the worktree is created, provisioning throws → the task cursor
         // stays at preflight (the phase never advanced) with the worktree on disk.
         await expect(handlers.preflight(ctx)).rejects.toThrow(/npm ci failed/)
-        const wtPath = taskWorktreePath(dataDir, RUN_ID, 't-multi')
+        const wtPath = taskWorktreePath(workDir, RUN_ID, 't-multi')
         expect(git.worktrees.has(wtPath)).toBe(true)
 
         // Resume: preflight re-runs. createTaskWorktree must REUSE the existing worktree
@@ -311,8 +315,8 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
 
         expect(r1).toEqual({kind: 'advance', to: 'tests'})
         expect(r2).toEqual({kind: 'advance', to: 'tests'})
-        expect(git.worktrees.get(taskWorktreePath(dataDir, RUN_ID, 't-par-1'))).toBeDefined()
-        expect(git.worktrees.get(taskWorktreePath(dataDir, RUN_ID, 't-par-2'))).toBeDefined()
+        expect(git.worktrees.get(taskWorktreePath(workDir, RUN_ID, 't-par-1'))).toBeDefined()
+        expect(git.worktrees.get(taskWorktreePath(workDir, RUN_ID, 't-par-2'))).toBeDefined()
         // The load-bearing assertion: the git sections ran strictly one-at-a-time.
         expect(maxActive).toBe(1)
     })

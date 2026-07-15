@@ -76,8 +76,18 @@ export interface HandlerDeps {
      * the holdout-validator checks against at the verify phase.
      */
     readonly holdout: HoldoutStore
-    /** Plugin data dir — roots the run store + per-task worktree paths. */
+    /** Plugin data dir — roots the run store (state/spec/holdout), NOT worktrees. */
     readonly dataDir: string
+    /**
+     * `<main-repo-root>/.claude/worktrees` — roots per-task worktrees + the
+     * dot-prefixed scratch worktrees/results (`.docs`, `.trace`, `.results`, …).
+     * `.claude/worktrees/` is the one subtree Claude Code's protected-path check
+     * exempts (Decision 67) and where the orchestrator's own staging worktree
+     * already lives (`run.ts`) — task worktrees/results move there too so agent
+     * writes never trip the unsuppressible `~/.claude/` prompt. Resolved via
+     * `GitClient.mainWorktreeRoot()`, NOT `showToplevel()` (see its doc comment).
+     */
+    readonly workDir: string
     /** Repo owner (PR base resolution / merge serializer). */
     readonly owner: string
     /** Repo name (PR base resolution / merge serializer). */

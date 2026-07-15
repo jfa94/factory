@@ -60,7 +60,7 @@ export async function proveCriticals(
     const cfg = deps.config.e2e
     const files = deps.files ?? new DefaultE2eFileOps()
     const tool = deps.playwright ?? new DefaultPlaywrightTool()
-    const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId)
+    const wtPath = e2eBaseProofWorktreePath(deps.workDir, runId)
     const base = `origin/${deps.config.git.baseBranch}`
     // No fetch (proves against the already-fetched base) and no retry-reset (specs are
     // re-copied in fresh each pass).

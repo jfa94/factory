@@ -49,7 +49,7 @@ export interface AssessmentRunDeps {
     readonly state: StateManager
     readonly git: GitClient
     readonly config: Config
-    readonly dataDir: string
+    readonly workDir: string
     /** The run's durable spec — task list for the coverage forecast. */
     readonly spec: SpecManifest
     /** Injectable worktree provisioner (tests fake this; production runs `npm ci`-equivalent). */
@@ -72,10 +72,10 @@ const ASSESSOR_MODEL = 'sonnet'
 // ponytail: 2 mirrors MAX_DOCS_ATTEMPTS — one retry covers a flake, more just delays the verdict
 export const MAX_ASSESS_ATTEMPTS = 2
 
-/** The assessment worktree — dot-prefixed under `worktrees/<runId>/` (see e2e.ts's
+/** The assessment worktree — dot-prefixed under `<workDir>/<runId>/` (see e2e.ts's
  * path-relocation note: agent-writable, collision-proof vs task worktrees). */
-export function assessmentWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-assess')
+export function assessmentWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-assess')
 }
 
 function assessBranchName(runId: string): string {
@@ -178,7 +178,7 @@ export async function runAssessmentEmit(deps: AssessmentRunDeps, runId: string):
 
     const staging = run.staging_branch
     const branch = assessBranchName(runId)
-    const worktree = assessmentWorktreePath(deps.dataDir, runId)
+    const worktree = assessmentWorktreePath(deps.workDir, runId)
 
     await deps.git.fetch('origin', staging)
     // Retry-reset: the crashed attempt's edits must not bleed into the new one.
@@ -228,7 +228,7 @@ async function failAssessment(
     reason: string,
     attempts: number
 ): Promise<Extract<AssessmentAction, {kind: 'failed'}>> {
-    const worktree = assessmentWorktreePath(deps.dataDir, runId)
+    const worktree = assessmentWorktreePath(deps.workDir, runId)
     await removeWorktreeBestEffort(deps.git, worktree)
 
     const run = await deps.state.read(runId)
@@ -286,7 +286,7 @@ export async function runAssessmentRecord(
     runId: string,
     results: AssessmentResults
 ): Promise<AssessmentAction> {
-    const worktree = assessmentWorktreePath(deps.dataDir, runId)
+    const worktree = assessmentWorktreePath(deps.workDir, runId)
     const run = await deps.state.read(runId)
     const attempts = (run.e2e_assessment?.attempts ?? 0) + 1
 

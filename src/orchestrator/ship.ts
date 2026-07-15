@@ -71,7 +71,7 @@ export async function shipTask(deps: ShipDeps, ctx: PhaseContext): Promise<Phase
     // holds the pre-rescue commits, so every re-drive deterministically re-hits the same
     // rejected push. The branch is run-scoped and factory-owned (never human work), so the
     // root-cause repair is safe: delete the stale remote ref and retry ONCE, force-free.
-    const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id)
+    const cwd = taskWorktreePath(deps.workDir, runId, task.task_id)
     try {
         await deps.git.push('origin', branch, {setUpstream: true, cwd})
     } catch (err) {

@@ -13,6 +13,7 @@
  * runner's job. The CLI carries only the deterministic before/after seam —
  * exactly {@link HandlerDeps} + state.
  */
+import {join} from 'node:path'
 import {loadConfig, resolveDataDir, type DataDirOptions} from '../config/index.js'
 import {StateManager} from '../core/state/index.js'
 import {SpecStore} from '../spec/index.js'
@@ -107,14 +108,18 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
     const spec = await new SpecStore(dirOpts).read(run.spec.repo, run.spec.spec_id)
     const {owner, repo} = splitRepo(run.spec.repo)
 
+    const git = new DefaultGitClient()
+    const workDir = join(await git.mainWorktreeRoot({cwd: process.cwd()}), '.claude', 'worktrees')
+
     return {
         config,
         spec,
-        git: new DefaultGitClient(),
+        git,
         gh: new DefaultGhClient(),
         tools: defaultGateTools(config.quality.gateEnv),
         holdout: new FsHoldoutStore(dataDir),
         dataDir,
+        workDir,
         owner,
         repo,
         // The explicit `--ship-mode` flag overrides; otherwise honor the value

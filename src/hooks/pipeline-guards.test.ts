@@ -15,6 +15,8 @@ import {decidePipelineGuards, runPipelineGuards} from './pipeline-guards.js'
 import {type ActiveRun} from './hook-context.js'
 import {parseHookInput, isDeny} from './hook-io.js'
 import {EXIT} from '../shared/exit-codes.js'
+import {FakeGitClient} from '../git/index.js'
+import type {GitClient} from '../git/index.js'
 import type {RunState, TaskState} from '../types/index.js'
 
 const SPEC = {repo: 'o/n', spec_id: '1-x', issue_number: 1} as const
@@ -77,9 +79,25 @@ function bash(command: string) {
 function write(file_path: string) {
     return parseHookInput(JSON.stringify({tool_name: 'Write', tool_input: {file_path}}))
 }
-/** A Write whose target is inside a task's worktree (`<dataDir>/worktrees/<run>/<task>/…`). */
-function writeInWorktree(runId: string, taskId: string, rel: string) {
-    return write(join('/data', 'worktrees', runId, taskId, rel))
+
+/** The repo root the write-scope arm's injected gitClient resolves to in these tests. */
+const REPO_ROOT = '/repo'
+
+/** A gitClient whose `mainWorktreeRoot()` resolves to `repoRoot` (Decision 67). */
+function gitAt(repoRoot: string): GitClient {
+    return new FakeGitClient({repoRoot})
+}
+
+/** A minimal gitClient stub whose `mainWorktreeRoot()` rejects (not inside a resolvable git repo). Only `mainWorktreeRoot` is exercised by the write-scope arm. */
+function nonGitClient(): GitClient {
+    return {
+        mainWorktreeRoot: () => Promise.reject(new Error('fatal: not a git repository')),
+    } as unknown as GitClient
+}
+
+/** A Write whose target is inside a task's worktree (`<repoRoot>/.claude/worktrees/<run>/<task>/…`, Decision 67). */
+function writeInWorktree(runId: string, taskId: string, rel: string, repoRoot = REPO_ROOT) {
+    return write(join(repoRoot, '.claude', 'worktrees', runId, taskId, rel))
 }
 
 const APPROVE = {reviewer: 'quality', verdict: 'approve', confirmed_blockers: 0} as const
@@ -148,8 +166,10 @@ describe('pipeline-guards — ship guard is agent-deny while a run is active', (
 describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)', () => {
     // The write-scope arm derives its owning run+task from the TARGET PATH (the
     // worktree the producer writes into), NOT a global pointer — so it fires only on
-    // a write into THAT run's worktree, never on an unrelated session's edit.
-    const DATA = {dataDir: '/data'}
+    // a write into THAT run's worktree, never on an unrelated session's edit. The
+    // worktree root itself is git-derived (`<main-repo-root>/.claude/worktrees`,
+    // Decision 67), so every case here injects a `gitClient` resolving to REPO_ROOT.
+    const DATA = {dataDir: '/data', gitClient: gitAt(REPO_ROOT)}
 
     it('blocks an implementation write into the task worktree during the test-writer phase', async () => {
         const run = runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
@@ -210,6 +230,45 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
             loadRunById: withRunById(run),
         })
         expect(isDeny(d)).toBe(false)
+    })
+
+    // Regression: the shape check (`.claude/worktrees/<id>/<id>/…`) is NOT enough by
+    // itself — the write-scope arm anchors to the git-resolved workDir before treating
+    // a path as a producer write. Claude Code's own native `--worktree` feature also
+    // uses a `.claude/worktrees/` layout, in any repo, for anything the user is doing —
+    // unrelated to this factory run. A target that merely LOOKS like a worktree write
+    // but sits under a DIFFERENT repo root than the one `gitClient.mainWorktreeRoot()`
+    // resolves must pass through, never consulting a run (see Part 1, item 8/9 of the
+    // plan: "do NOT drop the root parameter and do a bare substring/segment scan").
+    it('a path shaped like a worktree write but under a DIFFERENT repo root than gitClient resolves → null, no run consulted', async () => {
+        let consulted = false
+        const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.ts', '/other-repo'), {
+            ...DATA, // gitClient still resolves to REPO_ROOT ("/repo")
+            loadRunById: () => {
+                consulted = true
+                return Promise.resolve(
+                    runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
+                )
+            },
+        })
+        expect(isDeny(d)).toBe(false)
+        expect(consulted).toBe(false)
+    })
+
+    it('gitClient unable to resolve a repo root (not inside a git repo) → null, no run consulted', async () => {
+        let consulted = false
+        const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.ts'), {
+            ...DATA,
+            gitClient: nonGitClient(),
+            loadRunById: () => {
+                consulted = true
+                return Promise.resolve(
+                    runState({t1: task({status: 'executing', phase: 'tests', producer_role: 'test-writer'})})
+                )
+            },
+        })
+        expect(isDeny(d)).toBe(false)
+        expect(consulted).toBe(false)
     })
 })
 

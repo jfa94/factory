@@ -23,6 +23,7 @@ const BRANCH = `e2e-assess-${RUN_ID}`
 const STAGING = `staging-${RUN_ID}`
 
 let dataDir: string
+let workDir: string
 let state: StateManager
 let git: FakeGitClient
 
@@ -66,7 +67,7 @@ function deps(overrides: Partial<AssessmentRunDeps> = {}): AssessmentRunDeps {
         state,
         git,
         config: defaultConfig(),
-        dataDir,
+        workDir,
         spec: SPEC,
         provision: noopProvision,
         ...overrides,
@@ -75,6 +76,7 @@ function deps(overrides: Partial<AssessmentRunDeps> = {}): AssessmentRunDeps {
 
 beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'e2e-assess-'))
+    workDir = await mkdtemp(join(tmpdir(), 'e2e-assess-workdir-'))
     state = new StateManager({dataDir})
     git = new FakeGitClient({remoteHeads: {[STAGING]: 'sha-staging'}})
     await state.create({
@@ -91,6 +93,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await rm(dataDir, {recursive: true, force: true})
+    await rm(workDir, {recursive: true, force: true})
 })
 
 describe('runAssessmentEmit', () => {
@@ -109,9 +112,10 @@ describe('runAssessmentEmit', () => {
         if (env.kind !== 'spawn') {
             throw new Error('expected spawn')
         }
-        expect(env.worktree).toBe(assessmentWorktreePath(dataDir, RUN_ID))
-        // TCB-safe location: under worktrees/<runId>/, dot-prefixed (never runs/<runId>/).
-        expect(env.worktree).toContain(join('worktrees', RUN_ID, '.e2e-assess'))
+        expect(env.worktree).toBe(assessmentWorktreePath(workDir, RUN_ID))
+        // TCB-safe location: under workDir/<runId>/, dot-prefixed (never runs/<runId>/;
+        // workDir is git-derived `<repoRoot>/.claude/worktrees` in production, Decision 67).
+        expect(env.worktree).toContain(join(workDir, RUN_ID, '.e2e-assess'))
         expect(env.assess_branch).toBe(BRANCH)
         expect(env.staging_branch).toBe(STAGING)
         expect(env.model).toBe('sonnet') // trimmed from the prior apex pin (Decision 40)

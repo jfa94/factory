@@ -192,7 +192,7 @@ export async function holdoutSidecar(
         return undefined
     }
     const record = await deps.holdout.get(runId, taskId)
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     return {
         kind: 'holdout-validate',
         task_id: taskId,
@@ -280,7 +280,7 @@ async function resyncShipRetry(
     stagingBranch: string,
     reason: string
 ): Promise<{kind: 'done'; step: TaskStep} | {kind: 'continue'}> {
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     if (!(await deps.git.worktreeExists(worktree))) {
         const step = await failStep(
             deps,
@@ -428,7 +428,7 @@ export async function nextAction(
             case 'spawn-agents': {
                 const spawnPhase = asSpawnPhase(phase)
                 const expects: DriveExpects = spawnPhase === 'verify' ? 'reviews' : 'producer-status'
-                const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+                const worktree = taskWorktreePath(deps.workDir, runId, taskId)
                 // The base ref the worktree forked from — plumbed into every spawn so
                 // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
                 const base_ref = `origin/${run.staging_branch}`

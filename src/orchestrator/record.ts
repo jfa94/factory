@@ -432,7 +432,7 @@ export async function applyRecordReviews(
     if (task === undefined) {
         throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`)
     }
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     const baseRef = run.staging_branch
 
     // 1. parse reviews + build the worktree source and the replay verifier factory

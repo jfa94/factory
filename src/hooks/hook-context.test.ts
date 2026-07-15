@@ -13,7 +13,6 @@ import {join} from 'node:path'
 import {StateManager} from '../core/state/index.js'
 import {FakeGitClient} from '../git/index.js'
 import {loadOwnerScopedRun, resolveActiveTask, isTestWriterPhase, runTaskForPath} from './hook-context.js'
-import {worktreesRoot} from '../core/state/index.js'
 import type {RunState, TaskState} from '../types/index.js'
 
 const SPEC = {repo: 'o/n', spec_id: '1-x', issue_number: 1} as const
@@ -287,61 +286,63 @@ describe('isTestWriterPhase', () => {
 // --- worktree path → run+task ownership (run-isolation L1.1) -----------------
 
 describe('runTaskForPath — derive owning run+task from a producer write path', () => {
-    let dataDir: string
+    // `workDir` is the root arg directly (git-derived `<repoRoot>/.claude/worktrees`
+    // in production, Decision 67) — no `worktreesRoot()` join indirection anymore.
+    let workDir: string
     beforeEach(() => {
-        dataDir = mkdtempSync(join(tmpdir(), 'rtfp-'))
+        workDir = mkdtempSync(join(tmpdir(), 'rtfp-'))
     })
     afterEach(() => {
-        rmSync(dataDir, {recursive: true, force: true})
+        rmSync(workDir, {recursive: true, force: true})
     })
 
-    it('a file under worktrees/<run>/<task>/… resolves both ids', () => {
-        const p = join(worktreesRoot(dataDir), 'run-20260101-000000', 't1', 'src', 'a.ts')
-        expect(runTaskForPath(dataDir, p)).toEqual({
+    it('a file under <workDir>/<run>/<task>/… resolves both ids', () => {
+        const p = join(workDir, 'run-20260101-000000', 't1', 'src', 'a.ts')
+        expect(runTaskForPath(workDir, p)).toEqual({
             run_id: 'run-20260101-000000',
             task_id: 't1',
         })
     })
 
     it('the task dir itself (no file tail) still resolves both ids', () => {
-        const p = join(worktreesRoot(dataDir), 'run-x', 't2')
-        expect(runTaskForPath(dataDir, p)).toEqual({run_id: 'run-x', task_id: 't2'})
+        const p = join(workDir, 'run-x', 't2')
+        expect(runTaskForPath(workDir, p)).toEqual({run_id: 'run-x', task_id: 't2'})
     })
 
-    it('a path under worktrees/<run> with no task segment → null', () => {
-        const p = join(worktreesRoot(dataDir), 'run-x')
-        expect(runTaskForPath(dataDir, p)).toBeNull()
+    it('a path under <workDir>/<run> with no task segment → null', () => {
+        const p = join(workDir, 'run-x')
+        expect(runTaskForPath(workDir, p)).toBeNull()
     })
 
     it('a path in an unrelated repo checkout → null (the spurious-block fix)', () => {
-        expect(runTaskForPath(dataDir, '/Users/dev/some-repo/src/index.ts')).toBeNull()
+        expect(runTaskForPath(workDir, '/Users/dev/some-repo/src/index.ts')).toBeNull()
     })
 
-    it('a path under runs/ (a sibling store, not a worktree) → null', () => {
-        const p = join(dataDir, 'runs', 'run-x', 'state.json')
-        expect(runTaskForPath(dataDir, p)).toBeNull()
+    it('a path in a sibling directory (not under the worktrees root) → null', () => {
+        const p = join(workDir, '..', 'runs', 'run-x', 'state.json')
+        expect(runTaskForPath(workDir, p)).toBeNull()
     })
 
     it('a traversal out of a worktree resolves away and does NOT match', () => {
-        // worktrees/run-x/t1/../../../etc/passwd canonicalizes above the root → null.
-        const p = join(worktreesRoot(dataDir), 'run-x', 't1', '..', '..', '..', 'etc', 'passwd')
-        expect(runTaskForPath(dataDir, p)).toBeNull()
+        // <workDir>/run-x/t1/../../../etc/passwd canonicalizes above the root → null.
+        const p = join(workDir, 'run-x', 't1', '..', '..', '..', 'etc', 'passwd')
+        expect(runTaskForPath(workDir, p)).toBeNull()
     })
 
-    it('canonicalizes a symlinked dataDir on both sides (consistent match)', () => {
+    it('canonicalizes a symlinked workDir on both sides (consistent match)', () => {
         // mkdtemp on macOS lives under a symlinked /var → /private/var; canonicalizePath
         // realpaths both the root and the candidate, so the under-root check still holds.
-        const p = join(worktreesRoot(dataDir), 'run-y', 't3', 'pkg', 'b.ts')
-        expect(runTaskForPath(dataDir, p)).toEqual({run_id: 'run-y', task_id: 't3'})
+        const p = join(workDir, 'run-y', 't3', 'pkg', 'b.ts')
+        expect(runTaskForPath(workDir, p)).toEqual({run_id: 'run-y', task_id: 't3'})
     })
 
     it('a segment that is not a valid id → null (not a recognizable worktree path)', () => {
-        const p = join(worktreesRoot(dataDir), 'bad id with spaces', 't1', 'a.ts')
-        expect(runTaskForPath(dataDir, p)).toBeNull()
+        const p = join(workDir, 'bad id with spaces', 't1', 'a.ts')
+        expect(runTaskForPath(workDir, p)).toBeNull()
     })
 
-    it('empty dataDir or empty path → null', () => {
+    it('empty workDir or empty path → null', () => {
         expect(runTaskForPath('', '/x')).toBeNull()
-        expect(runTaskForPath(dataDir, '')).toBeNull()
+        expect(runTaskForPath(workDir, '')).toBeNull()
     })
 })

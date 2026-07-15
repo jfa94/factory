@@ -7,37 +7,38 @@
 import {join} from 'node:path'
 import type {Config, RunState} from './deps.js'
 
-// All four e2e dirs live under `<dataDir>/worktrees/<runId>/` — the agent-WRITABLE
-// sibling of the TCB-write-denied `runs/` tree (core/state/paths.ts). They originally
-// lived under `runs/<runId>/…`, where the `data-runs` deny rule blocked the e2e-author's
-// own Write calls into its worktree (verified live, Decision 40). The DOT prefix makes
+// All four e2e dirs live under `<workDir>/<runId>/` (`.claude/worktrees` — the
+// protected-path exemption, Decision 67) — the agent-WRITABLE sibling of the
+// TCB-write-denied `runs/` tree (core/state/paths.ts). They originally lived under
+// `runs/<runId>/…`, where the `data-runs` deny rule blocked the e2e-author's own
+// Write calls into its worktree (verified live, Decision 40). The DOT prefix makes
 // collision with a task worktree `<runId>/<taskId>` impossible (task ids are
 // validateId-constrained to [a-zA-Z0-9_-], never a leading dot), and the pipeline-guards
 // write-scope arm resolves run `<runId>` (exists) / task `.e2e-…` (unknown → no scope).
 
 /** The e2e-phase author worktree path (torn down once its specs are merged/rejected). */
-export function e2eWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-author')
+export function e2eWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-author')
 }
 
 /** The persistent "run the suite against current staging" worktree — reused every pass. */
-export function e2eRunWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-run')
+export function e2eRunWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-run')
 }
 
 /** Scratch worktree used ONLY for the fail-first base-side proof (removed after use). */
-export function e2eBaseProofWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-base-proof')
+export function e2eBaseProofWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-base-proof')
 }
 
 /** The run's ephemeral, out-of-repo throwaway-spec directory — never committed, discarded at run end. */
-export function e2eThrowawayDir(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-throwaway')
+export function e2eThrowawayDir(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-throwaway')
 }
 
 /** The adjudicator's worktree (D7) — torn down once its spec updates are merged/rejected. */
-export function e2eAdjudicateWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.e2e-adjudicate')
+export function e2eAdjudicateWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.e2e-adjudicate')
 }
 
 export function e2eBranchName(runId: string): string {

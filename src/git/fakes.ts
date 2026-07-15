@@ -104,6 +104,10 @@ export class FakeGitClient implements GitClient {
         return Promise.resolve(this.repoRoot)
     }
 
+    mainWorktreeRoot(_opts?: GitOpts): Promise<string> {
+        return Promise.resolve(this.repoRoot)
+    }
+
     private nextSha(prefix = 'sha'): string {
         this.shaCounter += 1
         return `${prefix}-${this.shaCounter}`

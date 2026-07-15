@@ -80,7 +80,7 @@ export async function prepareAuthorSpawn(
     const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const branch = e2eBranchName(runId)
-    const worktree = e2eWorktreePath(deps.dataDir, runId)
+    const worktree = e2eWorktreePath(deps.workDir, runId)
     const baseRef = `origin/${base}`
 
     await deps.git.fetch('origin', staging)
@@ -98,7 +98,7 @@ export async function prepareAuthorSpawn(
             }),
     })
 
-    const throwawayDir = e2eThrowawayDir(deps.dataDir, runId)
+    const throwawayDir = e2eThrowawayDir(deps.workDir, runId)
     return {
         kind: 'spawn',
         expects: 'author-results',
@@ -193,7 +193,7 @@ export async function recordAuthorResults(
     results: E2eAuthorResults,
     emit: EmitFn
 ): Promise<E2eAction> {
-    const worktree = e2eWorktreePath(deps.dataDir, runId)
+    const worktree = e2eWorktreePath(deps.workDir, runId)
 
     const outcome = parseProducerStatus(results.status)
     if (outcome.status === 'error') {

@@ -87,8 +87,8 @@ async function driveToVerify(
  * so tests that exercise the BEHIND ship-refusal re-sync (which guards on worktreeExists,
  * Bug #1) must seed it or the guard fails the task as environmentally-blocked.
  */
-function registerTaskWorktree(deps: OrchestratorDeps, runId: string, dataDir: string, taskId: string): void {
-    ;(deps.git as FakeGitClient).worktrees.set(taskWorktreePath(dataDir, runId, taskId), runScopedBranch(runId, taskId))
+function registerTaskWorktree(deps: OrchestratorDeps, runId: string, workDir: string, taskId: string): void {
+    ;(deps.git as FakeGitClient).worktrees.set(taskWorktreePath(workDir, runId, taskId), runScopedBranch(runId, taskId))
 }
 
 /**
@@ -707,11 +707,11 @@ describe('nextAction', () => {
     })
 
     it('a blocked merge gate escalates and resumes at exec', async () => {
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps()
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps()
         try {
             await driveToVerify(deps, runId, 'T1')
             // Write the cited file into the worktree so citation-verify can confirm it.
-            const worktree = taskWorktreePath(dataDir, runId, 'T1')
+            const worktree = taskWorktreePath(workDir, runId, 'T1')
             const citedFile = join(worktree, 'src', 'x.ts')
             await mkdir(dirname(citedFile), {recursive: true})
             await writeFile(citedFile, 'bad code\n')
@@ -770,7 +770,7 @@ describe('nextAction', () => {
             mergeStateStatus: 'BEHIND',
             url: 'https://github.com/fake/repo/pull/500',
         })
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
@@ -783,7 +783,7 @@ describe('nextAction', () => {
                 pr_number: 500,
             },
         })
-        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        registerTaskWorktree(deps, runId, workDir, 'T1')
         try {
             const env = await nextAction(deps, runId, 'T1')
             expect(env).toMatchObject({
@@ -811,12 +811,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new BehindOnceGh()
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
-        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        registerTaskWorktree(deps, runId, workDir, 'T1')
         try {
             const panelEnv = await driveToVerify(deps, runId, 'T1')
             const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
@@ -861,12 +861,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new AlwaysBehindGh()
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
-        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        registerTaskWorktree(deps, runId, workDir, 'T1')
         try {
             const panelEnv = await driveToVerify(deps, runId, 'T1')
             const withheld = (await deps.holdout.get(runId, 'T1')).withheld_criteria
@@ -922,12 +922,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new BehindOnceGh()
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
-        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        registerTaskWorktree(deps, runId, workDir, 'T1')
         const git = deps.git as FakeGitClient
         const branch = runScopedBranch(runId, 'T1')
         const stagingBranch = runStagingBranch(runId)
@@ -966,12 +966,12 @@ describe('nextAction', () => {
             }
         }
         const gh = new AlwaysBehindGh()
-        const {deps, runId, dataDir, cleanup} = await makeOrchestratorDeps({
+        const {deps, runId, workDir, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c']}],
             shipMode: 'live',
             ghClient: gh,
         })
-        registerTaskWorktree(deps, runId, dataDir, 'T1')
+        registerTaskWorktree(deps, runId, workDir, 'T1')
         const git = deps.git as FakeGitClient
         git.failMergeNoForce = true // the forward-merge hits a real conflict
         try {

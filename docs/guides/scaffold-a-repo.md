@@ -39,19 +39,29 @@ This is idempotent. It:
   An empty `gateEnv` leaves the build step's marker untouched, and a re-scaffold is
   byte-identical (drift is measured against the rendered file);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
-- emits / idempotently merges the target `.claude/settings.json` (factory allow-list
-    - `permissions.additionalDirectories` plus `Read|Write|Edit(<data-dir>/**)` allow
-      rules so the built-in file tools reach the out-of-tree plugin data dir —
-      `results/`, `worktrees/`, `runs/`, `specs/` — without tripping the
-      working-directory-boundary prompt + `worktree.baseRef:"head"`). The data-dir path
-      is the **CLI-resolved canonical dir baked in at scaffold time** (allow globs in the
-      `~`-tilde form when under `$HOME`, absolute otherwise; `additionalDirectories`
-      always absolute — `~/` does not expand there), **not** the literal
-      `${CLAUDE_PLUGIN_DATA}` placeholder: env-var interpolation in permission rules is
-      unsupported and the var is hijackable by co-installed plugins, so a placeholder
-      rule would match nothing. Re-scaffolding an older repo migrates any stale
-      `${CLAUDE_PLUGIN_DATA}` rules — and the older tilde-form `additionalDirectories`
-      entry — to the baked form. See [Decision 17](../explanation/decisions.md#decision-17-coarse-bash-allow-with-hook-enforced-defense-in-depth);
+- emits / idempotently merges TWO target settings files, split by what is safe to
+  commit:
+    - `.claude/settings.json` (**committed**): the factory allow-list +
+      `Read|Write|Edit(<data-dir>/**)` rules (tilde form when the data dir is under
+      `$HOME`, absolute otherwise) + `worktree.baseRef:"head"`. Carries NO
+      `additionalDirectories` — see below.
+    - `.claude/settings.local.json` (**gitignored**, per-machine): the
+      `permissions.additionalDirectories` entry so the built-in file tools reach the
+      out-of-tree plugin data dir (`runs/`, `specs/`) without tripping the
+      working-directory-boundary prompt. ALWAYS absolute — `~/` does not expand in
+      `additionalDirectories` — which is exactly why it can't live in the committed
+      file (it would leak `$HOME`/username and be wrong on another machine or CI).
+      Written prune-then-add: a stale factory-managed entry (a literal
+      `${CLAUDE_PLUGIN_DATA}` placeholder, a tilde form, or a previously-baked path
+      that moved) is stripped and replaced on the next `factory scaffold` (which runs
+      idempotently on every `/factory:run` preflight, so this self-heals with no
+      separate migration step); the user's own entries are kept.
+
+    Neither file ever ships the literal `${CLAUDE_PLUGIN_DATA}` placeholder — env-var
+    interpolation in permission rules is unsupported and the var is hijackable by
+    co-installed plugins, so a placeholder rule would match nothing; both bake the
+    CLI-resolved canonical data dir instead. See [Decision 17](../explanation/decisions.md#decision-17-coarse-bash-allow-with-hook-enforced-defense-in-depth);
+
 - probes branch protection on `develop` (the integration base) and **refuses loudly
   if it is missing**.
 
@@ -63,7 +73,8 @@ It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`
 (outdated files auto-refreshed: managed files on any drift, seed configs only while
 pristine per the committed `.factory/scaffold.lock` hash record — commit the lock
 alongside the seeds), `protection` (enabled / strict-up-to-date / required checks /
-provisioned), and `settings` (created / changed). A CUSTOMIZED seed config is
+provisioned), and `settings` (created / changed, plus a nested `local` with the same
+shape for `.claude/settings.local.json`). A CUSTOMIZED seed config is
 project-owned — reported under `files_present`, never overwritten (even a richer
 superset of the shipped baseline is recognized as current, not drift); delete it and
 re-scaffold to re-adopt the latest baseline.

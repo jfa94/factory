@@ -177,11 +177,16 @@ export interface ScaffoldReport {
         readonly provisioned: boolean
     }
     /**
-     * E1 (F-perm): the target `.claude/settings.json` emit/merge — whether the
-     * file was freshly created and whether the merge altered it. Stops the
+     * E1 (F-perm): the target `.claude/settings.json` (committed) +
+     * `.claude/settings.local.json` (gitignored, `local`) emit/merge — whether
+     * each file was freshly created and whether its merge altered it. Stops the
      * per-call permission prompts for interactive `/factory:run` in this repo.
      */
-    readonly settings: {readonly created: boolean; readonly changed: boolean}
+    readonly settings: {
+        readonly created: boolean
+        readonly changed: boolean
+        readonly local: {readonly created: boolean; readonly changed: boolean}
+    }
     /** Detected stack driving the gate-contract resolution (S7, Decision 46). */
     readonly stack: GateContractStack
     /** Whether `.factory/gates.json` was freshly resolved+written or already present. */
@@ -562,17 +567,25 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     // 3. .gitignore guard (factory state must never be committed).
     await ensureGitignore(opts.targetRoot, lists)
 
-    // 3b. E1 (F-perm): emit / idempotently merge the target-repo
-    //     `.claude/settings.json` (factory allow-list + baked data-dir rules +
-    //     worktree.baseRef:"head"; NO statusLine — that belongs to E2's
-    //     merged-settings). Non-destructive: a user's existing settings keys (incl.
-    //     their own statusLine) are kept, and any stale `${CLAUDE_PLUGIN_DATA}`
-    //     placeholder rules from an older scaffold are migrated to the baked form.
+    // 3b. E1 (F-perm): emit / idempotently merge TWO target-repo settings files
+    //     (Decision 17, corrected): the COMMITTED `.claude/settings.json` (factory
+    //     allow-list + baked TILDE-form data-dir rules + worktree.baseRef:"head";
+    //     NO statusLine — that belongs to E2's merged-settings) and the GITIGNORED
+    //     `.claude/settings.local.json` (the absolute `additionalDirectories`
+    //     entry — Claude Code never expands `~/` there, so it must never be
+    //     committed). Non-destructive: a user's existing keys in either file
+    //     (incl. their own statusLine, their own extra additionalDirectories) are
+    //     kept; any stale factory-managed additionalDirectories entry (a literal
+    //     `${CLAUDE_PLUGIN_DATA}` placeholder, a tilde form, or a previously-baked
+    //     path that moved) is pruned from settings.local.json and replaced.
     const settings = await ensureTargetSettings({
         targetRoot: opts.targetRoot,
         dataDirRules: opts.dataDirRules,
     })
-    // Surface the .claude/settings.json path in the file lists for transparency.
+    // Surface the committed .claude/settings.json path in the file lists for
+    // transparency (git add/commit visibility). settings.local.json is NOT
+    // listed here — it's gitignored (GITIGNORE_ENTRIES above), never meant to be
+    // committed, so it would be misleading to report it as a trackable file.
     const settingsRel = relative(opts.targetRoot, settings.path)
     if (settings.created) {
         lists.created.push(settingsRel)
@@ -617,7 +630,11 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
             required_status_checks: state.requiredStatusChecks,
             provisioned,
         },
-        settings: {created: settings.created, changed: settings.changed},
+        settings: {
+            created: settings.created,
+            changed: settings.changed,
+            local: {created: settings.local.created, changed: settings.local.changed},
+        },
         stack: gates.stack,
         gates_contract: gates.status,
     }

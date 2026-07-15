@@ -9,15 +9,17 @@ import {runDocsEmit, runDocsRecord, type DocsRunDeps} from './docs.js'
 
 const RUN_ID = 'run-1'
 let dataDir: string
+let workDir: string
 let state: StateManager
 let git: FakeGitClient
 
 function deps(): DocsRunDeps {
-    return {state, git, config: defaultConfig(), dataDir}
+    return {state, git, config: defaultConfig(), workDir}
 }
 
 beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'docs-emit-'))
+    workDir = await mkdtemp(join(tmpdir(), 'docs-emit-workdir-'))
     state = new StateManager({dataDir})
     git = new FakeGitClient({remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging'}})
     await state.create({
@@ -28,6 +30,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
     await rm(dataDir, {recursive: true, force: true})
+    await rm(workDir, {recursive: true, force: true})
 })
 
 describe('runDocsRecord', () => {

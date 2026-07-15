@@ -1,5 +1,6 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
 import {mkdtemp, rm, readFile, writeFile} from 'node:fs/promises'
+import {execFileSync} from 'node:child_process'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {
@@ -539,6 +540,15 @@ describe('debugSeed', () => {
 
 describe('debugFinalize', () => {
     it('delegates to finalizeRun and wraps its result under kind:finalized', async () => {
+        // debugFinalize (like production's real call site, debug.ts:724) takes only
+        // {dataDir} — no injected gitClient — so finalizedEnvelope's loadCliDeps hits
+        // the REAL DefaultGitClient to resolve `workDir` (Decision 67). In production
+        // this cwd genuinely is a git worktree; make the fixture match rather than
+        // faking git out here (the rest of this suite stays fake-git-only per
+        // debug/integration.test.ts's fixture-weight discipline — this is the one
+        // test that actually reaches that code path).
+        execFileSync('git', ['init', '-q'], {cwd})
+
         const store = new SpecStore({dataDir})
         const manifest = buildManifest(REPO, 2_000_000_001, {
             specMd: '# Fix',

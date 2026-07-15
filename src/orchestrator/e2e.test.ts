@@ -27,6 +27,7 @@ const RUN_ID = 'run-1'
 const REPO = 'acme/widgets'
 
 let dataDir: string
+let workDir: string
 let state: StateManager
 let git: FakeGitClient
 
@@ -154,7 +155,7 @@ function deps(overrides: Partial<E2eRunDeps> = {}): E2eRunDeps {
         state,
         git,
         config: e2eConfig(),
-        dataDir,
+        workDir,
         spec: SPEC,
         files: new FakeE2eFileOps(),
         ...overrides,
@@ -163,6 +164,7 @@ function deps(overrides: Partial<E2eRunDeps> = {}): E2eRunDeps {
 
 beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'e2e-coroutine-'))
+    workDir = await mkdtemp(join(tmpdir(), 'e2e-coroutine-workdir-'))
     state = new StateManager({dataDir})
     git = new FakeGitClient({
         remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging', develop: 'sha-develop'},
@@ -184,6 +186,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await rm(dataDir, {recursive: true, force: true})
+    await rm(workDir, {recursive: true, force: true})
 })
 
 describe('runE2eEmit', () => {
@@ -368,7 +371,7 @@ describe('e2e worktrees are provisioned (npm ci) before any Playwright invocatio
     it('provisions the base-proof worktree before the fail-first proof runs against it', async () => {
         await runE2eEmit(deps(), RUN_ID)
         const {calls, fn} = recordingProvision()
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool((opts) => [
             {file: 'e2e/checkout.spec.ts', title: `${CONTROL_TITLE_PREFIX} boots`, status: 'passed'},
             {
@@ -397,7 +400,7 @@ describe('e2e worktrees are provisioned (npm ci) before any Playwright invocatio
         const tool = new ScriptedPlaywrightTool(() => [
             {file: 'checkout.spec.ts', title: `${CONTROL_TITLE_PREFIX} boots`, status: 'passed'},
         ])
-        const worktree = e2eRunWorktreePath(dataDir, RUN_ID)
+        const worktree = e2eRunWorktreePath(workDir, RUN_ID)
         await runE2eEmit(deps({playwright: tool, provision: fn}), RUN_ID)
         expect(calls.some((c) => c.path === worktree)).toBe(true)
     })
@@ -479,7 +482,7 @@ describe('runE2eRecord', () => {
         expect(git.calls.some((c) => c.startsWith('push'))).toBe(false)
         expect(Object.keys(git.mergesInto)).toHaveLength(0)
         // The author worktree never leaks on an early failure exit.
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('DONE with an empty manifest AND an explicit no_ui_surface declaration is an immediate done', async () => {
@@ -510,7 +513,7 @@ describe('runE2eRecord', () => {
         expect(env.reason).toContain('no_ui_surface')
         const run = await state.read(RUN_ID)
         expect(run.e2e_phase?.status).toBe('failed')
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('rejects a manifest entry naming a task_id absent from run.tasks — never merges', async () => {
@@ -531,13 +534,13 @@ describe('runE2eRecord', () => {
         expect(env.reason).toContain('task-unknown')
         expect(Object.keys(git.mergesInto)).toHaveLength(0)
         expect(git.calls.some((c) => c.startsWith('push'))).toBe(false)
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('fail-first proof passes: merges the critical spec, then runs the full suite green', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const authorWt = e2eWorktreePath(dataDir, RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const authorWt = e2eWorktreePath(workDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const files = new FakeE2eFileOps()
         const tool = new ScriptedPlaywrightTool((opts) => [
             {
@@ -574,7 +577,7 @@ describe('runE2eRecord', () => {
 
     it('fail-first proof rejects a vacuous-pass spec (green even on the base app) — never merged', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const authorWt = e2eWorktreePath(dataDir, RUN_ID)
+        const authorWt = e2eWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool(() => [
             {
                 file: 'e2e/checkout.spec.ts',
@@ -600,7 +603,7 @@ describe('runE2eRecord', () => {
 
     it("fail-first proof rejects when the base app itself doesn't boot (control assertion fails)", async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool((opts) => [
             {
                 file: 'e2e/checkout.spec.ts',
@@ -647,7 +650,7 @@ describe('runE2eRecord', () => {
 
     it('an all-throwaway manifest (no critical entries) skips the diff-guard, fail-first proof, and merge entirely', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const authorWt = e2eWorktreePath(dataDir, RUN_ID)
+        const authorWt = e2eWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool(() => [
             {file: 'task-a.spec.ts', title: 'explores the flow', status: 'passed'},
         ])
@@ -676,7 +679,7 @@ describe('manifest spec_path is guarded against traversal before any join/copySp
         }
         expect(env.reason).toContain('..')
         expect(Object.keys(git.mergesInto)).toHaveLength(0)
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('rejects an absolute critical spec_path', async () => {
@@ -689,7 +692,7 @@ describe('manifest spec_path is guarded against traversal before any join/copySp
         }
         expect(env.reason).toContain('absolute')
         expect(Object.keys(git.mergesInto)).toHaveLength(0)
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 })
 
@@ -731,7 +734,7 @@ describe('author branch merge is path-guarded against out-of-testDir changes (W5
 
     it('allows a merge whose extra changed files are all under testDir/', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         git.branchFiles.set(`e2e-${RUN_ID}`, ['e2e/checkout.spec.ts', 'e2e/support/fixtures.ts'])
         const files = new FakeE2eFileOps()
         const tool = new ScriptedPlaywrightTool((opts) => [
@@ -773,7 +776,7 @@ describe('author branch merge is path-guarded against out-of-testDir changes (W5
 
     it('converse check carve-out: support/** and auth.setup.ts may be committed undeclared', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         git.branchFiles.set(`e2e-${RUN_ID}`, ['e2e/checkout.spec.ts', 'e2e/support/seed.ts', 'e2e/auth.setup.ts'])
         const tool = new ScriptedPlaywrightTool((opts) => [
             {
@@ -1131,8 +1134,8 @@ describe('runSuiteAndDecide (via runE2eEmit re-entry)', () => {
             },
         }))
         const files = new FakeE2eFileOps()
-        const worktree = e2eRunWorktreePath(dataDir, RUN_ID)
-        const throwawayDir = e2eThrowawayDir(dataDir, RUN_ID)
+        const worktree = e2eRunWorktreePath(workDir, RUN_ID)
+        const throwawayDir = e2eThrowawayDir(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool(() => [
             {file: 'checkout.spec.ts', title: `${CONTROL_TITLE_PREFIX} boots`, status: 'passed'},
         ])
@@ -1235,13 +1238,13 @@ describe('e2e tooling THROWS (missing binary, empty/truncated reporter output) a
         const run = await state.read(RUN_ID)
         expect(run.e2e_phase?.status).toBe('failed')
         expect(Object.keys(git.mergesInto)).toHaveLength(0)
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
-        expect(await git.worktreeExists(e2eBaseProofWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eBaseProofWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('a throw against staging (base proof already red) names the staging side in the reason', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const scripted = new ScriptedPlaywrightTool((opts) => [
             {file: 'e2e/checkout.spec.ts', title: `${CONTROL_TITLE_PREFIX} boots`, status: 'passed'},
             {
@@ -1348,7 +1351,7 @@ describe('e2e tooling THROWS (missing binary, empty/truncated reporter output) a
 describe('every Playwright invocation runs under the scrubbed env allowlist (Decision 39 W5)', () => {
     it('proof (base + staging), critical suite, and throwaway suite all pass replaceEnv:true with EXACTLY the allowlisted keys', async () => {
         await runE2eEmit(deps(), RUN_ID)
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool((opts) => {
             if (opts.config !== undefined) {
                 return [{file: 'task-a.spec.ts', title: 'explores the flow', status: 'passed'}]
@@ -1406,7 +1409,7 @@ describe('author crash retry (Decision 40 D5)', () => {
         // Attempt 2 starts from a clean staging tip — the crashed attempt's partial
         // work is discarded via hard-reset, not by tearing the worktree down.
         expect(git.calls.some((c) => c.startsWith(`reset --hard origin/staging-${RUN_ID}`))).toBe(true)
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(true)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(true)
     })
 
     it("a second crash fails the phase with '(after 2 attempts)' and cleans up the worktree", async () => {
@@ -1421,7 +1424,7 @@ describe('author crash retry (Decision 40 D5)', () => {
         expect(second.reason).toContain('(after 2 attempts)')
         const run = await state.read(RUN_ID)
         expect(run.e2e_phase?.status).toBe('failed')
-        expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false)
+        expect(await git.worktreeExists(e2eWorktreePath(workDir, RUN_ID))).toBe(false)
     })
 
     it('a deliberate NEEDS_CONTEXT verdict is FINAL — fails without spending the author retry', async () => {
@@ -1651,7 +1654,7 @@ describe('adjudication of pre-existing failing specs (Decision 40 D7)', () => {
             cursor: {specs: [CURSOR_SPEC], attempts: 0, requested_at: '2026-07-03T00:00:00.000Z'},
         })
         git.branchFiles.set(`e2e-adjudicate-${RUN_ID}`, ['e2e/legacy.spec.ts'])
-        const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID)
+        const baseWt = e2eBaseProofWorktreePath(workDir, RUN_ID)
         const tool = new ScriptedPlaywrightTool((opts) => [
             {file: 'e2e/legacy.spec.ts', title: `${CONTROL_TITLE_PREFIX} boots`, status: 'passed'},
             {

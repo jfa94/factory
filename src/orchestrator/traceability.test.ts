@@ -35,11 +35,12 @@ const SPEC = makeSpec([
 ])
 
 let dataDir: string
+let workDir: string
 let state: StateManager
 let git: FakeGitClient
 
 function deps(): TraceabilityRunDeps {
-    return {state, git, config: defaultConfig(), dataDir, spec: SPEC}
+    return {state, git, config: defaultConfig(), dataDir, workDir, spec: SPEC}
 }
 
 const MET = {index: 1, verdict: 'met' as const, evidence: 'src/checkout.ts:12 handles it'}
@@ -47,6 +48,7 @@ const MET2 = {index: 2, verdict: 'met' as const, evidence: 'returns 201 in handl
 
 beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'trace-'))
+    workDir = await mkdtemp(join(tmpdir(), 'trace-workdir-'))
     state = new StateManager({dataDir})
     git = new FakeGitClient({remoteHeads: {[`staging-${RUN_ID}`]: 'sha-staging'}})
     await state.create({
@@ -59,6 +61,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
     await rm(dataDir, {recursive: true, force: true})
+    await rm(workDir, {recursive: true, force: true})
 })
 
 describe('runTraceabilityEmit', () => {
@@ -71,9 +74,10 @@ describe('runTraceabilityEmit', () => {
         expect(env.staging_branch).toBe(`staging-${RUN_ID}`)
         expect(env.base_ref).toBe('origin/develop')
         expect(env.model).toBe('sonnet')
-        expect(env.worktree).toBe(traceWorktreePath(dataDir, RUN_ID))
-        // TCB: worktrees/<runId>/, never runs/** (agent writes there are denied).
-        expect(env.worktree).toContain(join('worktrees', RUN_ID))
+        expect(env.worktree).toBe(traceWorktreePath(workDir, RUN_ID))
+        // TCB: under workDir/<runId>/, never runs/** (agent writes there are denied;
+        // workDir is git-derived `<repoRoot>/.claude/worktrees` in production, Decision 67).
+        expect(env.worktree).toContain(join(workDir, RUN_ID))
         // Detached — the auditor never commits, so there is no branch to GC.
         expect(git.calls.some((c) => c.startsWith('worktree add') && c.includes('--detach'))).toBe(true)
         expect(git.calls.some((c) => c.includes('-b '))).toBe(false)

@@ -10,7 +10,7 @@ export interface DocsRunDeps {
     readonly state: StateManager
     readonly git: GitClient
     readonly config: Config
-    readonly dataDir: string
+    readonly workDir: string
 }
 
 export type DocsAction =
@@ -33,13 +33,14 @@ const DOCS_MODEL = 'sonnet'
 export const MAX_DOCS_ATTEMPTS = 2
 
 /**
- * The docs-phase worktree path for a run. Lives under `worktrees/<runId>/`, NOT
+ * The docs-phase worktree path for a run. Lives under `<workDir>/<runId>/`
+ * (`.claude/worktrees` — the protected-path exemption, Decision 67), NOT
  * `runs/<runId>/` — the TCB `data-runs` rule denies agent writes under `runs/**`,
  * and the scribe must write here. The `.docs` dot prefix cannot collide with a
  * task id (`validateId` allows only `[a-zA-Z0-9_-]`).
  */
-export function docsWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.docs')
+export function docsWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.docs')
 }
 
 /** Build the scribe prompt for the docs phase. @internal */
@@ -61,7 +62,7 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
     const staging = run.staging_branch
     const base = deps.config.git.baseBranch
     const docsBranch = `docs-${runId}`
-    const worktree = docsWorktreePath(deps.dataDir, runId)
+    const worktree = docsWorktreePath(deps.workDir, runId)
     const baseRef = `origin/${base}`
 
     await deps.git.fetch('origin', staging)
@@ -100,7 +101,7 @@ export async function runDocsRecord(
     const run = await deps.state.read(runId)
     const staging = run.staging_branch
     const docsBranch = `docs-${runId}`
-    const worktree = docsWorktreePath(deps.dataDir, runId)
+    const worktree = docsWorktreePath(deps.workDir, runId)
     const outcome = parseProducerStatus(results.status)
 
     if (outcome.status === 'done') {
