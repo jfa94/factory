@@ -1,5 +1,13 @@
 node_modules/
 .claude/
 dist/
+# Both rendered per-repo by scaffold from .factory/gates.json (D53), and drift is
+# measured against the RENDERED bytes — tabWidth:4 would reindent every scaffolded
+# repo's workflow for nothing (2-space is the GitHub Actions convention).
+templates/.github/workflows/
 templates/.github/scripts/
+# Prettier 3.7.4 does NOT converge here: each --write pass adds 4 spaces to the
+# deeply-nested list at ~L134, so --check can never pass. This is executable
+# policy, and runaway indent would corrupt the nesting the protocol relies on.
+skills/rescue-protocol/SKILL.md
 pnpm-lock.yaml
