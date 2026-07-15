@@ -25,6 +25,9 @@ export type {ShipMode, HandlerDeps} from './types.js'
 // -- docs applicability check ------------------------------------------------
 export {isDocsApplicable} from './docs-applicable.js'
 
+// -- design-system discovery for implementer UI prompts ---------------------
+export {findDesignSystemDocs, isFrontendPath} from './design-system.js'
+
 // -- record input reader (record cores themselves are consumed via deep './record.js' imports) --
 export {readJsonInput} from './record.js'
 

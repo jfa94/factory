@@ -87,6 +87,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 ## Process
 
 1. **Sync.** `cd` into the task worktree from your prompt. Read the task context.
+   When it includes a `Design system` section, read every cited doc before writing UI code.
 2. **Confirm RED** per the TDD skill; note the exact failure messages. (Detect the runner
    from `package.json`, `pyproject.toml`, `Cargo.toml`, `Makefile`, etc.)
 3. **Explore** the codebase around `files` — existing patterns, imports, types.

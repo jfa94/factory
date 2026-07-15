@@ -81,6 +81,8 @@ export interface BuildProducerContextInput {
      * is the rung-2 "changed variable" (the injected context).
      */
     readonly priorFailures?: readonly PriorFailureNote[]
+    /** Repo-relative design-system docs to read before implementer UI work. */
+    readonly designSystemDocs?: readonly string[]
 }
 
 /**
@@ -103,6 +105,8 @@ export interface ProducerContext {
     readonly priorFailures: readonly PriorFailureNote[]
     /** True IFF ≥1 prior-failure note was injected — the rung-2 context change. */
     readonly injectedPriorFailure: boolean
+    /** Repo-relative design-system docs (empty for non-UI work and test writers). */
+    readonly designSystemDocs: readonly string[]
 }
 
 /** Map a confirmed-blocker {@link Finding} to a concrete {@link FixInstruction}. */
@@ -135,6 +139,7 @@ export function buildProducerContext(input: BuildProducerContextInput): Producer
         fixInstructions,
         priorFailures,
         injectedPriorFailure: priorFailures.length > 0,
+        designSystemDocs: input.designSystemDocs ?? [],
     }
 }
 
@@ -156,6 +161,13 @@ export function renderProducerPrompt(ctx: ProducerContext, worktree: string): st
     ]
     if (ctx.files.length > 0) {
         lines.push('', 'Scoped files:', ...ctx.files.map((f) => `- ${f}`))
+    }
+    if (ctx.designSystemDocs.length > 0) {
+        lines.push(
+            '',
+            `Design system: this repo documents a design system at ${ctx.designSystemDocs.join(', ')}. ` +
+                'Read it BEFORE writing any UI code and follow its tokens/components/conventions.'
+        )
     }
     if (ctx.fixInstructions.length > 0) {
         lines.push('', 'Confirmed blockers to fix (patch forward, do not nuke prior work):')

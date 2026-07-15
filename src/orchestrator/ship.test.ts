@@ -110,6 +110,7 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
         owner: 'acme',
         repo: 'widgets',
         shipMode: opts.shipMode ?? 'no-merge',
+        designSystemDocs: () => Promise.resolve([]),
         state,
     }
 

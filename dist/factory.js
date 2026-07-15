@@ -601,9 +601,9 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$readdir = fs2.readdir;
-      fs2.readdir = readdir3;
+      fs2.readdir = readdir4;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path7, options, cb) {
+      function readdir4(path7, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path8, options2, cb2, startTime) {
@@ -8069,7 +8069,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -11076,7 +11076,8 @@ function buildProducerContext(input) {
     rung: input.rung,
     fixInstructions,
     priorFailures,
-    injectedPriorFailure: priorFailures.length > 0
+    injectedPriorFailure: priorFailures.length > 0,
+    designSystemDocs: input.designSystemDocs ?? []
   };
 }
 function renderProducerPrompt(ctx, worktree) {
@@ -11090,6 +11091,12 @@ function renderProducerPrompt(ctx, worktree) {
   ];
   if (ctx.files.length > 0) {
     lines.push("", "Scoped files:", ...ctx.files.map((f) => `- ${f}`));
+  }
+  if (ctx.designSystemDocs.length > 0) {
+    lines.push(
+      "",
+      `Design system: this repo documents a design system at ${ctx.designSystemDocs.join(", ")}. Read it BEFORE writing any UI code and follow its tokens/components/conventions.`
+    );
   }
   if (ctx.fixInstructions.length > 0) {
     lines.push("", "Confirmed blockers to fix (patch forward, do not nuke prior work):");
@@ -14348,7 +14355,54 @@ async function appendHoldoutEvidence(deps, verdictStore, runId, taskId, rung, ev
 }
 
 // src/orchestrator/handlers.ts
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
+
+// src/orchestrator/design-system.ts
+import { readdir as readdir3 } from "node:fs/promises";
+import { join as join13, relative } from "node:path";
+var FRONTEND_EXTENSION = /\.(?:tsx|jsx|vue|svelte|css|scss|less)$/i;
+var FRONTEND_DIRECTORY = /(?:^|\/)(?:components|pages|app)\//i;
+var DESIGN_SYSTEM_DOC = /design[-_]?system|style[-_]?guide|design[-_]?tokens|ui[-_]?guidelines/i;
+var MAX_DEPTH = 4;
+function isFrontendPath(path7) {
+  return FRONTEND_EXTENSION.test(path7) || FRONTEND_DIRECTORY.test(path7.replaceAll("\\", "/"));
+}
+async function findDesignSystemDocs(repoRoot) {
+  const docsRoot = join13(repoRoot, "docs");
+  const matches = [];
+  async function scan(dir, depth) {
+    let entries;
+    try {
+      entries = await readdir3(dir, { withFileTypes: true });
+    } catch (err) {
+      if (dir === docsRoot && err.code === "ENOENT") {
+        return;
+      }
+      throw err;
+    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        const absolute = join13(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (depth < MAX_DEPTH) {
+            await scan(absolute, depth + 1);
+          }
+          return;
+        }
+        if (entry.isFile()) {
+          const repoRelative = relative(repoRoot, absolute).replaceAll("\\", "/");
+          if (DESIGN_SYSTEM_DOC.test(repoRelative)) {
+            matches.push(repoRelative);
+          }
+        }
+      })
+    );
+  }
+  await scan(docsRoot, 0);
+  return matches.sort();
+}
+
+// src/orchestrator/handlers.ts
 var PREFLIGHT_GIT_LOCK_TUNING = {
   ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
@@ -14381,10 +14435,11 @@ function makePhaseHandlers(deps) {
       }
     ] : [];
   }
-  function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
+  async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const model = role === "test-writer" ? selectProducerModel("high", deps.config) : dial.model;
     const split = splitFor(deps.config, runId, specTask);
+    const designSystemDocs = role === "implementer" && specTask.files.some(isFrontendPath) ? await deps.designSystemDocs() : [];
     const context = buildProducerContext({
       taskId: specTask.task_id,
       title: specTask.title,
@@ -14392,6 +14447,7 @@ function makePhaseHandlers(deps) {
       visibleCriteria: split.visible,
       files: specTask.files,
       rung,
+      designSystemDocs,
       // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
       // the rung dial — a defective RED test must be steered away from on the very
       // first regeneration (rung 1), where the generic dial note is still off.
@@ -14436,8 +14492,8 @@ function makePhaseHandlers(deps) {
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
         {
-          dir: join13(deps.dataDir, "locks"),
-          lockfile: join13(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          dir: join14(deps.dataDir, "locks"),
+          lockfile: join14(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
           label: `preflight git '${staging}'`,
           dirPolicy: "create",
           tuning: PREFLIGHT_GIT_LOCK_TUNING
@@ -14490,22 +14546,20 @@ function makePhaseHandlers(deps) {
      * visible criteria (recomputed from the same seed — never re-persisted), resume
      * at verify.
      */
-    exec(ctx) {
+    async exec(ctx) {
       const task = requireTask3(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return Promise.resolve(
-        producerSpawn(
-          "implementer",
-          specTask,
-          ctx.run.run_id,
-          task.escalation_rung,
-          "verify",
-          e2eFeedbackNote(task),
-          // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
-          // gate-stderr record (record.ts persisted it on the wait-retry branch) —
-          // patches the specific verified misses instead of re-nuking.
-          task.fix_findings
-        )
+      return producerSpawn(
+        "implementer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "verify",
+        e2eFeedbackNote(task),
+        // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+        // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+        // patches the specific verified misses instead of re-nuking.
+        task.fix_findings
       );
     },
     /**
@@ -14619,7 +14673,7 @@ function shipBody(runId, specTask) {
 
 // src/orchestrator/docs-applicable.ts
 import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -14639,14 +14693,14 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join14(repoRoot, "docs"));
+    const s = await stat(join15(repoRoot, "docs"));
     if (!s.isDirectory()) {
       return false;
     }
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join14(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
@@ -15359,7 +15413,7 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 
 // src/orchestrator/stage-helpers.ts
 async function ensureStageWorktree(git, opts) {
@@ -15385,7 +15439,7 @@ function specTaskLines(spec) {
 var DOCS_MODEL = "sonnet";
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(workDir, runId) {
-  return join15(workDir, runId, ".docs");
+  return join16(workDir, runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -15454,11 +15508,11 @@ async function runDocsRecord(deps, runId, results) {
 }
 
 // src/orchestrator/traceability.ts
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 var TRACE_MODEL = "sonnet";
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(workDir, runId) {
-  return join16(workDir, runId, ".trace");
+  return join17(workDir, runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -15861,21 +15915,21 @@ var E2eResultsSchema = external_exports.object({
 }).strict();
 
 // src/orchestrator/e2e-paths.ts
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 function e2eWorktreePath(workDir, runId) {
-  return join17(workDir, runId, ".e2e-author");
+  return join18(workDir, runId, ".e2e-author");
 }
 function e2eRunWorktreePath(workDir, runId) {
-  return join17(workDir, runId, ".e2e-run");
+  return join18(workDir, runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(workDir, runId) {
-  return join17(workDir, runId, ".e2e-base-proof");
+  return join18(workDir, runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(workDir, runId) {
-  return join17(workDir, runId, ".e2e-throwaway");
+  return join18(workDir, runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(workDir, runId) {
-  return join17(workDir, runId, ".e2e-adjudicate");
+  return join18(workDir, runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -15970,7 +16024,7 @@ function unattributableToolingFailure(r) {
 }
 
 // src/orchestrator/e2e-proof.ts
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 function classifyBaseRun(specs) {
   const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
@@ -15998,7 +16052,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   });
   try {
     for (const entry of critical) {
-      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
+      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -16066,7 +16120,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
 }
 
 // src/orchestrator/e2e-suite.ts
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 var log28 = createLogger("e2e");
 function buildAdjudicationPrompt(args) {
   const taskLines = specTaskLines(args.spec);
@@ -16258,7 +16312,7 @@ async function recordAdjudication(deps, runId, run9, results, emit2) {
   return runSuiteAndDecide(deps, runId);
 }
 function throwawayConfigPath(worktree) {
-  return join19(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join20(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -16640,12 +16694,12 @@ async function runE2eRecord(deps, runId, results) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join20 } from "node:path";
+import { join as join21 } from "node:path";
 var log31 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(workDir, runId) {
-  return join20(workDir, runId, ".e2e-assess");
+  return join21(workDir, runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -16979,10 +17033,10 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 }
 
 // src/cli/subcommands/run.ts
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 
 // src/cli/wiring.ts
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
     throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
@@ -17012,7 +17066,8 @@ async function loadCliDeps(opts) {
   const spec = await new SpecStore(dirOpts).read(run9.spec.repo, run9.spec.spec_id);
   const { owner, repo } = splitRepo(run9.spec.repo);
   const git = new DefaultGitClient();
-  const workDir = join21(await git.mainWorktreeRoot({ cwd: process.cwd() }), ".claude", "worktrees");
+  const repoRoot = await git.mainWorktreeRoot({ cwd: process.cwd() });
+  const workDir = join22(repoRoot, ".claude", "worktrees");
   return {
     config,
     spec,
@@ -17028,6 +17083,7 @@ async function loadCliDeps(opts) {
     // persisted on the run at create (manual/resume `drive`/`finalize` omit the
     // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
     shipMode: opts.shipMode ?? run9.ship_mode,
+    designSystemDocs: () => findDesignSystemDocs(repoRoot),
     state,
     run: run9
   };
@@ -17130,13 +17186,13 @@ function decideAutonomyPreflight(input) {
 
 // src/orchestrator/preflight.ts
 import { readFile as readFile14 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 var TCB_COVERED_TEST_DIRS = ["e2e", "./e2e"];
 async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile14(join22(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile14(join23(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -17157,7 +17213,7 @@ async function assertE2ePrereqs(cwd) {
   }
   let configRaw;
   try {
-    configRaw = await readFile14(join22(cwd, "playwright.config.ts"), "utf8");
+    configRaw = await readFile14(join23(cwd, "playwright.config.ts"), "utf8");
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -17404,7 +17460,7 @@ async function runCreate(argv, overrides = {}) {
     ghClient,
     config,
     targetRoot: cwd,
-    orchestratorWorktreePath: join23(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
+    orchestratorWorktreePath: join24(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
@@ -17457,7 +17513,7 @@ async function runCreate(argv, overrides = {}) {
     return {
       run: parked,
       spec_approval: {
-        spec_path: join23(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
+        spec_path: join24(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -18111,10 +18167,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join24(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join25(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join24(dataDir, "debug", runId, `pass-${pass}`);
+  return join25(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -18193,8 +18249,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join24(passDir, "findings.json");
-  const reportPath = join24(passDir, "findings.md");
+  const findingsPath = join25(passDir, "findings.json");
+  const reportPath = join25(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -18469,7 +18525,7 @@ var stateCommand = {
 import { mkdir as mkdir13, readFile as readFile18, writeFile as writeFile5 } from "node:fs/promises";
 import { existsSync as existsSync11 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname11, join as join28, relative } from "node:path";
+import { dirname as dirname11, join as join29, relative as relative2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/ci/inject-gate-env.ts
@@ -18718,7 +18774,7 @@ function resolveNodeRuntimeDeclarations(declarations) {
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir10, readFile as readFile15 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 var log33 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -18800,9 +18856,9 @@ async function readExistingSettings(path7) {
   return {};
 }
 async function ensureTargetSettings(opts) {
-  const dir = join25(opts.targetRoot, ".claude");
-  const path7 = join25(dir, "settings.json");
-  const localPath = join25(dir, "settings.local.json");
+  const dir = join26(opts.targetRoot, ".claude");
+  const path7 = join26(dir, "settings.json");
+  const localPath = join26(dir, "settings.local.json");
   const created = !existsSync8(path7);
   const localCreated = !existsSync8(localPath);
   const [existing, existingLocal] = await Promise.all([readExistingSettings(path7), readExistingSettings(localPath)]);
@@ -18829,9 +18885,9 @@ async function ensureTargetSettings(opts) {
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { mkdir as mkdir11, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname9, join as join26 } from "node:path";
+import { dirname as dirname9, join as join27 } from "node:path";
 function detectStack(targetRoot) {
-  const has = (f) => existsSync9(join26(targetRoot, f));
+  const has = (f) => existsSync9(join27(targetRoot, f));
   const hasPkg = has("package.json");
   const hasDeno = has("deno.json") || has("deno.jsonc");
   const hasNodeLock = has("pnpm-lock.yaml") || has("package-lock.json") || has("yarn.lock") || has("bun.lockb");
@@ -18847,7 +18903,7 @@ function detectStack(targetRoot) {
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join26(targetRoot, "package.json"), "utf8");
+  const raw = await readFile16(join27(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -18861,9 +18917,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync9(join26(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join27(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join26(targetRoot, file), "utf8");
+  const raw = await readFile16(join27(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -18881,7 +18937,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync9(join26(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join27(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -18891,7 +18947,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join27(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -18913,11 +18969,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join26(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join27(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync9(join26(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join27(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -18983,7 +19039,7 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack, contract: load.contract };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join26(opts.targetRoot, GATE_CONTRACT_REL);
+  const dest = join27(opts.targetRoot, GATE_CONTRACT_REL);
   await mkdir11(dirname9(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack, contract };
@@ -18993,13 +19049,13 @@ async function ensureGateContract(opts) {
 import { createHash as createHash2 } from "node:crypto";
 import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync10 } from "node:fs";
-import { dirname as dirname10, join as join27 } from "node:path";
+import { dirname as dirname10, join as join28 } from "node:path";
 var SCAFFOLD_LOCK_REL = ".factory/scaffold.lock";
 function sha256Hex(text) {
   return createHash2("sha256").update(text, "utf8").digest("hex");
 }
 async function loadScaffoldLock(targetRoot) {
-  const path7 = join27(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join28(targetRoot, SCAFFOLD_LOCK_REL);
   const empty = { version: 1, seeds: {} };
   if (!existsSync10(path7)) {
     return { lock: empty, existed: false, invalid: false };
@@ -19022,7 +19078,7 @@ async function loadScaffoldLock(targetRoot) {
   }
 }
 async function saveScaffoldLock(targetRoot, lock2) {
-  const path7 = join27(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join28(targetRoot, SCAFFOLD_LOCK_REL);
   const seeds = {};
   for (const [rel, hash] of Object.entries(lock2.seeds).sort(([a], [b]) => a.localeCompare(b))) {
     seeds[rel] = hash;
@@ -19095,8 +19151,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname11(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join28(dir, "templates");
-    if (existsSync11(join28(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join29(dir, "templates");
+    if (existsSync11(join29(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname11(dir);
@@ -19135,8 +19191,8 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, transform) {
   const segs = entry.rel.split("/");
-  const src = join28(templatesDir, ...segs);
-  const dest = join28(targetRoot, ...segs);
+  const src = join29(templatesDir, ...segs);
+  const dest = join29(targetRoot, ...segs);
   if (!existsSync11(src)) {
     log34.warn(`template missing, skipping: ${src}`);
     return;
@@ -19200,8 +19256,8 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync11(join28(targetRoot, "pnpm-lock.yaml"));
-  const raw = await readFile18(join28(targetRoot, "package.json"), "utf8");
+  const pnpm = existsSync11(join29(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile18(join29(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
     pkg = JSON.parse(raw);
@@ -19209,11 +19265,11 @@ async function readWorkflowFacts(targetRoot) {
     throw new Error(`scaffold: package.json is not valid JSON: ${err.message}`);
   }
   const declarations = {};
-  if (existsSync11(join28(targetRoot, NODE_VERSION_FILE))) {
-    declarations.nodeVersion = await readFile18(join28(targetRoot, NODE_VERSION_FILE), "utf8");
+  if (existsSync11(join29(targetRoot, NODE_VERSION_FILE))) {
+    declarations.nodeVersion = await readFile18(join29(targetRoot, NODE_VERSION_FILE), "utf8");
   }
-  if (existsSync11(join28(targetRoot, NVMRC_FILE))) {
-    declarations.nvmrc = await readFile18(join28(targetRoot, NVMRC_FILE), "utf8");
+  if (existsSync11(join29(targetRoot, NVMRC_FILE))) {
+    declarations.nvmrc = await readFile18(join29(targetRoot, NVMRC_FILE), "utf8");
   }
   if (typeof pkg.engines === "object" && pkg.engines !== null && Object.hasOwn(pkg.engines, "node")) {
     declarations.enginesNode = pkg.engines.node;
@@ -19233,15 +19289,15 @@ async function readWorkflowFacts(targetRoot) {
   declarations.packageJsonRuntimeShadows = packageJsonRuntimeShadows;
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync11(join28(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync11(join29(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0,
     nodeRuntime: resolveNodeRuntimeDeclarations(declarations)
   };
 }
 async function ensureIgnoreFile(root, filename, entries, lists) {
-  const path7 = join28(root, filename);
-  const rel = relative(root, path7);
+  const path7 = join29(root, filename);
+  const rel = relative2(root, path7);
   if (!existsSync11(path7)) {
     await writeFile5(path7, entries.join("\n") + "\n", "utf8");
     lists.created.push(rel);
@@ -19269,7 +19325,7 @@ async function ensurePrettierignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync11(join28(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync11(join29(opts.targetRoot, "package.json"));
   const lockLoad = await loadScaffoldLock(opts.targetRoot);
   const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
@@ -19338,7 +19394,7 @@ async function runScaffold(opts) {
     targetRoot: opts.targetRoot,
     dataDirRules: opts.dataDirRules
   });
-  const settingsRel = relative(opts.targetRoot, settings.path);
+  const settingsRel = relative2(opts.targetRoot, settings.path);
   if (settings.created) {
     lists.created.push(settingsRel);
   } else {
@@ -20155,7 +20211,7 @@ var nextCommand = {
 
 // src/cli/subcommands/statusline.ts
 import { readFile as readFile19 } from "node:fs/promises";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -20208,7 +20264,7 @@ async function renderProgress(deps, payload) {
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const gitClient = deps.gitClient ?? new DefaultGitClient();
     const repo = await resolveRepo({ cwd, gitClient });
-    const raw = await readFile19(join29(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
+    const raw = await readFile19(join30(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run9 = JSON.parse(raw);
     if (typeof run9.run_id !== "string" || typeof run9.status !== "string") {
       return "";
@@ -20303,7 +20359,7 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync12 } from "node:fs";
 import { readFile as readFile20 } from "node:fs/promises";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log38 = createLogger("autonomy");
 var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -20341,7 +20397,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join30(dataDir, "merged-settings.json");
+  return join31(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -20423,7 +20479,7 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path7 = join30(pluginRoot, ".claude-plugin", "plugin.json");
+  const path7 = join31(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync12(path7)) {
     return void 0;
   }
@@ -20440,7 +20496,7 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join30(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join31(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync12(userSettingsPath)) {
@@ -20455,7 +20511,7 @@ async function runAutonomyEnsure(opts = {}) {
       log38.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join30(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join31(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile20(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({

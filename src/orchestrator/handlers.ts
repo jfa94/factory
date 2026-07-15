@@ -71,6 +71,7 @@ import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
 import {FsHoldoutVerdictStore} from '../verifier/holdout/index.js'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING, type FileLockTuning} from '../shared/index.js'
 import {join} from 'node:path'
+import {isFrontendPath} from './design-system.js'
 
 /**
  * Preflight git-lock tuning — same values as the MergeSerializer's
@@ -159,7 +160,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
      * `resumePhase`. The context is built from the holdout-stripped `visibleCriteria`
      * only; the prior-failure note is recorded in IFF the dial injects it (rung ≥ 2).
      */
-    function producerSpawn(
+    async function producerSpawn(
         role: ProducerSpawnRole,
         specTask: SpecTask,
         runId: string,
@@ -167,7 +168,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         resumePhase: TaskPhase,
         extraPriorFailures: readonly PriorFailureNote[] = [],
         confirmedBlockers?: readonly ConfirmedBlocker[]
-    ): PhaseResult {
+    ): Promise<PhaseResult> {
         const dial = dialForRung(specTask.risk_tier, rung, deps.config)
         // test-writer is pinned to the ceiling model regardless of risk tier (the
         // config-driven high-tier producerModels entry — Opus by default); only
@@ -175,6 +176,8 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         // dial result for both roles.
         const model = role === 'test-writer' ? selectProducerModel('high', deps.config) : dial.model
         const split = splitFor(deps.config, runId, specTask)
+        const designSystemDocs =
+            role === 'implementer' && specTask.files.some(isFrontendPath) ? await deps.designSystemDocs() : []
         const context: ProducerContext = buildProducerContext({
             taskId: specTask.task_id,
             title: specTask.title,
@@ -182,6 +185,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             visibleCriteria: split.visible,
             files: specTask.files,
             rung,
+            designSystemDocs,
             // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
             // the rung dial — a defective RED test must be steered away from on the very
             // first regeneration (rung 1), where the generic dial note is still off.
@@ -309,22 +313,20 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
          * visible criteria (recomputed from the same seed — never re-persisted), resume
          * at verify.
          */
-        exec(ctx: PhaseContext): Promise<PhaseResult> {
+        async exec(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'exec')
             const specTask = specTaskOf(deps.spec, task.task_id)
-            return Promise.resolve(
-                producerSpawn(
-                    'implementer',
-                    specTask,
-                    ctx.run.run_id,
-                    task.escalation_rung,
-                    'verify',
-                    e2eFeedbackNote(task),
-                    // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
-                    // gate-stderr record (record.ts persisted it on the wait-retry branch) —
-                    // patches the specific verified misses instead of re-nuking.
-                    task.fix_findings
-                )
+            return producerSpawn(
+                'implementer',
+                specTask,
+                ctx.run.run_id,
+                task.escalation_rung,
+                'verify',
+                e2eFeedbackNote(task),
+                // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+                // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+                // patches the specific verified misses instead of re-nuking.
+                task.fix_findings
             )
         },
 

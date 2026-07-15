@@ -9,7 +9,7 @@ This document explains key architectural choices and their rationale.
 > bash-era terms — e.g. Decision 1's "41 pipeline-\* bin scripts / 13 hooks" — now
 > map onto the **Model A** TypeScript surface: the deterministic engine is the
 > single `factory` CLI (`src/` → `dist/factory.js`) plus the `factory-hook`
-> dispatcher (`dist/factory-hook.js`, 7 guards in `hooks/hooks.json`); agents are
+> dispatcher (`dist/factory-hook.js`, 8 guards in `hooks/hooks.json`); agents are
 > the markdown surface (`commands/`, `agents/`, `skills/`). The _principle_ each
 > decision records is unchanged; only the implementation substrate moved. For the
 > current architecture see [model-a.md](./model-a.md) and

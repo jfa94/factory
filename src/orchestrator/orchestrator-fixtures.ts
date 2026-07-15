@@ -220,6 +220,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
         usage: fakeUsageSignal(opts.usage ?? PROCEED),
         now: () => NOW,
         docsApplicable: () => Promise.resolve(opts.docsApplicable ?? false),
+        designSystemDocs: () => Promise.resolve([]),
     }
 
     return {

@@ -21,6 +21,7 @@ describe('hook dispatch', () => {
         expect(Object.keys(hookRegistry).sort()).toEqual([
             'branch-protection',
             'holdout-guard',
+            'notification',
             'pipeline-guards',
             'secret-guard',
             'session-start',

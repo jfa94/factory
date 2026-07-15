@@ -303,6 +303,7 @@ describe('runner orchestrator seam — golden contract E2E', () => {
             }),
             now: () => NOW,
             docsApplicable: () => Promise.resolve(false),
+            designSystemDocs: () => Promise.resolve([]),
         }
     }
 

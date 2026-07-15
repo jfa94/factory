@@ -22,7 +22,7 @@ import {readStdin} from '../shared/stdin.js'
 export {readStdin}
 
 /**
- * Parsed PreToolUse / SubagentStop hook input. Claude Code passes a superset of
+ * Parsed PreToolUse / lifecycle hook input. Claude Code passes a superset of
  * these fields; we type only what the guards consume and keep the rest open.
  */
 export interface HookInput {
@@ -46,6 +46,8 @@ export interface HookInput {
     agent_transcript_path?: string
     transcript_path?: string
     session_id?: string
+    /** Human-facing Notification text (permission request, idle notice, etc.). */
+    message?: string
     /** The invoking session's cwd (CC pipes it in every hook payload) — the repo
      * anchor for run resolution when no owner session id is present (Decision 61). */
     cwd?: string

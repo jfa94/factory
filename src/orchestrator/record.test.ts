@@ -113,6 +113,7 @@ describe('applyRecordHoldout record', () => {
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
+            designSystemDocs: () => Promise.resolve([]),
             state,
         }
     })
@@ -293,6 +294,7 @@ describe('applyRecordReviews record', () => {
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
+            designSystemDocs: () => Promise.resolve([]),
             state,
         }
     }
@@ -932,6 +934,7 @@ describe('applyRecordReviews record', () => {
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
+            designSystemDocs: () => Promise.resolve([]),
             state,
         }
 
@@ -1084,6 +1087,7 @@ describe('applyRecordReviews record', () => {
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
+            designSystemDocs: () => Promise.resolve([]),
             state,
         }
         const input: RecordReviewsInput = {

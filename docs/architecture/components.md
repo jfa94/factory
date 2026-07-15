@@ -119,6 +119,12 @@ the inner fix-forward patch loop is the implementer re-spawn the orchestrator dr
 (`src/orchestrator/handlers.ts`). See
 [explanation/producer-ladder.md](../explanation/producer-ladder.md).
 
+For implementer tasks whose declared spec files look front-end-facing, the handler
+re-scans the target repo's `docs/` at spawn time for design-system, style-guide,
+design-token, or UI-guideline docs and cites matches in the producer prompt. This is
+derived per spawn (not stored in run state); test-writers and backend tasks do not
+receive the section.
+
 ## Verifier (`src/verifier`)
 
 Three sub-layers:

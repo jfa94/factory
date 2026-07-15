@@ -7,7 +7,7 @@
  * with the exported domain fakes (git/gh/gate/holdout) + a real StateManager (temp
  * dir) used ONLY to mint schema-valid RunState/TaskState contexts.
  */
-import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -55,7 +55,7 @@ function makeSpec(): SpecManifest {
                 task_id: 't-multi',
                 title: 'multi-criteria task',
                 description: 'holdout is active (>=2 criteria)',
-                files: ['src/multi.ts'],
+                files: ['src/multi.tsx'],
                 acceptance_criteria: ['a', 'b', 'c', 'd', 'e'],
                 tests_to_write: ['covers a..e'],
                 depends_on: [],
@@ -188,6 +188,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'live',
+            designSystemDocs: () => Promise.resolve([]),
             ...overrides,
         }
     }
@@ -507,6 +508,36 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         }
         expect(result.request.resume_phase).toBe('verify')
         expect(at(result.request.agents, 0).role).toBe('implementer')
+    })
+
+    it('exec cites design-system docs for a frontend task', async () => {
+        const designSystemDocs = vi.fn(() => Promise.resolve(['docs/design-system.md']))
+        const handlers = makePhaseHandlers(makeDeps({designSystemDocs}))
+        const result = await handlers.exec(await ctxFor({task_id: 't-multi'}))
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(designSystemDocs).toHaveBeenCalledOnce()
+        expect(at(result.request.agents, 0).prompt).toContain('docs/design-system.md')
+    })
+
+    it('omits design-system guidance for test writers and backend implementer tasks', async () => {
+        const designSystemDocs = vi.fn(() => Promise.resolve(['docs/design-system.md']))
+        const handlers = makePhaseHandlers(makeDeps({designSystemDocs}))
+
+        const testWriter = await handlers.tests(await ctxFor({task_id: 't-multi'}))
+        const backendImplementer = await handlers.exec(await ctxFor({task_id: 't-single'}))
+
+        expect(testWriter.kind).toBe('spawn-agents')
+        expect(backendImplementer.kind).toBe('spawn-agents')
+        if (testWriter.kind !== 'spawn-agents' || backendImplementer.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(designSystemDocs).not.toHaveBeenCalled()
+        expect(at(testWriter.request.agents, 0).prompt).not.toContain('Design system:')
+        expect(at(backendImplementer.request.agents, 0).prompt).not.toContain('Design system:')
     })
 
     it("exec injects the e2e-reopen note (Decision 39) into the implementer's context", async () => {

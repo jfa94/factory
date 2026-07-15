@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile2;
-      function readFile2(path, options, cb) {
+      fs2.readFile = readFile3;
+      function readFile3(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path, options, cb);
@@ -564,8 +564,8 @@ var require_graceful_fs = __commonJS({
       }
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
-        fs2.appendFile = appendFile;
-      function appendFile(path, data, options, cb) {
+        fs2.appendFile = appendFile2;
+      function appendFile2(path, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$appendFile(path, data, options, cb);
@@ -1850,10 +1850,16 @@ function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
+// src/shared/jsonl.ts
+import { appendFile, mkdir as mkdir2, readFile } from "node:fs/promises";
+
 // src/shared/fs-errors.ts
 function isEnoent(err) {
   return err instanceof Error && err.code === "ENOENT";
 }
+
+// src/shared/jsonl.ts
+import { dirname as dirname2 } from "node:path";
 
 // src/shared/assert.ts
 function nonNull(x, msg) {
@@ -1864,6 +1870,12 @@ function nonNull(x, msg) {
 }
 function at(a, i) {
   return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
+}
+
+// src/shared/jsonl.ts
+async function appendJsonl(path, record) {
+  await mkdir2(dirname2(path), { recursive: true });
+  await appendFile(path, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/time.ts
@@ -1949,7 +1961,7 @@ function validateId(id, label = "id") {
 
 // src/shared/file-lock.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir2 } from "node:fs/promises";
+import { mkdir as mkdir3 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 var log2 = createLogger("lock");
 var DEFAULT_FILE_LOCK_TUNING = {
@@ -1961,7 +1973,7 @@ var DEFAULT_FILE_LOCK_TUNING = {
 };
 async function withFileLock(opts, fn) {
   if (opts.dirPolicy === "create") {
-    await mkdir2(opts.dir, { recursive: true });
+    await mkdir3(opts.dir, { recursive: true });
   } else if (!existsSync(opts.dir)) {
     throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
   }
@@ -2504,7 +2516,7 @@ async function runBranchProtection(_argv = [], deps = {}) {
 
 // src/config/load.ts
 import { existsSync as existsSync3, readFileSync } from "node:fs";
-import { basename as basename2, dirname as dirname2, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
+import { basename as basename2, dirname as dirname3, join as join2, resolve as resolve2, sep as sep2 } from "node:path";
 import { homedir } from "node:os";
 
 // node_modules/zod/v3/external.js
@@ -6780,8 +6792,8 @@ function expectedDataDir(opts) {
   if (currentBase === PLUGIN_NAME || currentBase.startsWith(`${PLUGIN_NAME}-`)) {
     return null;
   }
-  const pluginFromPath = basename2(dirname2(pluginRoot));
-  const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
+  const pluginFromPath = basename2(dirname3(pluginRoot));
+  const marketplaceFromPath = basename2(dirname3(dirname3(pluginRoot)));
   const cacheAnchor = resolve2(pluginRoot, "..", "..", "..");
   const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
@@ -6812,7 +6824,7 @@ function inferPluginRoot() {
       if (existsSync3(join2(dir, ".claude-plugin"))) {
         return dir;
       }
-      dir = dirname2(dir);
+      dir = dirname3(dir);
     }
     return resolve2(here, "..");
   } catch (err) {
@@ -8098,9 +8110,9 @@ function parseRunState(raw) {
 }
 
 // src/core/state/manager.ts
-import { mkdir as mkdir3, readFile, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir4, readFile as readFile2, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
-import { basename as basename3, dirname as dirname3, join as join4 } from "node:path";
+import { basename as basename3, dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
@@ -8109,6 +8121,7 @@ var RUNS_DIR = "runs";
 var CURRENT_LINK = "current";
 var CURRENT_DIR = "current";
 var STATE_FILE = "state.json";
+var METRICS_FILE = "metrics.jsonl";
 function repoKey(repo) {
   const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
   if (key.length === 0) {
@@ -8128,6 +8141,9 @@ function runDir(dataDir, runId) {
 }
 function runStatePath(dataDir, runId) {
   return join3(runDir(dataDir, runId), STATE_FILE);
+}
+function runMetricsPath(dataDir, runId) {
+  return join3(runDir(dataDir, runId), METRICS_FILE);
 }
 function currentRepoRoot(dataDir) {
   return join3(dataDir, CURRENT_DIR);
@@ -8227,8 +8243,8 @@ var StateManager = class _StateManager {
     if (existsSync4(this.statePath(args.run_id))) {
       throw new Error(`state: run '${args.run_id}' already exists`);
     }
-    await mkdir3(join4(dir, "holdouts"), { recursive: true });
-    await mkdir3(join4(dir, "reviews"), { recursive: true });
+    await mkdir4(join4(dir, "holdouts"), { recursive: true });
+    await mkdir4(join4(dir, "reviews"), { recursive: true });
     const now = nowIso();
     const state = parseRunState({
       run_id: args.run_id,
@@ -8269,7 +8285,7 @@ var StateManager = class _StateManager {
    */
   async read(runId) {
     const path = this.statePath(runId);
-    const raw = await readFile(path, "utf8");
+    const raw = await readFile2(path, "utf8");
     return _StateManager.guardedParse(parseJson(raw, path), path);
   }
   /**
@@ -8306,7 +8322,7 @@ var StateManager = class _StateManager {
     const statePath = join4(link, "state.json");
     let raw;
     try {
-      raw = await readFile(statePath, "utf8");
+      raw = await readFile2(statePath, "utf8");
     } catch (err) {
       if (isEnoent(err)) {
         return null;
@@ -8371,7 +8387,7 @@ var StateManager = class _StateManager {
     for (const name of await this.runDirEntries()) {
       let raw;
       try {
-        raw = await readFile(runStatePath(this.dataDir, name), "utf8");
+        raw = await readFile2(runStatePath(this.dataDir, name), "utf8");
       } catch (err) {
         if (isEnoent(err)) {
           continue;
@@ -8605,7 +8621,7 @@ var StateManager = class _StateManager {
   async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
-      await mkdir3(dirname3(link), { recursive: true });
+      await mkdir4(dirname4(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
       await symlink(target, tmp);
@@ -8705,7 +8721,7 @@ async function runOrThrow(command, runner, args, opts) {
 }
 
 // src/git/git-client.ts
-import { dirname as dirname4 } from "node:path";
+import { dirname as dirname5 } from "node:path";
 var log8 = createLogger("git");
 var DefaultGitClient = class {
   runner;
@@ -8781,7 +8797,7 @@ var DefaultGitClient = class {
   }
   async mainWorktreeRoot(opts) {
     const r = await this.execOrThrow(["rev-parse", "--path-format=absolute", "--git-common-dir"], opts);
-    return dirname4(r.stdout.trim());
+    return dirname5(r.stdout.trim());
   }
   async remoteUrl(remote, opts) {
     const r = await this.exec(["remote", "get-url", remote], opts);
@@ -9382,6 +9398,62 @@ function runSessionStart(_argv = [], deps = {}) {
   return EXIT.OK;
 }
 
+// src/scoring/telemetry.ts
+var log19 = createLogger("telemetry");
+async function writeMetric(dataDir, runId, event, data, opts) {
+  const record = {
+    ts: opts.now ?? nowIso(),
+    run_id: runId,
+    event,
+    ...data !== void 0 ? { data } : {}
+  };
+  try {
+    await appendJsonl(runMetricsPath(dataDir, runId), record);
+    return { record, written: true };
+  } catch (err) {
+    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    return { record, written: false };
+  }
+}
+async function emitMetric(dataDir, runId, event, data, opts = {}) {
+  return (await writeMetric(dataDir, runId, event, data, opts)).record;
+}
+
+// src/hooks/notification.ts
+var log20 = createLogger("hook:notification");
+async function handleNotification(input, deps = {}) {
+  if (typeof input?.message !== "string" || !/permission/i.test(input.message)) {
+    return;
+  }
+  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
+  const sessionId = sessionIdOf(input);
+  const env = { ...deps.env ?? process.env };
+  if (sessionId !== void 0) {
+    env.CLAUDE_CODE_SESSION_ID = sessionId;
+  }
+  const active = await loadRun({
+    ...deps,
+    env,
+    ...input.cwd !== void 0 ? { cwd: input.cwd } : {}
+  });
+  if (active === null) {
+    return;
+  }
+  await (deps.emit ?? emitMetric)(active.dataDir, active.run.run_id, "permission.requested", {
+    message: input.message.slice(0, 500),
+    ...sessionId !== void 0 ? { session_id: sessionId } : {}
+  });
+}
+async function runNotification(_argv = [], deps = {}) {
+  try {
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
+    await handleNotification(parseHookInput(raw), deps);
+  } catch (err) {
+    log20.error(`Notification handler error: ${err.message}`);
+  }
+  return EXIT.OK;
+}
+
 // src/hooks/main.ts
 var hookRegistry = {
   "branch-protection": {
@@ -9407,6 +9479,10 @@ var hookRegistry = {
   "subagent-stop": {
     describe: "SubagentStop: log a stopping reviewer's parsed verdict (observational \u2014 the orchestrator record is the single writer of task.reviewers[])",
     run: (argv) => runSubagentStop(argv)
+  },
+  notification: {
+    describe: "Notification: log permission requests to run telemetry (observational)",
+    run: (argv) => runNotification(argv)
   },
   "stop-gate": {
     describe: "Stop: log a resumability hint for an owned all-terminal run (never mutates state \u2014 `factory resume` finalizes); block ONLY on state corruption",

@@ -94,6 +94,8 @@ export interface HandlerDeps {
     readonly repo: string
     /** `live` serial-merges; `no-merge` opens PRs but never auto-merges. */
     readonly shipMode: ShipMode
+    /** Re-evaluated target-repo design-system docs for implementer UI prompts. */
+    readonly designSystemDocs: () => Promise<readonly string[]>
     /**
      * S5/C — injectable cross-vendor probe (tests inject a fake). Optional: the
      * verify reporter defaults to the real memoized `codex --version` probe. Never

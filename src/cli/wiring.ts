@@ -19,7 +19,7 @@ import {StateManager} from '../core/state/index.js'
 import {SpecStore} from '../spec/index.js'
 import {DefaultGitClient, DefaultGhClient, isValidRepoSlug} from '../git/index.js'
 import {defaultGateTools} from '../verifier/deterministic/index.js'
-import {isDocsApplicable} from '../orchestrator/index.js'
+import {findDesignSystemDocs, isDocsApplicable} from '../orchestrator/index.js'
 import {FsHoldoutStore} from '../verifier/holdout/index.js'
 import {StatuslineUsageSignal} from '../quota/index.js'
 import {nowEpoch} from '../shared/time.js'
@@ -109,7 +109,8 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
     const {owner, repo} = splitRepo(run.spec.repo)
 
     const git = new DefaultGitClient()
-    const workDir = join(await git.mainWorktreeRoot({cwd: process.cwd()}), '.claude', 'worktrees')
+    const repoRoot = await git.mainWorktreeRoot({cwd: process.cwd()})
+    const workDir = join(repoRoot, '.claude', 'worktrees')
 
     return {
         config,
@@ -126,6 +127,7 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
         // persisted on the run at create (manual/resume `drive`/`finalize` omit the
         // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
         shipMode: opts.shipMode ?? run.ship_mode,
+        designSystemDocs: () => findDesignSystemDocs(repoRoot),
         state,
         run,
     }

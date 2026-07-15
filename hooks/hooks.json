@@ -88,6 +88,18 @@
                     }
                 ]
             }
+        ],
+        "Notification": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js notification",
+                        "timeout": 5,
+                        "statusMessage": "Logging permission request"
+                    }
+                ]
+            }
         ]
     }
 }

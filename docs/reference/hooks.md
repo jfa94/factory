@@ -19,12 +19,13 @@ exits `2`.
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                                                                                |
 | `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                                                                          |
 | `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                                                                                   |
+| `notification`      | Notification                                | Append permission-request notifications to the active run's `metrics.jsonl` as `permission.requested`; ignore idle/non-permission notices and never block the session.                                                                                                                                                                                                                                                     |
 | `stop-gate`         | Stop                                        | Pass-through + resumability hint. NEVER finalizes and performs NO state mutation; an owned, all-terminal run is left `running` (with a log hint) so the next `factory resume` routes it through the real `finalizeRun`. Blocks ONLY on an inaccessible data directory. Never blocks a session end with pending work — the run stays resumable via `factory resume`.                                                        |
 | `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`. A mid-run **compaction** can drop the runner's protocol from conversation context; this emits an `additionalContext` reminder so a compacted session never loses the pointer. Reads no state (the reminder is static). **Registered but not yet wired** — see [SessionStart wiring is pending](#sessionstart-wiring-is-pending). |
 
 ## `hooks.json` wiring
 
-Seven guards are wired across five matcher entries (some guards run under more
+Eight guards are wired across six matcher entries (some guards run under more
 than one matcher). The `session-start` hook is **registered but not yet wired** (see
 [below](#sessionstart-wiring-is-pending)):
 
@@ -42,10 +43,16 @@ graph TD
   end
   Stop["Stop"] --> stop[stop-gate]
   SubagentStop["SubagentStop"] --> ss[subagent-stop]
+  Notification["Notification"] --> notification[notification]
 ```
 
 Each entry carries a timeout (5–15s) and a status message. The full mapping is in
 `hooks/hooks.json`.
+
+The Notification handler is deliberately observational and fail-quiet: malformed
+payloads, missing active runs, and telemetry I/O failures all exit `0`. It maps the
+payload `session_id` into owner-scoped run resolution before falling back to cwd,
+preventing permission events from being attributed to a concurrent run.
 
 ### SessionStart wiring is pending
 

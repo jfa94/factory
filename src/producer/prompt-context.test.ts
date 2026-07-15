@@ -169,6 +169,26 @@ describe('renderProducerPrompt — 3b(i) inline spawn prompt', () => {
         expect(prompt).toContain('rung 1: merge gate blocked by security')
     })
 
+    it('renders design-system guidance when docs are present', () => {
+        const ctx = buildProducerContext({
+            taskId: 'T1',
+            title: 't',
+            description: 'd',
+            visibleCriteria: ['c'],
+            files: ['src/Button.tsx'],
+            rung: 0,
+            designSystemDocs: ['docs/design-system.md', 'docs/ui-guidelines.md'],
+        })
+
+        const prompt = renderProducerPrompt(ctx, '/wt')
+
+        expect(ctx.designSystemDocs).toEqual(['docs/design-system.md', 'docs/ui-guidelines.md'])
+        expect(prompt).toContain(
+            'Design system: this repo documents a design system at docs/design-system.md, docs/ui-guidelines.md.'
+        )
+        expect(prompt).toContain('Read it BEFORE writing any UI code')
+    })
+
     it('omits the scoped-files/fix/prior-failure sections when empty', () => {
         const ctx = buildProducerContext({
             taskId: 'T1',
@@ -183,5 +203,6 @@ describe('renderProducerPrompt — 3b(i) inline spawn prompt', () => {
         expect(prompt).not.toContain('Scoped files:')
         expect(prompt).not.toContain('Confirmed blockers to fix')
         expect(prompt).not.toContain('Prior failures')
+        expect(prompt).not.toContain('Design system:')
     })
 })
