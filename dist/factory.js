@@ -11458,7 +11458,11 @@ var testStrategy = {
     const skipped = scoped.length - runnable.length;
     const scope = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
     const detail = `vitest exit=${result.code ?? "null"} ${scope}` + (skipped > 0 ? `; ${skipped} non-vitest file(s) not executed` : "");
-    return ran("test", observed, detail);
+    if (observed) {
+      return ran("test", true, detail);
+    }
+    const output = excerpt(result.stdout || result.stderr);
+    return ran("test", false, output ? `${detail}: ${output}` : detail);
   }
 };
 

@@ -12,7 +12,7 @@ import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
 import {ran, skip} from '../strategy.js'
 import {diffScopedTestFiles} from '../scope.js'
 import type {GateTools} from '../tools.js'
-import {procOutcome} from './proc-strategy.js'
+import {excerpt, procOutcome} from './proc-strategy.js'
 
 /**
  * Can vitest execute this file? Only the JS/TS family. pgTAP (`*.test.sql`),
@@ -61,6 +61,14 @@ export const testStrategy: GateStrategy<GateTools> = {
         const detail =
             `vitest exit=${result.code ?? 'null'} ${scope}` +
             (skipped > 0 ? `; ${skipped} non-vitest file(s) not executed` : '')
-        return ran('test', observed, detail)
+        if (observed) {
+            return ran('test', true, detail)
+        }
+        // vitest's default reporter writes the failing-assertion summary to STDOUT (stderr
+        // carries Node warnings/uncaught errors) — stdout-first, the mirror of proc-strategy's
+        // stderr-first for tsc/eslint. Without this the fix-forward channel (composeFixFindings
+        // → fixInstructions) has nothing but the bare exit code to hand the next producer rung.
+        const output = excerpt(result.stdout || result.stderr)
+        return ran('test', false, output ? `${detail}: ${output}` : detail)
     },
 }

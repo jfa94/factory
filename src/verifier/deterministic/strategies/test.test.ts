@@ -77,6 +77,35 @@ describe('testStrategy — vitest test files', () => {
         expect((out as GateRan).evidence.observed).toBe(false)
     })
 
+    it('failing .test.ts with no captured output → detail has no trailing excerpt', async () => {
+        const tools = makeFakeTools({
+            git: probe(['src/foo.test.ts']),
+            vitest: new FakeVitest(proc(1)),
+        })
+        const out = await testStrategy.run(ctx(tools))
+        expect((out as GateRan).evidence.detail).toBe('vitest exit=1 diff-scoped (1 test file(s))')
+    })
+
+    it('failing .test.ts → stdout failure summary surfaces in detail (fix-forward evidence)', async () => {
+        const tools = makeFakeTools({
+            git: probe(['src/foo.test.ts']),
+            vitest: new FakeVitest(proc(1, 'FAIL src/foo.test.ts > createTestUser failed: fetch failed', '')),
+        })
+        const out = await testStrategy.run(ctx(tools))
+        const ev = (out as GateRan).evidence
+        expect(ev.observed).toBe(false)
+        expect(ev.detail).toContain('createTestUser failed: fetch failed')
+    })
+
+    it('failing .test.ts → stderr used when stdout is empty', async () => {
+        const tools = makeFakeTools({
+            git: probe(['src/foo.test.ts']),
+            vitest: new FakeVitest(proc(1, '', 'Error: could not resolve entry')),
+        })
+        const out = await testStrategy.run(ctx(tools))
+        expect((out as GateRan).evidence.detail).toContain('could not resolve entry')
+    })
+
     it('no changed test files → full un-scoped run (vitest called with [])', async () => {
         const fakeVitest = new FakeVitest(proc(0))
         const tools = makeFakeTools({git: probe(['src/foo.ts']), vitest: fakeVitest})
