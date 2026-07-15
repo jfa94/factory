@@ -77,6 +77,7 @@ function validatorJson(entries: readonly [string, boolean, string][]): string {
 
 describe('applyRecordHoldout record', () => {
     let dataDir: string
+    let workDir: string
     let state: StateManager
     let holdout: InMemoryHoldoutStore
     let verdictStore: InMemoryHoldoutVerdictStore
@@ -84,6 +85,7 @@ describe('applyRecordHoldout record', () => {
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-record-holdout-'))
+        workDir = await mkdtemp(join(tmpdir(), 'factory-record-holdout-workdir-'))
         state = new StateManager({
             dataDir,
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
@@ -107,6 +109,7 @@ describe('applyRecordHoldout record', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
@@ -116,6 +119,7 @@ describe('applyRecordHoldout record', () => {
 
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})
+        await rm(workDir, {recursive: true, force: true})
     })
 
     it('persists the parsed verdicts and emits a PASS gate evidence when all satisfied', async () => {
@@ -230,12 +234,14 @@ function fullPanel(...overrides: RawReview[]): unknown[] {
 
 describe('applyRecordReviews record', () => {
     let dataDir: string
+    let workDir: string
     let state: StateManager
     let holdout: InMemoryHoldoutStore
     let verdictStore: InMemoryHoldoutVerdictStore
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-record-reviews-'))
+        workDir = await mkdtemp(join(tmpdir(), 'factory-record-reviews-workdir-'))
         state = new StateManager({
             dataDir,
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
@@ -266,6 +272,7 @@ describe('applyRecordReviews record', () => {
 
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})
+        await rm(workDir, {recursive: true, force: true})
     })
 
     /** Build a RecordDeps over the seeded run with a GREEN gate sweep. */
@@ -282,6 +289,7 @@ describe('applyRecordReviews record', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
@@ -291,7 +299,7 @@ describe('applyRecordReviews record', () => {
 
     /** Write a source file into the task worktree so a citation can verify against it. */
     async function writeWorktreeFile(relPath: string, contents: string): Promise<void> {
-        const abs = join(taskWorktreePath(dataDir, RUN_ID, TASK_ID), relPath)
+        const abs = join(taskWorktreePath(workDir, RUN_ID, TASK_ID), relPath)
         await mkdir(dirname(abs), {recursive: true})
         await writeFile(abs, contents)
     }
@@ -544,7 +552,7 @@ describe('applyRecordReviews record', () => {
         expect(stderr).toMatch(/unknown reviewer 'database-design-reviewer'/)
     })
 
-    it('advancing past a prior blocked rung clears the stale fix_findings record (D5) and the disposition ledger (D67)', async () => {
+    it('advancing past a prior blocked rung clears the stale fix_findings record (D5) and the disposition ledger (D68)', async () => {
         const deps = makeDeps()
         await state.update(RUN_ID, (s) => ({
             ...s,
@@ -578,7 +586,7 @@ describe('applyRecordReviews record', () => {
         expect(task.review_dispositions).toBeUndefined()
     })
 
-    it('D67: a blocked round appends verifier-refuted + non-blocking claims to the disposition ledger', async () => {
+    it('D68: a blocked round appends verifier-refuted + non-blocking claims to the disposition ledger', async () => {
         await writeWorktreeFile('src/x.ts', 'line1\nconst x = 1\nconst y = 2\nline4\n')
         const deps = makeDeps()
         const input: RecordReviewsInput = {
@@ -920,6 +928,7 @@ describe('applyRecordReviews record', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',
@@ -1071,6 +1080,7 @@ describe('applyRecordReviews record', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode: 'no-merge',

@@ -768,7 +768,7 @@ describe('resetTaskRow (Decision 39 — e2e reopen reuse)', () => {
         expect(reset.pr_number).toBeUndefined()
     })
 
-    it('D67: PRESERVES review_dispositions across a reset (same rule as fix_findings)', () => {
+    it('D68: PRESERVES review_dispositions across a reset (same rule as fix_findings)', () => {
         const dispo = {
             reviewer: 'quality-reviewer',
             disposition: 'refuted' as const,
@@ -781,7 +781,7 @@ describe('resetTaskRow (Decision 39 — e2e reopen reuse)', () => {
     })
 })
 
-describe('doneTaskRow (D67 ledger lifecycle)', () => {
+describe('doneTaskRow (D68 ledger lifecycle)', () => {
     it('clears review_dispositions alongside fix_findings when a task ships', () => {
         const row = doneTaskRow(
             {

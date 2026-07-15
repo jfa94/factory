@@ -227,7 +227,7 @@ export type FixFinding = z.infer<typeof FixFindingSchema>
 
 /**
  * One adjudicated-and-dismissed review claim carried into the NEXT verify round's
- * panel reviewers (Decision 67 anti-ratcheting ledger). Two sources: a blocking
+ * panel reviewers (Decision 68 anti-ratcheting ledger). Two sources: a blocking
  * finding the independent finding-verifier REFUTED, or a non-blocking finding
  * (advisory — raised, not gating). A lean LOCAL shape like {@link FixFindingSchema}
  * (same frozen-seam rule: never import verifier types here). Injected VERBATIM into
@@ -315,7 +315,7 @@ export const TaskStateSchema = z.object({
     fix_findings: z.array(FixFindingSchema).optional(),
 
     /**
-     * Anti-ratcheting disposition ledger (Decision 67): claims a prior verify round
+     * Anti-ratcheting disposition ledger (Decision 68): claims a prior verify round
      * refuted or raised non-blocking, appended at the wait-retry branch (record.ts,
      * same separate-write pattern as `fix_findings`) and injected into the NEXT
      * round's panel reviewer prompts so a fresh-context reviewer cannot blindly
@@ -629,7 +629,7 @@ export type TraceabilityPhase = z.infer<typeof TraceabilityPhaseSchema>
 /**
  * Criticality by PERSISTENCE, not tags (Decision 39). `critical` specs are
  * committed to the target repo's `e2e/` (proven via the fail-first proof, gate
- * the run + CI); `throwaway` specs live only in the run's ephemeral out-of-repo
+ * the run + CI); `throwaway` specs live only in the run's ephemeral, gitignored
  * dir (advisory, discarded at run end). Nothing is annotated inside the spec file
  * itself — this enum only labels a manifest row, it is never written into the
  * Playwright test source.

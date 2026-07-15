@@ -26,6 +26,9 @@ const PLACEHOLDER_SURFACES = [
     'agents/implementation-reviewer.md',
     'agents/quality-reviewer.md',
     'agents/silent-failure-hunter.md',
+    'agents/systemic-failure-reviewer.md',
+    'agents/database-design-reviewer.md',
+    'agents/finding-verifier.md',
 ]
 
 /** The orchestrator template that interpolates the envelope's per-run base ref. */
@@ -44,11 +47,14 @@ describe('review base ref plumbing (Fix 2 regression guard)', () => {
         }
     )
 
-    it.each(PLACEHOLDER_SURFACES)('reviewer system-prompt diffs the prompt-provided <baseRef>: %s', (rel) => {
-        expect(read(rel)).toContain('diff <baseRef>')
-    })
+    it.each(PLACEHOLDER_SURFACES)(
+        'reviewer system-prompt diffs the prompt-provided <baseRef> against committed HEAD: %s',
+        (rel) => {
+            expect(read(rel)).toContain('diff <baseRef>..HEAD')
+        }
+    )
 
-    it('the session runner substitutes <tenv.base_ref> into the reviewer prompt', () => {
-        expect(read('skills/pipeline-runner/SKILL.md')).toContain('diff <tenv.base_ref>')
+    it('the session runner substitutes <tenv.base_ref> into the reviewer prompt, against committed HEAD', () => {
+        expect(read('skills/pipeline-runner/SKILL.md')).toContain('diff <tenv.base_ref>..HEAD')
     })
 })

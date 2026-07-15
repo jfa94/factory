@@ -15,7 +15,7 @@ import type {GateEvidence} from '../types/index.js'
 
 /** Build the GateContext both verify consumers hand the GateRunner. */
 export function buildGateContext(deps: HandlerDeps, runId: string, taskId: string, baseRef: string): GateContext {
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     return {
         runId,
         taskId,

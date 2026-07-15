@@ -216,8 +216,12 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. Reused across runs: re-running a
   the legacy global `runs/current` was retired (Decision 61), so nothing writes or
   reads a repo-less "most recent"; the no-cwd consumers resolve via a 3-tier order
   (owner session → cwd repo pointer → newest non-terminal scan).
-- **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`.
-  Because the path encodes `(run-id, task-id)`, a guard derives a write's run
+- **Producer worktrees** — NOT in this store: they live in the **target repo**, at
+  `<repo-root>/.claude/worktrees/<run-id>/<task-id>/`, with results alongside at
+  `<run-id>/.results/`. That subtree is the one Claude Code's protected-path check
+  exempts, so agent writes there never trip an unsuppressible permission prompt
+  (Decision 67); the split is "agent-writable → target repo, engine-only → data dir."
+  The path still encodes `(run-id, task-id)`, so a guard still derives a write's run
   ownership straight from its target path rather than from any shared pointer (see
   [explanation/decisions.md](../explanation/decisions.md) Decision 30).
 

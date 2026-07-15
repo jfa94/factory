@@ -1,16 +1,24 @@
 /**
- * E1 (F-perm) — TARGET-repo `.claude/settings.json` emit + idempotent merge.
+ * E1 (F-perm) — TARGET-repo `.claude/settings.json` + `.claude/settings.local.json`
+ * emit + idempotent merge (Decision 17, corrected).
  *
  * `factory scaffold` calls {@link ensureTargetSettings} so an interactive
  * `/factory:run` in the scaffolded repo runs the CLI + agents WITHOUT a
- * permission prompt per call. It writes (or non-destructively MERGES into) the
- * target's `.claude/settings.json`:
- *   - unions {@link FACTORY_TARGET_BASE_ALLOWLIST} + the baked data-dir rules
- *     (from {@link buildTargetDataDirRules}) into `permissions.allow`,
- *   - forces `worktree.baseRef: "head"` (the staging-determinism invariant —
- *     CLAUDE.md "Worktree base invariant", Decision 12),
- * and leaves every other user key — including the user's OWN `statusLine` —
- * untouched.
+ * permission prompt per call. It writes (or non-destructively MERGES into) TWO
+ * files, split by what is safe to commit:
+ *   - `.claude/settings.json` (COMMITTED): unions {@link FACTORY_TARGET_BASE_ALLOWLIST}
+ *     + the baked, TILDE-form data-dir allow globs (from {@link buildTargetDataDirRules})
+ *     into `permissions.allow`, and forces `worktree.baseRef: "head"` (the
+ *     staging-determinism invariant — CLAUDE.md "Worktree base invariant",
+ *     Decision 12). Carries NO `additionalDirectories` — see below.
+ *   - `.claude/settings.local.json` (GITIGNORED, per-machine): the factory-managed
+ *     `permissions.additionalDirectories` entry, ALWAYS ABSOLUTE. Claude Code does
+ *     not expand `~/` there (verified live: the tilde form left the
+ *     working-directory-boundary prompt firing on task-worktree writes,
+ *     run-20260630-095544), so this entry necessarily leaks `$HOME`/username and
+ *     is wrong on any other machine/CI — it must never land in the committed file.
+ * Both merges leave every other user key — including the user's OWN `statusLine`
+ * — untouched.
  *
  * Why NO statusLine here (deliberate trade-off): the target repo's
  * `.claude/settings.json` is the user's interactive settings for that repo.
@@ -129,12 +137,18 @@ export interface MergeResult {
     readonly changed: boolean
 }
 
-/** Result of {@link ensureTargetSettings} (the on-disk wrapper). */
-export interface EnsureResult extends MergeResult {
-    /** Absolute path to the written `.claude/settings.json`. */
+/** On-disk merge result for one settings file (shared shape for the committed + local files). */
+export interface EnsureFileResult extends MergeResult {
+    /** Absolute path to the written file. */
     readonly path: string
     /** Whether the file did not exist before (a fresh emit vs. a merge). */
     readonly created: boolean
+}
+
+/** Result of {@link ensureTargetSettings} (the on-disk wrapper). */
+export interface EnsureResult extends EnsureFileResult {
+    /** The sibling, GITIGNORED `.claude/settings.local.json` (additionalDirectories only). */
+    readonly local: EnsureFileResult
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -146,11 +160,14 @@ function isObject(v: unknown): v is Record<string, unknown> {
  * `worktree.baseRef:"head"`, preserving every other key. Pure: clones the input
  * and never mutates it.
  *
- * For both `permissions.allow` and `permissions.additionalDirectories` the merge
- * UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST} + the baked
- * data-dir rules from `dataDirRules`), order-preserving, deduped. `changed` is
- * additions-only. Idempotent: re-merging an already-baked settings reports
- * `changed:false`.
+ * `permissions.allow` UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST}
+ * + the baked data-dir rules from `dataDirRules`), order-preserving, deduped.
+ * `changed` is additions-only. Idempotent: re-merging an already-baked settings
+ * reports `changed:false`.
+ *
+ * Deliberately does NOT touch `permissions.additionalDirectories` — that entry is
+ * always absolute (never tilde-expanded by Claude Code) and so must never land in
+ * this COMMITTED file; see {@link mergeLocalSettings}.
  */
 export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRules: TargetDataDirRules): MergeResult {
     // Structured clone so the caller's object is never mutated (test isolation +
@@ -173,21 +190,6 @@ export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRu
         changed = true
     }
 
-    // permissions.additionalDirectories — same union so the built-in file tools
-    // never trip the working-directory boundary on out-of-tree data-dir writes
-    // (`results/<run>`, `worktrees/<run>/<task>`). The single baked parent entry
-    // grants recursive access to every managed subdir.
-    const currentDirs = Array.isArray(permissions.additionalDirectories)
-        ? permissions.additionalDirectories.filter((e): e is string => typeof e === 'string')
-        : []
-    const haveDirs = new Set(currentDirs)
-    const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e))
-    if (dirAdditions.length > 0) {
-        permissions.additionalDirectories = [...currentDirs, ...dirAdditions]
-        settings.permissions = permissions
-        changed = true
-    }
-
     // worktree.baseRef: "head" — the staging-determinism invariant. Only mutate when
     // baseRef is not already "head": bind the (possibly fresh) worktree object AND
     // flip baseRef together inside the change branch, so an existing `{baseRef:"head"}`
@@ -203,10 +205,80 @@ export function mergeTargetSettings(existing: Record<string, unknown>, dataDirRu
 }
 
 /**
- * Read the target repo's `.claude/settings.json` (if any), merge the factory
- * allow-list + the baked data-dir rules + worktree.baseRef into it, and write it
- * back atomically. Creates `.claude/` as needed. Idempotent: a second call
- * reports `changed:false` and rewrites nothing.
+ * Entries in `permissions.additionalDirectories` considered factory-managed and
+ * eligible for pruning: the raw `${CLAUDE_PLUGIN_DATA}` placeholder some older
+ * scaffold left literally (never resolved), the tilde form (never valid here —
+ * Claude Code doesn't expand `~/` in `additionalDirectories`), and a
+ * previously-baked absolute path that may no longer match after a data-dir move.
+ * Anything else is a user's own entry and is preserved verbatim.
+ */
+function staleLocalDirs(dataDirRules: TargetDataDirRules): Set<string> {
+    return new Set(['${CLAUDE_PLUGIN_DATA}', dataDirRules.allowGlobBase, dataDirRules.additionalDir])
+}
+
+/**
+ * Merge the factory `permissions.additionalDirectories` entry into `existing`
+ * (the target repo's GITIGNORED `.claude/settings.local.json`). Prune-then-add:
+ * strips any {@link staleLocalDirs} entry, then appends the current absolute
+ * `dataDirRules.additionalDir`. User-added directories outside that stale set are
+ * kept, in place. Pure: clones the input and never mutates it. Idempotent: a
+ * second merge against its own output reports `changed:false`.
+ */
+export function mergeLocalSettings(existing: Record<string, unknown>, dataDirRules: TargetDataDirRules): MergeResult {
+    const settings: Record<string, unknown> = structuredClone(existing)
+    const permissions = isObject(settings.permissions) ? settings.permissions : {}
+    const currentDirs = Array.isArray(permissions.additionalDirectories)
+        ? permissions.additionalDirectories.filter((e): e is string => typeof e === 'string')
+        : []
+
+    const stale = staleLocalDirs(dataDirRules)
+    const nextDirs = [...currentDirs.filter((e) => !stale.has(e)), dataDirRules.additionalDir]
+
+    const changed = JSON.stringify(nextDirs) !== JSON.stringify(currentDirs)
+    if (changed) {
+        permissions.additionalDirectories = nextDirs
+        settings.permissions = permissions
+    }
+
+    return {settings, changed}
+}
+
+/**
+ * Read + parse an existing settings JSON file, if present. Valid-JSON-but-not-an-object
+ * content (array / number / string) is treated as absent — we're about to write a
+ * merged settings object, which REPLACES the file, so warn loudly that the
+ * overwrite is destructive (the non-JSON case already throws via `JSON.parse`;
+ * this is the silently-coerced gap). Shared by the committed + local files.
+ */
+async function readExistingSettings(path: string): Promise<Record<string, unknown>> {
+    if (!existsSync(path)) {
+        return {}
+    }
+    const raw = await readFile(path, 'utf8')
+    const parsed: unknown = raw.trim().length > 0 ? JSON.parse(raw) : {}
+    if (isObject(parsed)) {
+        return parsed
+    }
+    log.warn(
+        `${path} is valid JSON but not an object (${
+            Array.isArray(parsed) ? 'array' : typeof parsed
+        }); replacing it with the factory settings object`
+    )
+    return {}
+}
+
+/**
+ * Read the target repo's `.claude/settings.json` + `.claude/settings.local.json`
+ * (if any), merge the factory rules into each, and write back atomically. Creates
+ * `.claude/` as needed. Idempotent: a second call reports `changed:false` on both
+ * and rewrites nothing.
+ *
+ * The split (Decision 17, corrected): `.claude/settings.json` is COMMITTED (allow-list
+ * + tilde-form data-dir globs + `worktree.baseRef`, via {@link mergeTargetSettings});
+ * `.claude/settings.local.json` is GITIGNORED and per-machine (the absolute
+ * `additionalDirectories` entry, via {@link mergeLocalSettings}) — Claude Code
+ * doesn't expand `~/` there, so that entry always leaks `$HOME`/username and must
+ * never be committed.
  *
  * @param opts.targetRoot   The target repo working tree.
  * @param opts.dataDirRules The baked, CLI-resolved data-dir permission rules
@@ -220,35 +292,31 @@ export async function ensureTargetSettings(opts: {
 }): Promise<EnsureResult> {
     const dir = join(opts.targetRoot, '.claude')
     const path = join(dir, 'settings.json')
+    const localPath = join(dir, 'settings.local.json')
     const created = !existsSync(path)
+    const localCreated = !existsSync(localPath)
 
-    let existing: Record<string, unknown> = {}
-    if (!created) {
-        const raw = await readFile(path, 'utf8')
-        const parsed: unknown = raw.trim().length > 0 ? JSON.parse(raw) : {}
-        if (isObject(parsed)) {
-            existing = parsed
-        } else {
-            // Valid JSON but not an object (array / number / string). We're about to
-            // write a merged settings object, which REPLACES this file — warn loudly so
-            // the destructive overwrite is visible (the non-JSON case already throws via
-            // JSON.parse above; this is the silently-coerced gap).
-            log.warn(
-                `${path} is valid JSON but not an object (${
-                    Array.isArray(parsed) ? 'array' : typeof parsed
-                }); replacing it with the factory settings object`
-            )
-        }
-    }
-
+    const [existing, existingLocal] = await Promise.all([readExistingSettings(path), readExistingSettings(localPath)])
     const {settings, changed} = mergeTargetSettings(existing, opts.dataDirRules)
+    const {settings: localSettings, changed: localChanged} = mergeLocalSettings(existingLocal, opts.dataDirRules)
 
     // Write when creating OR when the merge altered something. A no-op merge of an
     // existing file leaves the file byte-for-byte untouched (idempotent on disk).
-    if (created || changed) {
+    if (created || changed || localCreated || localChanged) {
         await mkdir(dir, {recursive: true})
+    }
+    if (created || changed) {
         await atomicWriteFile(path, stringifyJson(settings))
     }
+    if (localCreated || localChanged) {
+        await atomicWriteFile(localPath, stringifyJson(localSettings))
+    }
 
-    return {settings, changed, created, path}
+    return {
+        settings,
+        changed,
+        created,
+        path,
+        local: {settings: localSettings, changed: localChanged, created: localCreated, path: localPath},
+    }
 }

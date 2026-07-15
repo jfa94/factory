@@ -29,7 +29,7 @@ the finder's conclusion. You never see their case, only the bare claim, so it mu
 against the code on its own. Do not ask for them; judge without them.
 
 The dispatch also points you at the task worktree and base ref
-(`git -C <worktree> diff <baseRef>`) — use it to see what this task actually changed.
+(`git -C <worktree> diff <baseRef>..HEAD`) — use it to see what this task actually changed.
 `Read`/`Grep` at the cited path is your primary tool; the diff is context.
 
 **The citation is the reviewer's assertion, not an established fact.** Nothing has checked
@@ -105,7 +105,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
    is nowhere in the file, refute (Iron Law 3). Never stop here.
 3. Trace the minimal logic the claim depends on (the caller, the branch, the condition) —
    only as far as needed to prove or disprove the specific claim, not a general review.
-   `git -C <worktree> diff <baseRef>` shows what this task changed, if that helps.
+   `git -C <worktree> diff <baseRef>..HEAD` shows what this task changed, if that helps.
 4. Try to break the claim, on three grounds. **Reachable** — can the bad state actually
    occur? **Unhandled** — does no guard, earlier branch, or type already prevent it?
    **Material** — is it a real behavioral defect rather than a quibble? Failing ANY of

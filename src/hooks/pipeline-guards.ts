@@ -24,6 +24,7 @@
  * A corrupt run state (or broken git env) fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
  */
+import {join} from 'node:path'
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 import {isTestPath} from '../verifier/deterministic/scope.js'
 import {StateManager} from '../core/state/index.js'
@@ -38,6 +39,7 @@ import {
 } from './hook-context.js'
 import {isNestedShellOrHookBypass} from './shell-bypass.js'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
+import {DefaultGitClient, type GitClient} from '../git/index.js'
 import type {RunState} from '../types/index.js'
 import {
     allow,
@@ -64,6 +66,12 @@ export interface PipelineGuardsDeps extends DataDirOptions {
      * schema error) for a missing/corrupt run, which the arm maps to a fail-closed deny.
      */
     loadRunById?: (dataDir: string, runId: string) => Promise<RunState>
+    /**
+     * Test seam for the write-scope arm's `mainWorktreeRoot()` resolution. Mirrors
+     * the existing injectable-client convention ({@link OwnerScopedRunOptions.gitClient}).
+     * Defaults to {@link DefaultGitClient}.
+     */
+    gitClient?: GitClient
 }
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit'])
@@ -93,37 +101,79 @@ function isGhPrMerge(cmd: string): boolean {
 }
 
 /**
+ * Cheap, path-aware pre-filter: does `p` contain a `.claude` segment immediately
+ * followed by a `worktrees` segment? NOT a naive substring match (a sibling dir
+ * like `.claude-worktrees-backup` must not match) and tolerant of either path
+ * separator, so it stays correct on Windows regardless of which form the hook
+ * payload's `file_path` arrives in.
+ */
+function isPlausiblyUnderClaudeWorktrees(p: string): boolean {
+    const segments = p.split(/[/\\]/)
+    for (let i = 0; i + 1 < segments.length; i++) {
+        if (segments[i] === '.claude' && segments[i + 1] === 'worktrees') {
+            return true
+        }
+    }
+    return false
+}
+
+/**
  * The test-writer write-scope arm, anchored to the target path. For each write
- * target that lands inside a per-task worktree (`<dataDir>/worktrees/<run>/<task>`),
- * resolve the owning run+task FROM THE PATH and deny a non-test write while that
- * task is in the test-writer phase. Returns a deny {@link HookDecision}, or `null`
- * when nothing in scope warrants a deny (no worktree match, or not the RED phase).
+ * target that lands inside a per-task worktree (`<workDir>/<run>/<task>`, where
+ * `workDir` is `<main-repo-root>/.claude/worktrees` — the protected-path
+ * exemption, Decision 67), resolve the owning run+task FROM THE PATH and deny a
+ * non-test write while that task is in the test-writer phase. Returns a deny
+ * {@link HookDecision}, or `null` when nothing in scope warrants a deny (no
+ * worktree match, or not the RED phase).
  *
- * Fail-closed: a target inside a worktree whose run state is missing/corrupt denies
- * (corruption is never silently allowed). A target outside every worktree is not a
- * producer write → no scope.
+ * Pre-filters on the target path BEFORE any git call or `resolveDataDir` — this
+ * hook fires on EVERY Edit/Write/MultiEdit system-wide, so the overwhelmingly
+ * common case (no target anywhere near `.claude/worktrees/`) now costs one path
+ * split instead of an unconditional `resolveDataDir`.
+ *
+ * Fail-closed: a target inside a worktree whose data dir or run state cannot be
+ * resolved denies (corruption/misconfiguration is never silently allowed). A
+ * target outside every worktree is not a producer write → no scope.
  */
 async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDeps): Promise<HookDecision | null> {
     const targets = filePathsOf(input)
-    if (targets.length === 0) {
+    if (targets.length === 0 || !targets.some(isPlausiblyUnderClaudeWorktrees)) {
         return null
     }
 
-    let dataDir: string
+    const gitClient = deps.gitClient ?? new DefaultGitClient()
+    const cwd = deps.cwd ?? input?.cwd
+    let workDir: string
     try {
-        dataDir = resolveDataDir(deps)
+        workDir = join(await gitClient.mainWorktreeRoot(cwd !== undefined ? {cwd} : {}), '.claude', 'worktrees')
     } catch {
-        return null // no resolvable data dir → no worktree → nothing to scope
+        return null // not inside a resolvable git repo → no worktree → nothing to scope
     }
 
     const loadRunById =
         deps.loadRunById ?? ((dir: string, runId: string) => new StateManager({...deps, dataDir: dir}).read(runId))
 
     for (const target of targets) {
-        const ref = runTaskForPath(dataDir, target)
+        const ref = runTaskForPath(workDir, target)
         if (ref === null) {
             continue
         } // not a producer-worktree write → no scope
+
+        // Run STATE lives in the plugin data dir, not workDir — resolve it only now
+        // that a target has positively matched a real factory worktree. Unlike the
+        // pre-filter above (a plain pass-through), an unresolvable data dir HERE
+        // means a write we know targets a factory worktree can't be scope-checked
+        // → fail closed rather than silently letting it through.
+        let dataDir: string
+        try {
+            dataDir = resolveDataDir(deps)
+        } catch {
+            return deny(
+                'test_writer_scope_broken',
+                `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', ` +
+                    `but the plugin data dir cannot be resolved; failing closed.`
+            )
+        }
 
         let run: RunState
         try {
@@ -164,9 +214,10 @@ export async function decidePipelineGuards(
     const cmd = commandOf(input)
 
     // (a) test-writer-phase write-scope — anchored to the TARGET PATH, not a global
-    // pointer. A producer writes into its own `<dataDir>/worktrees/<run>/<task>`, so
-    // the write path itself names the owning run+task; an unrelated session's edit
-    // to any other checkout resolves to no run → this arm does not fire.
+    // pointer. A producer writes into its own `<workDir>/<run>/<task>` (workDir =
+    // `<main-repo-root>/.claude/worktrees`, Decision 67), so the write path itself
+    // names the owning run+task; an unrelated session's edit to any other checkout
+    // resolves to no run → this arm does not fire.
     if (WRITE_TOOLS.has(tool)) {
         const scoped = await decideWriteScope(input, deps)
         if (scoped !== null) {

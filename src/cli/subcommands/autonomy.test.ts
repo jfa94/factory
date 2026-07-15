@@ -3,11 +3,13 @@
  * `pipeline-ensure-autonomy`. It materializes `${CLAUDE_PLUGIN_DATA}/merged-settings.json`
  * from `templates/settings.autonomous.json` merged with the user's settings,
  * with placeholder substitution + env-baking + statusLine wiring, and prints the
- * `claude --worktree --settings <path> --permission-mode bypassPermissions` relaunch
- * command. The bypass flag suppresses Claude Code's built-in protected-path prompt
- * for writes under the plugin data dir (which lives under `~/.claude/`); the deny
- * list and every factory hook still apply under it. The deny list is deliberately
- * short (accident-prevention, not containment) — see Decision 65.
+ * `claude --worktree --settings <path>` relaunch command. That command carries NO
+ * permission-mode override — the permissive merged settings are the point, and no
+ * agent-side write lands under `~/.claude/` outside the `.claude/worktrees/`
+ * exemption any more (Decision 67), so there is
+ * nothing left for one to suppress. The relaunch-command assertions below use
+ * EXACT equality so re-appending any flag fails them. The deny list is
+ * deliberately short (accident-prevention, not containment) — see Decision 65.
  *
  * The materialize core is pure + injectable (template string, user settings,
  * dataDir, pluginRoot) so units never touch the real ~/.claude or a real plugin
@@ -285,11 +287,13 @@ describe('runAutonomyEnsure', () => {
         expect((written.env as Record<string, string>).CLAUDE_PLUGIN_DATA).toBe(dataDir)
         expect((written.statusLine as {command: string}).command).toBe(`${pluginRoot}/bin/factory statusline`)
         expect(result.path).toBe(path)
-        // Prints the relaunch command, carrying the bypass flag (kills the
-        // protected-path prompt for writes under the data dir — Decision extending D17).
+        // Prints the relaunch command. Asserted by EXACT equality, not substring:
+        // the command must carry no permission-mode flag of any kind (Decision 67 —
+        // the permissive merged settings are the whole point), and an exact match
+        // is what fails if one is ever re-appended.
         const printed = out.join('')
-        expect(printed).toContain(`claude --worktree --settings ${path} --permission-mode bypassPermissions`)
-        expect(result.relaunchCommand).toContain('--permission-mode bypassPermissions')
+        expect(printed).toContain(`claude --worktree --settings ${path}\n`)
+        expect(result.relaunchCommand).toBe(`claude --worktree --settings ${path}`)
     })
 
     it("reads the user's settings.json when present and chains its statusLine", async () => {
@@ -498,7 +502,7 @@ describe('runAutonomyPreflight', () => {
         expect(written.__sentinel).toBeUndefined()
         expect(written._factoryVersion).toBe('1.0.0')
         const printed = out.join('')
-        expect(printed).toContain(`claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`)
+        expect(printed).toContain(`claude --worktree --settings ${settingsPath()}\n`)
         expect(printed).toContain('stale')
         // Human-facing result: an unmistakable HALT: line on the relaunch-required path.
         expect(printed).toContain('HALT:')
@@ -530,9 +534,7 @@ describe('runAutonomyPreflight', () => {
         })
         expect(code).toBe(EXIT.ERROR)
         expect(existsSync(settingsPath())).toBe(true)
-        expect(out.join('')).toContain(
-            `claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`
-        )
+        expect(out.join('')).toContain(`claude --worktree --settings ${settingsPath()}\n`)
     })
 
     it('exits OK without writing when autonomous via raw env + no file (CI path)', async () => {
@@ -589,9 +591,7 @@ describe('runAutonomyPreflight', () => {
             home: HOME,
             writeStdout: (t) => out.push(t),
         })
-        expect(out.join('')).toContain(
-            `claude --worktree --settings ${settingsPath()} --permission-mode bypassPermissions`
-        )
+        expect(out.join('')).toContain(`claude --worktree --settings ${settingsPath()}\n`)
     })
 })
 

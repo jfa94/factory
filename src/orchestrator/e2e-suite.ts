@@ -122,7 +122,7 @@ export async function prepareAdjudicatorSpawn(
     }
     const staging = run.staging_branch
     const branch = adjudicateBranchName(runId)
-    const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId)
+    const worktree = e2eAdjudicateWorktreePath(deps.workDir, runId)
 
     await deps.git.fetch('origin', staging)
     // Retry-reset: a crashed adjudicator's partial work is discarded (mirrors D5).
@@ -214,7 +214,7 @@ export async function recordAdjudication(
     results: E2eAuthorResults,
     emit: EmitFn
 ): Promise<E2eAction> {
-    const worktree = e2eAdjudicateWorktreePath(deps.dataDir, runId)
+    const worktree = e2eAdjudicateWorktreePath(deps.workDir, runId)
     // Non-null by the runE2eRecord dispatch guard.
     const phase = nonNull(run.e2e_phase)
     const cursor = nonNull(phase.adjudication)
@@ -328,7 +328,7 @@ export async function recordAdjudication(
 /** Where the generated throwaway-suite Playwright config lives — inside the run
  * worktree (never committed, never staged) so its own `require("@playwright/test")`
  * resolves via THAT worktree's `node_modules`, even though `testDir` inside it
- * points at the out-of-repo throwaway dir. */
+ * points at the gitignored throwaway dir. */
 function throwawayConfigPath(worktree: string): string {
     return join(worktree, '.factory-e2e-throwaway.config.cjs')
 }
@@ -384,7 +384,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     }
 
     const staging = run.staging_branch
-    const worktree = e2eRunWorktreePath(deps.dataDir, runId)
+    const worktree = e2eRunWorktreePath(deps.workDir, runId)
     const provision = deps.provision ?? provisionWorktree
     await deps.git.fetch('origin', staging)
     // Always resync on reuse — a reopened task's re-ship advanced staging since the
@@ -416,7 +416,7 @@ export async function runSuiteAndDecide(deps: E2eRunDeps, runId: string): Promis
     let throwawayResult
     let throwawayThrew: string | undefined
     if (throwaway.length > 0) {
-        const throwawayDir = e2eThrowawayDir(deps.dataDir, runId)
+        const throwawayDir = e2eThrowawayDir(deps.workDir, runId)
         const configPath = throwawayConfigPath(worktree)
         await (deps.files ?? new DefaultE2eFileOps()).writeConfig(configPath, throwawayConfigContents(throwawayDir))
         try {

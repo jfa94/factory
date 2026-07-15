@@ -113,7 +113,7 @@ export type NextAction =
            */
           readonly base_ref: string
           /**
-           * D67 — the rendered disposition ledger, present ONLY for
+           * D68 — the rendered disposition ledger, present ONLY for
            * `expects === 'reviews'` spawns when the task carries prior
            * dispositions. The runner appends it VERBATIM to each panel
            * reviewer prompt; NEVER to a finding-verifier (anti-anchoring).
@@ -199,7 +199,7 @@ export async function holdoutSidecar(
         return undefined
     }
     const record = await deps.holdout.get(runId, taskId)
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     return {
         kind: 'holdout-validate',
         task_id: taskId,
@@ -287,7 +287,7 @@ async function resyncShipRetry(
     stagingBranch: string,
     reason: string
 ): Promise<{kind: 'done'; step: TaskStep} | {kind: 'continue'}> {
-    const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
     if (!(await deps.git.worktreeExists(worktree))) {
         const step = await failStep(
             deps,
@@ -435,7 +435,7 @@ export async function nextAction(
             case 'spawn-agents': {
                 const spawnPhase = asSpawnPhase(phase)
                 const expects: DriveExpects = spawnPhase === 'verify' ? 'reviews' : 'producer-status'
-                const worktree = taskWorktreePath(deps.dataDir, runId, taskId)
+                const worktree = taskWorktreePath(deps.workDir, runId, taskId)
                 // The base ref the worktree forked from — plumbed into every spawn so
                 // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
                 const base_ref = `origin/${run.staging_branch}`
@@ -506,7 +506,7 @@ export async function nextAction(
                         }))
                     }
                 }
-                // D67: inject the disposition ledger into review spawns only — panel
+                // D68: inject the disposition ledger into review spawns only — panel
                 // reviewers see it as a challengeable input document; producers and
                 // finding-verifiers never do.
                 const priorDispositions =

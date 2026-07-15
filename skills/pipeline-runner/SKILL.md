@@ -136,6 +136,7 @@ foreground `factory` call runs isolated from the user's checkout:
 ```bash
 ORCH="$(git rev-parse --show-toplevel)/.claude/worktrees/orchestrator-<run_id>"   # <run_id> = .run.run_id
 cd "$ORCH"
+RESULTS_DIR="$(dirname "$ORCH")/<run_id>/.results"   # sibling of task worktrees, same exempted tree
 ```
 
 Run all of Phase 3+ (every `factory` call and every `Agent` spawn) from `$ORCH`. **On resume**
@@ -350,7 +351,7 @@ e2e stage:
       spec to the task_id(s) it covers.
       Write {"status":"<line>","manifest":[{"task_ids":[...],
       "spec_path":"...","kind":"critical|throwaway","title":"..."}, ...]} to
-      a results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+      a results file under $RESULTS_DIR.
       (If the author died/was skipped, write {"status":"e2e-author agent
       skipped or died (no STATUS line)","manifest":[]} — a status containing
       none of BLOCKED/ESCALATE/NEEDS/DONE, so the engine spends its one
@@ -385,7 +386,7 @@ e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
     seed/auth support), validates by booting, and forecasts which committed specs
     this run's tasks touch. Write its structured verdict {"status":"ok|degraded|
     boot-impossible|machinery-impossible","reason":?,"warning":?,"resolved":?,
-    "affected_specs":[...]} to a results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+    "affected_specs":[...]} to a results file under $RESULTS_DIR.
     (If the assessor died/was skipped, write {"status":"error","reason":"..."} — the
     engine spends its one retry on it.)
     aenv = factory run e2e-assess --run <run_id> --results <file>   # may re-spawn once
@@ -399,7 +400,7 @@ traceability stage (S9, Decision 47 — once per non-debug run, after e2e, befor
                 trenv.worktree, a DETACHED read-only checkout), prompt = trenv.prompt VERBATIM.
                 Write its JSON verdict object {"status":"<line>","verdicts":[{"index":n,
                 "verdict":"met|partial|unmet","evidence":"..."}, ...]} to a results file
-                under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+                under $RESULTS_DIR.
                 (If the auditor died/was skipped, write {"status":"traceability-auditor
                 agent skipped or died (no STATUS line)","verdicts":[]} — the engine
                 spends its one retry on it.)
@@ -421,7 +422,7 @@ docs stage:
                 denv.model, isolation OMITTED — it works IN denv.worktree), prompt = denv.prompt VERBATIM.
                 Capture its terminal STATUS line.
                 Write {"status":"<line>"} to a results file under
-                $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+                $RESULTS_DIR.
                 denv2 = factory run docs --run <run_id> --results <file>
                 case denv2.kind: "done" → loop; "suspend" → report + STOP
 ```
@@ -430,7 +431,7 @@ docs stage:
 
 ### Collecting a spawn envelope
 
-Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the dir). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `next-action --results` reads from any path. Every spawn envelope names `expects`:
+Write results files under `$RESULTS_DIR` (create the dir — see Phase 3's `ORCH`/`RESULTS_DIR` setup; `.claude/worktrees/` is the one subtree Claude Code's protected-path check exempts, Decision 67, so writes here never trip the unsuppressible `~/.claude/` prompt). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `next-action --results` reads from any path. Every spawn envelope names `expects`:
 
 **`expects: "producer-status"`** (stages tests/exec — ONE producer agent):
 
@@ -459,11 +460,11 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    isolation `"worktree"`, model mapped from each agent's `model`,
    `maxTurns` OMITTED — reviewer entries never carry `max_turns`; each
    reviewer's own frontmatter governs). Each prompt: inspect via
-   `git -C <tenv.worktree> diff <tenv.base_ref>` and emit ONE RawReview JSON exactly per
+   `git -C <tenv.worktree> diff <tenv.base_ref>..HEAD` and emit ONE RawReview JSON exactly per
    `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
    reviewer via its frontmatter `skills:` — do not restate the shape).
 
-    **Prior dispositions (D67).** When the envelope carries `prior_dispositions`,
+    **Prior dispositions (D68).** When the envelope carries `prior_dispositions`,
     append it VERBATIM to EVERY panel reviewer's prompt (it is the anti-ratcheting
     ledger of claims a prior round refuted or raised non-blocking). NEVER append it
     to a finding-verifier prompt (step 3) — the verifier confirms independently,
@@ -498,7 +499,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    reviewer BELIEVED: its `description` (reasoning), its `severity` (confidence), or its
    `reviewer` (identity). Anti-anchoring: the verifier must judge the bare claim against
    the code, not be led toward the finder's prior. Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
-<tenv.base_ref>`) same as every other reviewer. It returns
+<tenv.base_ref>..HEAD`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
     ```json

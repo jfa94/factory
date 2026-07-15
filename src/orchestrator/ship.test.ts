@@ -105,6 +105,8 @@ async function makeShipFixture(opts: {runId: string; shipMode?: 'live' | 'no-mer
         tools: makeFakeTools(),
         holdout: new InMemoryHoldoutStore(),
         dataDir,
+        // FakeGitClient never touches real fs — reusing dataDir avoids a 2nd mkdtemp.
+        workDir: dataDir,
         owner: 'acme',
         repo: 'widgets',
         shipMode: opts.shipMode ?? 'no-merge',

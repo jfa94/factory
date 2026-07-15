@@ -741,7 +741,7 @@ describe('FixFinding file/line both-or-neither (T4 mirror)', () => {
     })
 })
 
-describe('ReviewDisposition (D67 anti-ratcheting ledger)', () => {
+describe('ReviewDisposition (D68 anti-ratcheting ledger)', () => {
     const entry = {
         reviewer: 'quality-reviewer',
         disposition: 'refuted',

@@ -19,7 +19,6 @@ $CLAUDE_PLUGIN_DATA/
 ├── specs/<repo-key>/<spec-id>/        # DURABLE spec store — reused across runs
 │   └── {spec.md,tasks.json,prd.json,spec.meta.json}
 ├── current/<repo-key>                # symlink → that repo's current run (the ONLY current pointer)
-├── worktrees/<run-id>/<task-id>/     # producer worktrees (write-scope ownership)
 └── runs/
     └── <run-id>/
         ├── state.json                 # the RunState
@@ -70,10 +69,15 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   tolerate-loudly precedent; every **targeted** read keeps its loud contract. This tolerance
   is what stops a schema-v2 pointer from crashing `run create` (the 2026-07-07 incident); the
   stale run dir it named is separately sweepable via [`rescue gc`](./cli.md#rescue-gc).
-- **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`
-  and `specs/`. The producer (test-writer / implementer) edits here; because the
-  path encodes `(run-id, task-id)`, the write-scope guard derives run ownership
-  straight from a write's absolute target path (Decision 30, [hooks](./hooks.md#run-ownership)).
+- **Producer worktrees** — NOT in this store. They live in the **target repo**, at
+  `<repo-root>/.claude/worktrees/<run-id>/<task-id>/` (with results alongside at
+  `<run-id>/.results/`), because `.claude/worktrees/` is the one subtree Claude Code's
+  protected-path check exempts — an agent write under `$CLAUDE_PLUGIN_DATA` would
+  otherwise trip an unsuppressible permission prompt (Decision 67). The path still
+  encodes `(run-id, task-id)`, so the write-scope guard still derives run ownership
+  straight from a write's absolute target path (Decision 30,
+  [hooks](./hooks.md#run-ownership)) — it just anchors to the git-derived main-worktree
+  root instead of the data dir.
 
 `<repo-key>` is a sanitized single path segment derived from `owner/name` (the
 slash and any unsafe char folded to `-`; a pure-dot path-traversal segment is

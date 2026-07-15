@@ -191,7 +191,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             // concrete PATCH instructions rather than re-nuking the implementation.
             ...(confirmedBlockers !== undefined ? {confirmedBlockers} : {}),
         })
-        const worktree = taskWorktreePath(deps.dataDir, runId, specTask.task_id)
+        const worktree = taskWorktreePath(deps.workDir, runId, specTask.task_id)
         const request: SpawnRequest = parseSpawnRequest({
             resume_phase: resumePhase,
             agents: [
@@ -224,7 +224,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
          */
         async preflight(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'preflight')
-            const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id)
+            const worktree = taskWorktreePath(deps.workDir, ctx.run.run_id, task.task_id)
             const staging = ctx.run.staging_branch
             // Parallel preflights share the main repo's .git: `fetch` + `worktree add`
             // contend on index.lock, and the shared origin/<staging> tracking ref can move
@@ -337,7 +337,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
          */
         async verify(ctx: PhaseContext): Promise<PhaseResult> {
             const task = requireTask(ctx, 'verify')
-            const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id)
+            const worktree = taskWorktreePath(deps.workDir, ctx.run.run_id, task.task_id)
             const gateCtx = buildGateContext(deps, ctx.run.run_id, task.task_id, ctx.run.staging_branch)
             const gate = await new GateRunner().run(gateCtx)
 
@@ -360,7 +360,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                     )
                 }
                 // 3b(ii): compose the codex prompt ONLY when there's a slot to spawn it into.
-                // D67: the codex reviewer is a panel reviewer — it gets the disposition
+                // D68: the codex reviewer is a panel reviewer — it gets the disposition
                 // ledger like the Claude-side panel (never a finding-verifier).
                 const priorDispositions = renderDispositionLedger(task.review_dispositions)
                 const crossVendorPrompt =

@@ -1,5 +1,5 @@
 /**
- * Decision 67 — the anti-ratcheting disposition ledger for review⇄fix rounds.
+ * Decision 68 — the anti-ratcheting disposition ledger for review⇄fix rounds.
  *
  * A fresh-context panel reviewer has no memory of prior rounds, so a claim the
  * independent finding-verifier REFUTED in round N gets blindly re-raised in

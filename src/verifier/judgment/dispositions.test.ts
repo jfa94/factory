@@ -45,7 +45,7 @@ function dispo(over: Partial<ReviewDisposition> = {}): ReviewDisposition {
     }
 }
 
-describe('composeDispositions (D67)', () => {
+describe('composeDispositions (D68)', () => {
     it('composes refuted blockers (with reason) + non-blocking findings; confirmed blockers excluded', () => {
         const [refutedFinding] = parseRawReview({
             reviewer: 'quality-reviewer',
@@ -93,7 +93,7 @@ describe('composeDispositions (D67)', () => {
     })
 })
 
-describe('appendDispositions (D67)', () => {
+describe('appendDispositions (D68)', () => {
     it('dedupes by file|quote|claim fingerprint, latest round wins', () => {
         const merged = appendDispositions([dispo({round: 1, note: 'old'})], [dispo({round: 2, note: 'new'})])
         expect(merged).toHaveLength(1)
@@ -119,7 +119,7 @@ describe('appendDispositions (D67)', () => {
     })
 })
 
-describe('renderDispositionLedger (D67)', () => {
+describe('renderDispositionLedger (D68)', () => {
     it('returns undefined for an empty/absent ledger', () => {
         expect(renderDispositionLedger(undefined)).toBeUndefined()
         expect(renderDispositionLedger([])).toBeUndefined()

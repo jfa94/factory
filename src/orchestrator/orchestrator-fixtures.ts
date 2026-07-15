@@ -133,6 +133,7 @@ export interface OrchestratorDepsResult {
     deps: OrchestratorDeps
     runId: string
     dataDir: string
+    workDir: string
     state: StateManager
     holdout: InMemoryHoldoutStore
     cleanup: () => Promise<void>
@@ -140,6 +141,7 @@ export interface OrchestratorDepsResult {
 
 export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}): Promise<OrchestratorDepsResult> {
     const dataDir = await mkdtemp(join(tmpdir(), 'factory-orchestrator-'))
+    const workDir = await mkdtemp(join(tmpdir(), 'factory-orchestrator-workdir-'))
     const state = new StateManager({
         dataDir,
         lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
@@ -210,6 +212,7 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
         }),
         holdout,
         dataDir,
+        workDir,
         owner: 'acme',
         repo: 'widgets',
         shipMode: opts.shipMode ?? 'no-merge',
@@ -223,8 +226,13 @@ export async function makeOrchestratorDeps(opts: MakeOrchestratorDepsOpts = {}):
         deps,
         runId,
         dataDir,
+        workDir,
         state,
         holdout,
-        cleanup: () => rm(dataDir, {recursive: true, force: true}),
+        cleanup: () =>
+            Promise.all([
+                rm(dataDir, {recursive: true, force: true}),
+                rm(workDir, {recursive: true, force: true}),
+            ]).then(() => undefined),
     }
 }

@@ -17,6 +17,7 @@ import {StateManager} from '../core/state/index.js'
 import {SpecStore} from '../spec/index.js'
 import {makePrd} from '../orchestrator/orchestrator-fixtures.js'
 import {parseSpecManifest, type SpecManifest} from '../spec/index.js'
+import {DefaultGitClient} from '../git/index.js'
 
 const RUN_ID = 'run-1'
 
@@ -92,6 +93,9 @@ describe('loadCliDeps', () => {
         expect(deps.holdout).toBeDefined()
         expect(deps.state).toBeInstanceOf(StateManager)
         expect(deps.dataDir).toBe(dataDir)
+        // workDir is git-derived (main repo root, Decision 67) — NOT dataDir-rooted.
+        const mainRoot = await new DefaultGitClient().mainWorktreeRoot()
+        expect(deps.workDir).toBe(join(mainRoot, '.claude', 'worktrees'))
     })
 
     it('honours an explicit shipMode override', async () => {

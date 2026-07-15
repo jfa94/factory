@@ -42,7 +42,15 @@ import {
     type GhClient,
 } from '../../git/index.js'
 import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
-import {injectGateEnvIntoWorkflow, renderQualityGate} from '../../ci/index.js'
+import {
+    injectGateEnvIntoWorkflow,
+    renderQualityGate,
+    resolveNodeRuntimeDeclarations,
+    NODE_VERSION_FILE,
+    NVMRC_FILE,
+    type NodeRuntime,
+    type NodeRuntimeDeclarations,
+} from '../../ci/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
@@ -177,11 +185,16 @@ export interface ScaffoldReport {
         readonly provisioned: boolean
     }
     /**
-     * E1 (F-perm): the target `.claude/settings.json` emit/merge — whether the
-     * file was freshly created and whether the merge altered it. Stops the
+     * E1 (F-perm): the target `.claude/settings.json` (committed) +
+     * `.claude/settings.local.json` (gitignored, `local`) emit/merge — whether
+     * each file was freshly created and whether its merge altered it. Stops the
      * per-call permission prompts for interactive `/factory:run` in this repo.
      */
-    readonly settings: {readonly created: boolean; readonly changed: boolean}
+    readonly settings: {
+        readonly created: boolean
+        readonly changed: boolean
+        readonly local: {readonly created: boolean; readonly changed: boolean}
+    }
     /** Detected stack driving the gate-contract resolution (S7, Decision 46). */
     readonly stack: GateContractStack
     /** Whether `.factory/gates.json` was freshly resolved+written or already present. */
@@ -234,6 +247,8 @@ interface TemplateEntry {
     readonly policy: TemplatePolicy
     /** Only scaffold this file when the target is a Node package (has package.json). */
     readonly nodeOnly?: boolean
+    /** Exact historical factory-authored SEED hashes safe to upgrade without a lock entry. */
+    readonly legacySeedHashes?: readonly string[]
 }
 
 /**
@@ -243,6 +258,16 @@ interface TemplateEntry {
  */
 /** The managed CI workflow — also the render/injection target (the only transformed file). */
 const QUALITY_GATE_REL = '.github/workflows/quality-gate.yml'
+
+/**
+ * Broken pre-lock e2e seeds shipped by factory v1.10.0–v1.27.0. Both contain an
+ * eslint-disable for a Playwright rule the scaffold never installed/configured.
+ * Whole-file hashes make the migration safe: any customization stays project-owned.
+ */
+const LEGACY_E2E_EXAMPLE_HASHES: readonly string[] = [
+    '2fcc468328b2070bd07ede3e524bf1bf33ec2957d2d0e9bef29302251a24356d',
+    '629824a48477223cfcef02bcb6c850aa9622d73d41c93bc3b76486831a98770e',
+]
 
 /** The managed CI net: rendered from the gate contract in pass 2 (npm stack only). */
 const CI_NET_RELS: readonly string[] = [QUALITY_GATE_REL, '.github/scripts/shard-mutation-scope.mjs']
@@ -260,7 +285,12 @@ const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
     // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
     // refuses an --e2e run whose config declares any other testDir.
     {rel: 'playwright.config.ts', policy: 'seed', nodeOnly: true},
-    {rel: 'e2e/example.spec.ts', policy: 'seed', nodeOnly: true},
+    {
+        rel: 'e2e/example.spec.ts',
+        policy: 'seed',
+        nodeOnly: true,
+        legacySeedHashes: LEGACY_E2E_EXAMPLE_HASHES,
+    },
 ]
 
 /** Mutable file buckets a scaffold run accumulates, surfaced in the report. */
@@ -338,9 +368,10 @@ async function applyTemplate(
     // lockstep belongs in the MANAGED tier. See Decision 15.
     if (entry.policy === 'seed') {
         const recorded = lock?.seeds[entry.rel]
+        const destText = await readFile(dest, 'utf8')
+        const destHash = sha256Hex(destText)
         if (recorded !== undefined) {
-            const destText = await readFile(dest, 'utf8')
-            if (sha256Hex(destText) === recorded) {
+            if (destHash === recorded) {
                 const rendered = await render()
                 if (rendered === destText) {
                     lists.present.push(entry.rel)
@@ -354,6 +385,22 @@ async function applyTemplate(
                 lists.updated.push(entry.rel)
                 return
             }
+        }
+        // Narrow migration exception for known pre-lock factory-authored seeds.
+        // Exact whole-file hashes prove provenance without treating arbitrary
+        // missing-lock files as factory-owned. The replacement is immediately
+        // adopted into the lock so every later refresh follows the normal path.
+        if (lock !== undefined && entry.legacySeedHashes?.includes(destHash) === true) {
+            const rendered = await render()
+            if (rendered !== destText) {
+                await writeFile(dest, rendered, 'utf8')
+                lists.updated.push(entry.rel)
+            } else {
+                lists.present.push(entry.rel)
+            }
+            lock.seeds[entry.rel] = sha256Hex(rendered)
+            lock.dirty = true
+            return
         }
         // Stale lock entries are KEPT: harmless (the hash never matches again), and
         // reverting the file to the exact scaffold-written bytes re-adopts it.
@@ -378,6 +425,7 @@ interface WorkflowFacts {
     readonly hasLockfile: boolean
     readonly scripts: Readonly<Record<string, string>>
     readonly hasNextDep: boolean
+    readonly nodeRuntime: NodeRuntime
 }
 
 /** Lockfile-detect the package manager + read the scripts/next facts from package.json. */
@@ -388,17 +436,50 @@ async function readWorkflowFacts(targetRoot: string): Promise<WorkflowFacts> {
         scripts?: Record<string, string>
         dependencies?: Record<string, string>
         devDependencies?: Record<string, string>
+        engines?: unknown
+        volta?: unknown
+        devEngines?: unknown
     }
     try {
         pkg = JSON.parse(raw) as typeof pkg
     } catch (err) {
         throw new Error(`scaffold: package.json is not valid JSON: ${(err as Error).message}`)
     }
+    const declarations: {
+        nodeVersion?: string
+        nvmrc?: string
+        enginesNode?: unknown
+        packageJsonRuntimeShadows?: string[]
+    } = {}
+    if (existsSync(join(targetRoot, NODE_VERSION_FILE))) {
+        declarations.nodeVersion = await readFile(join(targetRoot, NODE_VERSION_FILE), 'utf8')
+    }
+    if (existsSync(join(targetRoot, NVMRC_FILE))) {
+        declarations.nvmrc = await readFile(join(targetRoot, NVMRC_FILE), 'utf8')
+    }
+    if (typeof pkg.engines === 'object' && pkg.engines !== null && Object.hasOwn(pkg.engines, 'node')) {
+        declarations.enginesNode = (pkg.engines as {node?: unknown}).node
+    }
+    const packageJsonRuntimeShadows: string[] = []
+    if (typeof pkg.volta === 'object' && pkg.volta !== null) {
+        if (Object.hasOwn(pkg.volta, 'node')) {
+            packageJsonRuntimeShadows.push('volta.node')
+        }
+        if (Object.hasOwn(pkg.volta, 'extends')) {
+            packageJsonRuntimeShadows.push('volta.extends')
+        }
+    }
+    if (typeof pkg.devEngines === 'object' && pkg.devEngines !== null && Object.hasOwn(pkg.devEngines, 'runtime')) {
+        packageJsonRuntimeShadows.push('devEngines.runtime')
+    }
+    declarations.packageJsonRuntimeShadows = packageJsonRuntimeShadows
+
     return {
         packageManager: pnpm ? 'pnpm' : 'npm',
         hasLockfile: pnpm || existsSync(join(targetRoot, 'package-lock.json')),
         scripts: pkg.scripts ?? {},
         hasNextDep: pkg.dependencies?.next !== undefined || pkg.devDependencies?.next !== undefined,
+        nodeRuntime: resolveNodeRuntimeDeclarations(declarations satisfies NodeRuntimeDeclarations),
     }
 }
 
@@ -562,17 +643,25 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     // 3. .gitignore guard (factory state must never be committed).
     await ensureGitignore(opts.targetRoot, lists)
 
-    // 3b. E1 (F-perm): emit / idempotently merge the target-repo
-    //     `.claude/settings.json` (factory allow-list + baked data-dir rules +
-    //     worktree.baseRef:"head"; NO statusLine — that belongs to E2's
-    //     merged-settings). Non-destructive: a user's existing settings keys (incl.
-    //     their own statusLine) are kept, and any stale `${CLAUDE_PLUGIN_DATA}`
-    //     placeholder rules from an older scaffold are migrated to the baked form.
+    // 3b. E1 (F-perm): emit / idempotently merge TWO target-repo settings files
+    //     (Decision 17, corrected): the COMMITTED `.claude/settings.json` (factory
+    //     allow-list + baked TILDE-form data-dir rules + worktree.baseRef:"head";
+    //     NO statusLine — that belongs to E2's merged-settings) and the GITIGNORED
+    //     `.claude/settings.local.json` (the absolute `additionalDirectories`
+    //     entry — Claude Code never expands `~/` there, so it must never be
+    //     committed). Non-destructive: a user's existing keys in either file
+    //     (incl. their own statusLine, their own extra additionalDirectories) are
+    //     kept; any stale factory-managed additionalDirectories entry (a literal
+    //     `${CLAUDE_PLUGIN_DATA}` placeholder, a tilde form, or a previously-baked
+    //     path that moved) is pruned from settings.local.json and replaced.
     const settings = await ensureTargetSettings({
         targetRoot: opts.targetRoot,
         dataDirRules: opts.dataDirRules,
     })
-    // Surface the .claude/settings.json path in the file lists for transparency.
+    // Surface the committed .claude/settings.json path in the file lists for
+    // transparency (git add/commit visibility). settings.local.json is NOT
+    // listed here — it's gitignored (GITIGNORE_ENTRIES above), never meant to be
+    // committed, so it would be misleading to report it as a trackable file.
     const settingsRel = relative(opts.targetRoot, settings.path)
     if (settings.created) {
         lists.created.push(settingsRel)
@@ -617,7 +706,11 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
             required_status_checks: state.requiredStatusChecks,
             provisioned,
         },
-        settings: {created: settings.created, changed: settings.changed},
+        settings: {
+            created: settings.created,
+            changed: settings.changed,
+            local: {created: settings.local.created, changed: settings.local.changed},
+        },
         stack: gates.stack,
         gates_contract: gates.status,
     }

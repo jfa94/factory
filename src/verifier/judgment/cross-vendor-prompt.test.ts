@@ -13,7 +13,7 @@ describe('composeCrossVendorPrompt', () => {
         expect(prompt).toContain('git -C /data/runs/run-1/tasks/t1 diff origin/staging-run-1')
     })
 
-    it('D67: appends priorDispositions as a final section; byte-identical when absent', async () => {
+    it('D68: appends priorDispositions as a final section; byte-identical when absent', async () => {
         const base = {
             pluginRoot: resolvePluginRoot(),
             baseRef: 'origin/staging-run-1',

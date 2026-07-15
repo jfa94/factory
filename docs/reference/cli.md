@@ -71,8 +71,14 @@ The CI net is **rendered per-repo from the resolved gate contract**, not copied
 verbatim — `renderQualityGate` (`src/ci/render-quality-gate.ts`) fills the template's
 `# factory:*` markers with the target's package-manager setup (lockfile-detected pnpm
 vs npm) and per-gate steps, so CI runs the same checks the local `GateRunner` enforces.
-Each gate step resolves in precedence order: contracted `command` override → matching
-`package.json` script → GateRunner built-in (`npx tsc --noEmit`, `npx eslint .`,
+An npm-stack target must commit `.node-version`, `.nvmrc`, or a non-empty string at
+`package.json#engines.node`. Precedence is `.node-version` → `.nvmrc` → package.json;
+the two version files must agree when both exist. The selected file is rendered as
+setup-node's `node-version-file` for Quality and mutation jobs, so scaffold never
+infers CI's runtime from the operator's host. If package.json is selected,
+`volta.node`, `volta.extends`, and `devEngines.runtime` are refused because setup-node
+would silently prefer them over `engines.node`. Each gate step resolves in precedence
+order: contracted `command` override → GateRunner built-in (`npx tsc --noEmit`, `npx eslint .`,
 `npx vitest run`, `npm run build`); an uncontracted gate is omitted with an audit
 comment, and a waived `mutation` gate collapses to a vacuous-green aggregator job kept
 named exactly `Mutation Testing` (so the required-check context stays universal).
@@ -111,7 +117,10 @@ pristine** — their bytes still matching the hash the committed
 customized seed (or one with no lock entry — e.g. scaffolded before the lock
 existed) is project-owned: reported under `files_present`, never overwritten, never
 flagged (no `files_outdated`). Delete a seed and re-scaffold to re-adopt the latest
-baseline.
+baseline. A narrow migration exception recognizes the two exact historical
+`e2e/example.spec.ts` hashes that disabled the unregistered
+`playwright/no-skipped-test` rule; those pristine bytes upgrade once and enter the
+lock. Any customization changes the hash and remains untouched.
 
 ## `spec <resolve|gate|store>`
 
@@ -228,7 +237,7 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
 unattended by design; `/factory:run` calls [`factory autonomy preflight`](#autonomy-preflight)
-first, which auto-scaffolds and prints the `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
+first, which auto-scaffolds and prints the `claude --worktree --settings <merged-settings.json>`
 relaunch command when needed (`ensure`/`status` remain the manual primitives). See
 [Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)
 and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
@@ -434,7 +443,7 @@ returned envelope's `kind` tells the runner whether an agent is needed:
   (`resolveBootConfig` = `e2e.startCommand`/`e2e.baseURL` override ?? the values the run-start
   assessment wrote into `playwright.config.ts`, D10), explore each user-facing task, author
   **critical** journey specs into the worktree's `e2e.testDir` (committed) plus **throwaway**
-  specs into `throwaway_dir` (out-of-repo, never committed), self-validate them green against
+  specs into `throwaway_dir` (gitignored, never committed), self-validate them green against
   staging, and return a manifest of `{task_ids, spec_path, kind, title}` rows (`title` is the
   human-readable journey name, D12) — **without pushing**. On a **re-entry** (after a reopened
   task settles back to terminal) it does not spawn — it re-runs the already-authored suite
@@ -1076,18 +1085,21 @@ factory autonomy ensure [--user-settings <path>]
 Prints a human-readable relaunch message to stdout that includes the command
 
 ```
-claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions
+claude --worktree --settings <merged-settings.json>
 ```
 
-— not a `{kind:…}` envelope. The `--permission-mode bypassPermissions` flag suppresses
-Claude Code's built-in protected-path _prompt_ for writes under the plugin's data dir
-(which lives under `~/.claude/`, outside the exempted `.claude/worktrees`), converting an
-unattended stall into the correct binary outcome. It does **not** disable
-`permissions.deny`, any hook, or the `rm -rf /` / `rm -rf ~` circuit-breaker. The real
-security boundary stays the path-resolving hook layer (branch-protection, secret-guard,
-pipeline-guards, holdout-guard, write-protection); the template's `deny` block is
-deliberately short — accident-prevention for a non-adversarial agent, not a containment
-boundary. See [Decision 65](../explanation/decisions.md#decision-65--bypasspermissions-relaunch--deny-list-shrink-to-honest-accident-prevention).
+— not a `{kind:…}` envelope. The command carries **no permission-mode override**: the
+merged settings are permissive by design and that is the entire mechanism. Task worktrees
+and results live under the target repo's `.claude/worktrees/` — the one subtree Claude
+Code's built-in protected-path check exempts — and nothing else agent-side writes under
+`~/.claude/` (the plugin's data dir holds run/spec state, which only the engine writes,
+via Node `fs`, which the permission system never sees). The real security boundary stays
+the path-resolving hook layer (branch-protection, secret-guard, pipeline-guards,
+holdout-guard, write-protection); the template's `deny` block is deliberately short —
+accident-prevention for a non-adversarial agent, not a containment boundary. See
+[Decision 67](../explanation/decisions.md#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees)
+for the relocation and [Decision 65](../explanation/decisions.md#decision-65--deny-list-shrink-to-honest-accident-prevention)
+for the deny-list.
 
 ### `autonomy status`
 
@@ -1134,8 +1146,8 @@ plugin version:
 | yes         | present       | plugin unknowable | **proceed** (`version-unknowable` — no churn)                 |
 
 On a halt it delegates to `ensure` (the single writer path) to (re)materialize the settings,
-prints the same `claude --worktree --settings <merged-settings.json> --permission-mode bypassPermissions`
-relaunch block ([see `ensure`](#autonomy-ensure) for what the flag does) plus a one-line
+prints the same `claude --worktree --settings <merged-settings.json>`
+relaunch block ([see `ensure`](#autonomy-ensure)) plus a one-line
 reason, and **exits 1**. On proceed it writes nothing and **exits 0**. Like `status`, it is
 infallible on the decision path (an unresolvable data/root dir degrades to a halt-with-message,
 never a throw). The relaunch itself is irreducible — Claude Code reads settings only at launch,

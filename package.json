@@ -1,6 +1,6 @@
 {
     "name": "factory-plugin",
-    "version": "1.38.0",
+    "version": "1.40.0",
     "private": true,
     "type": "module",
     "description": "Factory plugin build tooling (Node + TypeScript rewrite). NOT the scaffold shipped into target repos (see templates/package.scaffold.json).",
@@ -34,6 +34,7 @@
         "eslint-config-prettier": "^10.1.8",
         "eslint-plugin-prettier": "^5.5.4",
         "eslint-plugin-security": "^4.0.0",
+        "fast-check": "^4.9.0",
         "globals": "^17.4.0",
         "madge": "^8.0.0",
         "prettier": "3.7.4",

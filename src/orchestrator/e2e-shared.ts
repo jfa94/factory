@@ -46,7 +46,7 @@ export interface E2eRunDeps {
     readonly state: StateManager
     readonly git: GitClient
     readonly config: Config
-    readonly dataDir: string
+    readonly workDir: string
     /** The run's durable spec — task list + acceptance criteria for the author prompt. */
     readonly spec: SpecManifest
     /** Injectable Playwright wrapper (tests fake this; production uses the real CLI). */

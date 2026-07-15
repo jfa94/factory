@@ -21,7 +21,6 @@
 import {isAbsolute, relative, sep} from 'node:path'
 import {resolveDataDir, type DataDirOptions} from '../config/load.js'
 import {StateManager, isTerminalRunStatus} from '../core/state/index.js'
-import {worktreesRoot} from '../core/state/index.js'
 import {resolveRepo, DefaultGitClient, type GitClient} from '../git/index.js'
 import {UsageError} from '../shared/usage-error.js'
 import {isValidId} from '../shared/ids.js'
@@ -119,11 +118,22 @@ export interface RunTaskRef {
  * when the path is not inside a per-task worktree.
  *
  * This is the run-isolation anchor for the test-writer write-scope guard: a
- * producer (test-writer/implementer) writes into `<dataDir>/worktrees/<run_id>/<task_id>/…`
- * ({@link worktreesRoot}), so its Edit/Write `file_path` ALREADY encodes which run
- * and task own the write — no global pointer, no cwd, no session payload needed.
- * An unrelated session editing a checkout outside the worktree root resolves to
- * `null` → that guard arm does not fire (the spurious cross-session block fix).
+ * producer (test-writer/implementer) writes into `<worktreesRoot>/<run_id>/<task_id>/…`
+ * (`<main-repo-root>/.claude/worktrees` — the protected-path exemption, Decision 67),
+ * so its Edit/Write `file_path` ALREADY encodes which run and task own the write —
+ * no global pointer, no cwd, no session payload needed. An unrelated session editing
+ * a checkout outside the worktree root resolves to `null` → that guard arm does not
+ * fire (the spurious cross-session block fix).
+ *
+ * RE-ROOTED, not DE-ROOTED: `worktreesRoot` is still a required, caller-resolved
+ * anchor (now git-derived — see {@link import("../cli/wiring.js").loadCliDeps}'s
+ * `workDir` — instead of dataDir-derived). This function must NEVER be turned into
+ * an unanchored `.claude/worktrees/` segment scan: the caller ({@link
+ * import("./pipeline-guards.js").decidePipelineGuards}) fires on EVERY Edit/Write/
+ * MultiEdit system-wide, not just during an active factory run, and
+ * `.claude/worktrees/` is ALSO where Claude Code's own native `--worktree` feature
+ * puts unrelated worktrees in any repo. An unanchored scan would misidentify a
+ * user's unrelated native worktree edit as a factory task write.
  *
  * Both sides are canonicalized (normalize + realpath, reusing {@link canonicalizePath})
  * so `..`/symlink evasions resolve to the same under-root decision as a direct
@@ -131,11 +141,11 @@ export interface RunTaskRef {
  * must be valid id segments (`^[a-zA-Z0-9_-]{1,64}$`) or the path is treated as
  * not a recognizable worktree path (`null`) rather than throwing.
  */
-export function runTaskForPath(dataDir: string, absPath: string): RunTaskRef | null {
-    if (dataDir.length === 0 || absPath.length === 0) {
+export function runTaskForPath(worktreesRoot: string, absPath: string): RunTaskRef | null {
+    if (worktreesRoot.length === 0 || absPath.length === 0) {
         return null
     }
-    const rootCanon = canonicalizePath(worktreesRoot(dataDir))
+    const rootCanon = canonicalizePath(worktreesRoot)
     const pathCanon = canonicalizePath(absPath)
     const rel = relative(rootCanon, pathCanon)
     // Outside the worktree root (`..`-prefixed or absolute, or the root itself) → no owner.

@@ -49,7 +49,7 @@ export interface AdjudicatedReviewer {
     readonly confirmedBlockers: readonly Finding[]
     /**
      * Blocking findings the independent verifier REFUTED (with its reason) —
-     * previously dropped silently; surfaced for the Decision 67 disposition
+     * previously dropped silently; surfaced for the Decision 68 disposition
      * ledger. Never forwarded to fix_findings; never gates.
      */
     readonly refuted: readonly {readonly finding: Finding; readonly reason: string}[]
@@ -124,7 +124,7 @@ async function adjudicateReviewer(
         } else if (outcome.status === 'error') {
             hadVerifierError = true
         } else {
-            // refuted ⇒ not forwarded to confirmed; kept for the disposition ledger (D67).
+            // refuted ⇒ not forwarded to confirmed; kept for the disposition ledger (D68).
             refuted.push({finding, reason: outcome.reason})
         }
     }

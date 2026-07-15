@@ -29,7 +29,10 @@ export interface TraceabilityRunDeps {
     readonly state: StateManager
     readonly git: GitClient
     readonly config: Config
+    /** Roots the durable PRD-snapshot read (SpecStore) — NOT the worktree. */
     readonly dataDir: string
+    /** Roots the auditor's detached worktree (`.claude/worktrees`, Decision 67). */
+    readonly workDir: string
     /** The run's durable spec — the FULL criteria set, incl. any holdout criteria. */
     readonly spec: SpecManifest
 }
@@ -53,13 +56,13 @@ const TRACE_MODEL = 'sonnet'
 export const MAX_TRACE_ATTEMPTS = 2
 
 /**
- * The traceability worktree path for a run. Lives under `worktrees/<runId>/`,
+ * The traceability worktree path for a run. Lives under `<workDir>/<runId>/`,
  * NOT `runs/<runId>/` — the TCB `data-runs` rule denies agent writes under
  * `runs/**` (the auditor is read-only, but Bash cwd bookkeeping still touches
  * the tree). The `.trace` dot prefix cannot collide with a task id.
  */
-export function traceWorktreePath(dataDir: string, runId: string): string {
-    return join(dataDir, 'worktrees', runId, '.trace')
+export function traceWorktreePath(workDir: string, runId: string): string {
+    return join(workDir, runId, '.trace')
 }
 
 /** Build the auditor prompt: PRD requirements as the axiom, diff as the evidence. @internal */
@@ -111,7 +114,7 @@ export async function runTraceabilityEmit(deps: TraceabilityRunDeps, runId: stri
     const run = await deps.state.read(runId)
     const staging = run.staging_branch
     const base = deps.config.git.baseBranch
-    const worktree = traceWorktreePath(deps.dataDir, runId)
+    const worktree = traceWorktreePath(deps.workDir, runId)
     const baseRef = `origin/${base}`
 
     const requirements = await readRequirements(deps, runId)
@@ -168,7 +171,7 @@ export async function runTraceabilityRecord(
     results: TraceabilityResults
 ): Promise<Extract<TraceabilityAction, {kind: 'done' | 'failed' | 'suspend'}>> {
     const run = await deps.state.read(runId)
-    const worktree = traceWorktreePath(deps.dataDir, runId)
+    const worktree = traceWorktreePath(deps.workDir, runId)
     const outcome = parseProducerStatus(results.status)
 
     if (outcome.status === 'done') {

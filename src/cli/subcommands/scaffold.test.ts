@@ -9,6 +9,8 @@ import {mkdtemp, rm, readFile, writeFile, mkdir, cp} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
 
 import {runScaffold, resolveTemplatesDir, scaffoldCommand, resolveScaffoldRepo} from './scaffold.js'
 import {sha256Hex} from './scaffold-lock.js'
@@ -21,6 +23,7 @@ import type {ProtectionApiResult} from '../../git/index.js'
 
 const cfg = defaultConfig()
 const BASE = cfg.git.baseBranch // "develop"
+const execFileAsync = promisify(execFile)
 
 /** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
 const DATA_DIR_RULES = buildTargetDataDirRules({
@@ -61,6 +64,7 @@ async function seedNpmFixture(dir: string): Promise<void> {
         join(dir, 'package.json'),
         JSON.stringify({
             name: 'fixture',
+            engines: {node: '>=22'},
             scripts: {build: 'tsc -p .'},
             devDependencies: {
                 vitest: '^2.0.0',
@@ -125,6 +129,9 @@ describe('runScaffold', () => {
         // installs/configures (bug #1, `playwright/no-skipped-test`).
         const e2eSpec = await readFile(join(root, 'e2e', 'example.spec.ts'), 'utf8')
         expect(e2eSpec).not.toContain('playwright/no-skipped-test')
+        await expect(
+            execFileAsync(join(process.cwd(), 'node_modules', '.bin', 'eslint'), ['e2e/example.spec.ts'], {cwd: root})
+        ).resolves.toMatchObject({stderr: ''})
 
         // Decision 40 D11: no e2e job in CI — it would gate CI merges on infra CI
         // can't boot (seed DB, auth, services). The run-level e2e phase is the gate.
@@ -136,7 +143,10 @@ describe('runScaffold', () => {
 
         // E1: a target-repo .claude/settings.json is emitted with the factory
         // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
-        // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
+        // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder,
+        // and NO additionalDirectories (Decision 17, corrected: that entry is
+        // always absolute and lives ONLY in the gitignored settings.local.json,
+        // never in this committed file).
         expect(report.settings.created).toBe(true)
         const settingsRaw = await readFile(join(root, '.claude', 'settings.json'), 'utf8')
         expect(settingsRaw).not.toContain('${CLAUDE_PLUGIN_DATA}') // the bug we fixed
@@ -145,10 +155,19 @@ describe('runScaffold', () => {
         const allow = (settings.permissions as {allow: string[]}).allow
         expect(allow).toContain('Bash(factory:*)')
         expect(allow).toContain(`Read(${DATA_DIR_RULES.allowGlobBase}/**)`) // baked, resolved dir
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(DATA_DIR_RULES.additionalDir)
+        expect(settings.permissions).not.toHaveProperty('additionalDirectories')
         expect(settings).not.toHaveProperty('statusLine')
         expect(report.files_created).toContain('.claude/settings.json')
+        // settings.local.json is gitignored — never listed as a committable file.
+        expect(report.files_created).not.toContain('.claude/settings.local.json')
+
+        // The sibling GITIGNORED .claude/settings.local.json carries the ABSOLUTE
+        // additionalDirectories entry instead.
+        expect(report.settings.local.created).toBe(true)
+        const localRaw = await readFile(join(root, '.claude', 'settings.local.json'), 'utf8')
+        const local = JSON.parse(localRaw) as Record<string, unknown>
+        const dirs = (local.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toContain(DATA_DIR_RULES.additionalDir)
     })
 
     it('E1: merges non-destructively into an existing target .claude/settings.json', async () => {
@@ -457,6 +476,48 @@ describe('runScaffold', () => {
             expect(wf).toMatch(/branches: \[["']staging-\*["'], develop\]/)
             // Mutation contracted (stryker devDep) → real mutation jobs, npm-ified.
             expect(wf).toContain('npx stryker run \\')
+            expect(wf.match(/node-version-file: 'package\.json'/g)).toHaveLength(2)
+        })
+
+        it('uses the declared runtime with stable precedence and idempotent re-rendering', async () => {
+            await writeFile(join(root, '.nvmrc'), '24\n', 'utf8')
+            await runScaffold(baseArgs())
+            expect((await readFile(wfPath(), 'utf8')).match(/node-version-file: '\.nvmrc'/g)).toHaveLength(2)
+
+            await writeFile(join(root, '.node-version'), '24\n', 'utf8')
+            const promoted = await runScaffold(baseArgs())
+            expect(promoted.files_updated).toContain('.github/workflows/quality-gate.yml')
+            expect((await readFile(wfPath(), 'utf8')).match(/node-version-file: '\.node-version'/g)).toHaveLength(2)
+
+            const stable = await runScaffold(baseArgs())
+            expect(stable.files_updated).not.toContain('.github/workflows/quality-gate.yml')
+        })
+
+        it('rejects missing, malformed, and conflicting runtime declarations', async () => {
+            const packagePath = join(root, 'package.json')
+            const pkg = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>
+            delete pkg.engines
+            await writeFile(packagePath, JSON.stringify(pkg), 'utf8')
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/Node runtime is undeclared/)
+
+            await writeFile(join(root, '.nvmrc'), '22\n24\n', 'utf8')
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/exactly one Node version line/)
+
+            await writeFile(join(root, '.nvmrc'), '22\n', 'utf8')
+            await writeFile(join(root, '.node-version'), '24\n', 'utf8')
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/\.node-version.*\.nvmrc.*disagree/)
+        })
+
+        it('rejects package fields that setup-node would prefer over engines.node', async () => {
+            const packagePath = join(root, 'package.json')
+            const pkg = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>
+            pkg.volta = {node: '20'}
+            await writeFile(packagePath, JSON.stringify(pkg), 'utf8')
+
+            await expect(runScaffold(baseArgs())).rejects.toThrow(/engines\.node is shadowed by volta\.node/)
+
+            await writeFile(join(root, '.nvmrc'), '24\n', 'utf8')
+            await expect(runScaffold(baseArgs())).resolves.toMatchObject({stack: 'npm'})
         })
 
         it('renders the vacuous-green Mutation Testing aggregator when mutation is waived', async () => {
@@ -464,6 +525,7 @@ describe('runScaffold', () => {
                 join(root, 'package.json'),
                 JSON.stringify({
                     name: 'x',
+                    engines: {node: '>=22'},
                     scripts: {build: 'b'},
                     devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
                 }),
@@ -573,6 +635,35 @@ describe('runScaffold', () => {
             expect((await readLock()).seeds).toHaveProperty('eslint.config.mjs')
         })
 
+        it.each(['e2e-example-v1.10.txt', 'e2e-example-v1.19.txt'])(
+            'migrates the exact legacy e2e template %s once',
+            async (fixture) => {
+                const legacy = await readFile(join(import.meta.dirname, 'fixtures', fixture), 'utf8')
+                await mkdir(join(root, 'e2e'), {recursive: true})
+                await writeFile(join(root, 'e2e', 'example.spec.ts'), legacy, 'utf8')
+
+                const report = await runScaffold(baseArgs())
+                expect(report.files_updated).toContain('e2e/example.spec.ts')
+                const migrated = await readFile(join(root, 'e2e', 'example.spec.ts'), 'utf8')
+                expect(migrated).not.toContain('playwright/no-skipped-test')
+                expect((await readLock()).seeds['e2e/example.spec.ts']).toBe(sha256Hex(migrated))
+
+                const stable = await runScaffold(baseArgs())
+                expect(stable.files_updated).not.toContain('e2e/example.spec.ts')
+            }
+        )
+
+        it('does not migrate a customized legacy e2e template', async () => {
+            const legacy = await readFile(join(import.meta.dirname, 'fixtures', 'e2e-example-v1.10.txt'), 'utf8')
+            await mkdir(join(root, 'e2e'), {recursive: true})
+            await writeFile(join(root, 'e2e', 'example.spec.ts'), `${legacy}// project-owned\n`, 'utf8')
+
+            const report = await runScaffold(baseArgs())
+            expect(report.files_present).toContain('e2e/example.spec.ts')
+            expect(report.files_updated).not.toContain('e2e/example.spec.ts')
+            expect((await readLock()).seeds).not.toHaveProperty('e2e/example.spec.ts')
+        })
+
         it('a GARBAGE lock fails safe (seeds read as customized) and is rewritten valid', async () => {
             await runScaffold(baseArgs())
             await writeFile(lockPath(), 'not json{{{', 'utf8')
@@ -618,6 +709,7 @@ describe('runScaffold', () => {
                 join(root, 'package.json'),
                 JSON.stringify({
                     name: 'x',
+                    engines: {node: '>=22'},
                     scripts: {build: 'b'},
                     devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
                 }),
@@ -682,6 +774,7 @@ describe('runScaffold', () => {
                 join(root, 'package.json'),
                 JSON.stringify({
                     name: 'x',
+                    engines: {node: '>=22'},
                     scripts: {build: 'b'},
                     devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
                 }),
@@ -704,6 +797,7 @@ describe('runScaffold', () => {
                 join(root, 'package.json'),
                 JSON.stringify({
                     name: 'x',
+                    engines: {node: '>=22'},
                     scripts: {build: 'b'},
                     devDependencies: {vitest: '^2.0.0', '@stryker-mutator/core': '^8.0.0'},
                 }),

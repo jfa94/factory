@@ -1,15 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import {join} from 'node:path'
-import {
-    repoKey,
-    specDir,
-    runDir,
-    runStatePath,
-    currentRepoRoot,
-    currentRepoLinkPath,
-    docsFactoryDir,
-    worktreesRoot,
-} from './paths.js'
+import {repoKey, specDir, runDir, runStatePath, currentRepoRoot, currentRepoLinkPath, docsFactoryDir} from './paths.js'
 
 describe('repoKey — repo id to one safe path segment', () => {
     it('records the owner/name slash to a dash', () => {
@@ -46,9 +37,6 @@ describe('two-store layout', () => {
     it('run store is keyed by run id', () => {
         expect(runDir(data, 'run-1')).toBe(join(data, 'runs', 'run-1'))
         expect(runStatePath(data, 'run-1')).toBe(join(data, 'runs', 'run-1', 'state.json'))
-    })
-    it('worktrees root is a sibling of runs/ and specs/ (per-task worktrees live here)', () => {
-        expect(worktreesRoot(data)).toBe(join(data, 'worktrees'))
     })
     it('per-repo current tree is a sibling of runs/ (so listRuns is untouched, L2.7)', () => {
         expect(currentRepoRoot(data)).toBe(join(data, 'current'))

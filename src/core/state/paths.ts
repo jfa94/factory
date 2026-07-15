@@ -41,13 +41,6 @@ export const DOCS_FACTORY_DIR = 'factory'
 /** Subdir name for the ephemeral run store. */
 export const RUNS_DIR = 'runs'
 /**
- * Subdir name for per-task worktrees. A worktree lives at
- * `<dataDir>/worktrees/<run-id>/<task-id>` — a SIBLING of the TCB-write-denied
- * `runs/`/`specs/` trees, so an implementer CAN write inside its own worktree while
- * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
- */
-export const WORKTREES_DIR = 'worktrees'
-/**
  * RETIRED global `runs/current` symlink name (Decision 61) — no consumer reads it.
  * Kept only so `pointCurrentAt` can best-effort rm a leftover from an older engine.
  */
@@ -98,11 +91,6 @@ export function repoKey(repo: string): string {
 /** `<dataDir>/runs`. */
 export function runsRoot(dataDir: string): string {
     return join(dataDir, RUNS_DIR)
-}
-
-/** `<dataDir>/worktrees` — the per-task worktree root (sibling of `runs/`/`specs/`). */
-export function worktreesRoot(dataDir: string): string {
-    return join(dataDir, WORKTREES_DIR)
 }
 
 /** `<dataDir>/runs/<run-id>`. Validates run-id charset. */

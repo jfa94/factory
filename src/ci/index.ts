@@ -5,3 +5,12 @@
  */
 export {injectGateEnvIntoWorkflow} from './inject-gate-env.js'
 export {renderQualityGate, type RenderQualityGateOpts} from './render-quality-gate.js'
+export {
+    NODE_VERSION_FILE,
+    NVMRC_FILE,
+    PACKAGE_JSON_FILE,
+    resolveNodeRuntimeDeclarations,
+    type NodeRuntime,
+    type NodeRuntimeDeclarations,
+    type NodeVersionFile,
+} from './node-runtime.js'

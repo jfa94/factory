@@ -130,7 +130,7 @@ describe('WS7 panel-run integration (D26/D27, Δ K)', () => {
         expect(res.mergeGate.passed).toBe(true)
     })
 
-    it('D67: a refuted blocker is surfaced on adjudicated[].refuted with the verifier reason', async () => {
+    it('D68: a refuted blocker is surfaced on adjudicated[].refuted with the verifier reason', async () => {
         const res = await runPanel({
             reviews: [blockedWith('quality-reviewer', 2, 'const value = process(input)')],
             source,
@@ -144,7 +144,7 @@ describe('WS7 panel-run integration (D26/D27, Δ K)', () => {
         expect(q?.confirmedBlockers).toHaveLength(0)
     })
 
-    it('D67: a confirmed blocker never appears in refuted', async () => {
+    it('D68: a confirmed blocker never appears in refuted', async () => {
         const res = await runPanel({
             reviews: [blockedWith('quality-reviewer', 2, 'const value = process(input)')],
             source,

@@ -1369,7 +1369,8 @@ describe('runDocs — CLI-level integration (T)', () => {
             spec: {repo: REPO, spec_id: '9-x', issue_number: 9},
         })
         const git = new FakeGitClient({remoteHeads: {[`staging-${runId}`]: 'sha-staging'}})
-        const deps: DocsRunDeps = {state, git, config: defaultConfig(), dataDir}
+        // FakeGitClient never touches real fs — reusing dataDir avoids a 2nd mkdtemp.
+        const deps: DocsRunDeps = {state, git, config: defaultConfig(), workDir: dataDir}
 
         await runDocsEmit(deps, runId)
         const env = await runDocsRecord(deps, runId, {status: 'STATUS: DONE'})
@@ -1390,7 +1391,8 @@ describe('runDocs — CLI-level integration (T)', () => {
             spec: {repo: REPO, spec_id: '9-x', issue_number: 9},
         })
         const git = new FakeGitClient({remoteHeads: {[`staging-${runId}`]: 'sha-staging'}})
-        const deps: DocsRunDeps = {state, git, config: defaultConfig(), dataDir}
+        // FakeGitClient never touches real fs — reusing dataDir avoids a 2nd mkdtemp.
+        const deps: DocsRunDeps = {state, git, config: defaultConfig(), workDir: dataDir}
 
         await runDocsEmit(deps, runId)
         // First failure → suspend, attempts: 1

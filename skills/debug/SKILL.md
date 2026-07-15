@@ -129,9 +129,9 @@ re-derived here — with these debug-only deltas:
 - Each reviewer's prompt is built INLINE from that role's `agents/<role>.md` body
   PLUS the `skills/review-protocol/SKILL.md` contract — panel manifest entries
   carry no `prompt` field, so there is no per-run prompt file to Read.
-- Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>` — the
+- Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>..HEAD` — the
   envelope's `base`/`worktree` verbatim (no task worktree, no `base_ref`).
-- **Prior dispositions (D67).** When the envelope carries `prior_dispositions`, append it
+- **Prior dispositions (D68).** When the envelope carries `prior_dispositions`, append it
   VERBATIM to EVERY panel reviewer's prompt (after the review-protocol contract). NEVER
   append it to a finding-verifier prompt — verifiers stay blind to prior belief-state
   (anti-anchoring). The cross-vendor prompt already contains it engine-side — do not

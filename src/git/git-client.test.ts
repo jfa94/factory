@@ -187,4 +187,19 @@ describe('DefaultGitClient over an injectable runner (no real git)', () => {
         // The tree was aborted back to clean before returning.
         expect(calls.some((c) => c[0] === 'merge' && c[1] === '--abort')).toBe(true)
     })
+
+    it('mainWorktreeRoot dirnames --git-common-dir (the MAIN repo root, not a linked worktree)', async () => {
+        const git = new DefaultGitClient((args) => {
+            expect(args).toEqual(['rev-parse', '--path-format=absolute', '--git-common-dir'])
+            // From inside a linked worktree, --git-common-dir still resolves to the
+            // main repo's .git — dirname() of that is the main repo root.
+            return Promise.resolve(result({stdout: '/repo/.git\n'}))
+        })
+        await expect(git.mainWorktreeRoot()).resolves.toBe('/repo')
+    })
+
+    it('mainWorktreeRoot is fatal on non-zero (execOrThrow)', async () => {
+        const git = new DefaultGitClient(() => Promise.resolve(result({code: 128, stderr: 'not a repo'})))
+        await expect(git.mainWorktreeRoot()).rejects.toThrow(/command failed/)
+    })
 })

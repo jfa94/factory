@@ -110,7 +110,7 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
       load-bearing. They gate this run and every future `--e2e` run. (There is **no** CI `e2e`
       job — Decision 40 D11 removed it from `quality-gate.yml` as a self-bricking hazard; e2e
       gating is run-level only.)
-    - **Throwaway** specs (an out-of-repo run directory, never committed) — one per
+    - **Throwaway** specs (a gitignored run directory, never committed) — one per
       user-facing task, broader coverage, discarded at run end.
 
     The author returns a manifest linking each spec to the `task_id`(s) it covers — the
@@ -129,8 +129,8 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
     - The engine diffs the author branch against staging by name and requires every changed
       file under `<testDir>/` to be a declared **critical** manifest entry (D6), with a
       carve-out for the assessment-owned `e2e/support/**` and `e2e/auth.setup.ts`. Any changed
-      path outside `<testDir>/` is rejected outright. Throwaway specs live out-of-repo (never
-      committed, so never in this diff), so a legitimate author branch touches only its declared
+      path outside `<testDir>/` is rejected outright. Throwaway specs live in a gitignored run
+      directory (never committed, so never in this diff), so a legitimate author branch touches only its declared
       critical specs. A stray edit to application source — or an undeclared file under
       `<testDir>/` — aborts the phase rather than landing unreviewed.
 
@@ -151,7 +151,8 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
 
 4. **Run the suite + decide.** The full suite runs against current staging — the committed
    critical specs, plus the throwaway specs (which **do** run, via a generated `--config`
-   pointing `testDir` at the out-of-repo throwaway dir with `cwd` set to the run worktree).
+   pointing `testDir` at the run's never-committed throwaway dir — `.claude/worktrees/<run-id>/.e2e-throwaway`,
+   gitignored, alongside the run's other scratch worktrees — with `cwd` set to the run worktree).
    The run worktree is re-synced to staging and `npm ci`-provisioned on every pass. The
    disposition:
     - **Every critical spec present and green** → the phase passes; a residual throwaway red

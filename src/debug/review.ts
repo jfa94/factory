@@ -71,7 +71,7 @@ export async function buildReviewManifest(opts: {
     readonly worktree: string
     /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
     readonly crossVendor: CrossVendorResolution
-    /** D67 — the rendered disposition ledger; threaded into the codex prompt (a panel reviewer). */
+    /** D68 — the rendered disposition ledger; threaded into the codex prompt (a panel reviewer). */
     readonly priorDispositions?: string
 }): Promise<DebugReviewManifest> {
     const crossVendorPrompt =
@@ -109,7 +109,7 @@ export interface AdjudicateWholeScopeInput {
 export interface AdjudicateWholeScopeResult {
     /** Per-reviewer adjudicated detail, passed through from `runPanel`. */
     readonly adjudicated: readonly AdjudicatedReviewer[]
-    /** The parsed raw reviews (D67 — composeDispositions reads non-blocking findings off these). */
+    /** The parsed raw reviews (D68 — composeDispositions reads non-blocking findings off these). */
     readonly reviews: readonly RawReview[]
     /** Every CONFIRMED blocking finding, flattened across all reviewers. */
     readonly confirmedBlockers: readonly Finding[]

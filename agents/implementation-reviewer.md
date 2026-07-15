@@ -21,7 +21,7 @@ is narrow and sharp: does the code actually implement the spec's intent — does
 well-written or secure" (quality-reviewer). You work in a fresh
 context — your blank slate forces the question "what's missing?".
 
-Inspect the change with `git -C <taskWorktree> diff <baseRef>` and read the files in that
+Inspect the change with `git -C <taskWorktree> diff <baseRef>..HEAD` and read the files in that
 worktree. The `<baseRef>` and acceptance criteria are in your prompt.
 
 <EXTREMELY-IMPORTANT>

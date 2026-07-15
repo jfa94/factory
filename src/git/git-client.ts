@@ -10,6 +10,7 @@
  * By CONSTRUCTION there is NO force-push method (global rule: never force-push in
  * any form). The interface simply does not expose one, so no caller can reach it.
  */
+import {dirname} from 'node:path'
 import type {ExecOptions} from '../shared/index.js'
 import {createLogger} from '../shared/index.js'
 import {defaultGitRunner, runOrThrow, type GitRunner} from './exec-tools.js'
@@ -92,6 +93,17 @@ export interface GitClient {
      * dir even when the CLI is invoked from a subdirectory.
      */
     showToplevel(opts?: GitOpts): Promise<string>
+    /**
+     * The MAIN repo root, resolved via `git rev-parse --path-format=absolute
+     * --git-common-dir` (then its parent dir) — unlike {@link showToplevel}, this
+     * is correct even when called from INSIDE a linked worktree (e.g. `$ORCH`,
+     * where all Phase 3+ CLI calls run): `showToplevel` would return the linked
+     * worktree's own root, which would nest task worktrees inside it. Used to
+     * anchor `.claude/worktrees/` — the one subtree Claude Code's protected-path
+     * check exempts (Decision 67) — at the true main root, not wherever cwd is.
+     * `--path-format=absolute` avoids MSYS/Windows path mangling.
+     */
+    mainWorktreeRoot(opts?: GitOpts): Promise<string>
     /**
      * `git remote get-url <remote>` → the remote URL, or `null` when the remote is
      * absent / the dir is not a git repo (a non-zero exit is a normal NO — used to
@@ -248,6 +260,11 @@ export class DefaultGitClient implements GitClient {
     async showToplevel(opts?: GitOpts): Promise<string> {
         const r = await this.execOrThrow(['rev-parse', '--show-toplevel'], opts)
         return r.stdout.trim()
+    }
+
+    async mainWorktreeRoot(opts?: GitOpts): Promise<string> {
+        const r = await this.execOrThrow(['rev-parse', '--path-format=absolute', '--git-common-dir'], opts)
+        return dirname(r.stdout.trim())
     }
 
     async remoteUrl(remote: string, opts?: GitOpts): Promise<string | null> {

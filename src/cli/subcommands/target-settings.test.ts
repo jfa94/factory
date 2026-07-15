@@ -1,21 +1,29 @@
 /**
- * Tests for the E1 (F-perm) target-repo `.claude/settings.json` emit + merge.
+ * Tests for the E1 (F-perm) target-repo settings emit + merge — SPLIT across two
+ * files (Decision 17, corrected):
  *
- * `ensureTargetSettings` writes (or idempotently MERGES into) the TARGET repo's
- * `.claude/settings.json` so an interactive `/factory:run` stops prompting per
- * call. The invariants under test:
- *   - emit: a fresh repo gets the base allow-list + the BAKED data-dir rules
- *     (CLI-resolved canonical dir; tilde form for the allow globs, ABSOLUTE for
- *     additionalDirectories — `~/` does not expand there) + worktree.baseRef:"head".
+ *   - `.claude/settings.json` (COMMITTED, git-safe): base allow-list + the BAKED
+ *     TILDE-form data-dir allow globs (CLI-resolved canonical dir) +
+ *     worktree.baseRef:"head". Carries NO `permissions.additionalDirectories` —
+ *     that entry is always absolute (never tilde-expanded), so it would leak
+ *     `$HOME`/username into a committed file.
+ *   - `.claude/settings.local.json` (GITIGNORED, per-machine): the ABSOLUTE
+ *     baked `additionalDirectories` entry, prune-then-add — any stale
+ *     factory-managed entry (a literal `${CLAUDE_PLUGIN_DATA}` placeholder, a
+ *     tilde form, or a previously-baked path that moved) is stripped and
+ *     replaced; the user's own unrelated entries are kept.
+ *
+ * `ensureTargetSettings` writes (or idempotently MERGES into) both, so an
+ * interactive `/factory:run` stops prompting per call. Invariants under test:
+ *   - emit: a fresh repo gets both files with the invariants above.
  *   - NO literal `${CLAUDE_PLUGIN_DATA}` placeholder is ever emitted (it does not
  *     resolve — env-var interpolation is undocumented and the var is hijackable).
  *   - NO statusLine (would clobber the user's own statusline — E2 territory).
- *   - merge: an existing settings.json keeps the user's other keys; the allow-list
- *     is UNIONed (no duplicates); worktree.baseRef is set.
- *   - MIGRATION: a repo scaffolded by the OLD emitter carries stale literal
- *     `${CLAUDE_PLUGIN_DATA}` rules — the merge strips them and bakes the resolved
- *     dir in their place (and reports changed).
- *   - idempotent: re-running reports "present", makes no further change.
+ *   - merge: existing files keep the user's other keys; allow-list is UNIONed
+ *     (no duplicates); worktree.baseRef is set; additionalDirectories is
+ *     prune-then-add (not a plain union — see {@link mergeLocalSettings}).
+ *   - idempotent: re-running reports "present", makes no further change to
+ *     either file.
  */
 import {mkdtemp, rm, readFile, writeFile, mkdir} from 'node:fs/promises'
 import {existsSync} from 'node:fs'
@@ -27,6 +35,7 @@ import {
     FACTORY_TARGET_BASE_ALLOWLIST,
     buildTargetDataDirRules,
     mergeTargetSettings,
+    mergeLocalSettings,
     ensureTargetSettings,
     type TargetDataDirRules,
 } from './target-settings.js'
@@ -51,9 +60,14 @@ afterEach(async () => {
 })
 
 const settingsPath = (): string => join(root, '.claude', 'settings.json')
+const localSettingsPath = (): string => join(root, '.claude', 'settings.local.json')
 
 async function readSettings(): Promise<Record<string, unknown>> {
     return JSON.parse(await readFile(settingsPath(), 'utf8')) as Record<string, unknown>
+}
+
+async function readLocalSettings(): Promise<Record<string, unknown>> {
+    return JSON.parse(await readFile(localSettingsPath(), 'utf8')) as Record<string, unknown>
 }
 
 describe('FACTORY_TARGET_BASE_ALLOWLIST', () => {
@@ -160,41 +174,20 @@ describe('mergeTargetSettings', () => {
         expect(changed).toBe(false)
         const allow = (twice.permissions as {allow: string[]}).allow
         expect(new Set(allow).size).toBe(allow.length) // no duplicates on re-merge
-        const dirs = (twice.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(new Set(dirs).size).toBe(dirs.length) // no duplicate dirs on re-merge
     })
 
-    it('from empty: declares the ABSOLUTE baked data dir in permissions.additionalDirectories', () => {
-        // The allow-list grants the tool; additionalDirectories grants the
-        // working-directory boundary for out-of-tree writes (results/, worktrees/).
-        // Absolute form only — `~/` does not expand in additionalDirectories.
-        const {settings} = mergeTargetSettings({}, RULES)
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(DATA_DIR)
-        expect(dirs).not.toContain(TILDE_BASE)
-        expect(dirs).not.toContain('${CLAUDE_PLUGIN_DATA}')
-    })
+    it('NEVER writes permissions.additionalDirectories — that entry belongs ONLY in settings.local.json', () => {
+        // additionalDirectories is always absolute (Claude Code never expands `~/`
+        // there), so it would leak $HOME/username into a COMMITTED file. Covered
+        // even when the input already carries a (possibly stale) entry: the
+        // committed-file merge must not touch or preserve it either way.
+        const fresh = mergeTargetSettings({}, RULES).settings
+        expect(fresh.permissions).not.toHaveProperty('additionalDirectories')
 
-    it("unions additionalDirectories, preserving the user's own entries", () => {
-        const existing = {
-            permissions: {additionalDirectories: ['/my/extra/dir']},
-        }
-        const {settings, changed} = mergeTargetSettings(existing, RULES)
-        expect(changed).toBe(true)
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain('/my/extra/dir') // user entry kept
-        expect(dirs).toContain(DATA_DIR) // baked entry added
-    })
-
-    it('reports changed when additionalDirectories is missing even if allow-list is complete', () => {
-        // Build a fully-merged settings, then strip ONLY additionalDirectories: a
-        // re-merge must re-add it (and report changed), independent of the allow-list.
-        const base = mergeTargetSettings({}, RULES).settings
-        delete (base.permissions as {additionalDirectories?: unknown}).additionalDirectories
-        const {changed, settings} = mergeTargetSettings(base, RULES)
-        expect(changed).toBe(true)
-        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
-        expect(dirs).toContain(DATA_DIR)
+        const withStale = mergeTargetSettings({permissions: {additionalDirectories: ['/my/extra/dir']}}, RULES).settings
+        expect((withStale.permissions as {additionalDirectories?: unknown}).additionalDirectories).toEqual([
+            '/my/extra/dir',
+        ])
     })
 
     it('reports changed when baseRef was not yet head even if allow-list is complete', () => {
@@ -217,6 +210,61 @@ describe('mergeTargetSettings', () => {
     })
 })
 
+describe('mergeLocalSettings', () => {
+    it('from empty: declares the ABSOLUTE baked data dir in permissions.additionalDirectories', () => {
+        // Absolute form only — `~/` does not expand in additionalDirectories.
+        const {settings, changed} = mergeLocalSettings({}, RULES)
+        expect(changed).toBe(true)
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toContain(DATA_DIR)
+        expect(dirs).not.toContain(TILDE_BASE)
+        expect(dirs).not.toContain('${CLAUDE_PLUGIN_DATA}')
+    })
+
+    it("unions additionalDirectories, preserving the user's own entries", () => {
+        const existing = {permissions: {additionalDirectories: ['/my/extra/dir']}}
+        const {settings, changed} = mergeLocalSettings(existing, RULES)
+        expect(changed).toBe(true)
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toContain('/my/extra/dir') // user entry kept
+        expect(dirs).toContain(DATA_DIR) // baked entry added
+    })
+
+    it('prunes a stale literal ${CLAUDE_PLUGIN_DATA} placeholder and bakes the resolved dir in its place', () => {
+        const existing = {permissions: {additionalDirectories: ['${CLAUDE_PLUGIN_DATA}', '/my/extra/dir']}}
+        const {settings, changed} = mergeLocalSettings(existing, RULES)
+        expect(changed).toBe(true)
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).not.toContain('${CLAUDE_PLUGIN_DATA}')
+        expect(dirs).toContain(DATA_DIR)
+        expect(dirs).toContain('/my/extra/dir') // unrelated user entry survives the prune
+    })
+
+    it('prunes a stale tilde-form entry (never valid here — additionalDirectories does not expand ~/)', () => {
+        const existing = {permissions: {additionalDirectories: [TILDE_BASE]}}
+        const {settings, changed} = mergeLocalSettings(existing, RULES)
+        expect(changed).toBe(true)
+        const dirs = (settings.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).not.toContain(TILDE_BASE)
+        expect(dirs).toEqual([DATA_DIR])
+    })
+
+    it('is idempotent: merging an already-merged settings reports no change + no dupes', () => {
+        const {settings: once} = mergeLocalSettings({}, RULES)
+        const {settings: twice, changed} = mergeLocalSettings(once, RULES)
+        expect(changed).toBe(false)
+        const dirs = (twice.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(new Set(dirs).size).toBe(dirs.length)
+    })
+
+    it("unions without clobbering the user's other keys", () => {
+        const existing = {env: {MY_VAR: '1'}, permissions: {deny: ['Bash(rm -rf /)']}}
+        const {settings} = mergeLocalSettings(existing, RULES)
+        expect(settings.env).toEqual({MY_VAR: '1'})
+        expect((settings.permissions as {deny: string[]}).deny).toEqual(['Bash(rm -rf /)'])
+    })
+})
+
 describe('ensureTargetSettings', () => {
     it('creates .claude/settings.json on a fresh repo and reports it created', async () => {
         const result = await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
@@ -228,6 +276,42 @@ describe('ensureTargetSettings', () => {
         expect(allow).toContain('Bash(factory:*)')
         expect(allow).toContain(`Read(${TILDE_BASE}/**)`)
         expect(written).not.toHaveProperty('statusLine')
+        // additionalDirectories lives ONLY in settings.local.json — never here.
+        expect(written.permissions).not.toHaveProperty('additionalDirectories')
+    })
+
+    it('creates the sibling .claude/settings.local.json with the ABSOLUTE additionalDirectories entry', async () => {
+        const result = await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
+        expect(result.local.created).toBe(true)
+        expect(result.local.path).toBe(localSettingsPath())
+        expect(existsSync(localSettingsPath())).toBe(true)
+        const written = await readLocalSettings()
+        const dirs = (written.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).toEqual([DATA_DIR])
+    })
+
+    it("prunes a stale additionalDirectories entry from an older scaffold on disk, keeping the user's own entry", async () => {
+        await mkdir(join(root, '.claude'), {recursive: true})
+        await writeFile(
+            localSettingsPath(),
+            JSON.stringify({permissions: {additionalDirectories: ['${CLAUDE_PLUGIN_DATA}', '/my/extra/dir']}}),
+            'utf8'
+        )
+        const result = await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
+        expect(result.local.created).toBe(false)
+        expect(result.local.changed).toBe(true)
+        const written = await readLocalSettings()
+        const dirs = (written.permissions as {additionalDirectories: string[]}).additionalDirectories
+        expect(dirs).not.toContain('${CLAUDE_PLUGIN_DATA}')
+        expect(dirs).toContain(DATA_DIR)
+        expect(dirs).toContain('/my/extra/dir')
+    })
+
+    it('is idempotent on disk for BOTH files: a second run reports no change to either', async () => {
+        await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
+        const second = await ensureTargetSettings({targetRoot: root, dataDirRules: RULES})
+        expect(second.changed).toBe(false)
+        expect(second.local.changed).toBe(false)
     })
 
     it('writes NO literal ${CLAUDE_PLUGIN_DATA} to disk on a fresh emit', async () => {

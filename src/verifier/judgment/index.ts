@@ -64,5 +64,5 @@ export {
 // end-to-end verify pass (derive-don't-store merge gate)
 export {runPanel, spawnPanel, type RunPanelInput, type PanelRunResult, type AdjudicatedReviewer} from './panel-run.js'
 
-// D67 anti-ratcheting disposition ledger
+// D68 anti-ratcheting disposition ledger
 export {composeDispositions, appendDispositions, renderDispositionLedger, DISPOSITION_CAP} from './dispositions.js'

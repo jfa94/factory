@@ -251,6 +251,7 @@ async function driveToTerminal(deps: OrchestratorDeps, runId: string, answer: An
 
 describe('runner orchestrator seam — golden contract E2E', () => {
     let dataDir: string
+    let workDir: string
     let state: StateManager
     let specStore: SpecStore
     let git: FakeGitClient
@@ -259,6 +260,7 @@ describe('runner orchestrator seam — golden contract E2E', () => {
 
     beforeEach(async () => {
         dataDir = await mkdtemp(join(tmpdir(), 'factory-orch-e2e-'))
+        workDir = await mkdtemp(join(tmpdir(), 'factory-orch-e2e-workdir-'))
         state = new StateManager({
             dataDir,
             lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
@@ -271,6 +273,7 @@ describe('runner orchestrator seam — golden contract E2E', () => {
 
     afterEach(async () => {
         await rm(dataDir, {recursive: true, force: true})
+        await rm(workDir, {recursive: true, force: true})
     })
 
     /** Build OrchestratorDeps directly (no CLI loading — keeps the E2E free of fs config). */
@@ -287,6 +290,7 @@ describe('runner orchestrator seam — golden contract E2E', () => {
             }),
             holdout,
             dataDir,
+            workDir,
             owner: 'acme',
             repo: 'widgets',
             shipMode,

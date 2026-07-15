@@ -32,16 +32,16 @@ A diff whose DB files are all clean → `verdict: "approve"` with empty findings
 
 ## Decision Gates (non-blocking unless unjustified AND harmful)
 
-| Gate                  | Default                                    | Flag when the diff…                                                                      |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| G1 Key strategy       | Surrogate PK + UNIQUE natural key          | has a natural key but no UNIQUE on it; or bolts `id` onto a pure junction/lookup table   |
-| G2 Key type           | BIGINT (single DB); UUIDv7 if distributed  | uses UUIDv4 PKs at evident scale with no stated reason; stores UUIDs as text             |
-| G3 Normalise          | 3NF/BCNF                                   | duplicates a fact across rows (drift risk) or denormalises with no measurement/reason    |
-| G4 Delete strategy    | Hard delete + archive, or lifecycle status | adds `deleted_at` by reflex, or soft-deletes without a partial unique index on live rows |
-| G5 Tree model         | Adjacency list + recursive CTE             | hand-rolls a tree shape that can't serve its evident queries                             |
-| G6 Inheritance        | per hierarchy: STI / CTI / concrete        | mixes subtype strategies incoherently in one hierarchy                                   |
-| G7 Dynamic attributes | Real columns → lookup → JSONB+GIN → EAV    | reaches for JSONB/EAV for attributes that are clearly fixed and typed                    |
-| G8 Where a rule lives | Invariant → DB constraint                  | enforces a data invariant only in app code when a constraint/CHECK could hold it (→ L1)  |
+| Gate                  | Default                                       | Flag when the diff…                                                                                                                                                      |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G1 Key strategy       | Surrogate PK + UNIQUE natural key             | has a natural key but no UNIQUE on it; or bolts `id` onto a pure junction/lookup table                                                                                   |
+| G2 Key type           | BIGINT (single DB); UUIDv7 if distributed     | uses UUIDv4 PKs at evident scale with no stated reason; stores UUIDs as text                                                                                             |
+| G3 Normalise          | 3NF/BCNF                                      | duplicates a fact across rows (drift risk) or denormalises with no measurement/reason                                                                                    |
+| G4 Delete strategy    | Hard delete + archive, or lifecycle status    | adds `deleted_at` by reflex, or soft-deletes without a partial unique index on live rows                                                                                 |
+| G5 Tree model         | Adjacency list + recursive CTE                | hand-rolls a tree shape that can't serve its evident queries                                                                                                             |
+| G6 Inheritance        | per hierarchy: STI / CTI / concrete           | mixes subtype strategies incoherently in one hierarchy                                                                                                                   |
+| G7 Dynamic attributes | Real columns → lookup → JSONB+GIN → EAV       | reaches for JSONB/EAV for attributes that are clearly fixed and typed                                                                                                    |
+| G8 Where a rule lives | Invariant → DB constraint                     | enforces a data invariant only in app code when a constraint/CHECK could hold it (→ L1)                                                                                  |
 | G9 Tenancy            | Shared schema + mandatory `tenant_id` (+ RLS) | multi-tenant schema with tenant-owned tables lacking `tenant_id`, or per-tenant uniqueness as `UNIQUE(x)` instead of `UNIQUE(tenant_id, x)`, and no stated tenancy model |
 
 Naming (snake_case, FK named after the referenced table, no reserved words) and design-level indexing (FK columns unindexed, composite order wrong for the evident access path, missing partial-unique for soft-delete) are `minor`, non-blocking.

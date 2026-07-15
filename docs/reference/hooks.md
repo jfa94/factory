@@ -85,9 +85,15 @@ cross-contamination:
 
 - **Write-scope arm** (`pipeline-guards`, `Edit\|Write\|MultiEdit`): derives
   `{run_id, task_id}` from the **absolute target path**. A producer writes into
-  `<dataDir>/worktrees/<run_id>/<task_id>/…`, so the path encodes both ids. A
+  `<repo-root>/.claude/worktrees/<run_id>/<task_id>/…`, so the path encodes both ids
+  ([Decision 67](../explanation/decisions.md#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees)). A
   target under no worktree is not a producer write → pass through; a target under
   a worktree whose run/task state is missing or corrupt → deny (fail closed).
+  The worktrees root is a **required, git-derived anchor** — `<main-worktree-root>/.claude/worktrees`,
+  derived from the git common dir and resolved once in `loadCliDeps` as `workDir` — never an
+  unanchored `.claude/worktrees/` segment scan: this arm fires on every `Edit`/`Write`/`MultiEdit`
+  system-wide, and `.claude/worktrees/` is also where Claude Code's own native worktree feature
+  puts unrelated worktrees in any repo.
 - **Bash arms** (nested-shell, ship): resolve the active run via
   [`loadOwnerScopedRun`](#active-run-resolution) — the owning session's run when
   `CLAUDE_CODE_SESSION_ID` is set, else the cwd repo's current run, else the

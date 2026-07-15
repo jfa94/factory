@@ -210,7 +210,7 @@ export interface DebugSession {
     /** This pass's stored spec id, persisted by `spec store`; read by `seed`. */
     readonly specId?: string
     /**
-     * D67 — the anti-ratcheting disposition ledger across debug passes: claims a
+     * D68 — the anti-ratcheting disposition ledger across debug passes: claims a
      * prior pass's verifier refuted or a reviewer raised non-blocking. Appended by
      * `review --record`; injected into the NEXT pass's review-spawn prompts by
      * `review --emit` (panel reviewers only — never finding-verifiers).
@@ -260,7 +260,7 @@ export type DebugEnvelope =
           /** The exact absence reason when codex_available=false — echoed verbatim by the runner. */
           readonly codex_absent_reason?: string
           /**
-           * D67 — the rendered disposition ledger from prior passes. The runner
+           * D68 — the rendered disposition ledger from prior passes. The runner
            * appends it VERBATIM to each panel reviewer prompt; NEVER to a
            * finding-verifier (anti-anchoring). Absent on pass 1 / when empty.
            */
@@ -398,7 +398,7 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
     const session = await readSession(deps.dataDir, runId)
     // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
     const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
-    // D67: prior passes' dismissed claims go to the panel reviewers (Claude-side via
+    // D68: prior passes' dismissed claims go to the panel reviewers (Claude-side via
     // the envelope, codex via the composed prompt) — never to finding-verifiers.
     const priorDispositions = renderDispositionLedger(session.dispositions)
     const built = await buildReviewManifest({
@@ -455,7 +455,7 @@ export async function debugReviewRecord(
     const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e)
     const e2eStatus = e2e.kind === 'skipped' ? {kind: 'skipped' as const, reason: e2e.reason} : {kind: 'ran' as const}
 
-    // D67: fold this pass's dismissed claims onto the session ledger so the next
+    // D68: fold this pass's dismissed claims onto the session ledger so the next
     // pass's review-spawn can inject them.
     const dispositions = appendDispositions(
         session.dispositions,
