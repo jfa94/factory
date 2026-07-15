@@ -51,6 +51,7 @@ const NPM_OPTS: RenderQualityGateOpts = {
     hasLockfile: true,
     scripts: {build: 'tsc -p .'},
     hasNextDep: false,
+    nodeRuntime: {versionFile: 'package.json'},
 }
 
 const PNPM_OPTS: RenderQualityGateOpts = {
@@ -65,12 +66,15 @@ const PNPM_OPTS: RenderQualityGateOpts = {
         'deps:validate': 'depcruise src',
     },
     hasNextDep: true,
+    nodeRuntime: {versionFile: '.nvmrc'},
 }
 
 describe('renderQualityGate — npm stack', () => {
     it('renders npm setup: setup-node with npm cache + npm ci; no pnpm anywhere', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).toContain('cache: npm')
+        expect(out.match(/node-version-file: 'package\.json'/g)).toHaveLength(2)
+        expect(out).not.toContain('node-version: 20')
         expect(out).toContain('- run: npm ci')
         expect(out).not.toContain('pnpm')
     })
@@ -80,6 +84,7 @@ describe('renderQualityGate — npm stack', () => {
         expect(out).toContain('- run: npm install --no-audit --no-fund')
         expect(out).not.toContain('cache: npm')
         expect(out).not.toContain('npm ci')
+        expect(out.match(/node-version-file: 'package\.json'/g)).toHaveLength(2)
     })
 
     it('renders the GateRunner built-ins (local/CI parity)', () => {
@@ -250,6 +255,8 @@ describe('renderQualityGate — pnpm stack', () => {
         expect(out).toContain('- run: pnpm deps:validate')
         expect(out).toContain('pnpm exec stryker run \\')
         expect(out).toContain('pnpm audit --audit-level=high')
+        expect(out.match(/node-version-file: '\.nvmrc'/g)).toHaveLength(2)
+        expect(out).not.toContain('node-version: 20')
     })
 })
 

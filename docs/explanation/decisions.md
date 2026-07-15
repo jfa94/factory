@@ -308,6 +308,13 @@ file policy**:
   never-fail-close lint property — a fresh repo only ever receives the
   dependency-free baseline (which loads before any plugin is installed), while an
   established repo's full config is left untouched.
+  A single compatibility migration is deliberately narrower than the general
+  cold-start rule: the two exact pre-lock `e2e/example.spec.ts` templates that
+  disabled `playwright/no-skipped-test` are recognized by sha256, replaced with the
+  current template, and adopted into the lock. That directive referenced a plugin
+  the scaffold never registered, so untouched historical bytes made the generated
+  lint gate fail. Any byte of project customization changes the hash and preserves
+  project ownership.
 - **MERGE** — `.gitignore` and `.claude/settings.json` are reconciled
   non-destructively (append missing entries / merge keys). The `.gitignore`
   guarantee makes the in-repo split **explicit**: each per-machine `.claude/` child
@@ -1968,6 +1975,18 @@ scaffold`. An
    `['staging-*', develop]` so per-run branches actually report. (The GitHub REST
    API accepts contexts that have never reported — the "run once first" limitation
    is UI-only — so provisioning works on a fresh scaffold.)
+
+5. **CI consumes the repo's committed Node runtime declaration (amended
+   2026-07-15).** npm-stack scaffold now requires `.node-version`, `.nvmrc`, or a
+   non-empty string at `package.json#engines.node`, with deterministic precedence in
+   that order. If both version files exist they must contain the same trimmed,
+   single-line value. The renderer passes the selected source to setup-node through
+   `node-version-file` in both the Quality and mutation install jobs. There is no
+   default, config knob, or operator-host inference: an undeclared repo fails loud,
+   and a re-scaffold cannot silently change CI merely because it ran on another
+   machine. When package.json is the selected source, fields setup-node would prefer
+   over `engines.node` (`volta.node`, `volta.extends`, `devEngines.runtime`) are
+   rejected rather than silently changing the runtime.
 
 **Consequence:** Scaffolding a repo whose `develop` protection lacks the three
 default contexts now refuses unless `--provision` is passed (the default list is

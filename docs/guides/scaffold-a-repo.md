@@ -31,7 +31,13 @@ This is idempotent. It:
   `.github/scripts/shard-mutation-scope.mjs` helper). The `quality-gate.yml` is
   **rendered per-repo from the gate contract** (Decision 53): the package-manager
   setup (lockfile-detected pnpm vs npm) and each gate step come from the contract, so
-  CI runs the same checks the local merge gate enforces. This render is **npm-stack
+  CI runs the same checks the local merge gate enforces. npm-stack repos must commit
+  a Node runtime declaration; scaffold selects `.node-version`, then `.nvmrc`, then
+  `package.json#engines.node`, and renders that source as setup-node's
+  `node-version-file` in both Quality and mutation jobs. Missing, malformed, or
+  conflicting version-file declarations fail loud. When package.json is selected,
+  scaffold also refuses `volta.node`, `volta.extends`, or `devEngines.runtime`
+  fields that setup-node would prefer over `engines.node`. This render is **npm-stack
   only** — a `deno`/`custom` repo skips the CI net with a loud log and relies on the
   local `GateRunner`. The configured `quality.gateEnv` is **injected** into the
   rendered build step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`),

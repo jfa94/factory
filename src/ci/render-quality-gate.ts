@@ -13,6 +13,7 @@
  */
 import type {GateContract, GateContractEntry} from '../verifier/deterministic/gate-contract.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
+import type {NodeRuntime} from './node-runtime.js'
 
 /**
  * The GATE_IDS partition between the two enforcers, pinned so the two lists can
@@ -60,11 +61,22 @@ export interface RenderQualityGateOpts {
     readonly scripts: Readonly<Record<string, string>>
     /** Whether `next` is a dependency (adds the typegen step). */
     readonly hasNextDep: boolean
+    /** Committed target-repo Node runtime source consumed directly by setup-node. */
+    readonly nodeRuntime: NodeRuntime
 }
 
 /** Pinned action refs shared by the generated setup blocks (keep in sync with the template). */
 const SETUP_NODE = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0'
 const PNPM_SETUP = 'pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8'
+
+/** setup-node `with:` block shared by the quality and mutation jobs. */
+function nodeSetupInputs(runtime: NodeRuntime, cache?: 'pnpm' | 'npm'): readonly string[] {
+    return [
+        '  with:',
+        `      node-version-file: '${runtime.versionFile}'`,
+        ...(cache === undefined ? [] : [`      cache: ${cache}`]),
+    ]
+}
 
 /** Replace the single line whose trimmed content is `marker` with `block` lines at the marker's indent. */
 function replaceMarker(lines: string[], marker: string, block: readonly string[]): string[] {
@@ -110,16 +122,14 @@ function setupBlock(opts: RenderQualityGateOpts): readonly string[] {
         return [
             `- uses: ${PNPM_SETUP}`,
             `- uses: ${SETUP_NODE}`,
-            '  with:',
-            '      node-version: 20',
-            '      cache: pnpm',
+            ...nodeSetupInputs(opts.nodeRuntime, 'pnpm'),
             '- run: pnpm install --frozen-lockfile',
         ]
     }
     if (opts.hasLockfile) {
-        return [`- uses: ${SETUP_NODE}`, '  with:', '      node-version: 20', '      cache: npm', '- run: npm ci']
+        return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, 'npm'), '- run: npm ci']
     }
-    return [`- uses: ${SETUP_NODE}`, '  with:', '      node-version: 20', '- run: npm install --no-audit --no-fund']
+    return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime), '- run: npm install --no-audit --no-fund']
 }
 
 /** The gate steps for the quality job: typegen?, type, lint, test, build(+gate-env), deps:validate?, audit. */
@@ -182,9 +192,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
             `  ${cond}`,
             `- uses: ${SETUP_NODE}`,
             `  ${cond}`,
-            '  with:',
-            '      node-version: 20',
-            '      cache: pnpm',
+            ...nodeSetupInputs(opts.nodeRuntime, 'pnpm'),
             `- ${cond}`,
             '  run: pnpm install --frozen-lockfile',
         ]
@@ -193,9 +201,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
         return [
             `- uses: ${SETUP_NODE}`,
             `  ${cond}`,
-            '  with:',
-            '      node-version: 20',
-            '      cache: npm',
+            ...nodeSetupInputs(opts.nodeRuntime, 'npm'),
             `- ${cond}`,
             '  run: npm ci',
         ]
@@ -203,8 +209,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
     return [
         `- uses: ${SETUP_NODE}`,
         `  ${cond}`,
-        '  with:',
-        '      node-version: 20',
+        ...nodeSetupInputs(opts.nodeRuntime),
         `- ${cond}`,
         '  run: npm install --no-audit --no-fund',
     ]

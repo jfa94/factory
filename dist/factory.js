@@ -18389,6 +18389,13 @@ function ciBuiltins(run9, pm) {
 }
 var SETUP_NODE = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0";
 var PNPM_SETUP = "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8";
+function nodeSetupInputs(runtime, cache) {
+  return [
+    "  with:",
+    `      node-version-file: '${runtime.versionFile}'`,
+    ...cache === void 0 ? [] : [`      cache: ${cache}`]
+  ];
+}
 function replaceMarker(lines, marker, block) {
   const idx = lines.findIndex((l) => l.trim() === marker);
   if (idx === -1) {
@@ -18416,16 +18423,14 @@ function setupBlock(opts) {
     return [
       `- uses: ${PNPM_SETUP}`,
       `- uses: ${SETUP_NODE}`,
-      "  with:",
-      "      node-version: 20",
-      "      cache: pnpm",
+      ...nodeSetupInputs(opts.nodeRuntime, "pnpm"),
       "- run: pnpm install --frozen-lockfile"
     ];
   }
   if (opts.hasLockfile) {
-    return [`- uses: ${SETUP_NODE}`, "  with:", "      node-version: 20", "      cache: npm", "- run: npm ci"];
+    return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, "npm"), "- run: npm ci"];
   }
-  return [`- uses: ${SETUP_NODE}`, "  with:", "      node-version: 20", "- run: npm install --no-audit --no-fund"];
+  return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime), "- run: npm install --no-audit --no-fund"];
 }
 function gatesBlock(opts) {
   const pm = opts.packageManager;
@@ -18481,9 +18486,7 @@ function mutationSetupBlock(opts) {
       `  ${cond}`,
       `- uses: ${SETUP_NODE}`,
       `  ${cond}`,
-      "  with:",
-      "      node-version: 20",
-      "      cache: pnpm",
+      ...nodeSetupInputs(opts.nodeRuntime, "pnpm"),
       `- ${cond}`,
       "  run: pnpm install --frozen-lockfile"
     ];
@@ -18492,9 +18495,7 @@ function mutationSetupBlock(opts) {
     return [
       `- uses: ${SETUP_NODE}`,
       `  ${cond}`,
-      "  with:",
-      "      node-version: 20",
-      "      cache: npm",
+      ...nodeSetupInputs(opts.nodeRuntime, "npm"),
       `- ${cond}`,
       "  run: npm ci"
     ];
@@ -18502,8 +18503,7 @@ function mutationSetupBlock(opts) {
   return [
     `- uses: ${SETUP_NODE}`,
     `  ${cond}`,
-    "  with:",
-    "      node-version: 20",
+    ...nodeSetupInputs(opts.nodeRuntime),
     `- ${cond}`,
     "  run: npm install --no-audit --no-fund"
   ];
@@ -18554,6 +18554,52 @@ function renderQualityGate(template, opts) {
   lines = replaceMarker(lines, "# factory:gates", gatesBlock(opts));
   lines = renderMutationRegion(lines, opts);
   return lines.join("\n");
+}
+
+// src/ci/node-runtime.ts
+var NODE_VERSION_FILE = ".node-version";
+var NVMRC_FILE = ".nvmrc";
+var PACKAGE_JSON_FILE = "package.json";
+function normalizeVersionFile(name, raw) {
+  const value = raw.trim();
+  if (value.length === 0) {
+    throw new Error(`scaffold: ${name} must contain a non-empty Node version`);
+  }
+  if (/\r|\n/.test(value)) {
+    throw new Error(`scaffold: ${name} must contain exactly one Node version line`);
+  }
+  return value;
+}
+function resolveNodeRuntimeDeclarations(declarations) {
+  const nodeVersion = declarations.nodeVersion === void 0 ? void 0 : normalizeVersionFile(NODE_VERSION_FILE, declarations.nodeVersion);
+  const nvmrc = declarations.nvmrc === void 0 ? void 0 : normalizeVersionFile(NVMRC_FILE, declarations.nvmrc);
+  if (Object.hasOwn(declarations, "enginesNode")) {
+    if (typeof declarations.enginesNode !== "string" || declarations.enginesNode.trim().length === 0) {
+      throw new Error("scaffold: package.json engines.node must be a non-empty string");
+    }
+  }
+  if (nodeVersion !== void 0 && nvmrc !== void 0 && nodeVersion !== nvmrc) {
+    throw new Error(
+      `scaffold: ${NODE_VERSION_FILE} (${nodeVersion}) and ${NVMRC_FILE} (${nvmrc}) disagree; keep one source or make them identical`
+    );
+  }
+  if (nodeVersion !== void 0) {
+    return { versionFile: NODE_VERSION_FILE };
+  }
+  if (nvmrc !== void 0) {
+    return { versionFile: NVMRC_FILE };
+  }
+  if (Object.hasOwn(declarations, "enginesNode")) {
+    if ((declarations.packageJsonRuntimeShadows?.length ?? 0) > 0) {
+      throw new Error(
+        `scaffold: package.json engines.node is shadowed by ${declarations.packageJsonRuntimeShadows?.join(", ")}; remove the shadowing field or declare .node-version/.nvmrc`
+      );
+    }
+    return { versionFile: PACKAGE_JSON_FILE };
+  }
+  throw new Error(
+    `scaffold: Node runtime is undeclared; add ${NODE_VERSION_FILE}, ${NVMRC_FILE}, or package.json engines.node`
+  );
 }
 
 // src/cli/subcommands/target-settings.ts
@@ -18947,6 +18993,10 @@ function resolveTemplatesDir() {
   throw new Error("scaffold: could not locate the plugin templates/ directory");
 }
 var QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
+var LEGACY_E2E_EXAMPLE_HASHES = [
+  "2fcc468328b2070bd07ede3e524bf1bf33ec2957d2d0e9bef29302251a24356d",
+  "629824a48477223cfcef02bcb6c850aa9622d73d41c93bc3b76486831a98770e"
+];
 var CI_NET_RELS = [QUALITY_GATE_REL, ".github/scripts/shard-mutation-scope.mjs"];
 var TEMPLATE_MANIFEST = [
   { rel: QUALITY_GATE_REL, policy: "managed" },
@@ -18961,7 +19011,12 @@ var TEMPLATE_MANIFEST = [
   // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
   // refuses an --e2e run whose config declares any other testDir.
   { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
-  { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true }
+  {
+    rel: "e2e/example.spec.ts",
+    policy: "seed",
+    nodeOnly: true,
+    legacySeedHashes: LEGACY_E2E_EXAMPLE_HASHES
+  }
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, transform) {
   const segs = entry.rel.split("/");
@@ -18988,9 +19043,10 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   }
   if (entry.policy === "seed") {
     const recorded = lock2?.seeds[entry.rel];
+    const destText2 = await readFile18(dest, "utf8");
+    const destHash = sha256Hex(destText2);
     if (recorded !== void 0) {
-      const destText2 = await readFile18(dest, "utf8");
-      if (sha256Hex(destText2) === recorded) {
+      if (destHash === recorded) {
         const rendered2 = await render();
         if (rendered2 === destText2) {
           lists.present.push(entry.rel);
@@ -19004,6 +19060,18 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
         lists.updated.push(entry.rel);
         return;
       }
+    }
+    if (lock2 !== void 0 && entry.legacySeedHashes?.includes(destHash) === true) {
+      const rendered2 = await render();
+      if (rendered2 !== destText2) {
+        await writeFile5(dest, rendered2, "utf8");
+        lists.updated.push(entry.rel);
+      } else {
+        lists.present.push(entry.rel);
+      }
+      lock2.seeds[entry.rel] = sha256Hex(rendered2);
+      lock2.dirty = true;
+      return;
     }
     lists.present.push(entry.rel);
     return;
@@ -19025,11 +19093,35 @@ async function readWorkflowFacts(targetRoot) {
   } catch (err) {
     throw new Error(`scaffold: package.json is not valid JSON: ${err.message}`);
   }
+  const declarations = {};
+  if (existsSync11(join28(targetRoot, NODE_VERSION_FILE))) {
+    declarations.nodeVersion = await readFile18(join28(targetRoot, NODE_VERSION_FILE), "utf8");
+  }
+  if (existsSync11(join28(targetRoot, NVMRC_FILE))) {
+    declarations.nvmrc = await readFile18(join28(targetRoot, NVMRC_FILE), "utf8");
+  }
+  if (typeof pkg.engines === "object" && pkg.engines !== null && Object.hasOwn(pkg.engines, "node")) {
+    declarations.enginesNode = pkg.engines.node;
+  }
+  const packageJsonRuntimeShadows = [];
+  if (typeof pkg.volta === "object" && pkg.volta !== null) {
+    if (Object.hasOwn(pkg.volta, "node")) {
+      packageJsonRuntimeShadows.push("volta.node");
+    }
+    if (Object.hasOwn(pkg.volta, "extends")) {
+      packageJsonRuntimeShadows.push("volta.extends");
+    }
+  }
+  if (typeof pkg.devEngines === "object" && pkg.devEngines !== null && Object.hasOwn(pkg.devEngines, "runtime")) {
+    packageJsonRuntimeShadows.push("devEngines.runtime");
+  }
+  declarations.packageJsonRuntimeShadows = packageJsonRuntimeShadows;
   return {
     packageManager: pnpm ? "pnpm" : "npm",
     hasLockfile: pnpm || existsSync11(join28(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
-    hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0
+    hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0,
+    nodeRuntime: resolveNodeRuntimeDeclarations(declarations)
   };
 }
 async function ensureIgnoreFile(root, filename, entries, lists) {

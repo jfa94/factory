@@ -71,8 +71,14 @@ The CI net is **rendered per-repo from the resolved gate contract**, not copied
 verbatim — `renderQualityGate` (`src/ci/render-quality-gate.ts`) fills the template's
 `# factory:*` markers with the target's package-manager setup (lockfile-detected pnpm
 vs npm) and per-gate steps, so CI runs the same checks the local `GateRunner` enforces.
-Each gate step resolves in precedence order: contracted `command` override → matching
-`package.json` script → GateRunner built-in (`npx tsc --noEmit`, `npx eslint .`,
+An npm-stack target must commit `.node-version`, `.nvmrc`, or a non-empty string at
+`package.json#engines.node`. Precedence is `.node-version` → `.nvmrc` → package.json;
+the two version files must agree when both exist. The selected file is rendered as
+setup-node's `node-version-file` for Quality and mutation jobs, so scaffold never
+infers CI's runtime from the operator's host. If package.json is selected,
+`volta.node`, `volta.extends`, and `devEngines.runtime` are refused because setup-node
+would silently prefer them over `engines.node`. Each gate step resolves in precedence
+order: contracted `command` override → GateRunner built-in (`npx tsc --noEmit`, `npx eslint .`,
 `npx vitest run`, `npm run build`); an uncontracted gate is omitted with an audit
 comment, and a waived `mutation` gate collapses to a vacuous-green aggregator job kept
 named exactly `Mutation Testing` (so the required-check context stays universal).
@@ -111,7 +117,10 @@ pristine** — their bytes still matching the hash the committed
 customized seed (or one with no lock entry — e.g. scaffolded before the lock
 existed) is project-owned: reported under `files_present`, never overwritten, never
 flagged (no `files_outdated`). Delete a seed and re-scaffold to re-adopt the latest
-baseline.
+baseline. A narrow migration exception recognizes the two exact historical
+`e2e/example.spec.ts` hashes that disabled the unregistered
+`playwright/no-skipped-test` rule; those pristine bytes upgrade once and enter the
+lock. Any customization changes the hash and remains untouched.
 
 ## `spec <resolve|gate|store>`
 
