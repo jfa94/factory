@@ -741,6 +741,36 @@ describe('FixFinding file/line both-or-neither (T4 mirror)', () => {
     })
 })
 
+describe('ReviewDisposition (D67 anti-ratcheting ledger)', () => {
+    const entry = {
+        reviewer: 'quality-reviewer',
+        disposition: 'refuted',
+        file: 'src/x.ts',
+        line: 2,
+        quote: 'const x = 1',
+        claim: 'magic number',
+        note: 'constant is config-derived',
+        round: 1,
+    }
+
+    it('back-compat: a task without review_dispositions parses (field optional)', () => {
+        expect(parseTaskState(minimalTask()).review_dispositions).toBeUndefined()
+    })
+
+    it('accepts refuted and non-blocking entries; round-trips', () => {
+        const t = parseTaskState(
+            minimalTask({review_dispositions: [entry, {...entry, disposition: 'non-blocking', note: undefined}]})
+        )
+        expect(t.review_dispositions).toHaveLength(2)
+        expect(t.review_dispositions?.[0]).toMatchObject({disposition: 'refuted', round: 1})
+    })
+
+    it('rejects an unknown disposition and a non-positive round', () => {
+        expect(() => parseTaskState(minimalTask({review_dispositions: [{...entry, disposition: 'fixed'}]}))).toThrow()
+        expect(() => parseTaskState(minimalTask({review_dispositions: [{...entry, round: 0}]}))).toThrow()
+    })
+})
+
 describe('terminal ⇔ ended_at cross-check', () => {
     it('accepts terminal+ended_at and non-terminal+null', () => {
         for (const status of TERMINAL_RUN_STATUSES) {

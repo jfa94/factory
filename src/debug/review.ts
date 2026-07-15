@@ -33,7 +33,7 @@ import {buildPanelManifest} from '../verifier/judgment/panel.js'
 import {composeCrossVendorPrompt} from '../verifier/judgment/cross-vendor-prompt.js'
 import type {CrossVendorResolution} from '../verifier/judgment/vendor.js'
 import {resolvePluginRoot} from '../config/index.js'
-import {parseRawReview, type Finding} from '../verifier/judgment/finding.js'
+import {parseRawReview, type Finding, type RawReview} from '../verifier/judgment/finding.js'
 import {runPanel, type AdjudicatedReviewer} from '../verifier/judgment/panel-run.js'
 import {buildWorktreeSource, makeReplayRunnerFactory, type ReviewerVerifications} from '../orchestrator/record.js'
 import {scrubbedE2eEnv} from '../orchestrator/e2e-paths.js'
@@ -71,6 +71,8 @@ export async function buildReviewManifest(opts: {
     readonly worktree: string
     /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
     readonly crossVendor: CrossVendorResolution
+    /** D67 — the rendered disposition ledger; threaded into the codex prompt (a panel reviewer). */
+    readonly priorDispositions?: string
 }): Promise<DebugReviewManifest> {
     const crossVendorPrompt =
         opts.crossVendor.status === 'present'
@@ -78,6 +80,7 @@ export async function buildReviewManifest(opts: {
                   pluginRoot: resolvePluginRoot(),
                   baseRef: opts.base,
                   worktree: opts.worktree,
+                  ...(opts.priorDispositions !== undefined ? {priorDispositions: opts.priorDispositions} : {}),
               })
             : undefined
     const manifest = buildPanelManifest(opts.resumePhase, opts.crossVendor, false, crossVendorPrompt)
@@ -106,6 +109,8 @@ export interface AdjudicateWholeScopeInput {
 export interface AdjudicateWholeScopeResult {
     /** Per-reviewer adjudicated detail, passed through from `runPanel`. */
     readonly adjudicated: readonly AdjudicatedReviewer[]
+    /** The parsed raw reviews (D67 — composeDispositions reads non-blocking findings off these). */
+    readonly reviews: readonly RawReview[]
     /** Every CONFIRMED blocking finding, flattened across all reviewers. */
     readonly confirmedBlockers: readonly Finding[]
     /** True iff no reviewer has a confirmed blocker. */
@@ -162,6 +167,7 @@ export async function adjudicateWholeScope(input: AdjudicateWholeScopeInput): Pr
     const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers)
     return {
         adjudicated: result.adjudicated,
+        reviews,
         confirmedBlockers,
         clean: confirmedBlockers.length === 0,
     }

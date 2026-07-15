@@ -131,6 +131,11 @@ re-derived here — with these debug-only deltas:
   carry no `prompt` field, so there is no per-run prompt file to Read.
 - Reviewers AND finding-verifiers inspect via `git -C <worktree> diff <base>` — the
   envelope's `base`/`worktree` verbatim (no task worktree, no `base_ref`).
+- **Prior dispositions (D67).** When the envelope carries `prior_dispositions`, append it
+  VERBATIM to EVERY panel reviewer's prompt (after the review-protocol contract). NEVER
+  append it to a finding-verifier prompt — verifiers stay blind to prior belief-state
+  (anti-anchoring). The cross-vendor prompt already contains it engine-side — do not
+  append twice.
 - Cross-vendor resolution is read OFF THIS ENVELOPE, never re-derived:
   `codex_available` is the CLI's REAL probe (config `codex.model` + a live
   `codex --version`; `debugReviewEmit`); when `false` the envelope carries

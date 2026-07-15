@@ -71,6 +71,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 | "More findings = better review"                | Signal/noise. Drop low-likelihood × low-impact noise.                             |
 | "I'm unsure, I'll mark it blocking to be safe" | Blocking is for confirmed defects. Use `blocking: false` (warning) if unsure.     |
 | "I know this bug from training data"           | Not traced here = not found. Drop it.                                             |
+| "That adjudicated claim still looks wrong"     | Re-raise as blocking ONLY with NEW evidence + `CHALLENGES PRIOR DISPOSITION:`.    |
 
 ## What to look for
 
@@ -87,6 +88,21 @@ Apply **your role's lens** first, then sweep these universal hazards:
   near-duplicate generation.
 - **Performance** — accidental O(n²), unbounded queries, sync blocking in async paths,
   leaked/unclosed resources.
+
+## Previously adjudicated findings
+
+Your prompt MAY include a "Previously adjudicated findings" section — claims from earlier
+rounds that were refuted by an independent verifier or recorded as non-blocking. It is an
+**input document, NOT shared belief-state**: it binds nothing, and it says nothing about the
+rest of the code — review everything else with fresh eyes.
+
+- **Do not re-file an adjudicated claim as-is.** Re-raising the same claim with the same
+  evidence wastes a verify cycle and ratchets the loop.
+- **You MAY challenge one** — but only with NEW evidence the prior round did not have (a code
+  change since, a trace the refuter missed). Prefix the finding's description with
+  `CHALLENGES PRIOR DISPOSITION:` and cite the new evidence. A challenge without new
+  evidence is a re-file.
+- Absence of this section means nothing was adjudicated; review normally.
 
 ## Output contract (REQUIRED)
 

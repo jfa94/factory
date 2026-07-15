@@ -164,6 +164,7 @@ export {
     parseRawReview,
     resolveCodexCrossVendor,
     composeCrossVendorPrompt,
+    renderDispositionLedger,
 } from '../verifier/judgment/index.js'
 export type {
     RunPanelInput,

@@ -78,6 +78,8 @@ import {buildReviewManifest, adjudicateWholeScope, runCommittedE2e, foldE2eIntoB
 import {debugIssueNumber, buildDebugReport, wireDebugSpecDeps} from '../../debug/spec-source.js'
 import {appendTasksFromSpec} from '../../debug/batch.js'
 import {resolveCodexCrossVendor} from '../../verifier/judgment/codex-probe.js'
+import {composeDispositions, appendDispositions, renderDispositionLedger} from '../../verifier/judgment/dispositions.js'
+import type {ReviewDisposition} from '../../core/state/index.js'
 import type {VendorProbe} from '../../verifier/judgment/vendor.js'
 import type {ReviewerVerifications} from '../../orchestrator/record.js'
 import type {Finding} from '../../verifier/judgment/finding.js'
@@ -207,6 +209,13 @@ export interface DebugSession {
     readonly confirmedBlockers?: readonly Finding[]
     /** This pass's stored spec id, persisted by `spec store`; read by `seed`. */
     readonly specId?: string
+    /**
+     * D67 — the anti-ratcheting disposition ledger across debug passes: claims a
+     * prior pass's verifier refuted or a reviewer raised non-blocking. Appended by
+     * `review --record`; injected into the NEXT pass's review-spawn prompts by
+     * `review --emit` (panel reviewers only — never finding-verifiers).
+     */
+    readonly dispositions?: readonly ReviewDisposition[]
 }
 
 function debugSessionPath(dataDir: string, runId: string): string {
@@ -250,6 +259,12 @@ export type DebugEnvelope =
           readonly codex_available: boolean
           /** The exact absence reason when codex_available=false — echoed verbatim by the runner. */
           readonly codex_absent_reason?: string
+          /**
+           * D67 — the rendered disposition ledger from prior passes. The runner
+           * appends it VERBATIM to each panel reviewer prompt; NEVER to a
+           * finding-verifier (anti-anchoring). Absent on pass 1 / when empty.
+           */
+          readonly prior_dispositions?: string
       }
     | {
           /** `review --record`'s output when the pass has zero confirmed blockers. */
@@ -383,11 +398,15 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
     const session = await readSession(deps.dataDir, runId)
     // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
     const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe)
+    // D67: prior passes' dismissed claims go to the panel reviewers (Claude-side via
+    // the envelope, codex via the composed prompt) — never to finding-verifiers.
+    const priorDispositions = renderDispositionLedger(session.dispositions)
     const built = await buildReviewManifest({
         resumePhase: 'verify',
         base: session.base,
         worktree: deps.cwd,
         crossVendor,
+        ...(priorDispositions !== undefined ? {priorDispositions} : {}),
     })
     return {
         kind: 'review-spawn',
@@ -398,6 +417,7 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
         worktree: built.worktree,
         codex_available: built.codexAvailable,
         ...(built.codexAbsentReason !== undefined ? {codex_absent_reason: built.codexAbsentReason} : {}),
+        ...(priorDispositions !== undefined ? {prior_dispositions: priorDispositions} : {}),
     }
 }
 
@@ -435,7 +455,13 @@ export async function debugReviewRecord(
     const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e)
     const e2eStatus = e2e.kind === 'skipped' ? {kind: 'skipped' as const, reason: e2e.reason} : {kind: 'ran' as const}
 
-    await writeSession(deps.dataDir, {...session, confirmedBlockers})
+    // D67: fold this pass's dismissed claims onto the session ledger so the next
+    // pass's review-spawn can inject them.
+    const dispositions = appendDispositions(
+        session.dispositions,
+        composeDispositions(adjudicated.reviews, adjudicated.adjudicated, session.pass)
+    )
+    await writeSession(deps.dataDir, {...session, confirmedBlockers, dispositions})
 
     if (confirmedBlockers.length === 0) {
         return {kind: 'clean', run_id: runId, pass: session.pass, e2e: e2eStatus}

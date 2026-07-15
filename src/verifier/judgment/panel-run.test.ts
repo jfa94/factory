@@ -130,6 +130,33 @@ describe('WS7 panel-run integration (D26/D27, Δ K)', () => {
         expect(res.mergeGate.passed).toBe(true)
     })
 
+    it('D67: a refuted blocker is surfaced on adjudicated[].refuted with the verifier reason', async () => {
+        const res = await runPanel({
+            reviews: [blockedWith('quality-reviewer', 2, 'const value = process(input)')],
+            source,
+            makeRunner: confirmAll(false), // verifier refutes with note 'n'
+            gateEvidence: PASSING_GATES,
+            phase: 'verify',
+        })
+        const q = res.adjudicated.find((a) => a.reviewer === 'quality-reviewer')
+        expect(q?.refuted).toHaveLength(1)
+        expect(q?.refuted[0]).toMatchObject({reason: 'n', finding: {file: 'src/app.ts', line: 2}})
+        expect(q?.confirmedBlockers).toHaveLength(0)
+    })
+
+    it('D67: a confirmed blocker never appears in refuted', async () => {
+        const res = await runPanel({
+            reviews: [blockedWith('quality-reviewer', 2, 'const value = process(input)')],
+            source,
+            makeRunner: confirmAll(true),
+            gateEvidence: PASSING_GATES,
+            phase: 'verify',
+        })
+        const q = res.adjudicated.find((a) => a.reviewer === 'quality-reviewer')
+        expect(q?.refuted).toHaveLength(0)
+        expect(q?.confirmedBlockers).toHaveLength(1)
+    })
+
     it('D26 (loud error): an `error` reviewer fails the merge gate — never counted as approve', async () => {
         const errored = parseRawReview({
             reviewer: 'quality-reviewer',

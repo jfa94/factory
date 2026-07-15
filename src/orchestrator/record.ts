@@ -36,6 +36,8 @@ import {GateRunner} from '../verifier/deterministic/index.js'
 import {
     runPanel,
     parseRawReview,
+    composeDispositions,
+    appendDispositions,
     PANEL_ROLES,
     panelRolesFor,
     touchesDatabase,
@@ -508,6 +510,8 @@ export async function applyRecordReviews(
             status: nextStatus,
             // A passing verify clears any stale fix-forward record from a prior blocked round.
             fix_findings: undefined,
+            // D67: the disposition ledger has served its purpose once the gate passes.
+            review_dispositions: undefined,
             // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
             cross_vendor_absent: panel.crossVendorAbsence,
         }))
@@ -535,7 +539,18 @@ export async function applyRecordReviews(
             // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
             // `{...t}` spread then carries it across the rung bump while it clears reviewers.
             const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
-            await deps.state.updateTask(runId, taskId, (t) => ({...t, fix_findings: fixFindings}))
+            // D67: fold this round's dismissed claims (verifier-refuted + non-blocking)
+            // onto the ledger in the SAME write — the next panel spawn injects it so a
+            // fresh-context reviewer cannot blindly re-raise an adjudicated claim.
+            const round = task.escalation_rung + 1
+            await deps.state.updateTask(runId, taskId, (t) => ({
+                ...t,
+                fix_findings: fixFindings,
+                review_dispositions: appendDispositions(
+                    t.review_dispositions,
+                    composeDispositions(reviews, panel.adjudicated, round)
+                ),
+            }))
             step = await escalateOrFail(
                 deps,
                 runId,

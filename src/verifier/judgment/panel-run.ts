@@ -47,6 +47,12 @@ export interface AdjudicatedReviewer {
     readonly rawVerdict: RawReview['verdict']
     /** Blocking findings that survived citation-verify AND were CONFIRMED. */
     readonly confirmedBlockers: readonly Finding[]
+    /**
+     * Blocking findings the independent verifier REFUTED (with its reason) —
+     * previously dropped silently; surfaced for the Decision 67 disposition
+     * ledger. Never forwarded to fix_findings; never gates.
+     */
+    readonly refuted: readonly {readonly finding: Finding; readonly reason: string}[]
     /** True iff any confirmation was UNRESOLVED (verifier error) — fails LOUDLY. */
     readonly hadVerifierError: boolean
     /**
@@ -99,6 +105,7 @@ async function adjudicateReviewer(
 
     const runner = makeRunner(review)
     const confirmed: Finding[] = []
+    const refuted: {finding: Finding; reason: string}[] = []
     let hadVerifierError = false
 
     for (const {finding, citedLine} of kept) {
@@ -116,14 +123,17 @@ async function adjudicateReviewer(
             confirmed.push(finding)
         } else if (outcome.status === 'error') {
             hadVerifierError = true
+        } else {
+            // refuted ⇒ not forwarded to confirmed; kept for the disposition ledger (D67).
+            refuted.push({finding, reason: outcome.reason})
         }
-        // refuted ⇒ not forwarded (intentionally dropped from confirmed).
     }
 
     return {
         reviewer: review.reviewer,
         rawVerdict: review.verdict,
         confirmedBlockers: confirmed,
+        refuted,
         hadVerifierError,
         raisedBlockers: blocking.length,
         citedBlockers: kept.length,

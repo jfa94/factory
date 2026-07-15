@@ -62,6 +62,8 @@ Violating the letter of this rule violates the spirit. No exceptions.
    signature, `as`/`any` cast — and the description names the concrete illegal value the
    current type admits AND the tightening that forbids it. Pragmatism over purism: flag a type
    only when a realistic bad value flows through it.
+8. **Parsimony findings are ALWAYS `blocking: false`.** Excess code is debt, not a defect —
+   flag it, name the deletion/simplification, never gate the merge on it.
 
 ## Dimension-ownership map
 
@@ -82,6 +84,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 | Insecure defaults         | `Access-Control-Allow-Origin: *`, `Math.random()` for security values, disabled TLS verification, tokens in localStorage                                                                                                                                                 | The default's line                                |
 | Architecture              | Layer-direction violations, import cycles, god objects (responsibility mix, not line count), leaky abstractions (framework/DB types crossing layers), barrel-file coupling, speculative generality, duplicated logic that should reuse an existing utility               | The import/edge line(s)                           |
 | Type design               | Primitive obsession (id/email/money/status as bare `string`/`number`), illegal states representable (boolean soup a discriminated union would eliminate), missing discriminants, over-wide signatures, `any`/`as` casts, `!` on nullables, optional-vs-required mismatch | The declaration line                              |
+| Parsimony                 | Diff bloat: speculative abstraction, redundant guard layers duplicating an existing check, comment bloat narrating the obvious, additions where a deletion would satisfy the same requirement                                                                            | The superfluous line(s)                           |
 
 ## Sibling routing — check before EVERY finding
 
@@ -118,7 +121,10 @@ Violating the letter of this rule violates the spirit. No exceptions.
    sink; scan for secrets/insecure defaults; confirm any new dependency exists and its import
    path is real; (c) architecture — trace each changed module's edges (which layers it imports,
    which import it); (d) type design — for each changed/added type, signature, or cast, ask
-   what illegal value it admits and confirm a construction/call site lets it occur.
+   what illegal value it admits and confirm a construction/call site lets it occur;
+   (e) parsimony — for each added guard, abstraction, or comment, ask: would deleting or
+   simplifying this still satisfy the tests + acceptance criteria? If yes, flag it
+   (`blocking: false`).
 3. Keep only findings whose trace holds; score likelihood × impact and drop the tail.
 
 ## Output

@@ -48,7 +48,7 @@ import {runScopedBranch, resyncTaskBranchOntoStaging} from './deps.js'
 import {shipTask} from './ship.js'
 import {taskWorktreePath} from './paths.js'
 import {applyQuotaGate, quotaStopFields, type QuotaStop} from './quota-gate.js'
-import {resolveReviewModel} from '../verifier/judgment/index.js'
+import {resolveReviewModel, renderDispositionLedger} from '../verifier/judgment/index.js'
 import {buildHoldoutPrompt, FsHoldoutVerdictStore} from '../verifier/holdout/index.js'
 import {isSpawnPhase} from './results.js'
 import type {DriveResults, ResultKey, SpawnPhase} from './results.js'
@@ -112,6 +112,13 @@ export type NextAction =
            * `origin/staging`, which namespace-collides after a repo branch rename.
            */
           readonly base_ref: string
+          /**
+           * D67 — the rendered disposition ledger, present ONLY for
+           * `expects === 'reviews'` spawns when the task carries prior
+           * dispositions. The runner appends it VERBATIM to each panel
+           * reviewer prompt; NEVER to a finding-verifier (anti-anchoring).
+           */
+          readonly prior_dispositions?: string
       }
     | {
           readonly kind: 'done'
@@ -499,6 +506,11 @@ export async function nextAction(
                         }))
                     }
                 }
+                // D67: inject the disposition ledger into review spawns only — panel
+                // reviewers see it as a challengeable input document; producers and
+                // finding-verifiers never do.
+                const priorDispositions =
+                    expects === 'reviews' ? renderDispositionLedger(task.review_dispositions) : undefined
                 return {
                     kind: 'spawn',
                     run_id: runId,
@@ -510,6 +522,7 @@ export async function nextAction(
                     expects,
                     worktree,
                     base_ref,
+                    ...(priorDispositions !== undefined ? {prior_dispositions: priorDispositions} : {}),
                 }
             }
             case 'task-terminal': {

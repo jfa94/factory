@@ -226,6 +226,35 @@ export const FixFindingSchema = z
 export type FixFinding = z.infer<typeof FixFindingSchema>
 
 /**
+ * One adjudicated-and-dismissed review claim carried into the NEXT verify round's
+ * panel reviewers (Decision 67 anti-ratcheting ledger). Two sources: a blocking
+ * finding the independent finding-verifier REFUTED, or a non-blocking finding
+ * (advisory — raised, not gating). A lean LOCAL shape like {@link FixFindingSchema}
+ * (same frozen-seam rule: never import verifier types here). Injected VERBATIM into
+ * panel reviewer prompts as a challengeable input document — reviewers may re-raise
+ * only with NEW evidence, prefixing the finding description with
+ * "CHALLENGES PRIOR DISPOSITION:". Never shown to a finding-verifier
+ * (anti-anchoring). Cleared when the task ships (doneTaskRow).
+ */
+export const ReviewDispositionSchema = z.object({
+    /** Which reviewer raised the original finding. */
+    reviewer: z.string().min(1),
+    /** Why it does not gate: verifier-refuted, or raised non-blocking. */
+    disposition: z.enum(['refuted', 'non-blocking']),
+    file: z.string().optional(),
+    line: z.number().int().positive().optional(),
+    /** The verbatim quote from the original finding (fingerprint half 1). */
+    quote: z.string().min(1),
+    /** The one-sentence claim from the original finding (fingerprint half 2). */
+    claim: z.string().min(1),
+    /** The refutation reason (refuted entries only). */
+    note: z.string().optional(),
+    /** The verify round (attempt) that adjudicated it. */
+    round: z.number().int().positive(),
+})
+export type ReviewDisposition = z.infer<typeof ReviewDispositionSchema>
+
+/**
  * Per-task state. Carries the producer ladder position, the panel results, the
  * git/PR pointers, and the failure classification — but NO stored gate-verdict
  * booleans, and NO producer dial: the `risk_tier` dial is read live from the spec
@@ -284,6 +313,17 @@ export const TaskStateSchema = z.object({
      * Transient — not a failure field (allowed on any status).
      */
     fix_findings: z.array(FixFindingSchema).optional(),
+
+    /**
+     * Anti-ratcheting disposition ledger (Decision 67): claims a prior verify round
+     * refuted or raised non-blocking, appended at the wait-retry branch (record.ts,
+     * same separate-write pattern as `fix_findings`) and injected into the NEXT
+     * round's panel reviewer prompts so a fresh-context reviewer cannot blindly
+     * re-raise an already-dismissed claim. Survives `escalateOrFail`'s `{...t}`
+     * spread across rung bumps; cleared when the task ships (doneTaskRow) and on
+     * the advancing verify write. Transient — allowed on any status.
+     */
+    review_dispositions: z.array(ReviewDispositionSchema).optional(),
 
     // --- Merge gate (Decision 26/27) ---
     /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */

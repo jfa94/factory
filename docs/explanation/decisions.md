@@ -2753,6 +2753,64 @@ recovery is now kill+re-drive instead of liveness-check.
 
 ---
 
+## Decision 67 — Anti-Ratcheting: Disposition Ledger + Fixer Scope Limits + Parsimony Fold-In
+
+**Date:** 2026-07-15
+
+**Context:** Multi-pass review loops ratchet: each pass adds guards/tests/comments, none
+removes anything, and adjudications don't persist. Observed in a 6-pass external loop
+(and structurally possible here): a finding refuted in round N is blindly re-raised in
+round N+1 by a fresh-context reviewer (fresh contexts are the anti-anchoring design — the
+cost is amnesia), burning a verify cycle and sometimes getting "fixed" anyway. Literature
+(ESLint suppression ratchets, Google eng-practices "improves code health, not perfect",
+Huang et al. ICLR 2024 on non-converging self-correction) supports persisted dispositions
+plus scope pressure on the fixer.
+
+**Decision:** Three lean, composable changes:
+
+1. **Disposition ledger on TaskState.** `review_dispositions?: ReviewDisposition[]`
+   (`{reviewer, disposition: refuted|non-blocking, file?, line?, quote, claim, note?, round}`)
+   next to `fix_findings`. Written in `record.ts`'s wait-retry branch:
+   `appendDispositions(prior, composeDispositions(reviews, adjudicated, round))` —
+   refuted blockers (verifier reason as note) + non-blocking findings; citation-dropped
+   findings deliberately excluded (never adjudicated on merit — suppressing them would hide
+   a mis-cited real defect). Fingerprint dedupe (`file|quote|claim`, latest round wins),
+   cap 30 — dedupe/cap are containment only, never gating. Cleared on advance and on rescue
+   `doneTaskRow`; survives escalation (the `{...t}` spread) and rescue reset, same lifecycle
+   as `fix_findings`.
+2. **Injection as a challengeable input document.** `renderDispositionLedger` produces a
+   markdown docket ("input document — NOT shared belief-state"); the spawn envelope stamps
+   it as `prior_dispositions` ONLY for `expects: 'reviews'`. The runner appends it VERBATIM
+   to every panel reviewer's prompt and NEVER to a finding-verifier (anti-anchoring
+   boundary: verifiers stay blind to prior belief-state). The cross-vendor prompt gets it
+   engine-side. Re-raise convention is prose-only — a `CHALLENGES PRIOR DISPOSITION:`
+   description prefix with NEW evidence — no Finding/RawReview schema change. `factory
+debug` mirrors the thread: `DebugSession.dispositions`, recorded on `--record`, stamped
+   on the next `--emit` envelope.
+3. **Scope pressure on both sides of the loop.** Implementer charter: fix-forward passes
+   change ONLY code a fixInstruction/gate implicates; no "while I'm here" armor; DELETION
+   IS A VALID FIX. Quality-reviewer charter: parsimony dimension (speculative abstraction,
+   redundant guards, comment bloat, additions a deletion would replace), ALWAYS
+   `blocking: false`.
+
+**Deliberate non-changes:** No cross-pass auto-refute (code changes between rungs; the
+verifier stays arbiter). No convergence-policy change (blocking-only gate + escalation cap
+already bound the loop). No ledger in producer prompts (would invite defensive armor). No
+new panel role (frozen `SpawnRoleEnum`). No file-based ledger (the TaskState field has
+exactly the right lifecycle).
+
+**Consequences:** A reviewer who re-files an adjudicated claim without new evidence wastes
+its own finding (the docket told it not to); a challenge still goes through the normal
+finding-verifier, which never saw the docket — so a wrong prior disposition is correctable
+on merit. Ledger is transient per task: nothing persists past ship, so no cross-run bloat.
+
+**Relationship:** Extends the Decision 5 frozen-state seam (new optional field, back-compat
+parse); preserves D26 (citation-verify untouched), D27 (verify-then-fix — verifiers stay
+blind), D44 (panel construction unchanged), D43 (parsimony folds into the merged
+quality charter rather than a new seat).
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

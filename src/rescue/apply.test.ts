@@ -18,7 +18,7 @@ import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {applyRescue, resetTaskRow} from './apply.js'
+import {applyRescue, resetTaskRow, doneTaskRow} from './apply.js'
 import {StateManager} from '../core/state/manager.js'
 import {isTerminalRunStatus} from '../core/state/schema.js'
 import type {RunStatus, TaskState} from '../types/index.js'
@@ -766,5 +766,40 @@ describe('resetTaskRow (Decision 39 — e2e reopen reuse)', () => {
             clearShippedPr: true,
         })
         expect(reset.pr_number).toBeUndefined()
+    })
+
+    it('D67: PRESERVES review_dispositions across a reset (same rule as fix_findings)', () => {
+        const dispo = {
+            reviewer: 'quality-reviewer',
+            disposition: 'refuted' as const,
+            quote: 'q',
+            claim: 'c',
+            round: 1,
+        }
+        const reset = resetTaskRow(task({task_id: 'a', status: 'shipping', review_dispositions: [dispo]}))
+        expect(reset.review_dispositions).toEqual([dispo])
+    })
+})
+
+describe('doneTaskRow (D67 ledger lifecycle)', () => {
+    it('clears review_dispositions alongside fix_findings when a task ships', () => {
+        const row = doneTaskRow(
+            {
+                task_id: 'a',
+                status: 'shipping',
+                depends_on: [],
+                escalation_rung: 1,
+                reviewers: [],
+                merge_resyncs: 0,
+                fix_findings: [{reviewer: 'lint', description: 'stale'}],
+                review_dispositions: [
+                    {reviewer: 'quality-reviewer', disposition: 'refuted', quote: 'q', claim: 'c', round: 1},
+                ],
+            },
+            '2026-07-04T00:00:00.000Z'
+        )
+        expect(row.fix_findings).toBeUndefined()
+        expect(row.review_dispositions).toBeUndefined()
+        expect(row.status).toBe('done')
     })
 })

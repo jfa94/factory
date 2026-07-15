@@ -245,6 +245,7 @@ export function doneTaskRow(task: TaskState, at: string): TaskState {
         spawn_in_flight: undefined,
         e2e_feedback: undefined,
         fix_findings: undefined,
+        review_dispositions: undefined,
         failure_class: undefined,
         failure_reason: undefined,
     }

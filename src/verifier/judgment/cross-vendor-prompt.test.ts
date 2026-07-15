@@ -12,4 +12,18 @@ describe('composeCrossVendorPrompt', () => {
         expect(prompt).toContain('RawReview')
         expect(prompt).toContain('git -C /data/runs/run-1/tasks/t1 diff origin/staging-run-1')
     })
+
+    it('D67: appends priorDispositions as a final section; byte-identical when absent', async () => {
+        const base = {
+            pluginRoot: resolvePluginRoot(),
+            baseRef: 'origin/staging-run-1',
+            worktree: '/data/runs/run-1/tasks/t1',
+        }
+        const ledger = '## Previously adjudicated findings\n- [refuted, round 1, quality-reviewer] — "claim"'
+        const [without, withLedger] = await Promise.all([
+            composeCrossVendorPrompt(base),
+            composeCrossVendorPrompt({...base, priorDispositions: ledger}),
+        ])
+        expect(withLedger).toBe(`${without}\n\n${ledger}`)
+    })
 })

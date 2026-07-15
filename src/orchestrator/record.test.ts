@@ -544,7 +544,7 @@ describe('applyRecordReviews record', () => {
         expect(stderr).toMatch(/unknown reviewer 'database-design-reviewer'/)
     })
 
-    it('advancing past a prior blocked rung clears the stale fix_findings record (D5)', async () => {
+    it('advancing past a prior blocked rung clears the stale fix_findings record (D5) and the disposition ledger (D67)', async () => {
         const deps = makeDeps()
         await state.update(RUN_ID, (s) => ({
             ...s,
@@ -553,6 +553,15 @@ describe('applyRecordReviews record', () => {
                 [TASK_ID]: {
                     ...nonNull(s.tasks[TASK_ID]),
                     fix_findings: [{reviewer: 'lint', description: 'eslint exit=1: stale'}],
+                    review_dispositions: [
+                        {
+                            reviewer: 'quality-reviewer',
+                            disposition: 'refuted' as const,
+                            quote: 'q',
+                            claim: 'c',
+                            round: 1,
+                        },
+                    ],
                 },
             },
         }))
@@ -566,6 +575,80 @@ describe('applyRecordReviews record', () => {
         expect(env.mergeGate.passed).toBe(true)
         const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
         expect(task.fix_findings).toBeUndefined()
+        expect(task.review_dispositions).toBeUndefined()
+    })
+
+    it('D67: a blocked round appends verifier-refuted + non-blocking claims to the disposition ledger', async () => {
+        await writeWorktreeFile('src/x.ts', 'line1\nconst x = 1\nconst y = 2\nline4\n')
+        const deps = makeDeps()
+        const input: RecordReviewsInput = {
+            reviews: fullPanel({
+                reviewer: 'quality-reviewer',
+                verdict: 'blocked',
+                findings: [
+                    {
+                        reviewer: 'quality-reviewer',
+                        severity: 'critical',
+                        blocking: true,
+                        file: 'src/x.ts',
+                        line: 2,
+                        quote: 'const x = 1',
+                        claim: 'a magic number is hardcoded',
+                        description: 'magic number',
+                    },
+                    {
+                        reviewer: 'quality-reviewer',
+                        severity: 'critical',
+                        blocking: true,
+                        file: 'src/x.ts',
+                        line: 3,
+                        quote: 'const y = 2',
+                        claim: 'y is unused',
+                        description: 'unused variable',
+                    },
+                    {
+                        reviewer: 'quality-reviewer',
+                        severity: 'warning',
+                        blocking: false,
+                        file: 'src/x.ts',
+                        line: 3,
+                        quote: 'const y = 2',
+                        claim: 'y could be inlined',
+                        description: 'style',
+                    },
+                ],
+            }),
+            // One blocker confirmed (drives the block), one refuted.
+            verifications: [
+                {
+                    reviewer: 'quality-reviewer',
+                    verdicts: [
+                        {file: 'src/x.ts', line: 2, holds: true, note: 'confirmed'},
+                        {file: 'src/x.ts', line: 3, holds: false, note: 'y is exported and used'},
+                    ],
+                },
+            ],
+        }
+
+        const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)
+
+        expect(env.mergeGate.passed).toBe(false)
+        const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
+        // The ledger carries the refuted claim (with the verifier's reason) and the
+        // non-blocking advisory — never the confirmed blocker (that's fix_findings').
+        const ledger = nonNull(task.review_dispositions)
+        expect(ledger.map((d) => ({disposition: d.disposition, claim: d.claim}))).toEqual(
+            expect.arrayContaining([
+                {disposition: 'refuted', claim: 'y is unused'},
+                {disposition: 'non-blocking', claim: 'y could be inlined'},
+            ])
+        )
+        expect(ledger.some((d) => d.claim === 'a magic number is hardcoded')).toBe(false)
+        expect(nonNull(ledger.find((d) => d.disposition === 'refuted')).note).toBe('y is exported and used')
+        expect(ledger.every((d) => d.round === 1)).toBe(true)
+        // …and it survives escalateOrFail's reviewers clear (the {...t} spread).
+        expect(task.escalation_rung).toBe(1)
+        expect(task.reviewers).toEqual([])
     })
 
     it('a confirmed blocker blocks the merge gate → escalate (clear reviewers, resume at exec)', async () => {

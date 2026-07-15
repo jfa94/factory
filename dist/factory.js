@@ -6641,6 +6641,22 @@ var FixFindingSchema = external_exports.object({
     });
   }
 });
+var ReviewDispositionSchema = external_exports.object({
+  /** Which reviewer raised the original finding. */
+  reviewer: external_exports.string().min(1),
+  /** Why it does not gate: verifier-refuted, or raised non-blocking. */
+  disposition: external_exports.enum(["refuted", "non-blocking"]),
+  file: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional(),
+  /** The verbatim quote from the original finding (fingerprint half 1). */
+  quote: external_exports.string().min(1),
+  /** The one-sentence claim from the original finding (fingerprint half 2). */
+  claim: external_exports.string().min(1),
+  /** The refutation reason (refuted entries only). */
+  note: external_exports.string().optional(),
+  /** The verify round (attempt) that adjudicated it. */
+  round: external_exports.number().int().positive()
+});
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   status: TaskStatusEnum.default("pending"),
@@ -6689,6 +6705,16 @@ var TaskStateSchema = external_exports.object({
    * Transient — not a failure field (allowed on any status).
    */
   fix_findings: external_exports.array(FixFindingSchema).optional(),
+  /**
+   * Anti-ratcheting disposition ledger (Decision 67): claims a prior verify round
+   * refuted or raised non-blocking, appended at the wait-retry branch (record.ts,
+   * same separate-write pattern as `fix_findings`) and injected into the NEXT
+   * round's panel reviewer prompts so a fresh-context reviewer cannot blindly
+   * re-raise an already-dismissed claim. Survives `escalateOrFail`'s `{...t}`
+   * spread across rung bumps; cleared when the task ships (doneTaskRow) and on
+   * the advancing verify write. Transient — allowed on any status.
+   */
+  review_dispositions: external_exports.array(ReviewDispositionSchema).optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
@@ -12522,7 +12548,8 @@ async function composeCrossVendorPrompt(input) {
     "",
     contract.trim(),
     "",
-    `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}\`.`
+    `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}\`.`,
+    ...input.priorDispositions !== void 0 ? ["", input.priorDispositions] : []
   ].join("\n");
 }
 
@@ -12807,6 +12834,7 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   const { kept } = verifyCitations(blocking, source, { redact });
   const runner = makeRunner2(review);
   const confirmed = [];
+  const refuted = [];
   let hadVerifierError = false;
   for (const { finding, citedLine } of kept) {
     if (!isCitable(finding)) {
@@ -12817,12 +12845,15 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
       confirmed.push(finding);
     } else if (outcome.status === "error") {
       hadVerifierError = true;
+    } else {
+      refuted.push({ finding, reason: outcome.reason });
     }
   }
   return {
     reviewer: review.reviewer,
     rawVerdict: review.verdict,
     confirmedBlockers: confirmed,
+    refuted,
     hadVerifierError,
     raisedBlockers: blocking.length,
     citedBlockers: kept.length
@@ -12856,6 +12887,64 @@ async function runPanel(input) {
 }
 function nextOrSelf(phase) {
   return phase === "verify" ? "ship" : phase;
+}
+
+// src/verifier/judgment/dispositions.ts
+var DISPOSITION_CAP = 30;
+var collapseWs = (s) => s.replace(/\s+/g, " ").trim();
+function fingerprintOf(d) {
+  return `${d.file ?? ""}|${collapseWs(d.quote)}|${collapseWs(d.claim).toLowerCase()}`;
+}
+function toDisposition(f, disposition, round, note) {
+  return {
+    reviewer: f.reviewer,
+    disposition,
+    ...f.file !== void 0 ? { file: f.file } : {},
+    ...f.line !== void 0 ? { line: f.line } : {},
+    quote: f.quote,
+    claim: f.claim,
+    ...note !== void 0 ? { note } : {},
+    round
+  };
+}
+function composeDispositions(reviews, adjudicated, round) {
+  const refuted = adjudicated.flatMap(
+    (a) => a.refuted.map(({ finding, reason }) => toDisposition(finding, "refuted", round, reason))
+  );
+  const nonBlocking = reviews.flatMap(
+    (r) => r.findings.filter((f) => !f.blocking).map((f) => toDisposition(f, "non-blocking", round))
+  );
+  return [...refuted, ...nonBlocking];
+}
+function appendDispositions(prior, next, cap = DISPOSITION_CAP) {
+  const byFingerprint = /* @__PURE__ */ new Map();
+  for (const d of [...prior ?? [], ...next]) {
+    byFingerprint.set(fingerprintOf(d), d);
+  }
+  return [...byFingerprint.values()].sort((a, b) => a.round - b.round).slice(-cap);
+}
+function renderDispositionLedger(entries) {
+  if (entries === void 0 || entries.length === 0) {
+    return void 0;
+  }
+  const lines = entries.map((d) => {
+    const where = d.file !== void 0 ? ` ${d.file}${d.line !== void 0 ? `:${d.line}` : ""}` : "";
+    const note = d.note !== void 0 ? ` \u2014 ${collapseWs(d.note)}` : "";
+    return `- [${d.disposition}, round ${d.round}, ${d.reviewer}]${where} \u2014 "${collapseWs(d.claim)}"${note}`;
+  });
+  return [
+    "## Previously adjudicated findings (input document \u2014 NOT shared belief-state)",
+    "",
+    "The claims below were dismissed in a prior review round: `refuted` means an",
+    "independent verifier checked the claim against the code and it did not hold;",
+    "`non-blocking` means it was raised advisory-only. Do NOT re-raise one as a new",
+    "blocking finding on the same evidence. ONLY if you have NEW evidence that a",
+    "disposition is wrong, raise the finding with its description prefixed",
+    '"CHALLENGES PRIOR DISPOSITION:" and cite the new evidence. This list says',
+    "nothing about the rest of the diff \u2014 review everything else with fresh eyes.",
+    "",
+    ...lines
+  ].join("\n");
 }
 
 // src/verifier/holdout/validate.ts
@@ -13571,6 +13660,7 @@ function doneTaskRow(task, at2) {
     spawn_in_flight: void 0,
     e2e_feedback: void 0,
     fix_findings: void 0,
+    review_dispositions: void 0,
     failure_class: void 0,
     failure_reason: void 0
   };
@@ -14435,10 +14525,12 @@ function makePhaseHandlers(deps) {
             `environmental blocker: cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`
           );
         }
+        const priorDispositions = renderDispositionLedger(task.review_dispositions);
         const crossVendorPrompt = crossVendor.status === "present" ? await composeCrossVendorPrompt({
           pluginRoot: resolvePluginRoot(),
           baseRef: gateCtx.baseRef,
-          worktree
+          worktree,
+          ...priorDispositions !== void 0 ? { priorDispositions } : {}
         }) : void 0;
         return spawn2(buildPanelManifest("verify", crossVendor, dbApplicable, crossVendorPrompt));
       };
@@ -14750,6 +14842,8 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       status: nextStatus,
       // A passing verify clears any stale fix-forward record from a prior blocked round.
       fix_findings: void 0,
+      // D67: the disposition ledger has served its purpose once the gate passes.
+      review_dispositions: void 0,
       // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
       cross_vendor_absent: panel.crossVendorAbsence
     }));
@@ -14768,7 +14862,15 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       outcome = "environmental";
     } else {
       const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
-      await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
+      const round = task.escalation_rung + 1;
+      await deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        fix_findings: fixFindings,
+        review_dispositions: appendDispositions(
+          t.review_dispositions,
+          composeDispositions(reviews, panel.adjudicated, round)
+        )
+      }));
       step = await escalateOrFail(
         deps,
         runId,
@@ -15195,6 +15297,7 @@ async function nextAction(deps, runId, taskId, results) {
             }));
           }
         }
+        const priorDispositions = expects === "reviews" ? renderDispositionLedger(task.review_dispositions) : void 0;
         return {
           kind: "spawn",
           run_id: runId,
@@ -15205,7 +15308,8 @@ async function nextAction(deps, runId, taskId, results) {
           ...holdout !== void 0 ? { holdout } : {},
           expects,
           worktree,
-          base_ref
+          base_ref,
+          ...priorDispositions !== void 0 ? { prior_dispositions: priorDispositions } : {}
         };
       }
       case "task-terminal": {
@@ -17714,7 +17818,8 @@ async function buildReviewManifest(opts) {
   const crossVendorPrompt = opts.crossVendor.status === "present" ? await composeCrossVendorPrompt({
     pluginRoot: resolvePluginRoot(),
     baseRef: opts.base,
-    worktree: opts.worktree
+    worktree: opts.worktree,
+    ...opts.priorDispositions !== void 0 ? { priorDispositions: opts.priorDispositions } : {}
   }) : void 0;
   const manifest = buildPanelManifest(opts.resumePhase, opts.crossVendor, false, crossVendorPrompt);
   return {
@@ -17750,6 +17855,7 @@ async function adjudicateWholeScope(input) {
   const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers);
   return {
     adjudicated: result.adjudicated,
+    reviews,
     confirmedBlockers,
     clean: confirmedBlockers.length === 0
   };
@@ -18037,11 +18143,13 @@ async function debugStart(deps, opts = {}) {
 async function debugReviewEmit(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
   const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
+  const priorDispositions = renderDispositionLedger(session.dispositions);
   const built = await buildReviewManifest({
     resumePhase: "verify",
     base: session.base,
     worktree: deps.cwd,
-    crossVendor
+    crossVendor,
+    ...priorDispositions !== void 0 ? { priorDispositions } : {}
   });
   return {
     kind: "review-spawn",
@@ -18051,7 +18159,8 @@ async function debugReviewEmit(deps, runId) {
     base: built.base,
     worktree: built.worktree,
     codex_available: built.codexAvailable,
-    ...built.codexAbsentReason !== void 0 ? { codex_absent_reason: built.codexAbsentReason } : {}
+    ...built.codexAbsentReason !== void 0 ? { codex_absent_reason: built.codexAbsentReason } : {},
+    ...priorDispositions !== void 0 ? { prior_dispositions: priorDispositions } : {}
   };
 }
 async function debugReviewRecord(deps, runId, input) {
@@ -18066,7 +18175,11 @@ async function debugReviewRecord(deps, runId, input) {
   const e2e = await runCommittedE2e({ cwd: worktree, config: deps.config.e2e });
   const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e);
   const e2eStatus = e2e.kind === "skipped" ? { kind: "skipped", reason: e2e.reason } : { kind: "ran" };
-  await writeSession(deps.dataDir, { ...session, confirmedBlockers });
+  const dispositions = appendDispositions(
+    session.dispositions,
+    composeDispositions(adjudicated.reviews, adjudicated.adjudicated, session.pass)
+  );
+  await writeSession(deps.dataDir, { ...session, confirmedBlockers, dispositions });
   if (confirmedBlockers.length === 0) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }

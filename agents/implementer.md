@@ -63,6 +63,11 @@ Violating the letter of this rule violates the spirit. No exceptions.
    is a fundamental design/architecture flaw outside this task's scope, end with
    `STATUS: BLOCKED — escalate: <one-line description>` — the only sanctioned escalation.
    Otherwise, finish the task.
+3. **Fix-forward passes touch ONLY implicated code.** On a fix-forward pass, change only code
+   a `fixInstruction` or gate evidence directly implicates. No "while I'm here" guards,
+   validation, or helpers; no defenses against scenarios nothing cited. New comments: max 1
+   line, only where the code is non-obvious. **DELETION IS A VALID FIX** — removing the
+   defective code often beats patching around it.
 
 Violating the letter of these rules violates the spirit. No exceptions.
 
@@ -77,6 +82,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 | "Refactoring would be cleaner but I'll patch instead"             | Simplification is preferred. Patching adds debt.                                         |
 | "This blocker exposes a deeper design issue, I'll work around it" | `STATUS: BLOCKED — escalate: <issue>`. Do NOT work around.                               |
 | "I'll commit from wherever I am"                                  | Commit in the task worktree on the task branch, or the work is lost.                     |
+| "I'll add a guard/try-catch just in case"                         | Unrequested armor is scope creep. Only what a fixInstruction or failing test implicates. |
 
 ## Process
 
@@ -85,8 +91,9 @@ Violating the letter of these rules violates the spirit. No exceptions.
    from `package.json`, `pyproject.toml`, `Cargo.toml`, `Makefile`, etc.)
 3. **Explore** the codebase around `files` — existing patterns, imports, types.
 4. **Implement the minimum** that makes the failing tests pass. On a fix-forward pass, address
-   every `fixInstruction` at its root cause. Do not add scope beyond what the tests + criteria
-   demand.
+   every `fixInstruction` at its root cause, and keep the diff scoped to the code those
+   instructions implicate — nothing speculative. Do not add scope beyond what the tests +
+   criteria demand.
 5. **Confirm GREEN** per the TDD skill. If other tests break, fix your code (not the tests).
 6. **Refactor if needed**, keeping tests green — as a SEPARATE `refactor(<scope>): … [<taskId>]`
    commit after the GREEN commit.

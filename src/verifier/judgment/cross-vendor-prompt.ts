@@ -18,6 +18,13 @@ export interface ComposeCrossVendorPromptInput {
     readonly baseRef: string
     /** The worktree the reviewer inspects. */
     readonly worktree: string
+    /**
+     * D67 — the rendered disposition ledger (renderDispositionLedger), appended as
+     * a final section when a prior round dismissed claims. The codex reviewer is a
+     * PANEL reviewer, so it gets the same challengeable input document the
+     * Claude-side panel gets. Omitted ⇒ byte-identical prompt to before D67.
+     */
+    readonly priorDispositions?: string
 }
 
 export async function composeCrossVendorPrompt(input: ComposeCrossVendorPromptInput): Promise<string> {
@@ -31,5 +38,6 @@ export async function composeCrossVendorPrompt(input: ComposeCrossVendorPromptIn
         contract.trim(),
         '',
         `Task worktree: \`${input.worktree}\`. Base ref: \`${input.baseRef}\`. Inspect the change with \`git -C ${input.worktree} diff ${input.baseRef}\`.`,
+        ...(input.priorDispositions !== undefined ? ['', input.priorDispositions] : []),
     ].join('\n')
 }

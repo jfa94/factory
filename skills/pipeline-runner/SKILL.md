@@ -463,6 +463,13 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `skills/review-protocol/SKILL.md`'s output contract (injected into every panel
    reviewer via its frontmatter `skills:` — do not restate the shape).
 
+    **Prior dispositions (D67).** When the envelope carries `prior_dispositions`,
+    append it VERBATIM to EVERY panel reviewer's prompt (it is the anti-ratcheting
+    ledger of claims a prior round refuted or raised non-blocking). NEVER append it
+    to a finding-verifier prompt (step 3) — the verifier confirms independently,
+    anti-anchoring. The codex cross-vendor prompt already contains it (the engine
+    composes it in); do not append it twice there.
+
     **Cross-vendor quality-reviewer (Δ U/S5).** The manifest carries the engine's
     resolved `cross_vendor` stamp; it decides how the `quality-reviewer` entry runs:
     - `cross_vendor.status == "present"` → do NOT spawn the Claude quality-reviewer.

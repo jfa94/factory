@@ -7501,6 +7501,22 @@ var FixFindingSchema = external_exports.object({
     });
   }
 });
+var ReviewDispositionSchema = external_exports.object({
+  /** Which reviewer raised the original finding. */
+  reviewer: external_exports.string().min(1),
+  /** Why it does not gate: verifier-refuted, or raised non-blocking. */
+  disposition: external_exports.enum(["refuted", "non-blocking"]),
+  file: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional(),
+  /** The verbatim quote from the original finding (fingerprint half 1). */
+  quote: external_exports.string().min(1),
+  /** The one-sentence claim from the original finding (fingerprint half 2). */
+  claim: external_exports.string().min(1),
+  /** The refutation reason (refuted entries only). */
+  note: external_exports.string().optional(),
+  /** The verify round (attempt) that adjudicated it. */
+  round: external_exports.number().int().positive()
+});
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   status: TaskStatusEnum.default("pending"),
@@ -7549,6 +7565,16 @@ var TaskStateSchema = external_exports.object({
    * Transient — not a failure field (allowed on any status).
    */
   fix_findings: external_exports.array(FixFindingSchema).optional(),
+  /**
+   * Anti-ratcheting disposition ledger (Decision 67): claims a prior verify round
+   * refuted or raised non-blocking, appended at the wait-retry branch (record.ts,
+   * same separate-write pattern as `fix_findings`) and injected into the NEXT
+   * round's panel reviewer prompts so a fresh-context reviewer cannot blindly
+   * re-raise an already-dismissed claim. Survives `escalateOrFail`'s `{...t}`
+   * spread across rung bumps; cleared when the task ships (doneTaskRow) and on
+   * the advancing verify write. Transient — allowed on any status.
+   */
+  review_dispositions: external_exports.array(ReviewDispositionSchema).optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),

@@ -576,6 +576,48 @@ describe('nextAction', () => {
         }
     })
 
+    it('D67: the verify spawn envelope carries prior_dispositions IFF the task has a ledger; exec spawns never do', async () => {
+        const {deps, runId, holdout, cleanup} = await makeOrchestratorDeps({
+            tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c', 'd', 'e']}],
+        })
+        try {
+            await holdout.put(runId, makeHoldoutRecord('T1', ['d', 'e'], 5))
+            // Producer spawn first (tests phase) — a producer must never see the ledger.
+            await deps.state.updateTask(runId, 'T1', (t) => ({
+                ...t,
+                review_dispositions: [
+                    {
+                        reviewer: 'quality-reviewer',
+                        disposition: 'refuted' as const,
+                        quote: 'const x = 1',
+                        claim: 'a magic number is hardcoded',
+                        note: 'config-derived',
+                        round: 1,
+                    },
+                ],
+            }))
+            const execEnv = await nextAction(deps, runId, 'T1')
+            expect(execEnv.kind).toBe('spawn')
+            if (execEnv.kind !== 'spawn') {
+                return
+            }
+            expect(execEnv.expects).toBe('producer-status')
+            expect(execEnv.prior_dispositions).toBeUndefined()
+
+            await driveToVerify(deps, runId, 'T1')
+            const env = await nextAction(deps, runId, 'T1')
+            expect(env.kind).toBe('spawn')
+            if (env.kind !== 'spawn') {
+                return
+            }
+            expect(env.expects).toBe('reviews')
+            expect(env.prior_dispositions).toContain('a magic number is hardcoded')
+            expect(env.prior_dispositions).toContain('CHALLENGES PRIOR DISPOSITION:')
+        } finally {
+            await cleanup()
+        }
+    })
+
     it('the verify spawn envelope carries the per-run base ref (origin/staging-<run-id>)', async () => {
         const {deps, runId, holdout, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1', acceptance_criteria: ['a', 'b', 'c', 'd', 'e']}],

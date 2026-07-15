@@ -44,6 +44,7 @@ import {
     renderProducerPrompt,
     resolveCodexCrossVendor,
     composeCrossVendorPrompt,
+    renderDispositionLedger,
     resolvePluginRoot,
     ESCALATION_CAP,
     splitHoldout,
@@ -359,12 +360,16 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                     )
                 }
                 // 3b(ii): compose the codex prompt ONLY when there's a slot to spawn it into.
+                // D67: the codex reviewer is a panel reviewer — it gets the disposition
+                // ledger like the Claude-side panel (never a finding-verifier).
+                const priorDispositions = renderDispositionLedger(task.review_dispositions)
                 const crossVendorPrompt =
                     crossVendor.status === 'present'
                         ? await composeCrossVendorPrompt({
                               pluginRoot: resolvePluginRoot(),
                               baseRef: gateCtx.baseRef,
                               worktree,
+                              ...(priorDispositions !== undefined ? {priorDispositions} : {}),
                           })
                         : undefined
                 return spawn(buildPanelManifest('verify', crossVendor, dbApplicable, crossVendorPrompt))

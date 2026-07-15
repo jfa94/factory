@@ -279,6 +279,78 @@ describe('debugReviewRecord', () => {
         expect(report).toContain('Factory Debug Pass 1')
     })
 
+    it('D67: a refuted blocker + a non-blocking finding land on the session ledger and the NEXT emit carries prior_dispositions', async () => {
+        await seedCitableFile()
+        const d = deps()
+        const started = await debugStart(d, {})
+        if (started.kind !== 'review') {
+            throw new Error('unreachable')
+        }
+
+        const reviews = [
+            {
+                reviewer: 'quality-reviewer',
+                verdict: 'blocked',
+                summary: 'one blocker, one advisory',
+                findings: [
+                    {
+                        reviewer: 'quality-reviewer',
+                        severity: 'critical',
+                        blocking: true,
+                        file: 'src/thing.ts',
+                        line: 2,
+                        quote: 'line two',
+                        claim: 'line two is broken',
+                        description: 'this is broken',
+                    },
+                    {
+                        reviewer: 'quality-reviewer',
+                        severity: 'warning',
+                        blocking: false,
+                        file: 'src/thing.ts',
+                        line: 3,
+                        quote: 'line three',
+                        claim: 'line three could be simpler',
+                        description: 'style nit',
+                    },
+                ],
+            },
+        ]
+        const verifications: ReviewerVerifications[] = [
+            {
+                reviewer: 'quality-reviewer',
+                verdicts: [{file: 'src/thing.ts', line: 2, holds: false, note: 'line two is fine, guarded upstream'}],
+            },
+        ]
+
+        // Refuted blocker ⇒ zero confirmed ⇒ clean pass…
+        const recorded = await debugReviewRecord(d, started.run_id, {reviews, verifications})
+        expect(recorded.kind).toBe('clean')
+
+        // …but the NEXT pass's review spawn carries the ledger (panel reviewers only).
+        const env = await debugReviewEmit(d, started.run_id)
+        if (env.kind !== 'review-spawn') {
+            throw new Error('unreachable')
+        }
+        expect(env.prior_dispositions).toContain('line two is broken')
+        expect(env.prior_dispositions).toContain('line two is fine, guarded upstream')
+        expect(env.prior_dispositions).toContain('line three could be simpler')
+        expect(env.prior_dispositions).toContain('CHALLENGES PRIOR DISPOSITION:')
+    })
+
+    it('D67: emit carries no prior_dispositions before any pass recorded one', async () => {
+        const d = deps()
+        const started = await debugStart(d, {})
+        if (started.kind !== 'review') {
+            throw new Error('unreachable')
+        }
+        const env = await debugReviewEmit(d, started.run_id)
+        if (env.kind !== 'review-spawn') {
+            throw new Error('unreachable')
+        }
+        expect(env.prior_dispositions).toBeUndefined()
+    })
+
     it('propagates a finding-verifier error as a throw instead of returning kind:"clean"', async () => {
         await seedCitableFile()
         const d = deps()
