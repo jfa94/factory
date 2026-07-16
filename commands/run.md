@@ -47,8 +47,8 @@ into staging and the staging→develop rollup into develop. One terse boolean ov
 
 Develop protection is run-scoped by default (Decision 74): `run create` escalates develop
 to the strict profile (full checks, strict up-to-date, admins enforced) and every
-run-terminal path drops it back to the baseline (Quality + Security Scan for non-admin
-PRs, admins bypass). `--no-ship` caveat: finalize de-escalates when the rollup PR is left
+run-terminal path drops it back to the baseline (`developRequiredStatusChecks` minus
+Mutation Testing for non-admin PRs, admins bypass). `--no-ship` caveat: finalize de-escalates when the rollup PR is left
 open on purpose, so merging that PR later needs the baseline checks green for non-admins
 but not Mutation Testing/strict — and an admin can bypass.
 

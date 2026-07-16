@@ -47,9 +47,23 @@ describe('ConfigSchema', () => {
         expect(() => ConfigSchema.parse({git: {developProtection: 'off'}})).toThrow()
     })
 
-    it('git.developBaselineStatusChecks defaults to Quality + Security Scan (D74)', () => {
+    it('git.developBaselineStatusChecks derives from developRequiredStatusChecks minus Mutation Testing (D74)', () => {
+        // Default run profile → derived baseline Quality + Security Scan.
         expect(ConfigSchema.parse({}).git.developBaselineStatusChecks).toEqual(['Quality', 'Security Scan'])
+        // A custom run-profile context (e.g. a repo's pgTAP check) carries into the baseline.
+        const custom = ConfigSchema.parse({
+            git: {developRequiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan', 'Database Tests']},
+        })
+        expect(custom.git.developBaselineStatusChecks).toEqual(['Quality', 'Security Scan', 'Database Tests'])
+        // An explicit value (including []) overrides the derivation.
         expect(ConfigSchema.parse({git: {developBaselineStatusChecks: []}}).git.developBaselineStatusChecks).toEqual([])
+        const explicit = ConfigSchema.parse({
+            git: {
+                developRequiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan', 'Database Tests'],
+                developBaselineStatusChecks: ['Quality'],
+            },
+        })
+        expect(explicit.git.developBaselineStatusChecks).toEqual(['Quality'])
     })
 
     it('quality.setupCommand is optional and round-trips when set', () => {

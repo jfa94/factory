@@ -6686,8 +6686,13 @@ var GitSchema = external_exports.object({
    * Required status-check contexts of develop's BASELINE profile (run-scoped
    * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
    * is active. Admins bypass (baseline sets `enforce_admins: false`).
+   * DERIVED default: `developRequiredStatusChecks` minus `'Mutation Testing'`
+   * (the GitSchema transform below) — the baseline drops exactly the mutation
+   * gate, so a custom context added to the run profile (e.g. a repo's pgTAP
+   * check) stays required at rest with no double-bookkeeping. An explicitly
+   * set value (including `[]`) overrides the derivation.
    */
-  developBaselineStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Security Scan"]),
+  developBaselineStatusChecks: external_exports.array(external_exports.string()).optional(),
   /**
    * Required status-check contexts provisioned onto each per-run
    * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
@@ -6706,7 +6711,10 @@ var GitSchema = external_exports.object({
    * `<branchPrefix>/<run_id>/<task_id>`.
    */
   branchPrefix: external_exports.string().min(1).default("factory")
-}).default({});
+}).transform((git) => ({
+  ...git,
+  developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
+})).default({});
 var E2eConfigSchema = external_exports.object({
   /**
    * OPTIONAL override (Decision 40 D10) of the command that boots the target app,

@@ -92,7 +92,8 @@ This is idempotent. It:
   if it is missing**. Protection is two-profile
   ([Decision 74](../explanation/decisions.md#decision-74--run-scoped-develop-protection-two-profile-lifecycle),
   default `git.developProtection: "run-scoped"`): at rest develop carries only the
-  **baseline** — `git.developBaselineStatusChecks` (Quality + Security Scan) for
+  **baseline** — `git.developBaselineStatusChecks` (derived default:
+  `developRequiredStatusChecks` minus Mutation Testing → Quality + Security Scan) for
   non-admin PRs, admins bypass, no strict up-to-date — so you can push develop
   directly between runs. `run create` escalates to the strict profile; every
   run-terminal path drops it back.

@@ -133,16 +133,16 @@ producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by ri
 
 ### Git / serial-writer (`git.*`)
 
-| Key                           | Default                                  | Meaning                                                                     |
-| ----------------------------- | ---------------------------------------- | --------------------------------------------------------------------------- |
-| `baseBranch`                  | develop                                  | Branch staging forks from / rolls up into (never main)                      |
-| `stagingBranch`               | staging                                  | Integration branch task PRs serial-merge into                               |
-| `developProtection`           | run-scoped                               | D74: strict profile only while a run is active; `permanent` = always strict |
-| `developBaselineStatusChecks` | Quality, Security Scan                   | At-rest checks on develop (run-scoped; non-admin PRs, admins bypass)        |
-| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks the strict run profile enforces on develop (rollup PR gate)          |
-| `stagingRequiredStatusChecks` | []                                       | Checks provisioned onto each per-run staging branch                         |
-| `provision`                   | false                                    | Write branch protection when missing (else refuse)                          |
-| `branchPrefix`                | factory                                  | Prefix for run-scoped task branches                                         |
+| Key                           | Default                                     | Meaning                                                                                        |
+| ----------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `baseBranch`                  | develop                                     | Branch staging forks from / rolls up into (never main)                                         |
+| `stagingBranch`               | staging                                     | Integration branch task PRs serial-merge into                                                  |
+| `developProtection`           | run-scoped                                  | D74: strict profile only while a run is active; `permanent` = always strict                    |
+| `developBaselineStatusChecks` | derived: run profile minus Mutation Testing | At-rest checks on develop (run-scoped; non-admin PRs, admins bypass); explicit value overrides |
+| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan    | Checks the strict run profile enforces on develop (rollup PR gate)                             |
+| `stagingRequiredStatusChecks` | []                                          | Checks provisioned onto each per-run staging branch                                            |
+| `provision`                   | false                                       | Write branch protection when missing (else refuse)                                             |
+| `branchPrefix`                | factory                                     | Prefix for run-scoped task branches                                                            |
 
 > Run-scoped caveat (D74): the engine owns develop's protection shape — its escalate /
 > de-escalate PUTs are full replaces, so custom manual rules on develop get clobbered.

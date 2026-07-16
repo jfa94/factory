@@ -96,7 +96,8 @@ marker untouched.
 
 The develop-protection probe is two-profile (Decision 74). In the default
 `git.developProtection: "run-scoped"` mode it asserts the **baseline**:
-`git.developBaselineStatusChecks` (default `["Quality", "Security Scan"]`), strict
+`git.developBaselineStatusChecks` (default derived: `git.developRequiredStatusChecks`
+minus `"Mutation Testing"` → `["Quality", "Security Scan"]`), strict
 NOT required, `enforce_admins: false` — the strict run profile
 (`git.developRequiredStatusChecks`, default
 `["Quality", "Mutation Testing", "Security Scan"]`, strict, admins enforced) is

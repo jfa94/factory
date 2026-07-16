@@ -66,6 +66,21 @@ describe('factory configure', () => {
         expect(overlay).toEqual({quality: {holdoutPercent: 25}})
     })
 
+    it('--set developRequiredStatusChecks shifts the DERIVED baseline without persisting it (D74)', async () => {
+        const code = await configureCommand.run([
+            '--set',
+            'git.developRequiredStatusChecks=["Quality","Mutation Testing","Security Scan","Database Tests"]',
+        ])
+        expect(code).toBe(EXIT.OK)
+        // Echoed resolved config: baseline derives run profile minus 'Mutation Testing'.
+        expect(out().git.developBaselineStatusChecks).toEqual(['Quality', 'Security Scan', 'Database Tests'])
+        // The derived value is NOT frozen to disk — only the edited key persists.
+        const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
+        expect(overlay).toEqual({
+            git: {developRequiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan', 'Database Tests']},
+        })
+    })
+
     it('coerces JSON scalar types (number/boolean) and falls back to string', async () => {
         await configureCommand.run(['--set', 'git.stagingBranch=staging'])
         const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as {

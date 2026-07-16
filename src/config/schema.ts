@@ -18,7 +18,10 @@
  * dial (WS5/WS8) and is intentionally not ported here.
  *
  * Every field uses `.default(...)`, so `ConfigSchema.parse({})` yields a fully
- * populated, typed config with no missing keys.
+ * populated, typed config with no missing keys. One exception in kind, not in
+ * contract: cross-field DERIVED defaults (e.g. `git.developBaselineStatusChecks`)
+ * live in a sub-schema `.transform` here instead of `.default(...)` — parse
+ * output is still fully populated.
  */
 import {z} from 'zod'
 import {at} from '../shared/index.js'
@@ -225,8 +228,13 @@ export const GitSchema = z
          * Required status-check contexts of develop's BASELINE profile (run-scoped
          * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
          * is active. Admins bypass (baseline sets `enforce_admins: false`).
+         * DERIVED default: `developRequiredStatusChecks` minus `'Mutation Testing'`
+         * (the GitSchema transform below) — the baseline drops exactly the mutation
+         * gate, so a custom context added to the run profile (e.g. a repo's pgTAP
+         * check) stays required at rest with no double-bookkeeping. An explicitly
+         * set value (including `[]`) overrides the derivation.
          */
-        developBaselineStatusChecks: z.array(z.string()).default(['Quality', 'Security Scan']),
+        developBaselineStatusChecks: z.array(z.string()).optional(),
         /**
          * Required status-check contexts provisioned onto each per-run
          * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
@@ -246,6 +254,15 @@ export const GitSchema = z
          */
         branchPrefix: z.string().min(1).default('factory'),
     })
+    // Derived default (still "all defaults live in this file"): baseline = run
+    // profile minus 'Mutation Testing' — the literal is the aggregator job name
+    // pinned by the quality-gate template (src/ci/render-quality-gate.ts
+    // waivedMutationBlock keeps the context universal across factory repos).
+    .transform((git) => ({
+        ...git,
+        developBaselineStatusChecks:
+            git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== 'Mutation Testing'),
+    }))
     .default({})
 
 /**

@@ -3212,6 +3212,15 @@ Decision 33's serial-writer correctness (the strict profile still guards develop
 entire life of every run); extends Decision 60's adoption story (`--recheck-rollup`
 re-drive is the pending-rollup exit).
 
+**Amended 2026-07-16 — derived baseline default:** `git.developBaselineStatusChecks`
+no longer carries its own hardcoded default. Unset, it DERIVES as
+`git.developRequiredStatusChecks` minus `"Mutation Testing"` (the pinned aggregator
+context) — with default lists that still yields Quality + Security Scan, but a custom
+run-profile context (e.g. a repo's pgTAP check) now stays required at rest with one list
+to maintain: the ONLY check the baseline drops is mutation testing. An explicitly set
+value (including `[]`) overrides the derivation; the derived value is never persisted
+(sparse-overlay semantics, `src/config/save.ts`).
+
 ---
 
 ## Open Questions

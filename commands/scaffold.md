@@ -69,7 +69,8 @@ This is idempotent. It:
 
 Protection is **two-profile** (Decision 74, default `git.developProtection: "run-scoped"`):
 scaffold writes/asserts only the **baseline** — required checks
-`git.developBaselineStatusChecks` (default Quality + Security Scan) for non-admin PRs,
+`git.developBaselineStatusChecks` (default derived: `developRequiredStatusChecks` minus
+Mutation Testing → Quality + Security Scan) for non-admin PRs,
 no strict up-to-date, `enforce_admins: false` so admins can push develop directly. The
 full strict profile (`git.developRequiredStatusChecks`, strict, admins enforced) is
 escalated by `run create` and dropped back to baseline when the run ends. With
