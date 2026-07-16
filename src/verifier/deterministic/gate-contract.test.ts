@@ -115,6 +115,41 @@ describe('GateContractSchema', () => {
         ;(raw2.gates as Record<string, unknown>).test = {contracted: true, comand: 'typo'}
         expect(GateContractSchema.safeParse(raw2).success).toBe(false)
     })
+
+    describe('setup_steps (Decision 73)', () => {
+        it('accepts uses-steps (with inputs) and run-steps, optionally named', () => {
+            const raw = validContract()
+            raw.setup_steps = [
+                {uses: 'supabase/setup-cli@v1', with: {version: 'latest'}},
+                {name: 'Boot Supabase', run: 'supabase start'},
+            ]
+            expect(GateContractSchema.safeParse(raw).success).toBe(true)
+        })
+
+        it('rejects a step with BOTH uses and run', () => {
+            const raw = validContract()
+            raw.setup_steps = [{uses: 'supabase/setup-cli@v1', run: 'supabase start'}]
+            expect(GateContractSchema.safeParse(raw).success).toBe(false)
+        })
+
+        it('rejects a step with NEITHER uses nor run', () => {
+            const raw = validContract()
+            raw.setup_steps = [{name: 'noop'}]
+            expect(GateContractSchema.safeParse(raw).success).toBe(false)
+        })
+
+        it("rejects 'with' on a run-step (with belongs to uses)", () => {
+            const raw = validContract()
+            raw.setup_steps = [{run: 'supabase start', with: {version: 'latest'}}]
+            expect(GateContractSchema.safeParse(raw).success).toBe(false)
+        })
+
+        it('rejects unknown step keys (strict)', () => {
+            const raw = validContract()
+            raw.setup_steps = [{run: 'supabase start', shell: 'bash'}]
+            expect(GateContractSchema.safeParse(raw).success).toBe(false)
+        })
+    })
 })
 
 describe('validateGateCommand runner policy', () => {

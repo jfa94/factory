@@ -39,6 +39,39 @@ describe('parseProducerStatus — closed outcome from the terminal STATUS line',
         expect(parseProducerStatus('STATUS: NEEDS_CONTEXT').status).toBe('needs-context')
     })
 
+    // Decision 70 — the base already contains this task's work; the engine verifies.
+    it('STATUS: ALREADY_SATISFIED with cited SHAs → already-satisfied (Decision 70)', () => {
+        const o = parseProducerStatus(
+            'STATUS: ALREADY_SATISFIED — abc1234, 9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e: PR #12 landed the auth flow'
+        )
+        expect(o).toEqual({
+            status: 'already-satisfied',
+            shas: ['abc1234', '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e'],
+            reason: 'STATUS: ALREADY_SATISFIED — abc1234, 9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e: PR #12 landed the auth flow',
+        })
+    })
+
+    it("the spaced 'ALREADY SATISFIED' variant also parses (Decision 70)", () => {
+        const o = parseProducerStatus('STATUS: ALREADY SATISFIED — see deadbeef')
+        expect(o.status).toBe('already-satisfied')
+        if (o.status === 'already-satisfied') {
+            expect(o.shas).toEqual(['deadbeef'])
+        }
+    })
+
+    it('ALREADY_SATISFIED with NO citable SHA still parses (the verifier rejects downstream, not the parser)', () => {
+        const o = parseProducerStatus('STATUS: ALREADY_SATISFIED — trust me')
+        expect(o).toEqual({status: 'already-satisfied', shas: [], reason: 'STATUS: ALREADY_SATISFIED — trust me'})
+    })
+
+    it('ALREADY_SATISFIED ignores non-SHA hex noise shorter than 7 chars', () => {
+        const o = parseProducerStatus('STATUS: ALREADY_SATISFIED — abc123 is too short but abcdef0 counts')
+        expect(o.status).toBe('already-satisfied')
+        if (o.status === 'already-satisfied') {
+            expect(o.shas).toEqual(['abcdef0'])
+        }
+    })
+
     it("an unparseable / empty status → error (never silently 'done')", () => {
         expect(parseProducerStatus('garbage line').status).toBe('error')
         expect(parseProducerStatus('').status).toBe('error')

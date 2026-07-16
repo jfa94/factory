@@ -83,6 +83,8 @@ export interface BuildProducerContextInput {
     readonly priorFailures?: readonly PriorFailureNote[]
     /** Repo-relative design-system docs to read before implementer UI work. */
     readonly designSystemDocs?: readonly string[]
+    /** The spec's `tests_to_write` list — test-writer spawns only (Fix 2). */
+    readonly testsToWrite?: readonly string[]
 }
 
 /**
@@ -107,6 +109,8 @@ export interface ProducerContext {
     readonly injectedPriorFailure: boolean
     /** Repo-relative design-system docs (empty for non-UI work and test writers). */
     readonly designSystemDocs: readonly string[]
+    /** The spec's `tests_to_write` list (empty for implementer spawns). */
+    readonly testsToWrite: readonly string[]
 }
 
 /** Map a confirmed-blocker {@link Finding} to a concrete {@link FixInstruction}. */
@@ -140,6 +144,7 @@ export function buildProducerContext(input: BuildProducerContextInput): Producer
         priorFailures,
         injectedPriorFailure: priorFailures.length > 0,
         designSystemDocs: input.designSystemDocs ?? [],
+        testsToWrite: input.testsToWrite ?? [],
     }
 }
 
@@ -159,6 +164,9 @@ export function renderProducerPrompt(ctx: ProducerContext, worktree: string): st
         'Acceptance criteria:',
         ...ctx.acceptanceCriteria.map((c) => `- ${c}`),
     ]
+    if (ctx.testsToWrite.length > 0) {
+        lines.push('', 'Tests to write:', ...ctx.testsToWrite.map((t) => `- ${t}`))
+    }
     if (ctx.files.length > 0) {
         lines.push('', 'Scoped files:', ...ctx.files.map((f) => `- ${f}`))
     }

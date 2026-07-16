@@ -35,6 +35,7 @@ import {resolveDataDir, type DataDirOptions} from '../config/index.js'
 import {specDir, specsRoot, repoKey, docsFactoryDir} from '../core/state/paths.js'
 import type {SpecPointer} from '../types/index.js'
 import type {Prd} from './gh.js'
+import {readLedger, type Ledger} from './ledger.js'
 import {parsePrd, parseSpecManifest, parseSpecTasks, type SpecManifest} from './schema.js'
 
 const log = createLogger('spec:store')
@@ -93,6 +94,11 @@ export class SpecStore {
     constructor(opts: SpecStoreOptions = {}) {
         this.dataDir = resolveDataDir(opts)
         this.docsRoot = opts.docsRoot ?? join(process.cwd(), 'docs')
+    }
+
+    /** Read the spec's shipped-work ledger (Decision 70). ENOENT → empty; garbage → LOUD. */
+    async ledger(repo: string, specId: string): Promise<Ledger> {
+        return readLedger(this.dataDir, repo, specId)
     }
 
     /**

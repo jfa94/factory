@@ -153,6 +153,7 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
                 ? {test_revision_feedback: task.test_revision_feedback}
                 : {}),
             ...(task.e2e_feedback != null && task.e2e_feedback.length > 0 ? {e2e_feedback: task.e2e_feedback} : {}),
+            ...(task.needs_context ? {needs_context: task.needs_context} : {}),
             ...(task.fix_findings ? {fix_findings: task.fix_findings} : {}),
         }
         await state.update(RUN_ID, (s) => ({...s, tasks: {...s.tasks, [full.task_id]: full}}))
@@ -476,6 +477,46 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         expect(agent.prompt).toContain('order confirmation')
     })
 
+    it('tests injects an unanswered needs-context note (Decision 69) at rung 0 — the same-rung re-ask', async () => {
+        const deps = makeDeps()
+        const handlers = makePhaseHandlers(deps)
+        const ctx = await ctxFor({
+            task_id: 't-multi',
+            escalation_rung: 0,
+            needs_context: {question: 'was the run intended to start from a base that predates feat/x?'},
+        })
+        const result = await handlers.tests(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        const agent = at(result.request.agents, 0)
+        expect(agent.prompt).toContain("Prior failures — don't repeat these:")
+        expect(agent.prompt).toContain('predates feat/x')
+        expect(agent.prompt).toContain('NEEDS_CONTEXT')
+    })
+
+    it('exec injects an ANSWERED needs-context note (rescue --answer fed the human reply back)', async () => {
+        const deps = makeDeps()
+        const handlers = makePhaseHandlers(deps)
+        const ctx = await ctxFor({
+            task_id: 't-multi',
+            escalation_rung: 0,
+            needs_context: {question: 'which base?', answer: 'the advanced base — skip nothing'},
+        })
+        const result = await handlers.exec(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        const agent = at(result.request.agents, 0)
+        expect(agent.prompt).toContain('which base?')
+        expect(agent.prompt).toContain('A human answered')
+        expect(agent.prompt).toContain('skip nothing')
+    })
+
     it('tests threads the dialed effort into the request once the model has hit its ceiling (rung 3 = ceiling+xhigh)', async () => {
         const deps = makeDeps()
         const handlers = makePhaseHandlers(deps)
@@ -496,6 +537,31 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
     })
 
     // -- exec -----------------------------------------------------------------
+
+    it("tests threads the spec's tests_to_write into the test-writer prompt (Fix 2)", async () => {
+        const handlers = makePhaseHandlers(makeDeps())
+        const ctx = await ctxFor({task_id: 't-multi'})
+        const result = await handlers.tests(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        const prompt = nonNull(at(result.request.agents, 0).prompt)
+        expect(prompt).toContain('Tests to write:')
+        expect(prompt).toContain('- covers a..e')
+    })
+
+    it('exec does NOT thread tests_to_write (the implementer works from the tests themselves)', async () => {
+        const handlers = makePhaseHandlers(makeDeps())
+        const result = await handlers.exec(await ctxFor({task_id: 't-multi'}))
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        expect(nonNull(at(result.request.agents, 0).prompt)).not.toContain('Tests to write:')
+    })
 
     it('exec spawns the implementer and resumes at verify', async () => {
         const handlers = makePhaseHandlers(makeDeps())
@@ -581,6 +647,29 @@ describe('makePhaseHandlers (Model-A reporters)', () => {
         const agent = at(result.request.agents, 0)
         expect(agent.prompt).toContain('Confirmed blockers to fix')
         expect(agent.prompt).toContain('- [lint] (src/lib/x.ts:10) eslint exit=1: no-unsafe-assignment')
+    })
+
+    it("tests threads a persisted fix_findings record into the test-writer's fixInstructions (Decision 70 reject feedback)", async () => {
+        const handlers = makePhaseHandlers(makeDeps())
+        const ctx = await ctxFor({
+            task_id: 't-multi',
+            fix_findings: [
+                {
+                    reviewer: 'already-satisfied-verifier',
+                    description:
+                        'ALREADY_SATISFIED claim rejected: cited SHA deadbeef is unknown at the checkpoint tip',
+                },
+            ],
+        })
+        const result = await handlers.tests(ctx)
+
+        expect(result.kind).toBe('spawn-agents')
+        if (result.kind !== 'spawn-agents') {
+            throw new Error('unreachable')
+        }
+        const agent = at(result.request.agents, 0)
+        expect(agent.prompt).toContain('Confirmed blockers to fix')
+        expect(agent.prompt).toContain('ALREADY_SATISFIED claim rejected')
     })
 
     it('exec with no fix_findings yields empty fixInstructions (a fresh attempt, not a patch)', async () => {

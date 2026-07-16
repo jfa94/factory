@@ -115,7 +115,12 @@ consent prompt. Never edit `state.json` by hand.
 3.  **Propose the plan — ONE consent prompt.** Assemble every proposable repair as an
     `AskUserQuestion` **multiSelect** item, each with what it does + why it is needed: - **Safe resets** — one item covering `scan.resettable` (list the ids); executes the
     default `factory rescue apply`. - **One item per diagnostic-recommended dead-end** — the id + the diagnostic's reason;
-    executes `--task <id>`. - **Clear failed e2e verdict** (`e2e_failed` / `e2e_assessment_failed`) — approving
+    executes `--task <id>`. - **Answer an open question** — one item per `failed` task with `failure_class:
+    "needs-context"`; its scan line carries the recorded `question`. Surface the question
+    verbatim and collect the human's answer (the "Other" free-text option); executes
+    `factory rescue apply --run <id> --task <id> --answer "<their answer>"` as its own
+    apply call (exactly one --task per --answer). The answer is injected into the next
+    producer spawn's prompt (Decision 69). - **Clear failed e2e verdict** (`e2e_failed` / `e2e_assessment_failed`) — approving
     asserts the underlying cause no longer applies; executes `--reset-e2e`. - **Clear failed traceability audit** (`traceability_failed`) — approving asserts the
     unmet PRD intent is addressed; executes `--reset-traceability`. - **Recheck armed rollup** (`rollup_pending`) — approving asserts the queued merge
     landed; executes `--recheck-rollup`. - **Reconcile LOCAL git drift** (`reconcile: true`) — spawn the `rescue-reconciler` agent
@@ -140,7 +145,9 @@ consent prompt. Never edit `state.json` by hand.
     single `factory rescue apply [--run <id>] [--task <id>]... [--reset-e2e]
 [--reset-traceability] [--recheck-rollup]` (approved safe resets = the flagless default
     set; approved dead-ends = explicit `--task` ids, which reset without
-    `--include-dead-ends`). Emits `{ run_id, run_status, reset: [...], reopened,
+    `--include-dead-ends`). Exception: each approved **answer** item runs as its OWN
+    `apply --task <id> --answer "<text>"` call first (`--answer` demands exactly one
+    `--task`). Emits `{ run_id, run_status, reset: [...], reopened,
 skipped: [...], resume? }` — apply also reopens a terminal run and clears any surviving
     park itself (ONE `recover` touch covers the whole approved plan, Decision 49).
 

@@ -129,6 +129,8 @@ describe('score happy paths', () => {
             'capability-budget': 0,
             'spec-defect': 1,
             'blocked-environmental': 0,
+            'needs-context': 0,
+            'blocked-dependency': 0,
         })
         expect(summary.shipped_prs).toEqual([{task_id: 'a', pr_number: 11, branch: 'factory/run/a'}])
     })

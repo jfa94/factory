@@ -33,7 +33,7 @@ import {makeRunId, validateId} from '../../shared/index.js'
 import {nowEpoch, nowIso} from '../../shared/time.js'
 import {nonNull} from '../../shared/index.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
-import type {RunState} from '../../types/index.js'
+import {isTerminalRunStatus, type RunState} from '../../types/index.js'
 import {
     finalizeRun,
     runDocsEmit,
@@ -83,6 +83,7 @@ Usage:
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
   factory run e2e-assess [--run <id>] [--results <path>]
+  factory run stop [--run <id>] [--session-id <id>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -92,7 +93,8 @@ Actions:
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
-  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`
+  stop       Park a live run (suspended, resumable with \`factory resume\`); tasks untouched.
+  cancel     Abandon a live run (mark it failed; NOT resumable); --cleanup also tears down its branch.`
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
@@ -167,6 +169,9 @@ Emits ONE JSON envelope:
 
 const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed; not resumable)
 
+WARNING: cancel is IRREVERSIBLE — the run is finalized 'failed' and can never be
+resumed. To pause a run you intend to continue, use \`factory run stop\` instead.
+
 Usage:
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
@@ -185,6 +190,25 @@ session end and leaves the run resumable; cancel is for deliberately discarding 
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`
+
+const STOP_HELP = `factory run stop — park a live run (suspended; \`factory resume\` continues it)
+
+Usage:
+  factory run stop [--run <id>] [--session-id <id>]
+
+  --run         The run to park. Default: the active run THIS session owns
+                (--session-id / $CLAUDE_CODE_SESSION_ID), else runs/current.
+  --session-id  Owning session id used to locate the run when --run is omitted
+                (defaults to $CLAUDE_CODE_SESSION_ID).
+
+The non-destructive stop verb (Decision 72): suspends the run WITHOUT a quota
+checkpoint, so a plain \`factory resume\` un-parks it. Tasks are untouched. The
+orchestrator's park guard keeps \`next-task\` from silently un-parking it.
+Idempotent on an already paused/suspended run; a terminal run is a LOUD error.
+To deliberately DISCARD a run instead, use \`factory run cancel\` (irreversible).
+
+Emits ONE JSON envelope:
+  { kind:"stopped", run, already_parked }`
 
 // ---------------------------------------------------------------------------
 // Flag parsing + command wiring
@@ -654,7 +678,8 @@ async function resolveCancelRunId(
     state: StateManager,
     args: ReturnType<typeof parseArgs>,
     sessionId: string | undefined,
-    overrides: CurrentRunOverrides = {}
+    overrides: CurrentRunOverrides = {},
+    verb: 'cancel' | 'stop' = 'cancel'
 ): Promise<string> {
     const explicit = optionalString(args.flag('run'))
     if (explicit !== undefined) {
@@ -668,17 +693,58 @@ async function resolveCancelRunId(
         if (owned.length >= 2) {
             const ids = owned.map((r) => r.run_id).join(', ')
             throw new UsageError(
-                `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); ` +
-                    `pass --run <id> to choose which to cancel`
+                `run ${verb}: session '${sessionId}' owns ${owned.length} live runs (${ids}); ` +
+                    `pass --run <id> to choose which to ${verb}`
             )
         }
         // owned.length === 0 → fall through to the current pointer (the run for this checkout).
     }
     const current = await readCurrentForCwd(state, overrides)
     if (current === null) {
-        throw new UsageError('run cancel: no --run given and no owned/current run to cancel')
+        throw new UsageError(`run ${verb}: no --run given and no owned/current run to ${verb}`)
     }
     return current.run_id
+}
+
+/**
+ * `factory run stop` — park a live run (Decision 72). ONE suspend write with NO
+ * quota checkpoint (A2: quota-caused stops always carry `run.quota`), the exact
+ * `--approve-spec` precedent — so a plain `factory resume` (planResume clears a
+ * quota-less suspend unconditionally) un-parks it, and the orchestrator's park
+ * guard keeps `next-task` from silently resuming it. Tasks are untouched.
+ * Idempotent on an already paused/suspended run; a terminal run is a LOUD error.
+ * Like cancel, NOT gated on autonomous mode — a stop verb must work from any session.
+ */
+export async function runStop(argv: string[], overrides: RunCancelOverrides = {}): Promise<ExitCode> {
+    const args = parseArgs(argv, {})
+    if (args.flag('help') === true) {
+        return emitHelp(STOP_HELP)
+    }
+
+    const dataDir = resolveDataDir(overrides.dataDir !== undefined ? {dataDir: overrides.dataDir} : {})
+    const state = new StateManager({dataDir})
+    const sessionId = resolveOwnerSession(args.flag('session-id'))
+    const currentOverrides: CurrentRunOverrides = {
+        ...(overrides.gitClient !== undefined ? {gitClient: overrides.gitClient} : {}),
+        ...(overrides.cwd !== undefined ? {cwd: overrides.cwd} : {}),
+    }
+    const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides, 'stop')
+
+    let run = await state.read(runId)
+    if (isTerminalRunStatus(run.status)) {
+        throw new UsageError(`run stop: run '${runId}' is already terminal (${run.status}) — nothing to park`)
+    }
+    const alreadyParked = run.status === 'paused' || run.status === 'suspended'
+    if (!alreadyParked) {
+        run = await state.update(runId, (s) => ({...s, status: 'suspended' as const}))
+    }
+
+    emitJson({kind: 'stopped', run, already_parked: alreadyParked})
+    emitError(
+        `run ${runId} parked (suspended, no quota checkpoint) — \`factory resume\` continues it. ` +
+            `To deliberately discard it instead, use \`factory run cancel\` (irreversible).`
+    )
+    return EXIT.OK
 }
 
 /**
@@ -708,6 +774,38 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
         ...(overrides.cwd !== undefined ? {cwd: overrides.cwd} : {}),
     }
     const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides)
+
+    // Decision 72: sweep in-flight tasks terminal BEFORE the terminal flip — a cancelled
+    // run must not leave executing/reviewing/shipping rows that read as live work to
+    // rescue scan / the statusline. Pending rows stay untouched (they never ran).
+    // Skipped when the run is already terminal (idempotent re-cancel; a terminal run's
+    // state is frozen).
+    const pre = await state.read(runId)
+    if (!isTerminalRunStatus(pre.status)) {
+        const inFlight = new Set(['executing', 'reviewing', 'shipping'])
+        if (Object.values(pre.tasks).some((t) => inFlight.has(t.status))) {
+            await state.update(runId, (s) => ({
+                ...s,
+                tasks: Object.fromEntries(
+                    Object.entries(s.tasks).map(([id, t]) =>
+                        inFlight.has(t.status)
+                            ? [
+                                  id,
+                                  {
+                                      ...t,
+                                      status: 'failed' as const,
+                                      failure_class: 'blocked-environmental' as const,
+                                      failure_reason: 'run cancelled by operator',
+                                      ended_at: t.ended_at ?? nowIso(),
+                                      spawn_in_flight: undefined,
+                                  },
+                              ]
+                            : [id, t]
+                    )
+                ),
+            }))
+        }
+    }
 
     // Mark terminal via the one sanctioned writer (the CLI bypasses the TCB write-deny
     // hook by design — it guards Edit/Write tools, not the engine's own fs writes).
@@ -753,7 +851,8 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
         )
     } else {
         emitError(
-            `run ${run.run_id} cancelled (marked failed)` +
+            `run ${run.run_id} cancelled (marked failed; NOT resumable — \`factory run stop\` is the ` +
+                `resumable alternative)` +
                 (cleanup
                     ? `; staging branch '${branch}' + its task PRs torn down.`
                     : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`)
@@ -782,11 +881,13 @@ async function run(argv: string[]): Promise<ExitCode> {
             return runE2ePhase(rest)
         case 'e2e-assess':
             return runE2eAssess(rest)
+        case 'stop':
+            return runStop(rest)
         case 'cancel':
             return runCancel(rest)
         default:
             throw new UsageError(
-                `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+                `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | stop | cancel)`
             )
     }
 }

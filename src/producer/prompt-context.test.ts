@@ -189,6 +189,25 @@ describe('renderProducerPrompt — 3b(i) inline spawn prompt', () => {
         expect(prompt).toContain('Read it BEFORE writing any UI code')
     })
 
+    it('renders the tests-to-write section after acceptance criteria (Fix 2)', () => {
+        const ctx = buildProducerContext({
+            taskId: 'T1',
+            title: 't',
+            description: 'd',
+            visibleCriteria: ['c1'],
+            files: [],
+            rung: 0,
+            testsToWrite: ['POST /checkout returns 201', 'rejects an empty cart'],
+        })
+        const prompt = renderProducerPrompt(ctx, '/wt')
+
+        expect(ctx.testsToWrite).toEqual(['POST /checkout returns 201', 'rejects an empty cart'])
+        expect(prompt).toContain('Tests to write:')
+        expect(prompt).toContain('- POST /checkout returns 201')
+        expect(prompt).toContain('- rejects an empty cart')
+        expect(prompt.indexOf('Acceptance criteria:')).toBeLessThan(prompt.indexOf('Tests to write:'))
+    })
+
     it('omits the scoped-files/fix/prior-failure sections when empty', () => {
         const ctx = buildProducerContext({
             taskId: 'T1',
@@ -204,5 +223,6 @@ describe('renderProducerPrompt — 3b(i) inline spawn prompt', () => {
         expect(prompt).not.toContain('Confirmed blockers to fix')
         expect(prompt).not.toContain('Prior failures')
         expect(prompt).not.toContain('Design system:')
+        expect(prompt).not.toContain('Tests to write:')
     })
 })

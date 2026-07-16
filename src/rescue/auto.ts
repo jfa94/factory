@@ -35,7 +35,11 @@ export const SELF_HEAL_MAX_ATTEMPTS = 3
 
 /** The subset of `scan.resettable` worth auto-resetting (in scan order). */
 export function effectiveAutoResets(run: RunState, scan: RescueScan): string[] {
-    const resets = new Set(scan.resettable)
+    // Decision 69: a needs-context failure scans `recoverable` (a human can answer
+    // via `apply --answer`) but self-heal HAS no answer — a blind auto reset would
+    // just re-ask the same question and re-fail. Excluded from the candidate set,
+    // so dependents of one stay excluded too (its simulated status remains failed).
+    const resets = new Set(scan.resettable.filter((id) => run.tasks[id]?.failure_class !== 'needs-context'))
     // memo: task id → its simulated transitive closure is free of failed/missing rows.
     const clean = new Map<string, boolean>()
 
@@ -71,7 +75,7 @@ export function effectiveAutoResets(run: RunState, scan: RescueScan): string[] {
         return ok
     }
 
-    return scan.resettable.filter((id) =>
-        nonNull(run.tasks[id]).depends_on.every((dep) => closureClean(dep, new Set([id])))
+    return scan.resettable.filter(
+        (id) => resets.has(id) && nonNull(run.tasks[id]).depends_on.every((dep) => closureClean(dep, new Set([id])))
     )
 }

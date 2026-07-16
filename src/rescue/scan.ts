@@ -42,7 +42,10 @@ export type RescueDisposition =
     | 'runnable'
     /** in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase; resettable. */
     | 'stuck'
-    /** `failed` + `blocked-environmental` — the blocker may have cleared; resettable. */
+    /**
+     * `failed` + `blocked-environmental` (the blocker may have cleared) or
+     * `needs-context` (a human can answer via `apply --answer`, Decision 69); resettable.
+     */
     | 'recoverable'
     /** `failed` + `spec-defect`/`capability-budget` — re-running repeats it; left alone. */
     | 'dead-end'
@@ -56,6 +59,8 @@ export interface RescueTaskLine {
     failure_reason?: string
     branch?: string
     pr_number?: number
+    /** The recorded NEEDS_CONTEXT question (Decision 69) — the repair proposal prints it. */
+    question?: string
 }
 
 /** The read-only rescue diagnostic for a run. Deterministic given the run state. */
@@ -137,7 +142,13 @@ function dispositionOf(status: TaskStatus, failureClass: FailureClass | undefine
         return 'runnable'
     }
     if (status === 'failed') {
-        return failureClass === 'blocked-environmental' ? 'recoverable' : 'dead-end'
+        // blocked-dependency (Decision 72): a cascade victim never ran — once its failed
+        // dependency is reset, it is retryable as-is.
+        return failureClass === 'blocked-environmental' ||
+            failureClass === 'needs-context' ||
+            failureClass === 'blocked-dependency'
+            ? 'recoverable'
+            : 'dead-end'
     }
     // executing | reviewing | shipping
     return 'stuck'
@@ -158,6 +169,7 @@ export function scanRun(run: RunState): RescueScan {
         ...(t.failure_reason !== undefined ? {failure_reason: t.failure_reason} : {}),
         ...(t.branch !== undefined ? {branch: t.branch} : {}),
         ...(t.pr_number !== undefined ? {pr_number: t.pr_number} : {}),
+        ...(t.needs_context !== undefined ? {question: t.needs_context.question} : {}),
     }))
 
     const by = (d: RescueDisposition): RescueTaskLine[] => tasks.filter((t) => t.disposition === d)

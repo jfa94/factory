@@ -489,6 +489,55 @@ describe('TaskState.test_revision_feedback (defective-RED-test recovery)', () =>
     })
 })
 
+describe('TaskState.needs_context (NEEDS_CONTEXT fail-fast, Decision 69)', () => {
+    it('is optional (absent by default) and round-trips question with and without answer', () => {
+        expect(parseTaskState(minimalTask()).needs_context).toBeUndefined()
+        const q = 'was the run intended to start from a base that predates feat/x?'
+        expect(parseTaskState(minimalTask({needs_context: {question: q}})).needs_context).toEqual({question: q})
+        const answered = parseTaskState(minimalTask({needs_context: {question: q, answer: 'yes — skip it'}}))
+        expect(answered.needs_context?.answer).toBe('yes — skip it')
+    })
+
+    it('rejects an empty question or empty answer', () => {
+        expect(() => parseTaskState(minimalTask({needs_context: {question: ''}}))).toThrow()
+        expect(() => parseTaskState(minimalTask({needs_context: {question: 'q', answer: ''}}))).toThrow()
+    })
+
+    it('is allowed on a failed needs-context row (the question rides the failure)', () => {
+        const t = parseTaskState(
+            minimalTask({
+                status: 'failed',
+                failure_class: 'needs-context',
+                failure_reason: 'producer needs context (asked twice without resolving)',
+                needs_context: {question: 'which base?'},
+            })
+        )
+        expect(t.failure_class).toBe('needs-context')
+        expect(t.needs_context?.question).toBe('which base?')
+    })
+})
+
+describe('TaskState.last_failing_gates (repeated-gate detection, Decision 71)', () => {
+    it('is optional (absent by default) and round-trips a sorted gate list', () => {
+        expect(parseTaskState(minimalTask()).last_failing_gates).toBeUndefined()
+        const t = parseTaskState(minimalTask({last_failing_gates: ['coverage', 'test']}))
+        expect(t.last_failing_gates).toEqual(['coverage', 'test'])
+    })
+
+    it('rejects empty gate ids', () => {
+        expect(() => parseTaskState(minimalTask({last_failing_gates: ['']}))).toThrow()
+    })
+})
+
+describe('FailureClassEnum widening (Decisions 69 + 72)', () => {
+    it('parses failed rows classed needs-context and blocked-dependency', () => {
+        for (const cls of ['needs-context', 'blocked-dependency']) {
+            const t = parseTaskState(minimalTask({status: 'failed', failure_class: cls, failure_reason: 'r'}))
+            expect(t.failure_class).toBe(cls)
+        }
+    })
+})
+
 describe('TaskState.e2e_feedback (e2e reopen loop)', () => {
     it('is optional (absent by default) and round-trips a stamped value', () => {
         expect(parseTaskState(minimalTask()).e2e_feedback).toBeUndefined()

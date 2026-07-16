@@ -490,3 +490,33 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **relationships**: serves a Task; consumes the Test Writer's failing tests; its output is subject to Review.
 - **synonyms**: —
 - **code anchor**: `agents/implementer.md`
+
+### Needs-Context Failure
+
+- **type**: Value Object
+- **status**: accepted
+- **definition**: The terminal classification of a Task whose producer asked a question the repository and Spec could not answer — twice. The first ask is re-posed to the same producer with the question injected; only a second consecutive ask fails the Task, preserving the question so a human can answer it and resume the work through Rescue.
+- **invariants**:
+    - The unanswered question is always persisted with the failure; it is never dropped.
+    - One re-ask maximum: the same question is never re-posed to a producer more than once without a human answer.
+- **examples**:
+    - "Which OAuth provider should the login flow target?" — unanswerable from the repo; the Task stops and surfaces the question instead of burning the escalation ladder.
+    - Counter-example: a question answerable by reading the Spec — the producer is expected to resolve that itself on the re-ask.
+- **relationships**: recorded on a Task; recovered through Rescue (a human supplies the answer, the Task resets).
+- **synonyms**: —
+- **code anchor**: `src/orchestrator/transitions.ts` (Decision 69)
+
+### Blocked-Dependency Failure
+
+- **type**: Value Object
+- **status**: accepted
+- **definition**: The classification of a Task that never ran because a Task it depends on failed — a cascade victim, not a defect of its own. Distinct from an environmental blocker: once the failed dependency is repaired, the victim is retryable exactly as it was.
+- **invariants**:
+    - Applies only to Tasks that never started; a Task that ran and failed carries its own classification.
+    - Always Rescue-recoverable by default — resetting the failed dependency makes the victim runnable again.
+- **examples**:
+    - Task B depends on Task A; A exhausts its ladder, so B is failed as `blocked-dependency` without ever executing.
+    - Counter-example: a circuit-breaker sweep — those Tasks are stopped by a systemic halt (environmental), not by their own dependency edge.
+- **relationships**: assigned by the Orchestrator's cascade fail; treated recoverable by Rescue.
+- **synonyms**: cascade failure
+- **code anchor**: `src/orchestrator/next.ts` (Decision 72)

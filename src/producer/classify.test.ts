@@ -41,13 +41,9 @@ describe('classify-before-retry (Δ D) — deterministic/spec/environmental fail
 })
 
 describe('classify-before-retry (Δ D) — capability failures are RETRYABLE', () => {
-    it("producer 'needs-context' → retry", () => {
-        expect(classifyFailure({kind: 'producer-status', status: 'needs-context', reason: 'x'}).action).toBe('retry')
-    })
-
-    it("producer 'error' → retry", () => {
-        expect(classifyFailure({kind: 'producer-status', status: 'error', reason: 'x'}).action).toBe('retry')
-    })
+    // 'needs-context' and 'error' are no longer FailureSignal members: both are
+    // handled by transitions.ts BEFORE classification (Decisions 69/71) — see
+    // orchestrator/transitions.test.ts for their contracts.
 
     it("producer 'test-defective' → retry (regenerate the RED test, NOT a terminal spec-defect)", () => {
         const d = classifyFailure({

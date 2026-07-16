@@ -95,6 +95,8 @@ describe('buildRunSummary — failures_by_class shape', () => {
             'capability-budget': 0,
             'spec-defect': 0,
             'blocked-environmental': 0,
+            'needs-context': 0,
+            'blocked-dependency': 0,
         })
     })
 
@@ -137,6 +139,8 @@ describe('buildRunSummary — failures_by_class shape', () => {
             'capability-budget': 1,
             'spec-defect': 2,
             'blocked-environmental': 0,
+            'needs-context': 0,
+            'blocked-dependency': 0,
         })
     })
 })

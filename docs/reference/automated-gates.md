@@ -119,6 +119,19 @@ classified into one bucket or the other — the whole point is that adding a gat
 skip the local-vs-CI decision. No new CI steps were added by this pinning; `sast` and
 `coverage` stay local.
 
+### Extra CI setup steps (`setup_steps`)
+
+A gate command that needs a service or toolchain the default package-manager setup does
+not provide (a database, a native CLI) can declare **`setup_steps`** in
+`.factory/gates.json` ([Decision 73](../explanation/decisions.md)). `renderQualityGate`
+appends each step **after** the package install in **both** the Quality job and the
+mutation-shard job (in the shard, each carries the same `if: steps.slice.outputs.slice
+!= ''` guard as the package setup, so a custom boot is skipped when the shard has no
+mutants). Each step is strict: **exactly one** of `uses` or `run`, an optional `name`,
+and `with` **only** alongside `uses`. Hand edits to the managed `quality-gate.yml` are
+reverted as drift — declare the step in the contract instead. See
+[Scaffold a repo § setup_steps](../guides/scaffold-a-repo.md) for the how-to.
+
 ## Gates in force (S3)
 
 The gates the merge gate will actually enforce for a run are **derived from the

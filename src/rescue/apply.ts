@@ -128,6 +128,15 @@ export interface RescueApplyOptions {
      */
     resetTraceability?: boolean
     /**
+     * The human's answer to a task's recorded NEEDS_CONTEXT question (Decision 69,
+     * the CLI `--answer` flag). Requires exactly ONE explicit `tasks` entry, and that
+     * task must carry a recorded `needs_context.question` (both LOUD errors
+     * otherwise). Mutually exclusive with `auto` (self-heal has no answer). The reset
+     * row keeps the question and gains the answer; the next spawn's prompt injects
+     * both (handlers' needsContextNote).
+     */
+    answer?: string
+    /**
      * The bounded self-heal path (`factory rescue auto`, S10 / Decision 48).
      * Mutually exclusive with every manual option above (a LOUD error, not a
      * merge): the auto-safe target set is computed INSIDE the locked mutator via
@@ -191,6 +200,12 @@ export interface ResetTaskRowOpts {
      */
     e2eFeedback?: string
     /**
+     * The human's answer to the row's recorded NEEDS_CONTEXT question (Decision 69).
+     * Written as `needs_context.answer` alongside the preserved question; ignored
+     * when the row carries no question (applyRescue validates before calling).
+     */
+    answer?: string
+    /**
      * Drop `pr_number` as part of the reset (default: keep it). e2e-reopen re-runs a
      * `done` task with NEW commits on the SAME deterministic branch, so its old PR is
      * already MERGED; forgetting the number makes `createTaskPrIdempotent` open a FRESH
@@ -246,6 +261,7 @@ export function doneTaskRow(task: TaskState, at: string): TaskState {
         e2e_feedback: undefined,
         fix_findings: undefined,
         review_dispositions: undefined,
+        last_failing_gates: undefined, // D71: a shipped task carries no gate-failure streak
         failure_class: undefined,
         failure_reason: undefined,
     }
@@ -258,6 +274,8 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
         failure_reason: _failureReason,
         producer_role: _producerRole,
         test_revision_feedback: _testRevisionFeedback,
+        // D71: the failing-gate streak is per-attempt evidence — never spans a rescue.
+        last_failing_gates: _lastFailingGates,
         started_at: _startedAt,
         ended_at: _endedAt,
         phase: _phase,
@@ -279,6 +297,11 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
         merge_resyncs: 0,
         ...(opts.clearShippedPr !== true && _prNumber !== undefined ? {pr_number: _prNumber} : {}),
         ...(opts.e2eFeedback !== undefined ? {e2e_feedback: opts.e2eFeedback} : {}),
+        // Decision 69: needs_context is NOT dropped above (the question survives the
+        // reset); an answer, when given, is stamped alongside it.
+        ...(opts.answer !== undefined && rest.needs_context !== undefined
+            ? {needs_context: {question: rest.needs_context.question, answer: opts.answer}}
+            : {}),
     }
 }
 
@@ -288,10 +311,10 @@ export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): Task
  * id that is missing or `done`. See {@link RescueApplyOptions}.
  */
 /** The run's task map with every `targets` row reset (pure — shared by both apply branches). */
-function resetTasks(run: RunState, targets: readonly string[]): Record<string, TaskState> {
+function resetTasks(run: RunState, targets: readonly string[], answer?: string): Record<string, TaskState> {
     const nextTasks: Record<string, TaskState> = {...run.tasks}
     for (const id of targets) {
-        nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]))
+        nextTasks[id] = resetTaskRow(nonNull(run.tasks[id]), answer !== undefined ? {answer} : {})
     }
     return nextTasks
 }
@@ -359,12 +382,16 @@ export async function applyRescue(
             opts.includeDeadEnds === true ||
             opts.resetE2e === true ||
             opts.recheckRollup === true ||
-            opts.resetTraceability === true)
+            opts.resetTraceability === true ||
+            opts.answer !== undefined)
     ) {
         throw new Error(
             'rescue: `auto` is mutually exclusive with manual target options ' +
-                '(tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability)'
+                '(tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability/answer)'
         )
+    }
+    if (opts.answer !== undefined && (opts.tasks?.length ?? 0) !== 1) {
+        throw new Error('rescue: `answer` requires exactly one explicit --task (the one that asked the question)')
     }
 
     const updated = await state.update(runId, (run) => {
@@ -410,6 +437,14 @@ export async function applyRescue(
             }
         }
 
+        if (opts.answer !== undefined) {
+            const id = nonNull(opts.tasks?.[0])
+            if (run.tasks[id]?.needs_context === undefined) {
+                throw new Error(
+                    `rescue: task '${id}' has no recorded NEEDS_CONTEXT question — nothing for --answer to answer`
+                )
+            }
+        }
         const {targets, skipped} = selectTargets(run, opts)
         const wasTerminal = isTerminalRunStatus(run.status)
         // A failed e2e_phase verdict, when the human asserts (via resetE2e) it's worth
@@ -445,7 +480,7 @@ export async function applyRescue(
 
         return {
             ...run,
-            tasks: resetTasks(run, targets),
+            tasks: resetTasks(run, targets, opts.answer),
             // S11: a manual apply that did work IS a human touch.
             human_touches: [...run.human_touches, {kind: 'recover' as const, at: opts.at ?? nowIso()}],
             ...(e2eReset ? {e2e_phase: reopenE2ePhase(nonNull(run.e2e_phase))} : {}),

@@ -23,6 +23,7 @@ import {
     runCreate,
     runResume,
     runCancel,
+    runStop,
     resolveOwnerSession,
     type RunCancelOverrides,
 } from './run.js'
@@ -1251,6 +1252,114 @@ describe('runCancel (abandon a live run, Decision 35)', () => {
 
     it('--help short-circuits and exits OK (wired into the run dispatch)', async () => {
         expect(await runCommand.run(['cancel', '--help'])).toBe(EXIT.OK)
+    })
+
+    it('cancel sweeps in-flight tasks to failed/blocked-environmental; pending stays untouched (Decision 72)', async () => {
+        await seed('run-sweep')
+        await setExecuting('run-sweep', 't1')
+
+        await cancel(['--run', 'run-sweep'], {dataDir})
+
+        const run = await state.read('run-sweep')
+        expect(run.tasks.t1?.status).toBe('failed')
+        expect(run.tasks.t1?.failure_class).toBe('blocked-environmental')
+        expect(run.tasks.t1?.failure_reason).toBe('run cancelled by operator')
+        expect(run.tasks.t1?.ended_at).toBeDefined()
+        // t2 never started — its row is untouched (a sweep is hygiene, not a purge).
+        expect(run.tasks.t2?.status).toBe('pending')
+    })
+
+    it('cancel warns about irreversibility and names `run stop` as the resumable alternative (Decision 72)', async () => {
+        await seed('run-warn')
+        const {stderr} = await cancel(['--run', 'run-warn'], {dataDir})
+        expect(stderr).toContain('run stop')
+        expect(stderr.toLowerCase()).toContain('not resumable')
+    })
+})
+
+// ---------------------------------------------------------------------------
+// runStop — park a live run (suspended, resumable) — Decision 72
+// ---------------------------------------------------------------------------
+describe('runStop (park a live run, Decision 72)', () => {
+    let dataDir: string
+    let state: StateManager
+    let store: SpecStore
+
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'factory-run-stop-'))
+        state = new StateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(request([task('t1', []), task('t2', ['t1'])]), '# spec\n', makePrd())
+    })
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    async function seed(runId: string): Promise<void> {
+        await createRun(state, store, {repo: REPO, issue: 42, runId})
+    }
+
+    async function stop(argv: string[]): Promise<{env: Record<string, unknown>; code: number; stderr: string}> {
+        const chunks: string[] = []
+        const errChunks: string[] = []
+        const out = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+            chunks.push(String(c))
+            return true
+        })
+        const err = vi.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => {
+            errChunks.push(String(c))
+            return true
+        })
+        let code: number
+        try {
+            code = await runStop(argv, {dataDir})
+        } finally {
+            out.mockRestore()
+            err.mockRestore()
+        }
+        return {
+            env: JSON.parse(chunks.join('')) as Record<string, unknown>,
+            code,
+            stderr: errChunks.join(''),
+        }
+    }
+
+    it('parks a running run: suspended, NO quota checkpoint, tasks untouched', async () => {
+        await seed('run-park')
+        const {env, code, stderr} = await stop(['--run', 'run-park'])
+
+        expect(code).toBe(EXIT.OK)
+        expect(env.kind).toBe('stopped')
+        const run = await state.read('run-park')
+        expect(run.status).toBe('suspended')
+        // A2: a non-quota suspend never writes a checkpoint — plain `factory resume` clears it.
+        expect(run.quota).toBeUndefined()
+        expect(run.tasks.t1?.status).toBe('pending')
+        // Stderr points at the resume verb and names cancel as the destructive alternative.
+        expect(stderr).toContain('factory resume')
+        expect(stderr).toContain('run cancel')
+    })
+
+    it('is idempotent on an already-suspended run', async () => {
+        await seed('run-idem')
+        await stop(['--run', 'run-idem'])
+        const {env, code} = await stop(['--run', 'run-idem'])
+        expect(code).toBe(EXIT.OK)
+        expect(env.already_parked).toBe(true)
+        expect((await state.read('run-idem')).status).toBe('suspended')
+    })
+
+    it('is LOUD on a terminal run — nothing to park', async () => {
+        await seed('run-term')
+        await state.finalize('run-term', 'failed')
+        await expect(runStop(['--run', 'run-term'], {dataDir})).rejects.toThrow(/terminal/)
+    })
+
+    it('--help short-circuits and exits OK (wired into the run dispatch)', async () => {
+        expect(await runCommand.run(['stop', '--help'])).toBe(EXIT.OK)
     })
 })
 

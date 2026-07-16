@@ -74,6 +74,7 @@ export type ProducerOutcome =
     | {readonly status: 'blocked-escalate'; readonly reason: string}
     | {readonly status: 'test-defective'; readonly reason: string}
     | {readonly status: 'needs-context'; readonly reason: string}
+    | {readonly status: 'already-satisfied'; readonly shas: readonly string[]; readonly reason: string}
     | {readonly status: 'error'; readonly reason: string}
 
 /**
@@ -114,6 +115,15 @@ export function parseProducerStatus(raw: string): ProducerOutcome {
             return {status: 'test-defective', reason: line}
         }
         return {status: 'blocked-escalate', reason: line}
+    }
+    // Decision 70: the producer claims the base ALREADY contains this task's work.
+    // Checked before NEEDS_CONTEXT so a claim that also muses about missing context
+    // stays a verifiable claim. The cited commit SHAs (7-40 hex chars) are extracted
+    // here; ZERO citations is NOT a parse error — the engine-side verifier rejects
+    // the unevidenced claim downstream (burning a rung), the parser stays tolerant.
+    if (upper.includes('ALREADY_SATISFIED') || upper.includes('ALREADY SATISFIED')) {
+        const shas = line.match(/\b[0-9a-f]{7,40}\b/gi) ?? []
+        return {status: 'already-satisfied', shas, reason: line}
     }
     if (upper.includes('NEEDS_CONTEXT') || upper.includes('NEEDS CONTEXT')) {
         return {status: 'needs-context', reason: line}

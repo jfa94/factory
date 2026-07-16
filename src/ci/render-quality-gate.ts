@@ -11,7 +11,7 @@
  * npm-stack only (covers both npm and pnpm package managers). deno/custom throw
  * loud — scaffold skips the CI net for them with a per-stack reason.
  */
-import type {GateContract, GateContractEntry} from '../verifier/deterministic/gate-contract.js'
+import type {GateContract, GateContractEntry, SetupStep} from '../verifier/deterministic/gate-contract.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
 import type {NodeRuntime} from './node-runtime.js'
 
@@ -118,18 +118,57 @@ function gateStep(id: GateId, opts: RenderQualityGateOpts, builtin: string): rea
 
 /** The checkout-adjacent package-manager setup steps for the quality job. */
 function setupBlock(opts: RenderQualityGateOpts): readonly string[] {
+    const extra = contractSetupSteps(opts.contract.setup_steps ?? [])
     if (opts.packageManager === 'pnpm') {
         return [
             `- uses: ${PNPM_SETUP}`,
             `- uses: ${SETUP_NODE}`,
             ...nodeSetupInputs(opts.nodeRuntime, 'pnpm'),
             '- run: pnpm install --frozen-lockfile',
+            ...extra,
         ]
     }
     if (opts.hasLockfile) {
-        return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, 'npm'), '- run: npm ci']
+        return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, 'npm'), '- run: npm ci', ...extra]
     }
-    return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime), '- run: npm install --no-audit --no-fund']
+    return [
+        `- uses: ${SETUP_NODE}`,
+        ...nodeSetupInputs(opts.nodeRuntime),
+        '- run: npm install --no-audit --no-fund',
+        ...extra,
+    ]
+}
+
+/**
+ * Render the contract's `setup_steps` (Decision 73) as workflow steps. `cond`
+ * (the mutation shard's slice guard) is threaded onto each step in the mutation
+ * job so a custom env boot is skipped exactly like the package setup when the
+ * shard has no mutants.
+ */
+function contractSetupSteps(steps: readonly SetupStep[], cond?: string): readonly string[] {
+    const lines: string[] = []
+    for (const step of steps) {
+        if (step.uses !== undefined) {
+            lines.push(...(step.name === undefined ? [] : [`- name: ${step.name}`]))
+            lines.push(step.name === undefined ? `- uses: ${step.uses}` : `  uses: ${step.uses}`)
+            if (cond !== undefined) {
+                lines.push(`  ${cond}`)
+            }
+            if (step.with !== undefined) {
+                lines.push('  with:', ...Object.entries(step.with).map(([k, v]) => `      ${k}: ${v}`))
+            }
+        } else {
+            const head = step.name === undefined ? undefined : `- name: ${step.name}`
+            if (head !== undefined) {
+                lines.push(head, ...(cond === undefined ? [] : [`  ${cond}`]), `  run: ${step.run ?? ''}`)
+            } else if (cond !== undefined) {
+                lines.push(`- ${cond}`, `  run: ${step.run ?? ''}`)
+            } else {
+                lines.push(`- run: ${step.run ?? ''}`)
+            }
+        }
+    }
+    return lines
 }
 
 /** The gate steps for the quality job: typegen?, type, lint, test, build(+gate-env), deps:validate?, audit. */
@@ -186,6 +225,7 @@ function gatesBlock(opts: RenderQualityGateOpts): readonly string[] {
 /** The conditioned package-manager setup steps for the mutation shard job. */
 function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
     const cond = "if: steps.slice.outputs.slice != ''"
+    const extra = contractSetupSteps(opts.contract.setup_steps ?? [], cond)
     if (opts.packageManager === 'pnpm') {
         return [
             `- uses: ${PNPM_SETUP}`,
@@ -195,6 +235,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
             ...nodeSetupInputs(opts.nodeRuntime, 'pnpm'),
             `- ${cond}`,
             '  run: pnpm install --frozen-lockfile',
+            ...extra,
         ]
     }
     if (opts.hasLockfile) {
@@ -204,6 +245,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
             ...nodeSetupInputs(opts.nodeRuntime, 'npm'),
             `- ${cond}`,
             '  run: npm ci',
+            ...extra,
         ]
     }
     return [
@@ -212,6 +254,7 @@ function mutationSetupBlock(opts: RenderQualityGateOpts): readonly string[] {
         ...nodeSetupInputs(opts.nodeRuntime),
         `- ${cond}`,
         '  run: npm install --no-audit --no-fund',
+        ...extra,
     ]
 }
 

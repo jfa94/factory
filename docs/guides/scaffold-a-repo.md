@@ -43,7 +43,27 @@ This is idempotent. It:
   rendered build step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`),
   so one config drives both the factory's local merge gate and this repo's GitHub CI.
   An empty `gateEnv` leaves the build step's marker untouched, and a re-scaffold is
-  byte-identical (drift is measured against the rendered file);
+  byte-identical (drift is measured against the rendered file).
+
+    **Repos whose test suite needs an environment booted in CI** (a local database, an
+    emulator) declare it in the contract, not by hand-editing the managed workflow
+    (Decision 73 — hand edits are auto-reverted as drift). Add `setup_steps` to the
+    committed `.factory/gates.json`:
+
+    ```json
+    {
+        "version": 1,
+        "stack": "npm",
+        "gates": {"...": "..."},
+        "setup_steps": [{"uses": "supabase/setup-cli@v1", "with": {"version": "latest"}}, {"run": "supabase start"}]
+    }
+    ```
+
+    Each step is exactly one of `uses` (with optional `with` inputs) or `run`, plus an
+    optional `name`. Re-run `factory scaffold`: the steps render after the
+    package-manager install in BOTH the quality job and the mutation shards, and
+    repeated scaffolds stay byte-stable;
+
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits / idempotently merges TWO target settings files, split by what is safe to
   commit:

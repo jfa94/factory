@@ -23,6 +23,7 @@ import {finalizeRun, prdDoneComment, type FinalizeRunDeps} from './finalize.js'
 import {StateManager} from '../core/state/manager.js'
 import {FakeGhClient, FakeGitClient} from '../git/fakes.js'
 import {parseSpecManifest, type SpecManifest} from '../spec/index.js'
+import {readLedger} from '../spec/ledger.js'
 import {readMetrics} from '../scoring/index.js'
 import {runReportPath} from '../core/state/paths.js'
 import {scanRun} from '../rescue/scan.js'
@@ -279,6 +280,65 @@ describe('finalizeRun', () => {
         expect(result.failureCommentPosted).toBe(true)
         expect(gh.issueComments.some((c) => c.body.includes('Unmet PRD requirements'))).toBe(true)
         expect((await state.read(RUN_ID)).status).toBe('failed')
+    })
+
+    it("completed + live merged rollup appends one 'shipped' ledger entry per done task (Decision 70)", async () => {
+        const developTip = 'c'.repeat(40)
+        git.setRemoteHead('develop', developTip)
+        const tasks: TaskSeed[] = [
+            {task_id: 't1', status: 'done', pr_number: 11},
+            {task_id: 't2', status: 'done', pr_number: 12},
+        ]
+        await seed(tasks)
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(result.rollup?.merged).toBe(true)
+        const ledger = await readLedger(dataDir, REPO, SPEC_ID)
+        expect(ledger.entries).toHaveLength(2)
+        expect(ledger.entries.map((e) => e.task_id).sort()).toEqual(['t1', 't2'])
+        for (const e of ledger.entries) {
+            expect(e.source).toBe('shipped')
+            expect(e.run_id).toBe(RUN_ID)
+            expect(e.shas).toEqual([developTip])
+            expect(e.verified_at).toBe(NOW)
+        }
+        expect(ledger.entries.find((e) => e.task_id === 't1')?.pr_number).toBe(11)
+        expect(ledger.entries.find((e) => e.task_id === 't2')?.pr_number).toBe(12)
+    })
+
+    it('ledger write failure (unresolvable develop tip) logs loud but never fails finalize (Decision 70)', async () => {
+        // No origin/develop remote head seeded → the post-rollup tip rev-parse rejects.
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(result.run.status).toBe('completed')
+        expect(result.rollup?.merged).toBe(true)
+        expect((await readLedger(dataDir, REPO, SPEC_ID)).entries).toHaveLength(0)
+    })
+
+    it('completed + no-merge writes NO ledger entries (only a MERGED rollup is durable evidence)', async () => {
+        git.setRemoteHead('develop', 'd'.repeat(40))
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+
+        await finalizeRun(makeDeps(makeSpec(tasks), 'no-merge'), RUN_ID)
+
+        expect((await readLedger(dataDir, REPO, SPEC_ID)).entries).toHaveLength(0)
+    })
+
+    it('debug run merged rollup writes NO ledger entries (a debug session is not a PRD delivery)', async () => {
+        git.setRemoteHead('develop', 'e'.repeat(40))
+        const tasks: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        await seed(tasks)
+        await state.update(RUN_ID, (s) => ({...s, debug: true}))
+
+        const result = await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+        expect(result.rollup?.merged).toBe(true)
+        expect((await readLedger(dataDir, REPO, SPEC_ID)).entries).toHaveLength(0)
     })
 
     it('completed + no-merge: opens the rollup PR but never merges it', async () => {

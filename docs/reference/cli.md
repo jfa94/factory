@@ -9,7 +9,7 @@ for `state`); `--help` on any subcommand prints its contract. The binary is
 Subcommands are **reporters** (read-only; emit an envelope), **the orchestrator** (`next-task`
 records nothing; `next-action --results` records an agent spawn's output into ONE state
 step; `run docs --results` records a scribe spawn's output likewise), or **writers** (one
-state mutation). `run create`, `run finalize`, `run cancel`, `scaffold`, and the
+state mutation). `run create`, `run finalize`, `run stop`, `run cancel`, `scaffold`, and the
 orchestrators' (`next-action` ship / `run docs` record) side effects perform actions (state and/or
 GitHub side effects). The orchestrator seams spawn nothing themselves — they emit a spawn request
 the runner spawns from (see [Model A](../explanation/model-a.md)).
@@ -195,7 +195,7 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|finalize|traceability|docs|e2e-assess|e2e|cancel>`
+## `run <create|finalize|traceability|docs|e2e-assess|e2e|stop|cancel>`
 
 ### `run create`
 
@@ -502,16 +502,47 @@ Both paths converge on the same suite-run decision, which returns one of:
 `next-task` schedules e2e before docs, so a failed e2e phase never reaches the docs or
 rollup steps. See [Run with end-to-end tests](../guides/run-with-e2e.md).
 
+### `run stop`
+
+Action. **Parks a live run** so its owning session can stop while keeping the run
+resumable — the non-destructive counterpart to [`run cancel`](#run-cancel)
+([Decision 72](../explanation/decisions.md)). One state write flips the run to
+`suspended` with **NO quota checkpoint** (`run.quota` absent — the exact `--approve-spec`
+precedent), so a plain [`factory resume`](#resume) un-parks it (`planResume` clears a
+quota-less suspend unconditionally). Tasks are **untouched**. `next-task` on a parked run
+emits a `park`-scope pause envelope and never auto-clears it — the orchestrator's park
+guard is what keeps a background loop from silently resuming a deliberately-stopped run.
+Idempotent on an already `paused`/`suspended` run (`already_parked: true`, no write); a
+terminal run is a loud error (nothing to park).
+
+```
+factory run stop [--run <id>] [--session-id <id>]
+```
+
+| Flag                | Notes                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run <id>`        | The run to park. Default: the active run THIS session owns (`findActiveByOwner`), then the current run for the checkout. Loud if the session owns two live runs. |
+| `--session-id <id>` | Owning session id used to locate the run when `--run` is omitted. Defaults to `$CLAUDE_CODE_SESSION_ID`.                                                         |
+
+Like `cancel`, `stop` has **no autonomy gate** — a stop verb must work from any session.
+Emits `{kind:"stopped", run, already_parked}`.
+
 ### `run cancel`
 
 Action. **Abandons a live run** so its owning session can stop — the in-session escape
-from the Stop gate (Decision 35 addendum). Marks the run terminal by reusing `failed`,
-via `state.finalize` **directly** (NOT the `run finalize` ship path): no rollup CI, no
-merge, no PRD close. Because `finalize` validates only that the _target_ status is
-terminal — never the task statuses — a run with a task still `executing` is cancellable
-(the same mechanism `--supersede` uses). Idempotent for `failed`; a run already terminal
-as `completed`/`superseded` is a loud error. A cancelled run is **not resumable** — start
-fresh with `/factory:run`.
+from the Stop gate (Decision 35 addendum). To pause a run you intend to continue, use
+[`run stop`](#run-stop) instead — `cancel` is **irreversible**. Marks the run terminal by
+reusing `failed`, via `state.finalize` **directly** (NOT the `run finalize` ship path): no
+rollup CI, no merge, no PRD close. Because `finalize` validates only that the _target_
+status is terminal — never the task statuses — a run with a task still `executing` is
+cancellable (the same mechanism `--supersede` uses). **Before** the terminal flip it
+**sweeps every in-flight task** (`executing`/`reviewing`/`shipping`) to `failed` /
+`blocked-environmental` with reason `"run cancelled by operator"` and drops its
+`spawn_in_flight` ([Decision 72](../explanation/decisions.md)) — so a cancelled run leaves
+no row that reads as live work to `rescue scan` or the statusline; `pending` rows (which
+never ran) stay untouched. Idempotent for `failed` (the sweep is skipped once terminal); a
+run already terminal as `completed`/`superseded` is a loud error. A cancelled run is **not
+resumable** — start fresh with `/factory:run`.
 
 ```
 factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
@@ -851,7 +882,10 @@ route, reconcile, github, hints, awaiting? }`. The routing fields:
   (`quota`/`e2e`/`traceability`/`docs`/`spec-approval`/`unknown` — never stored).
 
 Dispositions: `shipped`, `runnable`, `stuck` (crashed in-flight), `recoverable`
-(`blocked-environmental` fail), `dead-end` (`spec-defect`/`capability-budget` fail).
+(a `blocked-environmental`, `needs-context`, or `blocked-dependency` fail — Decisions 69
+& 72), `dead-end` (`spec-defect`/`capability-budget` fail). A `needs-context` task's line
+carries the recorded `question`, and its repair `hint` is a `--task <id> --answer` command
+(not a blind reset).
 Default-resettable = `stuck ∪ recoverable`. `e2e_failed` is `true` iff
 `run.e2e_phase.status === "failed"` and `e2e_assessment_failed` is `true` iff
 `run.e2e_assessment.status === "failed"` (the run-start assessment, Decision 40 D3) — both
@@ -909,12 +943,13 @@ an approved `/factory:resume` repair plan executes — every flag is a human ass
 approved plan item carries.
 
 ```
-factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--reset-traceability] [--recheck-rollup]
+factory rescue apply [--run <id>] [--task <id>]... [--answer <text>] [--include-dead-ends] [--reset-e2e] [--reset-traceability] [--recheck-rollup]
 ```
 
 | Flag                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--task <id>`          | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--answer <text>`      | Answer a `needs-context` failure's recorded question ([Decision 69](../explanation/decisions.md)). Requires exactly ONE `--task`, and that task must carry a recorded `needs_context.question` (both loud errors otherwise). The reset preserves the question and stamps the answer alongside it; the next producer spawn's prompt injects both. Mutually exclusive with `auto`.                                                                                                                                                                                                                                                                                                                                                                       |
 | `--include-dead-ends`  | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `--reset-e2e`          | Clears a `failed` e2e-phase verdict so it re-enters, **and** drops a `failed` run-start `e2e_assessment` (Decision 40 D3) so the assessment re-runs. A post-authoring e2e-phase failure keeps its manifest + reopen counts + `adjudication_counts` and drops any live `adjudication` cursor; a pre-authoring failure (empty manifest) drops `e2e_phase` entirely so the author re-spawns. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable. The phase repair is **decoupled from reopening**: it also fires on a **non-terminal** run (e.g. a crash between e2e's `markFailed` and finalize left the run `running`), so the documented recovery never silently no-ops. |
 | `--recheck-rollup`     | Reopens a `completed` run whose rollup **armed but never landed** (`rollup_pending`) so a re-drive re-enters `finalizeRun` and its `rollup()` resume-guard picks up the now-merged PR (PRD-close + branch-GC). Use only after confirming the queued merge landed — alone sufficient to reopen a terminal run, and its repair likewise applies on a non-terminal run. Reopen only: `apply` never mutates the `rollup` pointer, only `finalizeRun` does.                                                                                                                                                                                                                                                                                                 |
@@ -942,7 +977,10 @@ factory rescue auto [--run <id>]
 Adopts forward-only GitHub drift first (Decision 60 — free; never spends the budget below),
 then resets only the _effective_ auto-safe set (resettable tasks that stay actionable
 post-reset — never dead-ends, e2e resets, traceability resets, rollup rechecks, or
-git drift) and stamps `self_heal {attempts, last_at}` — the sanctioned stored-event
+git drift). A `needs-context` failure scans `recoverable` but is **excluded** here
+([Decision 69](../explanation/decisions.md)): self-heal has no answer to give, so a blind
+reset would only re-ask the same question and re-fail (its dependents stay excluded too).
+The reset stamps `self_heal {attempts, last_at}` — the sanctioned stored-event
 exception. Runs while `attempts < SELF_HEAL_MAX_ATTEMPTS` (**3**); a blocked auto
 (`attempts >= 3`, empty effective set, or dead-ends only) emits `{kind:"page"}` and posts
 ONE deduped PRD comment pointing at `factory rescue scan`. Never appends a human touch.

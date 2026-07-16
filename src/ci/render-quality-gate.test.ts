@@ -209,6 +209,41 @@ describe('renderQualityGate — npm stack', () => {
     })
 })
 
+describe('renderQualityGate — contract setup_steps (Decision 73)', () => {
+    const optsWithSteps: RenderQualityGateOpts = {
+        ...NPM_OPTS,
+        contract: {
+            ...npmContract(),
+            setup_steps: [
+                {uses: 'supabase/setup-cli@v1', with: {version: 'latest'}},
+                {name: 'Boot Supabase', run: 'supabase start'},
+            ],
+        },
+    }
+
+    it('renders uses-steps (with inputs) and named run-steps after the quality-job package setup', () => {
+        const out = renderQualityGate(template, optsWithSteps)
+        expect(out).toContain('- uses: supabase/setup-cli@v1')
+        expect(out).toContain('version: latest')
+        expect(out).toContain('- name: Boot Supabase')
+        expect(out).toContain('run: supabase start')
+        // After the package-manager install, before the gates.
+        expect(out.indexOf('- run: npm ci')).toBeLessThan(out.indexOf('- uses: supabase/setup-cli@v1'))
+        expect(out.indexOf('supabase start')).toBeLessThan(out.indexOf('- run: npx tsc --noEmit'))
+    })
+
+    it('renders the steps in the mutation shard job too (it boots the test suite as well)', () => {
+        const out = renderQualityGate(template, optsWithSteps)
+        expect(out.match(/supabase\/setup-cli@v1/g)).toHaveLength(2)
+        expect(out.match(/supabase start/g)).toHaveLength(2)
+    })
+
+    it('renders nothing extra when setup_steps is absent', () => {
+        const out = renderQualityGate(template, NPM_OPTS)
+        expect(out).not.toContain('supabase')
+    })
+})
+
 describe('renderQualityGate — structure invariants', () => {
     it('emits the three protection contexts and no auto-merge job', () => {
         const out = renderQualityGate(template, NPM_OPTS)

@@ -559,6 +559,37 @@ describe('applyRescue', () => {
         expect(c.merge_resyncs).toBe(0)
     })
 
+    it('reset clears last_failing_gates (D71 — the streak record must not span a rescue)', async () => {
+        await seed([
+            {
+                task_id: 'g',
+                status: 'executing',
+                phase: 'verify',
+                last_failing_gates: ['lint', 'test'],
+            },
+        ])
+
+        await applyRescue(state, RUN_ID)
+
+        expect(nonNull((await state.read(RUN_ID)).tasks.g).last_failing_gates).toBeUndefined()
+    })
+
+    it('doneTaskRow clears last_failing_gates (D71 — a shipped task carries no streak)', () => {
+        const done = doneTaskRow(
+            {
+                task_id: 'h',
+                status: 'shipping',
+                depends_on: [],
+                escalation_rung: 0,
+                reviewers: [],
+                merge_resyncs: 0,
+                last_failing_gates: ['test'],
+            },
+            '2026-07-16T00:00:00.000Z'
+        )
+        expect(done.last_failing_gates).toBeUndefined()
+    })
+
     it("a plain rescue reset carries forward the task's existing e2e_feedback unchanged", async () => {
         await seed([
             {
@@ -678,6 +709,52 @@ describe('applyRescue', () => {
         })
     })
 
+    describe('answer (the NEEDS_CONTEXT answer channel — Decision 69)', () => {
+        const NC_SEED: TaskSeed = {
+            task_id: 'q',
+            status: 'failed',
+            failure_class: 'needs-context',
+            failure_reason: 'producer needs context (asked twice without resolving): which auth provider?',
+            needs_context: {question: 'which auth provider?'},
+        }
+
+        it('writes the answer onto the reset task, preserving the question', async () => {
+            await seed([NC_SEED])
+            const result = await applyRescue(state, RUN_ID, {tasks: ['q'], answer: 'use Supabase auth'})
+            expect(result.reset).toEqual(['q'])
+
+            const q = nonNull((await state.read(RUN_ID)).tasks.q)
+            expect(q.status).toBe('pending')
+            expect(q.needs_context).toEqual({question: 'which auth provider?', answer: 'use Supabase auth'})
+        })
+
+        it('requires exactly ONE named --task (zero → throw)', async () => {
+            await seed([NC_SEED])
+            await expect(applyRescue(state, RUN_ID, {answer: 'x'})).rejects.toThrow(/exactly one/)
+        })
+
+        it('requires exactly ONE named --task (two → throw)', async () => {
+            await seed([NC_SEED, {task_id: 'other', status: 'executing'}])
+            await expect(applyRescue(state, RUN_ID, {tasks: ['q', 'other'], answer: 'x'})).rejects.toThrow(
+                /exactly one/
+            )
+        })
+
+        it('throws when the named task has no recorded question', async () => {
+            await seed([{task_id: 'plain', status: 'failed', failure_class: 'blocked-environmental'}])
+            await expect(applyRescue(state, RUN_ID, {tasks: ['plain'], answer: 'x'})).rejects.toThrow(
+                /no recorded.*question/i
+            )
+        })
+
+        it('is mutually exclusive with auto', async () => {
+            await seed([NC_SEED])
+            await expect(
+                applyRescue(state, RUN_ID, {auto: {at: '2026-07-04T00:00:00.000Z'}, answer: 'x'})
+            ).rejects.toThrow(/mutually exclusive/)
+        })
+    })
+
     describe("human_touches (S11 — the manual-apply 'recover' touch)", () => {
         it("a manual apply that did work appends ONE 'recover' touch and reports touched:true", async () => {
             await seed([{task_id: 'a', status: 'executing', started_at: '2026-06-08T00:00:00.000Z'}])
@@ -766,6 +843,13 @@ describe('resetTaskRow (Decision 39 — e2e reopen reuse)', () => {
             clearShippedPr: true,
         })
         expect(reset.pr_number).toBeUndefined()
+    })
+
+    it('Decision 69: PRESERVES needs_context across a reset (the question survives for the next spawn)', () => {
+        const reset = resetTaskRow(
+            task({task_id: 'a', status: 'shipping', needs_context: {question: 'which auth provider?'}})
+        )
+        expect(reset.needs_context).toEqual({question: 'which auth provider?'})
     })
 
     it('D68: PRESERVES review_dispositions across a reset (same rule as fix_findings)', () => {

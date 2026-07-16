@@ -100,8 +100,22 @@ export function isTerminalTaskStatus(s: TaskStatus): boolean {
  *                               before-retry (Δ D) sends these straight to fail.
  *   - `blocked-environmental` — an external blocker (CI infra, network, a missing
  *                               dependency the task cannot itself provision).
+ *   - `needs-context`         — the producer asked a question the pipeline cannot
+ *                               answer (twice, unresolved — Decision 69). The question
+ *                               rides `needs_context.question`; rescue surfaces it and
+ *                               `rescue apply --answer` feeds the reply back in.
+ *   - `blocked-dependency`    — dependency cascade: an upstream task in the DAG
+ *                               failed, so this one never ran (Decision 72). Distinct
+ *                               from `blocked-environmental` so postmortem stats do
+ *                               not read a cascade as an infra outage.
  */
-export const FailureClassEnum = z.enum(['capability-budget', 'spec-defect', 'blocked-environmental'])
+export const FailureClassEnum = z.enum([
+    'capability-budget',
+    'spec-defect',
+    'blocked-environmental',
+    'needs-context',
+    'blocked-dependency',
+])
 export type FailureClass = z.infer<typeof FailureClassEnum>
 
 /**
@@ -290,6 +304,35 @@ export const TaskStateSchema = z.object({
      * otherwise. Transient — not a failure field (allowed on any status).
      */
     test_revision_feedback: z.string().optional(),
+
+    /**
+     * The producer's open NEEDS_CONTEXT question (Decision 69). Written on the
+     * first NEEDS_CONTEXT at a phase (the task re-spawns ONCE at the same rung with
+     * the question injected); a second consecutive NEEDS_CONTEXT fails the task
+     * `needs-context` with the question refreshed. `answer` is written only by
+     * `rescue apply --answer` and is injected alongside the question on the
+     * post-reset re-spawn. Cleared when a producer returns `done` (any role — a
+     * completed attempt resolves the question by construction). Deliberately
+     * PRESERVED by rescue's resetTaskRow (unlike most transients): the open
+     * question is the whole point of the reset. Transient — allowed on any status.
+     */
+    needs_context: z
+        .object({
+            question: z.string().min(1),
+            answer: z.string().min(1).optional(),
+        })
+        .optional(),
+
+    /**
+     * The failing gate-id set of the LAST blocked merge-gate verify (sorted,
+     * holdout excluded — Decision 71). An event record like `fix_findings`
+     * (the reviewers it derives from are cleared by escalateOrFail). When the next
+     * blocked verify fails the IDENTICAL set, the escalation is routed to the
+     * `tests` phase (the RED test is suspected as the broken arbiter) instead of
+     * re-rolling the implementer. Cleared on the advancing verify write, on
+     * doneTaskRow, and by rescue's resetTaskRow. Transient — allowed on any status.
+     */
+    last_failing_gates: z.array(z.string().min(1)).optional(),
 
     /**
      * Feedback carried from a failing e2e journey spec into this task's NEXT

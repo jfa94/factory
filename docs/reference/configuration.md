@@ -34,15 +34,19 @@ plugin's dir, `resolveDataDir()` derives the canonical `factory-jfa94` dir (from
 the cache-install layout, falling back to `marketplace.json`) and uses that
 instead — so state is never written into another plugin's dir.
 
-The redirect emits a **single WARN per distinct redirect per process** (keyed on
-the `current → corrected` pair; `resolveDataDir()` is called ~20×/command, so the
-warn is deduplicated rather than spammed). The message states that another plugin
-set the var, that factory auto-redirected to its canonical dir, that no action is
-required for correctness, and — if you want to silence it permanently — to set
-`CLAUDE_PLUGIN_DATA` to factory's own `factory-<your-marketplace-id>` dir. The
-redirect **behavior** is unconditional and unaffected by the warn rate-limiting.
+A **successful** redirect emits a **single DEBUG notice per distinct redirect per
+process** (keyed on the `current → corrected` pair; `resolveDataDir()` is called
+~20×/command, so the notice is deduplicated rather than spammed). It was demoted
+from WARN to DEBUG (Fix 8): a self-correcting redirect is benign, so it no longer
+clutters normal output — only a **real** problem inside the expected data dir (an
+unparseable `marketplace.json`) still emits a WARN. The notice states that another
+plugin set the var, that factory auto-redirected to its canonical dir, that no
+action is required for correctness, and — if you want to silence it permanently —
+to set `CLAUDE_PLUGIN_DATA` to factory's own `factory-<your-marketplace-id>` dir.
+The redirect **behavior** is unconditional and unaffected by the notice
+rate-limiting.
 
-Why the leak happens, why it is benign, and why the warn repeats across
+Why the leak happens, why it is benign, and why the notice repeats across
 commands is explained in
 [the plugin-data-dir explanation](../explanation/plugin-data-dir.md).
 

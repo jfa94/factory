@@ -14,8 +14,10 @@
  * derived honestly from run state (derive-don't-store — no breaker counter persisted):
  * the count of `capability-budget` failures — tasks whose producer escalation ladder
  * genuinely exhausted its budget. We deliberately EXCLUDE `blocked-environmental`
- * (dependency cascades AND the breaker's own trip sweep in `nextTask`) and
- * `spec-defect` (wedge) failures: those are CONSEQUENCES of a failure, not
+ * (dependency cascades AND the breaker's own trip sweep in `nextTask`),
+ * `spec-defect` (wedge), and `needs-context` (an unanswered question, Decision 69 —
+ * a human answers it via rescue, no producer capability was exhausted) failures:
+ * those are CONSEQUENCES of a failure or await human input, not
  * independent failures. Counting them would let ONE real failure that cascades to
  * two dependents masquerade as three "consecutive" failures and abort still-runnable
  * independent work — and counting the trip sweep's own output would poison the

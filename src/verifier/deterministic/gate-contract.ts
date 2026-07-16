@@ -92,6 +92,38 @@ const UncontractedSchema = z
 
 const EntrySchema = z.discriminatedUnion('contracted', [ContractedSchema, UncontractedSchema])
 
+/**
+ * One CI setup step (Decision 73): rendered verbatim into the managed
+ * quality-gate.yml's `# factory:setup` AND `# factory:mutation-setup` regions,
+ * so env boot (e.g. `supabase start`) lives in the committed contract instead
+ * of doomed hand edits to a managed file. Exactly one of `uses`/`run`; `with`
+ * only accompanies `uses`.
+ */
+const SetupStepSchema = z
+    .object({
+        name: z.string().min(1).optional(),
+        uses: z.string().min(1).optional(),
+        with: z.record(z.string()).optional(),
+        run: z.string().min(1).optional(),
+    })
+    .strict()
+    .superRefine((step, issues) => {
+        if ((step.uses === undefined) === (step.run === undefined)) {
+            issues.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "setup step requires exactly one of 'uses' or 'run'",
+            })
+        }
+        if (step.with !== undefined && step.uses === undefined) {
+            issues.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "'with' is only allowed on a 'uses' step",
+            })
+        }
+    })
+
+export type SetupStep = z.infer<typeof SetupStepSchema>
+
 /** One gate's contract entry. */
 export type GateContractEntry = z.infer<typeof EntrySchema>
 
@@ -106,6 +138,8 @@ export const GateContractSchema = z
         gates: z
             .object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema])) as Record<GateId, typeof EntrySchema>)
             .strict(),
+        /** CI env-boot steps rendered into the managed workflow (Decision 73). */
+        setup_steps: z.array(SetupStepSchema).optional(),
     })
     .strict()
     .superRefine((contract, issues) => {

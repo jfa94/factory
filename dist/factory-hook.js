@@ -6843,13 +6843,16 @@ function resolveDataDir(opts = {}) {
   const warn = opts.warn ?? ((m) => {
     log4.warn(m);
   });
+  const notifyRedirect = opts.warn ?? ((m) => {
+    log4.debug(m);
+  });
   const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected != null && corrected.length > 0 && corrected !== current) {
     const key = JSON.stringify([current ?? "", corrected]);
     if (!warnedRedirects.has(key)) {
       warnedRedirects.add(key);
-      warn(
-        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this warning permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
+      notifyRedirect(
+        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this notice permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
       );
     }
     return resolve2(corrected);
@@ -7469,7 +7472,13 @@ var TERMINAL_TASK_STATUSES = ["done", "failed"];
 function isTerminalTaskStatus(s) {
   return TERMINAL_TASK_STATUSES.includes(s);
 }
-var FailureClassEnum = external_exports.enum(["capability-budget", "spec-defect", "blocked-environmental"]);
+var FailureClassEnum = external_exports.enum([
+  "capability-budget",
+  "spec-defect",
+  "blocked-environmental",
+  "needs-context",
+  "blocked-dependency"
+]);
 var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
 var EscalationRungSchema = external_exports.number().int().min(0);
 var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
@@ -7559,6 +7568,31 @@ var TaskStateSchema = external_exports.object({
    * otherwise. Transient — not a failure field (allowed on any status).
    */
   test_revision_feedback: external_exports.string().optional(),
+  /**
+   * The producer's open NEEDS_CONTEXT question (Decision 69). Written on the
+   * first NEEDS_CONTEXT at a phase (the task re-spawns ONCE at the same rung with
+   * the question injected); a second consecutive NEEDS_CONTEXT fails the task
+   * `needs-context` with the question refreshed. `answer` is written only by
+   * `rescue apply --answer` and is injected alongside the question on the
+   * post-reset re-spawn. Cleared when a producer returns `done` (any role — a
+   * completed attempt resolves the question by construction). Deliberately
+   * PRESERVED by rescue's resetTaskRow (unlike most transients): the open
+   * question is the whole point of the reset. Transient — allowed on any status.
+   */
+  needs_context: external_exports.object({
+    question: external_exports.string().min(1),
+    answer: external_exports.string().min(1).optional()
+  }).optional(),
+  /**
+   * The failing gate-id set of the LAST blocked merge-gate verify (sorted,
+   * holdout excluded — Decision 71). An event record like `fix_findings`
+   * (the reviewers it derives from are cleared by escalateOrFail). When the next
+   * blocked verify fails the IDENTICAL set, the escalation is routed to the
+   * `tests` phase (the RED test is suspected as the broken arbiter) instead of
+   * re-rolling the implementer. Cleared on the advancing verify write, on
+   * doneTaskRow, and by rescue's resetTaskRow. Transient — allowed on any status.
+   */
+  last_failing_gates: external_exports.array(external_exports.string().min(1)).optional(),
   /**
    * Feedback carried from a failing e2e journey spec into this task's NEXT
    * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine

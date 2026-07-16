@@ -21,8 +21,12 @@ import type {FailureClass} from '../types/index.js'
  * A failure signal WS8 must classify. CLOSED discriminated union on `kind`:
  *   - `producer-status`   — the producer's own terminal outcome (agents.ts).
  *     `blocked-escalate` ⇒ spec-defect (immediate fail); `test-defective` ⇒
- *     capability (retryable — regenerate the RED test); `needs-context` /
- *     `error` ⇒ capability (retryable).
+ *     capability (retryable — regenerate the RED test). `needs-context` and
+ *     `error` are deliberately NOT members: neither is a capability failure —
+ *     `needs-context` is a question (one same-rung re-ask, then a loud
+ *     `needs-context` fail, Decision 69) and `error` is an infra signal (spends
+ *     the spawn re-drive budget, Decision 71) — both handled in transitions.ts
+ *     BEFORE classification, so routing one here is a bug.
  *   - `verifier-error`    — the panel had an UNRESOLVED verifier error
  *     (PanelRunResult.hadVerifierError). LOUD + unresolved — retryable (re-run
  *     the bounded verify), NEVER an auto-advance, NEVER a silent fail.
@@ -40,7 +44,7 @@ import type {FailureClass} from '../types/index.js'
 export type FailureSignal =
     | {
           readonly kind: 'producer-status'
-          readonly status: 'blocked-escalate' | 'test-defective' | 'needs-context' | 'error'
+          readonly status: 'blocked-escalate' | 'test-defective'
           readonly reason: string
       }
     | {readonly kind: 'verifier-error'; readonly reason: string}
@@ -79,7 +83,6 @@ function exhaustive(x: never): never {
  *
  * Retry (a rung may be burned by the ladder, within the cap):
  *   - producer `test-defective`             → capability (regenerate the RED test)
- *   - producer `needs-context` / `error`    → capability
  *   - gate-failure (fixable)                → capability
  *   - verifier-error (LOUD, re-run verify)  → capability
  *   - merge-gate-blocked (fix-forward)           → capability
@@ -96,15 +99,11 @@ export function classifyFailure(signal: FailureSignal): ClassifyDecision {
                     reason: `producer reported the task unworkable as specified: ${signal.reason}`,
                 }
             }
-            if (signal.status === 'test-defective') {
-                // The implementer reports the RED test itself is wrong. Re-running the
-                // TEST-WRITER (resume phase chosen by the caller, transitions.ts) with the
-                // defect fed back can regenerate a correct test — so this is RETRYABLE, not
-                // a terminal spec-defect. The ladder bounds it by the escalation cap.
-                return {action: 'retry', reason: `RED test reported defective: ${signal.reason}`}
-            }
-            // needs-context / error: a stronger model or fresh context may succeed.
-            return {action: 'retry', reason: signal.reason}
+            // test-defective: the implementer reports the RED test itself is wrong.
+            // Re-running the TEST-WRITER (resume phase chosen by the caller,
+            // transitions.ts) with the defect fed back can regenerate a correct test —
+            // RETRYABLE, not a terminal spec-defect. The ladder bounds it by the cap.
+            return {action: 'retry', reason: `RED test reported defective: ${signal.reason}`}
         }
         case 'gate-failure': {
             if (signal.structurallyUnfixable) {

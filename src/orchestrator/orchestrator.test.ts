@@ -334,6 +334,38 @@ describe('nextAction', () => {
         }
     })
 
+    it('an unparseable STATUS re-emits the same spawn key and spends a re-drive slot (Decision 71)', async () => {
+        const {deps, runId, cleanup} = await makeOrchestratorDeps()
+        try {
+            const git = deps.git as FakeGitClient
+            const env1 = await nextAction(deps, runId, 'T1') // fresh tests spawn, redrives 0
+            if (env1.kind !== 'spawn') {
+                throw new Error('expected tests spawn')
+            }
+
+            // A dead/garbled spawn delivers no parseable STATUS → producer `error` →
+            // same-(phase, rung) re-spawn through the matching-checkpoint branch:
+            // one re-drive slot spent + worktree reset to the checkpoint tip, no rung burn.
+            const callsBefore = git.calls.length
+            const env2 = await nextAction(deps, runId, 'T1', {
+                result_key: env1.result_key,
+                producer: {status: 'exited without printing anything'},
+            })
+            if (env2.kind !== 'spawn') {
+                throw new Error('expected re-emitted tests spawn')
+            }
+            expect(env2.result_key).toEqual(env1.result_key)
+            expect(env2.phase).toBe('tests')
+
+            const run = await deps.state.read(runId)
+            expect(run.tasks.T1?.escalation_rung).toBe(0)
+            expect(run.tasks.T1?.spawn_in_flight?.redrives).toBe(1)
+            expect(git.calls.slice(callsBefore).some((c) => c.startsWith('reset --hard'))).toBe(true)
+        } finally {
+            await cleanup()
+        }
+    })
+
     it('fails the task blocked-environmental when the re-drive budget is exhausted (Decision 66)', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps()
         try {
@@ -481,7 +513,7 @@ describe('nextAction', () => {
         }
     })
 
-    it('a blocked producer escalates the rung and re-spawns the same phase', async () => {
+    it('a NEEDS_CONTEXT producer re-spawns the same phase at the SAME rung with the question persisted (Decision 69)', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps()
         try {
             const env1 = await nextAction(deps, runId, 'T1')
@@ -489,10 +521,10 @@ describe('nextAction', () => {
             if (env1.kind !== 'spawn') {
                 return
             }
-            // NEEDS_CONTEXT → capability retry → rung bump (not a spec-defect fail)
+            // NEEDS_CONTEXT is a question, not a capability failure — no rung burn.
             const env = await nextAction(deps, runId, 'T1', {
                 result_key: env1.result_key,
-                producer: {status: 'STATUS: NEEDS_CONTEXT'},
+                producer: {status: 'STATUS: NEEDS_CONTEXT — which auth provider?'},
             })
             expect(env.kind).toBe('spawn')
             if (env.kind !== 'spawn') {
@@ -500,7 +532,8 @@ describe('nextAction', () => {
             }
             expect(env.phase).toBe('tests')
             const run = await deps.state.read(runId)
-            expect(run.tasks.T1?.escalation_rung).toBe(1)
+            expect(run.tasks.T1?.escalation_rung).toBe(0)
+            expect(run.tasks.T1?.needs_context?.question).toContain('which auth provider?')
         } finally {
             await cleanup()
         }
@@ -778,15 +811,24 @@ describe('nextAction', () => {
             taskStateOverrides: {task_id: 'T1', escalation_rung: ESCALATION_CAP},
         })
         try {
-            const env1 = await nextAction(deps, runId, 'T1')
+            const env1 = await nextAction(deps, runId, 'T1') // tests spawn
             expect(env1.kind).toBe('spawn')
             if (env1.kind !== 'spawn') {
                 return
             }
-            // NEEDS_CONTEXT → capability retry → rung already at cap → fails capability-budget
-            const env = await nextAction(deps, runId, 'T1', {
+            const env2 = await nextAction(deps, runId, 'T1', {
                 result_key: env1.result_key,
-                producer: {status: 'STATUS: NEEDS_CONTEXT'},
+                producer: {status: 'STATUS: DONE'},
+            })
+            expect(env2.kind).toBe('spawn')
+            if (env2.kind !== 'spawn') {
+                return
+            }
+            expect(env2.phase).toBe('exec')
+            // test-defective is a ladder retry (Δ D) — rung already at cap → capability-budget
+            const env = await nextAction(deps, runId, 'T1', {
+                result_key: env2.result_key,
+                producer: {status: 'STATUS: BLOCKED — escalate: test requires revision — pins a wrong literal'},
             })
             expect(env).toMatchObject({
                 kind: 'done',
@@ -1131,7 +1173,7 @@ describe('nextAction', () => {
         }
     })
 
-    it('duplicate NEEDS_CONTEXT results (result_key tests/0) reject LOUD and do not double-bump escalation_rung', async () => {
+    it('a second consecutive NEEDS_CONTEXT (same result_key tests/0 — the same-rung re-ask) fails LOUD with class needs-context (Decision 69)', async () => {
         const {deps, runId, cleanup} = await makeOrchestratorDeps()
         try {
             const env1 = await nextAction(deps, runId, 'T1') // tests spawn, result_key tests/0
@@ -1141,23 +1183,30 @@ describe('nextAction', () => {
             }
             const needsContextResults: DriveResults = {
                 result_key: env1.result_key, // { phase: "tests", rung: 0 }
-                producer: {status: 'STATUS: NEEDS_CONTEXT'},
+                producer: {status: 'STATUS: NEEDS_CONTEXT — which auth provider?'},
             }
-            // First record: bumps escalation_rung to 1.
+            // First ask: question persisted, SAME-rung re-spawn (no bump).
             const env2 = await nextAction(deps, runId, 'T1', needsContextResults)
             expect(env2.kind).toBe('spawn')
             if (env2.kind !== 'spawn') {
-                throw new Error('expected spawn after escalation')
+                throw new Error('expected spawn after first ask')
             }
             expect(env2.phase).toBe('tests')
+            expect(env2.result_key).toEqual(env1.result_key) // same (phase, rung) — no ladder burn
             const runAfter = await deps.state.read(runId)
-            expect(runAfter.tasks.T1?.escalation_rung).toBe(1)
+            expect(runAfter.tasks.T1?.escalation_rung).toBe(0)
+            expect(runAfter.tasks.T1?.needs_context?.question).toContain('which auth provider?')
 
-            // Re-deliver the SAME results (result_key tests/0) — rung is now 1, mismatch.
-            await expect(nextAction(deps, runId, 'T1', needsContextResults)).rejects.toThrow(/stale or duplicate/)
-            // Rung must still be 1 — no double-bump.
+            // Second consecutive ask (the re-ask also returned NEEDS_CONTEXT): loud
+            // classified fail — the question is surfaced to a human via rescue.
+            const env3 = await nextAction(deps, runId, 'T1', needsContextResults)
+            expect(env3).toMatchObject({
+                kind: 'done',
+                outcome: {outcome: 'failed', failure_class: 'needs-context'},
+            })
             const runFinal = await deps.state.read(runId)
-            expect(runFinal.tasks.T1?.escalation_rung).toBe(1)
+            expect(runFinal.tasks.T1?.escalation_rung).toBe(0)
+            expect(runFinal.tasks.T1?.needs_context?.question).toContain('which auth provider?')
         } finally {
             await cleanup()
         }

@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile21;
-      function readFile21(path7, options, cb) {
+      fs2.readFile = readFile22;
+      function readFile22(path7, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path7, options, cb);
@@ -6446,13 +6446,16 @@ function resolveDataDir(opts = {}) {
   const warn = opts.warn ?? ((m) => {
     log3.warn(m);
   });
+  const notifyRedirect = opts.warn ?? ((m) => {
+    log3.debug(m);
+  });
   const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected != null && corrected.length > 0 && corrected !== current) {
     const key = JSON.stringify([current ?? "", corrected]);
     if (!warnedRedirects.has(key)) {
       warnedRedirects.add(key);
-      warn(
-        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this warning permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
+      notifyRedirect(
+        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this notice permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
       );
     }
     return resolve2(corrected);
@@ -6594,7 +6597,13 @@ var TERMINAL_TASK_STATUSES = ["done", "failed"];
 function isTerminalTaskStatus(s) {
   return TERMINAL_TASK_STATUSES.includes(s);
 }
-var FailureClassEnum = external_exports.enum(["capability-budget", "spec-defect", "blocked-environmental"]);
+var FailureClassEnum = external_exports.enum([
+  "capability-budget",
+  "spec-defect",
+  "blocked-environmental",
+  "needs-context",
+  "blocked-dependency"
+]);
 var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
 var EscalationRungSchema = external_exports.number().int().min(0);
 var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
@@ -6684,6 +6693,31 @@ var TaskStateSchema = external_exports.object({
    * otherwise. Transient — not a failure field (allowed on any status).
    */
   test_revision_feedback: external_exports.string().optional(),
+  /**
+   * The producer's open NEEDS_CONTEXT question (Decision 69). Written on the
+   * first NEEDS_CONTEXT at a phase (the task re-spawns ONCE at the same rung with
+   * the question injected); a second consecutive NEEDS_CONTEXT fails the task
+   * `needs-context` with the question refreshed. `answer` is written only by
+   * `rescue apply --answer` and is injected alongside the question on the
+   * post-reset re-spawn. Cleared when a producer returns `done` (any role — a
+   * completed attempt resolves the question by construction). Deliberately
+   * PRESERVED by rescue's resetTaskRow (unlike most transients): the open
+   * question is the whole point of the reset. Transient — allowed on any status.
+   */
+  needs_context: external_exports.object({
+    question: external_exports.string().min(1),
+    answer: external_exports.string().min(1).optional()
+  }).optional(),
+  /**
+   * The failing gate-id set of the LAST blocked merge-gate verify (sorted,
+   * holdout excluded — Decision 71). An event record like `fix_findings`
+   * (the reviewers it derives from are cleared by escalateOrFail). When the next
+   * blocked verify fails the IDENTICAL set, the escalation is routed to the
+   * `tests` phase (the RED test is suspected as the broken arbiter) instead of
+   * re-rolling the implementer. Cleared on the advancing verify write, on
+   * doneTaskRow, and by rescue's resetTaskRow. Transient — allowed on any status.
+   */
+  last_failing_gates: external_exports.array(external_exports.string().min(1)).optional(),
   /**
    * Feedback carried from a failing e2e journey spec into this task's NEXT
    * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine
@@ -8069,7 +8103,7 @@ var configureCommand = {
 };
 
 // src/cli/subcommands/debug.ts
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 
 // src/core/phase-machine/phases.ts
 var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
@@ -10242,8 +10276,56 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { access as access2, readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { access as access2, readFile as readFile5, readdir as readdir2, rm as rm2 } from "node:fs/promises";
+import { join as join8 } from "node:path";
+
+// src/spec/ledger.ts
+import { readFile as readFile4, mkdir as mkdir6 } from "node:fs/promises";
+import { join as join7, dirname as dirname6 } from "node:path";
+var LEDGER_FILE = "ledger.json";
+var LedgerEntrySchema = external_exports.object({
+  task_id: external_exports.string().min(1),
+  run_id: external_exports.string().min(1),
+  /** GitHub PR number, when the entry came from a shipped PR. */
+  pr_number: external_exports.number().int().positive().optional(),
+  /** The commit SHAs that carry this task's work (min 1 — an unevidenced entry is useless). */
+  shas: external_exports.array(external_exports.string().min(7)).min(1),
+  verified_at: external_exports.string().min(1),
+  source: external_exports.enum(["shipped", "already-satisfied"])
+}).strict();
+var LedgerSchema = external_exports.object({ entries: external_exports.array(LedgerEntrySchema) }).strict();
+function ledgerPath(dataDir, repo, specId) {
+  return join7(specDir(dataDir, repo, specId), LEDGER_FILE);
+}
+async function readLedger(dataDir, repo, specId) {
+  const path7 = ledgerPath(dataDir, repo, specId);
+  let raw;
+  try {
+    raw = await readFile4(path7, "utf8");
+  } catch (err) {
+    if (isEnoent(err)) {
+      return { entries: [] };
+    }
+    throw err;
+  }
+  return LedgerSchema.parse(parseJson(raw, path7));
+}
+async function appendLedgerEntries(dataDir, repo, specId, entries) {
+  const path7 = ledgerPath(dataDir, repo, specId);
+  const current = await readLedger(dataDir, repo, specId);
+  const next = LedgerSchema.parse({ entries: [...current.entries, ...entries] });
+  await mkdir6(dirname6(path7), { recursive: true });
+  await atomicWriteFile(path7, stringifyJson(next));
+}
+function latestByTask(ledger) {
+  const map = /* @__PURE__ */ new Map();
+  for (const e of ledger.entries) {
+    map.set(e.task_id, e);
+  }
+  return map;
+}
+
+// src/spec/store.ts
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
@@ -10273,7 +10355,11 @@ var SpecStore = class {
   docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
-    this.docsRoot = opts.docsRoot ?? join7(process.cwd(), "docs");
+    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
+  }
+  /** Read the spec's shipped-work ledger (Decision 70). ENOENT → empty; garbage → LOUD. */
+  async ledger(repo, specId) {
+    return readLedger(this.dataDir, repo, specId);
   }
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
@@ -10288,7 +10374,7 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`resolveByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -10328,7 +10414,7 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -10351,8 +10437,8 @@ var SpecStore = class {
   /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile4(join7(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join7(dir, TASKS_FILE)));
+    const tasksRaw = await readFile5(join8(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -10383,11 +10469,11 @@ var SpecStore = class {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
-    await atomicWriteFile(join7(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join7(dir, TASKS_FILE), tasksJson);
-    await atomicWriteFile(join7(dir, PRD_FILE), stringifyJson(prd));
+    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join8(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
-      join7(dir, META_FILE),
+      join8(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -10398,8 +10484,8 @@ var SpecStore = class {
     const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
     let mirrored = true;
     try {
-      await atomicWriteFile(join7(reviewDir, SPEC_MD_FILE), specMd);
-      await atomicWriteFile(join7(reviewDir, TASKS_FILE), tasksJson);
+      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
       log17.warn(
@@ -10414,7 +10500,7 @@ var SpecStore = class {
   /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
   async hasPrd(repo, specId) {
     try {
-      await access2(join7(specDir(this.dataDir, repo, specId), PRD_FILE));
+      await access2(join8(specDir(this.dataDir, repo, specId), PRD_FILE));
       return true;
     } catch {
       return false;
@@ -10425,10 +10511,10 @@ var SpecStore = class {
    * snapshot is missing — never a silent null (traceability would audit nothing).
    */
   async readPrd(repo, specId) {
-    const path7 = join7(specDir(this.dataDir, repo, specId), PRD_FILE);
+    const path7 = join8(specDir(this.dataDir, repo, specId), PRD_FILE);
     let raw;
     try {
-      raw = await readFile4(path7, "utf8");
+      raw = await readFile5(path7, "utf8");
     } catch (err) {
       if (isEnoent(err)) {
         throw new Error(
@@ -10448,8 +10534,8 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile4(join7(dir, META_FILE), "utf8");
-    const parsed = parseJson(raw, join7(dir, META_FILE));
+    const raw = await readFile5(join8(dir, META_FILE), "utf8");
+    const parsed = parseJson(raw, join8(dir, META_FILE));
     const meta = parsed !== null && typeof parsed === "object" ? parsed : {};
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -10832,7 +10918,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/build.ts
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
@@ -10840,10 +10926,10 @@ var ATTEMPTS_FILE = "attempts.json";
 function scratchPaths(scratchRoot, repo, issue) {
   const dir = specBuildDir(scratchRoot, repo, issue);
   return {
-    prdPath: join8(dir, PRD_FILE2),
-    generatedPath: join8(dir, GENERATED_FILE),
-    verdictPath: join8(dir, VERDICT_FILE),
-    attemptsPath: join8(dir, ATTEMPTS_FILE)
+    prdPath: join9(dir, PRD_FILE2),
+    generatedPath: join9(dir, GENERATED_FILE),
+    verdictPath: join9(dir, VERDICT_FILE),
+    attemptsPath: join9(dir, ATTEMPTS_FILE)
   };
 }
 async function readAttempts(attemptsPath) {
@@ -11013,6 +11099,10 @@ function parseProducerStatus(raw) {
     }
     return { status: "blocked-escalate", reason: line };
   }
+  if (upper.includes("ALREADY_SATISFIED") || upper.includes("ALREADY SATISFIED")) {
+    const shas = line.match(/\b[0-9a-f]{7,40}\b/gi) ?? [];
+    return { status: "already-satisfied", shas, reason: line };
+  }
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
     return { status: "needs-context", reason: line };
   }
@@ -11077,7 +11167,8 @@ function buildProducerContext(input) {
     fixInstructions,
     priorFailures,
     injectedPriorFailure: priorFailures.length > 0,
-    designSystemDocs: input.designSystemDocs ?? []
+    designSystemDocs: input.designSystemDocs ?? [],
+    testsToWrite: input.testsToWrite ?? []
   };
 }
 function renderProducerPrompt(ctx, worktree) {
@@ -11089,6 +11180,9 @@ function renderProducerPrompt(ctx, worktree) {
     "Acceptance criteria:",
     ...ctx.acceptanceCriteria.map((c) => `- ${c}`)
   ];
+  if (ctx.testsToWrite.length > 0) {
+    lines.push("", "Tests to write:", ...ctx.testsToWrite.map((t) => `- ${t}`));
+  }
   if (ctx.files.length > 0) {
     lines.push("", "Scoped files:", ...ctx.files.map((f) => `- ${f}`));
   }
@@ -11132,10 +11226,7 @@ function classifyFailure(signal) {
           reason: `producer reported the task unworkable as specified: ${signal.reason}`
         };
       }
-      if (signal.status === "test-defective") {
-        return { action: "retry", reason: `RED test reported defective: ${signal.reason}` };
-      }
-      return { action: "retry", reason: signal.reason };
+      return { action: "retry", reason: `RED test reported defective: ${signal.reason}` };
     }
     case "gate-failure": {
       if (signal.structurallyUnfixable) {
@@ -11190,8 +11281,8 @@ function skip(gate, reason) {
 }
 
 // src/verifier/deterministic/gate-contract.ts
-import { readFile as readFile5 } from "node:fs/promises";
-import { join as join9 } from "node:path";
+import { readFile as readFile6 } from "node:fs/promises";
+import { join as join10 } from "node:path";
 
 // src/shared/command-allowlist.ts
 var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
@@ -11262,10 +11353,31 @@ var UncontractedSchema = external_exports.object({
   reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
 }).strict();
 var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var SetupStepSchema = external_exports.object({
+  name: external_exports.string().min(1).optional(),
+  uses: external_exports.string().min(1).optional(),
+  with: external_exports.record(external_exports.string()).optional(),
+  run: external_exports.string().min(1).optional()
+}).strict().superRefine((step, issues) => {
+  if (step.uses === void 0 === (step.run === void 0)) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "setup step requires exactly one of 'uses' or 'run'"
+    });
+  }
+  if (step.with !== void 0 && step.uses === void 0) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "'with' is only allowed on a 'uses' step"
+    });
+  }
+});
 var GateContractSchema = external_exports.object({
   version: external_exports.literal(1),
   stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict()
+  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
+  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
+  setup_steps: external_exports.array(SetupStepSchema).optional()
 }).strict().superRefine((contract, issues) => {
   for (const id of GATE_IDS) {
     const entry = contract.gates[id];
@@ -11293,7 +11405,7 @@ var GateContractSchema = external_exports.object({
 async function loadGateContract(rootAbs) {
   let raw;
   try {
-    raw = await readFile5(join9(rootAbs, GATE_CONTRACT_REL), "utf8");
+    raw = await readFile6(join10(rootAbs, GATE_CONTRACT_REL), "utf8");
   } catch (err) {
     if (isEnoent(err)) {
       return { state: "absent" };
@@ -11977,7 +12089,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tdd-exempt.ts
-import { readFile as readFile6 } from "node:fs/promises";
+import { readFile as readFile7 } from "node:fs/promises";
 import path2 from "node:path";
 var log19 = createLogger("verifier:tdd-exempt");
 function isTddExempt(taskId, tasksJson, packageJson) {
@@ -12014,7 +12126,7 @@ var DefaultExemptReader = class {
 async function readJsonOrNull(file) {
   let raw;
   try {
-    raw = await readFile6(file, "utf8");
+    raw = await readFile7(file, "utf8");
   } catch (err) {
     if (!isEnoent(err)) {
       log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
@@ -12030,7 +12142,7 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access3, mkdtemp, readFile as readFile7, rm as rm3, symlink as symlink2 } from "node:fs/promises";
+import { access as access3, mkdtemp, readFile as readFile8, rm as rm3, symlink as symlink2 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
 import path3 from "node:path";
 function toProc(r) {
@@ -12135,7 +12247,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile7(reportPath, "utf8");
+      raw = await readFile8(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -12217,7 +12329,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
     }
     let raw;
     try {
-      raw = await readFile7(summaryPath, "utf8");
+      raw = await readFile8(summaryPath, "utf8");
     } catch {
       return { kind: "summary-missing" };
     }
@@ -12334,12 +12446,12 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log39 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log39.code !== 0) {
-      throw new Error(`git log ${base}..HEAD failed (code=${log39.code ?? "null"}): ${log39.stderr.trim()}`);
+    const log40 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log40.code !== 0) {
+      throw new Error(`git log ${base}..HEAD failed (code=${log40.code ?? "null"}): ${log40.stderr.trim()}`);
     }
-    assertNotTruncated(log39, "git log (tdd classification)");
-    const shas = splitLines(log39.stdout).reverse();
+    assertNotTruncated(log40, "git log (tdd classification)");
+    const shas = splitLines(log40.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -12399,7 +12511,7 @@ function defaultGateTools(gateEnv = {}) {
 }
 
 // src/verifier/deterministic/coverage-store.ts
-import { mkdir as mkdir6, readFile as readFile8, rename as rename3, writeFile } from "node:fs/promises";
+import { mkdir as mkdir7, readFile as readFile9, rename as rename3, writeFile } from "node:fs/promises";
 import path4 from "node:path";
 var TREE_SHA_RE = /^[0-9a-f]{40,64}$/;
 function isSummary(v) {
@@ -12428,7 +12540,7 @@ var FsCoverageStore = class {
     const file = this.file(treeSha);
     let raw;
     try {
-      raw = await readFile8(file, "utf8");
+      raw = await readFile9(file, "utf8");
     } catch (err) {
       if (isEnoent(err)) {
         return null;
@@ -12448,7 +12560,7 @@ var FsCoverageStore = class {
   }
   async put(treeSha, summary) {
     const target = this.file(treeSha);
-    await mkdir6(this.dir, { recursive: true });
+    await mkdir7(this.dir, { recursive: true });
     const tmp = path4.join(this.dir, `.tmp-${treeSha}-${process.pid}-${this.seq++}`);
     await writeFile(tmp, JSON.stringify(summary), "utf8");
     await rename3(tmp, target);
@@ -12548,12 +12660,12 @@ async function touchesDatabase(git, baseRef, opts) {
 }
 
 // src/verifier/judgment/cross-vendor-prompt.ts
-import { readFile as readFile9 } from "node:fs/promises";
+import { readFile as readFile10 } from "node:fs/promises";
 import path5 from "node:path";
 async function composeCrossVendorPrompt(input) {
   const [charter, contract] = await Promise.all([
-    readFile9(path5.join(input.pluginRoot, "agents", "quality-reviewer.md"), "utf8"),
-    readFile9(path5.join(input.pluginRoot, "skills", "review-protocol", "SKILL.md"), "utf8")
+    readFile10(path5.join(input.pluginRoot, "agents", "quality-reviewer.md"), "utf8"),
+    readFile10(path5.join(input.pluginRoot, "skills", "review-protocol", "SKILL.md"), "utf8")
   ]);
   return [
     charter.trim(),
@@ -13094,8 +13206,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir7, readFile as readFile10 } from "node:fs/promises";
-import { dirname as dirname6, join as join10 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile11 } from "node:fs/promises";
+import { dirname as dirname7, join as join11 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -13128,21 +13240,21 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path7 = this.path(runId, record.task_id);
-    await mkdir7(dirname6(path7), { recursive: true });
+    await mkdir8(dirname7(path7), { recursive: true });
     await atomicWriteFile(path7, stringifyJson(record));
   }
   async get(runId, taskId) {
     const path7 = this.path(runId, taskId);
-    const raw = await readFile10(path7, "utf8");
+    const raw = await readFile11(path7, "utf8");
     return parseHoldoutRecord(parseJson(raw, path7), path7);
   }
   async has(runId, taskId) {
     try {
-      await readFile10(this.path(runId, taskId), "utf8");
+      await readFile11(this.path(runId, taskId), "utf8");
       return true;
     } catch (err) {
       if (isEnoent(err)) {
@@ -13154,8 +13266,8 @@ var FsHoldoutStore = class {
 };
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir8, readFile as readFile11 } from "node:fs/promises";
-import { dirname as dirname7, join as join11 } from "node:path";
+import { mkdir as mkdir9, readFile as readFile12 } from "node:fs/promises";
+import { dirname as dirname8, join as join12 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -13168,21 +13280,21 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId, rung) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.r${rung}.verdicts.json`);
+    return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.r${rung}.verdicts.json`);
   }
   async put(runId, taskId, rung, verdicts) {
     const path7 = this.path(runId, taskId, rung);
-    await mkdir8(dirname7(path7), { recursive: true });
+    await mkdir9(dirname8(path7), { recursive: true });
     await atomicWriteFile(path7, stringifyJson([...verdicts]));
   }
   async get(runId, taskId, rung) {
     const path7 = this.path(runId, taskId, rung);
-    const raw = await readFile11(path7, "utf8");
+    const raw = await readFile12(path7, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path7));
   }
   async has(runId, taskId, rung) {
     try {
-      await readFile11(this.path(runId, taskId, rung), "utf8");
+      await readFile12(this.path(runId, taskId, rung), "utf8");
       return true;
     } catch (err) {
       if (isEnoent(err)) {
@@ -13348,7 +13460,7 @@ function dispositionOf(status, failureClass) {
     return "runnable";
   }
   if (status === "failed") {
-    return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
+    return failureClass === "blocked-environmental" || failureClass === "needs-context" || failureClass === "blocked-dependency" ? "recoverable" : "dead-end";
   }
   return "stuck";
 }
@@ -13361,7 +13473,8 @@ function scanRun(run9) {
     ...t.failure_class !== void 0 ? { failure_class: t.failure_class } : {},
     ...t.failure_reason !== void 0 ? { failure_reason: t.failure_reason } : {},
     ...t.branch !== void 0 ? { branch: t.branch } : {},
-    ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
+    ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {},
+    ...t.needs_context !== void 0 ? { question: t.needs_context.question } : {}
   }));
   const by = (d) => tasks.filter((t) => t.disposition === d);
   const stuck = by("stuck");
@@ -13615,7 +13728,7 @@ async function reconcileRun(run9, gh) {
 // src/rescue/auto.ts
 var SELF_HEAL_MAX_ATTEMPTS = 3;
 function effectiveAutoResets(run9, scan) {
-  const resets = new Set(scan.resettable);
+  const resets = new Set(scan.resettable.filter((id) => run9.tasks[id]?.failure_class !== "needs-context"));
   const clean = /* @__PURE__ */ new Map();
   function closureClean(id, visiting) {
     const memoized = clean.get(id);
@@ -13645,7 +13758,7 @@ function effectiveAutoResets(run9, scan) {
     return ok;
   }
   return scan.resettable.filter(
-    (id) => nonNull(run9.tasks[id]).depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
+    (id) => resets.has(id) && nonNull(run9.tasks[id]).depends_on.every((dep) => closureClean(dep, /* @__PURE__ */ new Set([id])))
   );
 }
 
@@ -13673,6 +13786,8 @@ function doneTaskRow(task, at2) {
     e2e_feedback: void 0,
     fix_findings: void 0,
     review_dispositions: void 0,
+    last_failing_gates: void 0,
+    // D71: a shipped task carries no gate-failure streak
     failure_class: void 0,
     failure_reason: void 0
   };
@@ -13683,6 +13798,8 @@ function resetTaskRow(task, opts = {}) {
     failure_reason: _failureReason,
     producer_role: _producerRole,
     test_revision_feedback: _testRevisionFeedback,
+    // D71: the failing-gate streak is per-attempt evidence — never spans a rescue.
+    last_failing_gates: _lastFailingGates,
     started_at: _startedAt,
     ended_at: _endedAt,
     phase: _phase,
@@ -13703,13 +13820,16 @@ function resetTaskRow(task, opts = {}) {
     reviewers: [],
     merge_resyncs: 0,
     ...opts.clearShippedPr !== true && _prNumber !== void 0 ? { pr_number: _prNumber } : {},
-    ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
+    ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {},
+    // Decision 69: needs_context is NOT dropped above (the question survives the
+    // reset); an answer, when given, is stamped alongside it.
+    ...opts.answer !== void 0 && rest.needs_context !== void 0 ? { needs_context: { question: rest.needs_context.question, answer: opts.answer } } : {}
   };
 }
-function resetTasks(run9, targets) {
+function resetTasks(run9, targets, answer) {
   const nextTasks = { ...run9.tasks };
   for (const id of targets) {
-    nextTasks[id] = resetTaskRow(nonNull(run9.tasks[id]));
+    nextTasks[id] = resetTaskRow(nonNull(run9.tasks[id]), answer !== void 0 ? { answer } : {});
   }
   return nextTasks;
 }
@@ -13749,10 +13869,13 @@ function selectTargets(run9, opts) {
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  if (opts.auto !== void 0 && ((opts.tasks?.length ?? 0) > 0 || opts.includeDeadEnds === true || opts.resetE2e === true || opts.recheckRollup === true || opts.resetTraceability === true)) {
+  if (opts.auto !== void 0 && ((opts.tasks?.length ?? 0) > 0 || opts.includeDeadEnds === true || opts.resetE2e === true || opts.recheckRollup === true || opts.resetTraceability === true || opts.answer !== void 0)) {
     throw new Error(
-      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability)"
+      "rescue: `auto` is mutually exclusive with manual target options (tasks/includeDeadEnds/resetE2e/recheckRollup/resetTraceability/answer)"
     );
+  }
+  if (opts.answer !== void 0 && (opts.tasks?.length ?? 0) !== 1) {
+    throw new Error("rescue: `answer` requires exactly one explicit --task (the one that asked the question)");
   }
   const updated = await state.update(runId, (run9) => {
     if (opts.auto !== void 0) {
@@ -13794,6 +13917,14 @@ async function applyRescue(state, runId, opts = {}) {
         ...reopenFields(reopen2)
       };
     }
+    if (opts.answer !== void 0) {
+      const id = nonNull(opts.tasks?.[0]);
+      if (run9.tasks[id]?.needs_context === void 0) {
+        throw new Error(
+          `rescue: task '${id}' has no recorded NEEDS_CONTEXT question \u2014 nothing for --answer to answer`
+        );
+      }
+    }
     const { targets, skipped } = selectTargets(run9, opts);
     const wasTerminal = isTerminalRunStatus(run9.status);
     const e2eReset = opts.resetE2e === true && run9.e2e_phase?.status === "failed";
@@ -13815,7 +13946,7 @@ async function applyRescue(state, runId, opts = {}) {
     }
     return {
       ...run9,
-      tasks: resetTasks(run9, targets),
+      tasks: resetTasks(run9, targets, opts.answer),
       // S11: a manual apply that did work IS a human touch.
       human_touches: [...run9.human_touches, { kind: "recover", at: opts.at ?? nowIso() }],
       ...e2eReset ? { e2e_phase: reopenE2ePhase(nonNull(run9.e2e_phase)) } : {},
@@ -14165,6 +14296,30 @@ async function finalizeRun(deps, runId) {
       }
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
+      if (!run9.debug) {
+        try {
+          await deps.git.fetch("origin", deps.config.git.baseBranch);
+          const developTip = await deps.git.revParse(`origin/${deps.config.git.baseBranch}`);
+          const done = Object.values(run9.tasks).filter((t) => t.status === "done");
+          await appendLedgerEntries(
+            deps.dataDir,
+            run9.spec.repo,
+            run9.spec.spec_id,
+            done.map((t) => ({
+              task_id: t.task_id,
+              run_id: runId,
+              ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {},
+              shas: [developTip],
+              verified_at: now,
+              source: "shipped"
+            }))
+          );
+        } catch (err) {
+          log21.error(
+            `shipped-ledger append failed for '${run9.spec.spec_id}' (finalize continues; the next run falls back to the ALREADY_SATISFIED verdict): ${String(err)}`
+          );
+        }
+      }
     }
     await deps.state.update(runId, (s) => ({
       ...s,
@@ -14269,6 +14424,11 @@ function classifyProducerFailure(outcome) {
   if (outcome.status === "done") {
     throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
   }
+  if (outcome.status === "needs-context" || outcome.status === "error" || outcome.status === "already-satisfied") {
+    throw new Error(
+      `transitions: classifyProducerFailure called on a '${outcome.status}' outcome \u2014 handled before classification (Decisions 69/70/71), never a ladder retry`
+    );
+  }
   return classifyFailure({
     kind: "producer-status",
     status: outcome.status,
@@ -14282,23 +14442,51 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
       producer_role: opts.role,
       // A completed test-writer re-run resolves any pending defect feedback — clear
       // it so a stale note never leaks into a later rung's regeneration.
-      ...opts.role === "test-writer" ? { test_revision_feedback: void 0 } : {}
+      ...opts.role === "test-writer" ? { test_revision_feedback: void 0 } : {},
+      // A completed producer (any role) resolves any open NEEDS_CONTEXT question
+      // by construction (Decision 69) — clear it so a stale question never leaks.
+      needs_context: void 0
     }));
     return { done: false, phase: opts.resumePhase };
   }
-  if (outcome.status === "test-defective") {
-    if (opts.phase !== "exec") {
-      return escalateOrFail(
+  if (outcome.status === "error") {
+    log22.warn(
+      `task '${taskId}' producer spawn produced no usable STATUS (${outcome.reason}) \u2014 re-spawning at the same rung (spends one spawn re-drive slot)`
+    );
+    return { done: false, phase: opts.phase };
+  }
+  if (outcome.status === "needs-context") {
+    const run9 = await deps.state.read(runId);
+    const asked = run9.tasks[taskId]?.needs_context !== void 0;
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      // Refresh to the CURRENT question (dropping any spent answer) so rescue
+      // always surfaces what the latest attempt actually asked.
+      needs_context: { question: outcome.reason }
+    }));
+    if (asked) {
+      return failStep(
         deps,
         runId,
         taskId,
-        classifyFailure({
-          kind: "producer-status",
-          status: "error",
-          reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`
-        }),
-        opts.phase
+        "needs-context",
+        `producer needs context (asked twice without resolving): ${outcome.reason}`
       );
+    }
+    log22.warn(`task '${taskId}' producer asked NEEDS_CONTEXT \u2014 one same-rung re-ask with the question injected`);
+    return { done: false, phase: opts.phase };
+  }
+  if (outcome.status === "already-satisfied") {
+    throw new Error(
+      `transitions: applyProducerOutcome called on an 'already-satisfied' outcome for task '${taskId}' \u2014 the claim must be engine-verified in record.ts first (Decision 70)`
+    );
+  }
+  if (outcome.status === "test-defective") {
+    if (opts.phase !== "exec") {
+      log22.warn(
+        `task '${taskId}' emitted 'test-defective' from non-exec role '${opts.role}' \u2014 re-spawning at the same rung (spends one spawn re-drive slot)`
+      );
+      return { done: false, phase: opts.phase };
     }
     await deps.state.updateTask(runId, taskId, (t) => ({
       ...t,
@@ -14310,11 +14498,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/orchestrator/paths.ts
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 function taskWorktreePath(workDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(workDir, runId, taskId);
+  return join13(workDir, runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -14355,11 +14543,11 @@ async function appendHoldoutEvidence(deps, verdictStore, runId, taskId, rung, ev
 }
 
 // src/orchestrator/handlers.ts
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 
 // src/orchestrator/design-system.ts
 import { readdir as readdir3 } from "node:fs/promises";
-import { join as join13, relative } from "node:path";
+import { join as join14, relative } from "node:path";
 var FRONTEND_EXTENSION = /\.(?:tsx|jsx|vue|svelte|css|scss|less)$/i;
 var FRONTEND_DIRECTORY = /(?:^|\/)(?:components|pages|app)\//i;
 var DESIGN_SYSTEM_DOC = /design[-_]?system|style[-_]?guide|design[-_]?tokens|ui[-_]?guidelines/i;
@@ -14368,7 +14556,7 @@ function isFrontendPath(path7) {
   return FRONTEND_EXTENSION.test(path7) || FRONTEND_DIRECTORY.test(path7.replaceAll("\\", "/"));
 }
 async function findDesignSystemDocs(repoRoot) {
-  const docsRoot = join13(repoRoot, "docs");
+  const docsRoot = join14(repoRoot, "docs");
   const matches = [];
   async function scan(dir, depth) {
     let entries;
@@ -14382,7 +14570,7 @@ async function findDesignSystemDocs(repoRoot) {
     }
     await Promise.all(
       entries.map(async (entry) => {
-        const absolute = join13(dir, entry.name);
+        const absolute = join14(dir, entry.name);
         if (entry.isDirectory()) {
           if (depth < MAX_DEPTH) {
             await scan(absolute, depth + 1);
@@ -14435,6 +14623,18 @@ function makePhaseHandlers(deps) {
       }
     ] : [];
   }
+  function needsContextNote(task) {
+    if (task.needs_context === void 0) {
+      return [];
+    }
+    const { question, answer } = task.needs_context;
+    return [
+      {
+        rung: task.escalation_rung,
+        summary: answer !== void 0 ? `A prior attempt stopped with NEEDS_CONTEXT and asked: "${question}". A human answered: "${answer}". Proceed using that answer.` : `A prior attempt stopped with NEEDS_CONTEXT and asked: "${question}". Resolve it from repo/spec evidence if at all possible; only if it is genuinely unanswerable from the repo and the spec, return STATUS: NEEDS_CONTEXT again (the task then stops and surfaces the question to a human).`
+      }
+    ];
+  }
   async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const model = role === "test-writer" ? selectProducerModel("high", deps.config) : dial.model;
@@ -14448,6 +14648,10 @@ function makePhaseHandlers(deps) {
       files: specTask.files,
       rung,
       designSystemDocs,
+      // Fix 2: the spec's tests_to_write reach the test-writer (the gate at
+      // spec/gates.ts maps every criterion to one — dropping them here made the
+      // producer re-derive coverage blind). Implementer works from the tests.
+      ...role === "test-writer" ? { testsToWrite: specTask.tests_to_write } : {},
       // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
       // the rung dial — a defective RED test must be steered away from on the very
       // first regeneration (rung 1), where the generic dial note is still off.
@@ -14492,8 +14696,8 @@ function makePhaseHandlers(deps) {
       const lockScope = staging.replace(/[^\w.-]/g, "-");
       await withFileLock(
         {
-          dir: join14(deps.dataDir, "locks"),
-          lockfile: join14(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
+          dir: join15(deps.dataDir, "locks"),
+          lockfile: join15(deps.dataDir, "locks", `preflight-git-${lockScope}.lock`),
           label: `preflight git '${staging}'`,
           dirPolicy: "create",
           tuning: PREFLIGHT_GIT_LOCK_TUNING
@@ -14536,10 +14740,17 @@ function makePhaseHandlers(deps) {
           summary: `Your PRIOR test for this task was rejected as INCORRECT by the implementer and reviewers: ${task.test_revision_feedback}. Write a BEHAVIORAL test derived from the acceptance criteria \u2014 do NOT pin an implementation source literal (no toContain("<source string>")).`
         }
       ] : [];
-      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec", [
-        ...revisionNote,
-        ...e2eFeedbackNote(task)
-      ]);
+      return producerSpawn(
+        "test-writer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "exec",
+        [...revisionNote, ...e2eFeedbackNote(task), ...needsContextNote(task)],
+        // D70: a rejected ALREADY_SATISFIED claim (or any tests-routed send-back)
+        // persists fix_findings — thread them so the test-writer sees the rejection.
+        task.fix_findings
+      );
     },
     /**
      * exec: spawn the implementer for the current rung against the holdout-stripped
@@ -14555,7 +14766,7 @@ function makePhaseHandlers(deps) {
         ctx.run.run_id,
         task.escalation_rung,
         "verify",
-        e2eFeedbackNote(task),
+        [...e2eFeedbackNote(task), ...needsContextNote(task)],
         // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
         // gate-stderr record (record.ts persisted it on the wait-retry branch) —
         // patches the specific verified misses instead of re-nuking.
@@ -14672,12 +14883,12 @@ function shipBody(runId, specTask) {
 }
 
 // src/orchestrator/docs-applicable.ts
-import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { readFile as readFile13, stat } from "node:fs/promises";
+import { join as join16 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
-    raw = await readFile12(file, "utf8");
+    raw = await readFile13(file, "utf8");
   } catch {
     return null;
   }
@@ -14693,18 +14904,18 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join15(repoRoot, "docs"));
+    const s = await stat(join16(repoRoot, "docs"));
     if (!s.isDirectory()) {
       return false;
     }
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join16(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
-import { readFile as readFile13 } from "node:fs/promises";
+import { readFile as readFile14 } from "node:fs/promises";
 import { sep as sep3 } from "node:path";
 var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
@@ -14713,7 +14924,7 @@ async function persistStepCursor(deps, runId, taskId, step) {
   }
 }
 async function readJsonInput(path7) {
-  const raw = await readFile13(path7, "utf8");
+  const raw = await readFile14(path7, "utf8");
   return parseJson(raw, path7);
 }
 function producerPhaseInfo(phase) {
@@ -14725,7 +14936,8 @@ function producerPhaseInfo(phase) {
   }
   throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
 }
-async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
+async function applyRecordProducer(deps, runId, taskId, phase, statusLine) {
+  const { state } = deps;
   const info = producerPhaseInfo(phase);
   if (nextPhase(info.phase) !== info.after) {
     throw new Error(`record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`);
@@ -14735,6 +14947,11 @@ async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
+  if (outcome.status === "already-satisfied") {
+    const step2 = await verifyAlreadySatisfied(deps, run9, taskId, info.phase, outcome);
+    await persistStepCursor({ state }, runId, taskId, step2);
+    return { run_id: runId, task_id: taskId, step: step2 };
+  }
   const step = await applyProducerOutcome(
     { state },
     runId,
@@ -14744,6 +14961,71 @@ async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
   );
   await persistStepCursor({ state }, runId, taskId, step);
   return { run_id: runId, task_id: taskId, step };
+}
+async function verifyAlreadySatisfied(deps, run9, taskId, phase, outcome) {
+  const runId = run9.run_id;
+  const task = run9.tasks[taskId];
+  if (task === void 0) {
+    throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
+  }
+  const worktree = taskWorktreePath(deps.workDir, runId, taskId);
+  const reject = async (why) => {
+    const reason = `ALREADY_SATISFIED claim rejected: ${why}`;
+    log23.warn(`task '${taskId}': ${reason}`);
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      fix_findings: [{ reviewer: "already-satisfied-verifier", description: reason }]
+    }));
+    return escalateOrFail(deps, runId, taskId, { action: "retry", reason }, phase);
+  };
+  const checkpoint = task.spawn_in_flight;
+  if (checkpoint?.phase !== phase || checkpoint.rung !== task.escalation_rung) {
+    return reject("no matching spawn checkpoint \u2014 the pre-producer tip cannot be established");
+  }
+  if (outcome.shas.length === 0) {
+    return reject("no commit SHAs cited as evidence");
+  }
+  await deps.git.resetHardClean(checkpoint.tip_sha, { cwd: worktree });
+  for (const sha of outcome.shas) {
+    let resolved;
+    try {
+      resolved = await deps.git.revParse(sha, { cwd: worktree });
+    } catch {
+      return reject(`cited SHA '${sha}' does not exist in the repository`);
+    }
+    let base;
+    try {
+      base = await deps.git.mergeBase(resolved, checkpoint.tip_sha, { cwd: worktree });
+    } catch {
+      return reject(`cited SHA '${sha}' shares no history with the task base`);
+    }
+    if (base !== resolved) {
+      return reject(`cited SHA '${sha}' is not an ancestor of the task base \u2014 new work is not evidence`);
+    }
+  }
+  const gate = await new GateRunner().run({
+    ...buildGateContext(deps, runId, taskId, run9.staging_branch),
+    gates: ["test"]
+  });
+  const red = gate.evidence.filter((e) => !e.observed);
+  if (red.length > 0) {
+    return reject(
+      `test gate is RED at the base tip (${red.map((e) => e.detail ?? e.gate).join("; ")}) \u2014 the base does not satisfy the task`
+    );
+  }
+  await appendLedgerEntries(deps.dataDir, run9.spec.repo, run9.spec.spec_id, [
+    {
+      task_id: taskId,
+      run_id: runId,
+      shas: [...outcome.shas],
+      verified_at: nowIso(),
+      source: "already-satisfied"
+    }
+  ]);
+  log23.info(
+    `task '${taskId}' verified ALREADY_SATISFIED (${outcome.shas.join(", ")}) \u2014 completing without producer work`
+  );
+  return completeTask(deps, runId, taskId);
 }
 function parseVerdictsFailClosed(raw) {
   try {
@@ -14785,7 +15067,7 @@ async function buildWorktreeSource(worktree, reviews) {
       continue;
     }
     try {
-      const text = await readFile13(resolved, "utf8");
+      const text = await readFile14(resolved, "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (!isEnoent(err)) {
@@ -14901,6 +15183,8 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       status: nextStatus,
       // A passing verify clears any stale fix-forward record from a prior blocked round.
       fix_findings: void 0,
+      // D71: ditto the failing-gate-set record — the gate passed, the streak is over.
+      last_failing_gates: void 0,
       // D68: the disposition ledger has served its purpose once the gate passes.
       review_dispositions: void 0,
       // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
@@ -14922,20 +15206,42 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     } else {
       const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
       const round = task.escalation_rung + 1;
-      await deps.state.updateTask(runId, taskId, (t) => ({
-        ...t,
-        fix_findings: fixFindings,
-        review_dispositions: appendDispositions(
-          t.review_dispositions,
-          composeDispositions(reviews, panel.adjudicated, round)
-        )
-      }));
+      const failingEvidence = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed);
+      const failingGates = failingEvidence.map((g) => g.gate).sort();
+      const prev = task.last_failing_gates;
+      const sameGateSet = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
+      const repeatedSet = failingGates.length > 0 && prev !== void 0 && sameGateSet(failingGates, prev) && specTaskOf(deps.spec, taskId).tdd_exempt !== true;
+      if (repeatedSet) {
+        const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join("; ");
+        await deps.state.updateTask(runId, taskId, (t) => ({
+          ...t,
+          test_revision_feedback: `merge gate failed twice consecutively with the identical failing gate set (${failingGates.join(", ")}): ${detail}`,
+          // The streak record served its purpose; stale fix-forward instructions
+          // target the OLD tests and must not steer the regenerated round.
+          last_failing_gates: void 0,
+          fix_findings: void 0,
+          review_dispositions: appendDispositions(
+            t.review_dispositions,
+            composeDispositions(reviews, panel.adjudicated, round)
+          )
+        }));
+      } else {
+        await deps.state.updateTask(runId, taskId, (t) => ({
+          ...t,
+          fix_findings: fixFindings,
+          last_failing_gates: failingGates.length > 0 ? failingGates : void 0,
+          review_dispositions: appendDispositions(
+            t.review_dispositions,
+            composeDispositions(reviews, panel.adjudicated, round)
+          )
+        }));
+      }
       step = await escalateOrFail(
         deps,
         runId,
         taskId,
         classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
-        "exec"
+        repeatedSet ? "tests" : "exec"
       );
       await persistStepCursor(deps, runId, taskId, step);
       outcome = "send-back";
@@ -15204,7 +15510,7 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
     if (results.producer === void 0) {
       throw new Error(`drive: phase '${phase}' expects producer-status results`);
     }
-    const env2 = await applyRecordProducer(deps.state, runId, taskId, phase, results.producer.status);
+    const env2 = await applyRecordProducer(record, runId, taskId, phase, results.producer.status);
     return env2.step;
   }
   if (results.reviews === void 0) {
@@ -15333,7 +15639,7 @@ async function nextAction(deps, runId, taskId, results) {
                 runId,
                 taskId,
                 "blocked-environmental",
-                `hung spawn: re-drive budget (${SPAWN_REDRIVE_CAP}) for phase '${spawnPhase}' rung ${task.escalation_rung} exhausted \u2014 the spawn repeatedly exceeded the wall clock (config stallTtlMinutes/hungSpawnMinutes) without delivering results`
+                `hung spawn: re-drive budget (${SPAWN_REDRIVE_CAP}) for phase '${spawnPhase}' rung ${task.escalation_rung} exhausted \u2014 the spawn repeatedly exceeded the wall clock (config stallTtlMinutes/hungSpawnMinutes) or died without a parseable STATUS (Decision 71) without ever delivering usable results`
               );
               return doneFromStep(runId, taskId, step);
             }
@@ -15413,7 +15719,7 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 
 // src/orchestrator/stage-helpers.ts
 async function ensureStageWorktree(git, opts) {
@@ -15439,7 +15745,7 @@ function specTaskLines(spec) {
 var DOCS_MODEL = "sonnet";
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(workDir, runId) {
-  return join16(workDir, runId, ".docs");
+  return join17(workDir, runId, ".docs");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -15508,11 +15814,11 @@ async function runDocsRecord(deps, runId, results) {
 }
 
 // src/orchestrator/traceability.ts
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 var TRACE_MODEL = "sonnet";
 var MAX_TRACE_ATTEMPTS = 2;
 function traceWorktreePath(workDir, runId) {
-  return join17(workDir, runId, ".trace");
+  return join18(workDir, runId, ".trace");
 }
 function buildAuditorPrompt(worktree, baseRef, requirements, spec) {
   const reqLines = requirements.map((r, i) => `R${i + 1}. ${r}`);
@@ -15757,6 +16063,14 @@ async function nextTask(deps, runId) {
       `run '${runId}' has zero tasks \u2014 half-created (creation crashed before task seeding); cancel it (\`factory run cancel --run ${runId} --cleanup\`) and re-run \`factory run create\``
     );
   }
+  if (run9.status === "suspended" && run9.quota === void 0) {
+    return {
+      ...ctx(),
+      kind: "pause",
+      scope: "park",
+      reason: "run is parked (suspended without a quota checkpoint) \u2014 `factory resume` to continue"
+    };
+  }
   const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsE2e = allTerminal && wantsE2e(run9);
   const needsAssessment = wantsE2eAssessment(run9, allTerminal, needsE2e);
@@ -15813,7 +16127,10 @@ async function nextTask(deps, runId) {
         deps,
         runId,
         t.task_id,
-        "blocked-environmental",
+        // Decision 72: the class names the CAUSE (a failed dependency, not the
+        // environment) — rescue treats it recoverable; the breaker's equality
+        // filter and the scoring enum need no change.
+        "blocked-dependency",
         `dependency '${unsatisfied}' did not complete (failed or missing)`
       );
       cascadeFailed.push(t.task_id);
@@ -15915,21 +16232,21 @@ var E2eResultsSchema = external_exports.object({
 }).strict();
 
 // src/orchestrator/e2e-paths.ts
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 function e2eWorktreePath(workDir, runId) {
-  return join18(workDir, runId, ".e2e-author");
+  return join19(workDir, runId, ".e2e-author");
 }
 function e2eRunWorktreePath(workDir, runId) {
-  return join18(workDir, runId, ".e2e-run");
+  return join19(workDir, runId, ".e2e-run");
 }
 function e2eBaseProofWorktreePath(workDir, runId) {
-  return join18(workDir, runId, ".e2e-base-proof");
+  return join19(workDir, runId, ".e2e-base-proof");
 }
 function e2eThrowawayDir(workDir, runId) {
-  return join18(workDir, runId, ".e2e-throwaway");
+  return join19(workDir, runId, ".e2e-throwaway");
 }
 function e2eAdjudicateWorktreePath(workDir, runId) {
-  return join18(workDir, runId, ".e2e-adjudicate");
+  return join19(workDir, runId, ".e2e-adjudicate");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -15965,16 +16282,16 @@ function scrubbedE2eEnv(cfg, boot) {
 import { isAbsolute as isAbsolute2 } from "node:path";
 
 // src/orchestrator/e2e-shared.ts
-import { copyFile, mkdir as mkdir9, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
+import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname9 } from "node:path";
 var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
-    await mkdir9(dirname8(to), { recursive: true });
+    await mkdir10(dirname9(to), { recursive: true });
     await copyFile(from, to);
   }
   async writeConfig(path7, contents) {
-    await mkdir9(dirname8(path7), { recursive: true });
+    await mkdir10(dirname9(path7), { recursive: true });
     await writeFile2(path7, contents);
   }
 };
@@ -16024,7 +16341,7 @@ function unattributableToolingFailure(r) {
 }
 
 // src/orchestrator/e2e-proof.ts
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 function classifyBaseRun(specs) {
   const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
@@ -16052,7 +16369,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
   });
   try {
     for (const entry of critical) {
-      await files.copySpec(join19(authorWorktree, entry.spec_path), join19(wtPath, entry.spec_path));
+      await files.copySpec(join20(authorWorktree, entry.spec_path), join20(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -16120,7 +16437,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
 }
 
 // src/orchestrator/e2e-suite.ts
-import { join as join20 } from "node:path";
+import { join as join21 } from "node:path";
 var log28 = createLogger("e2e");
 function buildAdjudicationPrompt(args) {
   const taskLines = specTaskLines(args.spec);
@@ -16312,7 +16629,7 @@ async function recordAdjudication(deps, runId, run9, results, emit2) {
   return runSuiteAndDecide(deps, runId);
 }
 function throwawayConfigPath(worktree) {
-  return join20(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join21(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -16694,12 +17011,12 @@ async function runE2eRecord(deps, runId, results) {
 }
 
 // src/orchestrator/assessment.ts
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 var log31 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(workDir, runId) {
-  return join21(workDir, runId, ".e2e-assess");
+  return join22(workDir, runId, ".e2e-assess");
 }
 function assessBranchName(runId) {
   return `e2e-assess-${runId}`;
@@ -16889,6 +17206,40 @@ async function runAssessmentRecord(deps, runId, results) {
 }
 
 // src/orchestrator/lifecycle.ts
+var log32 = createLogger("run");
+async function seedFromLedger(specStore, request, seeded, stagingDeps, stagingTip) {
+  const latest = latestByTask(await specStore.ledger(request.repo, request.spec_id));
+  if (latest.size === 0) {
+    return;
+  }
+  const git = stagingDeps.gitClient;
+  const cwd = stagingDeps.targetRoot;
+  const isAncestor = async (sha) => {
+    try {
+      const resolved = await git.revParse(sha, { cwd });
+      return await git.mergeBase(resolved, stagingTip, { cwd }) === resolved;
+    } catch {
+      return false;
+    }
+  };
+  const shippedIds = [];
+  for (const [taskId, entry] of latest) {
+    const row = seeded[taskId];
+    if (row === void 0) {
+      continue;
+    }
+    const checks = await Promise.all(entry.shas.map(isAncestor));
+    if (checks.every(Boolean)) {
+      seeded[taskId] = { ...row, status: "done", ended_at: nowIso() };
+      shippedIds.push(taskId);
+    }
+  }
+  if (shippedIds.length > 0) {
+    log32.info(
+      `run create: seeded ${shippedIds.length} task(s) as already-shipped from ledger (${shippedIds.join(", ")})`
+    );
+  }
+}
 function seedTasksFromSpec(request) {
   const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
   const tasks = seedTaskRows(request.tasks, ctx);
@@ -16914,13 +17265,14 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     throw new Error(`state: run '${opts.runId}' already exists`);
   }
   if (stagingDeps !== void 0) {
-    await ensureStaging({
+    const staging = await ensureStaging({
       gitClient: stagingDeps.gitClient,
       stagingBranch: branch,
       baseBranch: stagingDeps.config.git.baseBranch,
       cwd: stagingDeps.targetRoot,
       orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath
     });
+    await seedFromLedger(specStore, request, seeded, stagingDeps, staging.stagingTip);
     await provisionProtection({
       ghClient: stagingDeps.ghClient,
       owner: stagingDeps.owner,
@@ -17033,10 +17385,10 @@ async function applyResume(state, runId, reading, config, nowEpochSec, opts = {}
 }
 
 // src/cli/subcommands/run.ts
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 
 // src/cli/wiring.ts
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
     throw new Error(`wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`);
@@ -17067,7 +17419,7 @@ async function loadCliDeps(opts) {
   const { owner, repo } = splitRepo(run9.spec.repo);
   const git = new DefaultGitClient();
   const repoRoot = await git.mainWorktreeRoot({ cwd: process.cwd() });
-  const workDir = join22(repoRoot, ".claude", "worktrees");
+  const workDir = join23(repoRoot, ".claude", "worktrees");
   return {
     config,
     spec,
@@ -17090,7 +17442,7 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/adoption.ts
-var log32 = createLogger("adoption");
+var log33 = createLogger("adoption");
 async function adoptForCli(deps, run9, at2) {
   let probe;
   try {
@@ -17111,7 +17463,7 @@ async function mirrorAdoption(dataDir, runId, report) {
     });
   }
   if (report.changed) {
-    log32.info(`run '${runId}': adoption \u2014 ${summarizeAdoption(report)}`);
+    log33.info(`run '${runId}': adoption \u2014 ${summarizeAdoption(report)}`);
   }
   return { ok: true, ...report };
 }
@@ -17185,14 +17537,14 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/orchestrator/preflight.ts
-import { readFile as readFile14 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { readFile as readFile15 } from "node:fs/promises";
+import { join as join24 } from "node:path";
 var TCB_COVERED_TEST_DIRS = ["e2e", "./e2e"];
 async function assertE2ePrereqs(cwd) {
   const missing = [];
   let pkgRaw;
   try {
-    pkgRaw = await readFile14(join23(cwd, "package.json"), "utf8");
+    pkgRaw = await readFile15(join24(cwd, "package.json"), "utf8");
   } catch {
     missing.push("package.json");
   }
@@ -17213,7 +17565,7 @@ async function assertE2ePrereqs(cwd) {
   }
   let configRaw;
   try {
-    configRaw = await readFile14(join23(cwd, "playwright.config.ts"), "utf8");
+    configRaw = await readFile15(join24(cwd, "playwright.config.ts"), "utf8");
   } catch {
     missing.push("playwright.config.ts");
   }
@@ -17268,6 +17620,7 @@ Usage:
   factory run docs [--run <id>] [--results <path>]
   factory run e2e [--run <id>] [--results <path>]
   factory run e2e-assess [--run <id>] [--results <path>]
+  factory run stop [--run <id>] [--session-id <id>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -17277,7 +17630,8 @@ Actions:
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   e2e-assess Emit the run-start e2e-assessment spawn request, or (with --results) record the assessor's verdict.
-  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
+  stop       Park a live run (suspended, resumable with \`factory resume\`); tasks untouched.
+  cancel     Abandon a live run (mark it failed; NOT resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
@@ -17348,6 +17702,9 @@ Emits ONE JSON envelope:
   { kind:"finalized", run, report, rollup?, failure_comment_posted }`;
 var CANCEL_HELP = `factory run cancel \u2014 abandon a live run (mark it failed; not resumable)
 
+WARNING: cancel is IRREVERSIBLE \u2014 the run is finalized 'failed' and can never be
+resumed. To pause a run you intend to continue, use \`factory run stop\` instead.
+
 Usage:
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
@@ -17366,6 +17723,24 @@ session end and leaves the run resumable; cancel is for deliberately discarding 
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;
+var STOP_HELP = `factory run stop \u2014 park a live run (suspended; \`factory resume\` continues it)
+
+Usage:
+  factory run stop [--run <id>] [--session-id <id>]
+
+  --run         The run to park. Default: the active run THIS session owns
+                (--session-id / $CLAUDE_CODE_SESSION_ID), else runs/current.
+  --session-id  Owning session id used to locate the run when --run is omitted
+                (defaults to $CLAUDE_CODE_SESSION_ID).
+
+The non-destructive stop verb (Decision 72): suspends the run WITHOUT a quota
+checkpoint, so a plain \`factory resume\` un-parks it. Tasks are untouched. The
+orchestrator's park guard keeps \`next-task\` from silently un-parking it.
+Idempotent on an already paused/suspended run; a terminal run is a LOUD error.
+To deliberately DISCARD a run instead, use \`factory run cancel\` (irreversible).
+
+Emits ONE JSON envelope:
+  { kind:"stopped", run, already_parked }`;
 function parseIssue(raw) {
   if (raw === void 0) {
     return void 0;
@@ -17460,7 +17835,7 @@ async function runCreate(argv, overrides = {}) {
     ghClient,
     config,
     targetRoot: cwd,
-    orchestratorWorktreePath: join24(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
+    orchestratorWorktreePath: join25(repoRoot, ".claude", "worktrees", `orchestrator-${runId}`),
     owner,
     repo
   };
@@ -17513,7 +17888,7 @@ async function runCreate(argv, overrides = {}) {
     return {
       run: parked,
       spec_approval: {
-        spec_path: join24(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
+        spec_path: join25(specDir(dataDir, repoSlug, run9.spec.spec_id), "spec.md"),
         note: "run parked for spec approval \u2014 review the spec, then run `factory resume`"
       }
     };
@@ -17654,7 +18029,7 @@ var runE2eAssess = phaseCommand({
   record: runAssessmentRecord,
   emit: runAssessmentEmit
 });
-async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
+async function resolveCancelRunId(state, args, sessionId, overrides = {}, verb = "cancel") {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) {
     return explicit;
@@ -17667,15 +18042,42 @@ async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
     if (owned.length >= 2) {
       const ids = owned.map((r) => r.run_id).join(", ");
       throw new UsageError(
-        `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); pass --run <id> to choose which to cancel`
+        `run ${verb}: session '${sessionId}' owns ${owned.length} live runs (${ids}); pass --run <id> to choose which to ${verb}`
       );
     }
   }
   const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
-    throw new UsageError("run cancel: no --run given and no owned/current run to cancel");
+    throw new UsageError(`run ${verb}: no --run given and no owned/current run to ${verb}`);
   }
   return current.run_id;
+}
+async function runStop(argv, overrides = {}) {
+  const args = parseArgs(argv, {});
+  if (args.flag("help") === true) {
+    return emitHelp(STOP_HELP);
+  }
+  const dataDir = resolveDataDir(overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {});
+  const state = new StateManager({ dataDir });
+  const sessionId = resolveOwnerSession(args.flag("session-id"));
+  const currentOverrides = {
+    ...overrides.gitClient !== void 0 ? { gitClient: overrides.gitClient } : {},
+    ...overrides.cwd !== void 0 ? { cwd: overrides.cwd } : {}
+  };
+  const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides, "stop");
+  let run9 = await state.read(runId);
+  if (isTerminalRunStatus(run9.status)) {
+    throw new UsageError(`run stop: run '${runId}' is already terminal (${run9.status}) \u2014 nothing to park`);
+  }
+  const alreadyParked = run9.status === "paused" || run9.status === "suspended";
+  if (!alreadyParked) {
+    run9 = await state.update(runId, (s) => ({ ...s, status: "suspended" }));
+  }
+  emitJson({ kind: "stopped", run: run9, already_parked: alreadyParked });
+  emitError(
+    `run ${runId} parked (suspended, no quota checkpoint) \u2014 \`factory resume\` continues it. To deliberately discard it instead, use \`factory run cancel\` (irreversible).`
+  );
+  return EXIT.OK;
 }
 async function runCancel(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["cleanup"] });
@@ -17690,6 +18092,30 @@ async function runCancel(argv, overrides = {}) {
     ...overrides.cwd !== void 0 ? { cwd: overrides.cwd } : {}
   };
   const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
+  const pre = await state.read(runId);
+  if (!isTerminalRunStatus(pre.status)) {
+    const inFlight = /* @__PURE__ */ new Set(["executing", "reviewing", "shipping"]);
+    if (Object.values(pre.tasks).some((t) => inFlight.has(t.status))) {
+      await state.update(runId, (s) => ({
+        ...s,
+        tasks: Object.fromEntries(
+          Object.entries(s.tasks).map(
+            ([id, t]) => inFlight.has(t.status) ? [
+              id,
+              {
+                ...t,
+                status: "failed",
+                failure_class: "blocked-environmental",
+                failure_reason: "run cancelled by operator",
+                ended_at: t.ended_at ?? nowIso(),
+                spawn_in_flight: void 0
+              }
+            ] : [id, t]
+          )
+        )
+      }));
+    }
+  }
   const run9 = await state.finalize(runId, "failed");
   const cleanup = args.flag("cleanup") === true;
   const branch = run9.staging_branch;
@@ -17718,7 +18144,7 @@ async function runCancel(argv, overrides = {}) {
     );
   } else {
     emitError(
-      `run ${run9.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
+      `run ${run9.run_id} cancelled (marked failed; NOT resumable \u2014 \`factory run stop\` is the resumable alternative)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
     );
   }
   return EXIT.OK;
@@ -17743,11 +18169,13 @@ async function run2(argv) {
       return runE2ePhase(rest);
     case "e2e-assess":
       return runE2eAssess(rest);
+    case "stop":
+      return runStop(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | cancel)`
+        `unknown run action '${action}' (expected create | finalize | traceability | docs | e2e | e2e-assess | stop | cancel)`
       );
   }
 }
@@ -18167,10 +18595,10 @@ Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
 { kind:"nothing-to-ship", run_id } when the session converged clean before any
 RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
-  return join25(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+  return join26(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
 function debugPassDir(dataDir, runId, pass) {
-  return join25(dataDir, "debug", runId, `pass-${pass}`);
+  return join26(dataDir, "debug", runId, `pass-${pass}`);
 }
 async function readSession(dataDir, runId) {
   return readJsonFile(debugSessionPath(dataDir, runId));
@@ -18249,8 +18677,8 @@ async function debugReviewRecord(deps, runId, input) {
     return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
-  const findingsPath = join25(passDir, "findings.json");
-  const reportPath = join25(passDir, "findings.md");
+  const findingsPath = join26(passDir, "findings.json");
+  const reportPath = join26(passDir, "findings.md");
   await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
   const report = buildDebugReport({
     confirmedBlockers,
@@ -18522,10 +18950,10 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir13, readFile as readFile18, writeFile as writeFile5 } from "node:fs/promises";
+import { mkdir as mkdir14, readFile as readFile19, writeFile as writeFile5 } from "node:fs/promises";
 import { existsSync as existsSync11 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname11, join as join29, relative as relative2 } from "node:path";
+import { dirname as dirname12, join as join30, relative as relative2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/ci/inject-gate-env.ts
@@ -18588,18 +19016,50 @@ function gateStep(id, opts, builtin) {
   return [`- run: ${gateCommand(entry, builtin)}`];
 }
 function setupBlock(opts) {
+  const extra = contractSetupSteps(opts.contract.setup_steps ?? []);
   if (opts.packageManager === "pnpm") {
     return [
       `- uses: ${PNPM_SETUP}`,
       `- uses: ${SETUP_NODE}`,
       ...nodeSetupInputs(opts.nodeRuntime, "pnpm"),
-      "- run: pnpm install --frozen-lockfile"
+      "- run: pnpm install --frozen-lockfile",
+      ...extra
     ];
   }
   if (opts.hasLockfile) {
-    return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, "npm"), "- run: npm ci"];
+    return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime, "npm"), "- run: npm ci", ...extra];
   }
-  return [`- uses: ${SETUP_NODE}`, ...nodeSetupInputs(opts.nodeRuntime), "- run: npm install --no-audit --no-fund"];
+  return [
+    `- uses: ${SETUP_NODE}`,
+    ...nodeSetupInputs(opts.nodeRuntime),
+    "- run: npm install --no-audit --no-fund",
+    ...extra
+  ];
+}
+function contractSetupSteps(steps, cond) {
+  const lines = [];
+  for (const step of steps) {
+    if (step.uses !== void 0) {
+      lines.push(...step.name === void 0 ? [] : [`- name: ${step.name}`]);
+      lines.push(step.name === void 0 ? `- uses: ${step.uses}` : `  uses: ${step.uses}`);
+      if (cond !== void 0) {
+        lines.push(`  ${cond}`);
+      }
+      if (step.with !== void 0) {
+        lines.push("  with:", ...Object.entries(step.with).map(([k, v]) => `      ${k}: ${v}`));
+      }
+    } else {
+      const head = step.name === void 0 ? void 0 : `- name: ${step.name}`;
+      if (head !== void 0) {
+        lines.push(head, ...cond === void 0 ? [] : [`  ${cond}`], `  run: ${step.run ?? ""}`);
+      } else if (cond !== void 0) {
+        lines.push(`- ${cond}`, `  run: ${step.run ?? ""}`);
+      } else {
+        lines.push(`- run: ${step.run ?? ""}`);
+      }
+    }
+  }
+  return lines;
 }
 function gatesBlock(opts) {
   const pm = opts.packageManager;
@@ -18649,6 +19109,7 @@ function gatesBlock(opts) {
 }
 function mutationSetupBlock(opts) {
   const cond = "if: steps.slice.outputs.slice != ''";
+  const extra = contractSetupSteps(opts.contract.setup_steps ?? [], cond);
   if (opts.packageManager === "pnpm") {
     return [
       `- uses: ${PNPM_SETUP}`,
@@ -18657,7 +19118,8 @@ function mutationSetupBlock(opts) {
       `  ${cond}`,
       ...nodeSetupInputs(opts.nodeRuntime, "pnpm"),
       `- ${cond}`,
-      "  run: pnpm install --frozen-lockfile"
+      "  run: pnpm install --frozen-lockfile",
+      ...extra
     ];
   }
   if (opts.hasLockfile) {
@@ -18666,7 +19128,8 @@ function mutationSetupBlock(opts) {
       `  ${cond}`,
       ...nodeSetupInputs(opts.nodeRuntime, "npm"),
       `- ${cond}`,
-      "  run: npm ci"
+      "  run: npm ci",
+      ...extra
     ];
   }
   return [
@@ -18674,7 +19137,8 @@ function mutationSetupBlock(opts) {
     `  ${cond}`,
     ...nodeSetupInputs(opts.nodeRuntime),
     `- ${cond}`,
-    "  run: npm install --no-audit --no-fund"
+    "  run: npm install --no-audit --no-fund",
+    ...extra
   ];
 }
 function waivedMutationBlock(reason) {
@@ -18772,10 +19236,10 @@ function resolveNodeRuntimeDeclarations(declarations) {
 }
 
 // src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir10, readFile as readFile15 } from "node:fs/promises";
+import { mkdir as mkdir11, readFile as readFile16 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
-import { join as join26 } from "node:path";
-var log33 = createLogger("cli:target-settings");
+import { join as join27 } from "node:path";
+var log34 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -18845,27 +19309,27 @@ async function readExistingSettings(path7) {
   if (!existsSync8(path7)) {
     return {};
   }
-  const raw = await readFile15(path7, "utf8");
+  const raw = await readFile16(path7, "utf8");
   const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
   if (isObject(parsed)) {
     return parsed;
   }
-  log33.warn(
+  log34.warn(
     `${path7} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
   );
   return {};
 }
 async function ensureTargetSettings(opts) {
-  const dir = join26(opts.targetRoot, ".claude");
-  const path7 = join26(dir, "settings.json");
-  const localPath = join26(dir, "settings.local.json");
+  const dir = join27(opts.targetRoot, ".claude");
+  const path7 = join27(dir, "settings.json");
+  const localPath = join27(dir, "settings.local.json");
   const created = !existsSync8(path7);
   const localCreated = !existsSync8(localPath);
   const [existing, existingLocal] = await Promise.all([readExistingSettings(path7), readExistingSettings(localPath)]);
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   const { settings: localSettings, changed: localChanged } = mergeLocalSettings(existingLocal, opts.dataDirRules);
   if (created || changed || localCreated || localChanged) {
-    await mkdir10(dir, { recursive: true });
+    await mkdir11(dir, { recursive: true });
   }
   if (created || changed) {
     await atomicWriteFile(path7, stringifyJson(settings));
@@ -18884,10 +19348,10 @@ async function ensureTargetSettings(opts) {
 
 // src/cli/subcommands/scaffold-gates.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { mkdir as mkdir11, readFile as readFile16, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname9, join as join27 } from "node:path";
+import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname10, join as join28 } from "node:path";
 function detectStack(targetRoot) {
-  const has = (f) => existsSync9(join27(targetRoot, f));
+  const has = (f) => existsSync9(join28(targetRoot, f));
   const hasPkg = has("package.json");
   const hasDeno = has("deno.json") || has("deno.jsonc");
   const hasNodeLock = has("pnpm-lock.yaml") || has("package-lock.json") || has("yarn.lock") || has("bun.lockb");
@@ -18903,7 +19367,7 @@ function detectStack(targetRoot) {
   return "custom";
 }
 async function readPackageJson(targetRoot) {
-  const raw = await readFile16(join27(targetRoot, "package.json"), "utf8");
+  const raw = await readFile17(join28(targetRoot, "package.json"), "utf8");
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -18917,9 +19381,9 @@ function stripJsoncComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 async function denoHasBuildTask(targetRoot) {
-  const jsonc = existsSync9(join27(targetRoot, "deno.jsonc"));
+  const jsonc = existsSync9(join28(targetRoot, "deno.jsonc"));
   const file = jsonc ? "deno.jsonc" : "deno.json";
-  const raw = await readFile16(join27(targetRoot, file), "utf8");
+  const raw = await readFile17(join28(targetRoot, file), "utf8");
   let parsed;
   try {
     parsed = JSON.parse(jsonc ? stripJsoncComments(raw) : raw);
@@ -18937,7 +19401,7 @@ async function resolveNpm(opts) {
   if (!hasDep(pkg, "vitest")) {
     floor.push("test gate: no vitest dependency \u2014 install vitest");
   }
-  if (!existsSync9(join27(opts.targetRoot, "tsconfig.json"))) {
+  if (!existsSync9(join28(opts.targetRoot, "tsconfig.json"))) {
     floor.push("type gate: no tsconfig.json \u2014 add one");
   }
   if (pkg.scripts?.build === void 0) {
@@ -18947,7 +19411,7 @@ async function resolveNpm(opts) {
     throw new Error(`scaffold: gate contract below floor for stack 'npm':
   - ${floor.join("\n  - ")}`);
   }
-  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join27(opts.targetRoot, "node_modules", ".bin", "stryker"));
+  const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join28(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
   if (strykerResolvable) {
     mutation = yes;
@@ -18969,11 +19433,11 @@ async function resolveNpm(opts) {
       "scaffold: coverage gate: no vitest coverage provider \u2014 install @vitest/coverage-v8 (or @vitest/coverage-istanbul) or pass --waive coverage to record the waiver"
     );
   }
-  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join27(opts.targetRoot, c)));
+  const eslintConfig = ESLINT_CONFIGS.some((c) => existsSync9(join28(opts.targetRoot, c)));
   let lint;
   if (!eslintConfig) {
     lint = no("no eslint config");
-  } else if (hasDep(pkg, "eslint") || existsSync9(join27(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
+  } else if (hasDep(pkg, "eslint") || existsSync9(join28(opts.targetRoot, "node_modules", ".bin", "eslint"))) {
     lint = yes;
   } else {
     lint = no("eslint config present but eslint not installed \u2014 install eslint and re-scaffold");
@@ -19039,29 +19503,29 @@ async function ensureGateContract(opts) {
     return { status: "present", stack: load.contract.stack, contract: load.contract };
   }
   const contract = await resolveGateContract(opts);
-  const dest = join27(opts.targetRoot, GATE_CONTRACT_REL);
-  await mkdir11(dirname9(dest), { recursive: true });
+  const dest = join28(opts.targetRoot, GATE_CONTRACT_REL);
+  await mkdir12(dirname10(dest), { recursive: true });
   await writeFile3(dest, JSON.stringify(contract, null, 2) + "\n", "utf8");
   return { status: "created", stack: contract.stack, contract };
 }
 
 // src/cli/subcommands/scaffold-lock.ts
 import { createHash as createHash2 } from "node:crypto";
-import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile4 } from "node:fs/promises";
+import { mkdir as mkdir13, readFile as readFile18, writeFile as writeFile4 } from "node:fs/promises";
 import { existsSync as existsSync10 } from "node:fs";
-import { dirname as dirname10, join as join28 } from "node:path";
+import { dirname as dirname11, join as join29 } from "node:path";
 var SCAFFOLD_LOCK_REL = ".factory/scaffold.lock";
 function sha256Hex(text) {
   return createHash2("sha256").update(text, "utf8").digest("hex");
 }
 async function loadScaffoldLock(targetRoot) {
-  const path7 = join28(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join29(targetRoot, SCAFFOLD_LOCK_REL);
   const empty = { version: 1, seeds: {} };
   if (!existsSync10(path7)) {
     return { lock: empty, existed: false, invalid: false };
   }
   try {
-    const parsed = JSON.parse(await readFile17(path7, "utf8"));
+    const parsed = JSON.parse(await readFile18(path7, "utf8"));
     const seeds = typeof parsed === "object" && parsed !== null ? parsed.seeds : null;
     if (typeof seeds !== "object" || seeds === null) {
       return { lock: empty, existed: true, invalid: true };
@@ -19078,17 +19542,17 @@ async function loadScaffoldLock(targetRoot) {
   }
 }
 async function saveScaffoldLock(targetRoot, lock2) {
-  const path7 = join28(targetRoot, SCAFFOLD_LOCK_REL);
+  const path7 = join29(targetRoot, SCAFFOLD_LOCK_REL);
   const seeds = {};
   for (const [rel, hash] of Object.entries(lock2.seeds).sort(([a], [b]) => a.localeCompare(b))) {
     seeds[rel] = hash;
   }
-  await mkdir12(dirname10(path7), { recursive: true });
+  await mkdir13(dirname11(path7), { recursive: true });
   await writeFile4(path7, JSON.stringify({ version: 1, seeds }, null, 2) + "\n", "utf8");
 }
 
 // src/cli/subcommands/scaffold.ts
-var log34 = createLogger("scaffold");
+var log35 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -19149,13 +19613,13 @@ var GITIGNORE_ENTRIES = [
   "*.worktree"
 ];
 function resolveTemplatesDir() {
-  let dir = dirname11(fileURLToPath(import.meta.url));
+  let dir = dirname12(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join29(dir, "templates");
-    if (existsSync11(join29(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join30(dir, "templates");
+    if (existsSync11(join30(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname11(dir);
+    const parent = dirname12(dir);
     if (parent === dir) {
       break;
     }
@@ -19191,19 +19655,19 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, transform) {
   const segs = entry.rel.split("/");
-  const src = join29(templatesDir, ...segs);
-  const dest = join29(targetRoot, ...segs);
+  const src = join30(templatesDir, ...segs);
+  const dest = join30(targetRoot, ...segs);
   if (!existsSync11(src)) {
-    log34.warn(`template missing, skipping: ${src}`);
+    log35.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
-    const text = await readFile18(src, "utf8");
+    const text = await readFile19(src, "utf8");
     return transform ? transform(text) : text;
   };
   if (!existsSync11(dest)) {
     const rendered2 = await render();
-    await mkdir13(dirname11(dest), { recursive: true });
+    await mkdir14(dirname12(dest), { recursive: true });
     await writeFile5(dest, rendered2, "utf8");
     if (entry.policy === "seed" && lock2) {
       lock2.seeds[entry.rel] = sha256Hex(rendered2);
@@ -19214,7 +19678,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   }
   if (entry.policy === "seed") {
     const recorded = lock2?.seeds[entry.rel];
-    const destText2 = await readFile18(dest, "utf8");
+    const destText2 = await readFile19(dest, "utf8");
     const destHash = sha256Hex(destText2);
     if (recorded !== void 0) {
       if (destHash === recorded) {
@@ -19247,7 +19711,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
     lists.present.push(entry.rel);
     return;
   }
-  const [rendered, destText] = await Promise.all([render(), readFile18(dest, "utf8")]);
+  const [rendered, destText] = await Promise.all([render(), readFile19(dest, "utf8")]);
   if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
@@ -19256,8 +19720,8 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   lists.updated.push(entry.rel);
 }
 async function readWorkflowFacts(targetRoot) {
-  const pnpm = existsSync11(join29(targetRoot, "pnpm-lock.yaml"));
-  const raw = await readFile18(join29(targetRoot, "package.json"), "utf8");
+  const pnpm = existsSync11(join30(targetRoot, "pnpm-lock.yaml"));
+  const raw = await readFile19(join30(targetRoot, "package.json"), "utf8");
   let pkg;
   try {
     pkg = JSON.parse(raw);
@@ -19265,11 +19729,11 @@ async function readWorkflowFacts(targetRoot) {
     throw new Error(`scaffold: package.json is not valid JSON: ${err.message}`);
   }
   const declarations = {};
-  if (existsSync11(join29(targetRoot, NODE_VERSION_FILE))) {
-    declarations.nodeVersion = await readFile18(join29(targetRoot, NODE_VERSION_FILE), "utf8");
+  if (existsSync11(join30(targetRoot, NODE_VERSION_FILE))) {
+    declarations.nodeVersion = await readFile19(join30(targetRoot, NODE_VERSION_FILE), "utf8");
   }
-  if (existsSync11(join29(targetRoot, NVMRC_FILE))) {
-    declarations.nvmrc = await readFile18(join29(targetRoot, NVMRC_FILE), "utf8");
+  if (existsSync11(join30(targetRoot, NVMRC_FILE))) {
+    declarations.nvmrc = await readFile19(join30(targetRoot, NVMRC_FILE), "utf8");
   }
   if (typeof pkg.engines === "object" && pkg.engines !== null && Object.hasOwn(pkg.engines, "node")) {
     declarations.enginesNode = pkg.engines.node;
@@ -19289,21 +19753,21 @@ async function readWorkflowFacts(targetRoot) {
   declarations.packageJsonRuntimeShadows = packageJsonRuntimeShadows;
   return {
     packageManager: pnpm ? "pnpm" : "npm",
-    hasLockfile: pnpm || existsSync11(join29(targetRoot, "package-lock.json")),
+    hasLockfile: pnpm || existsSync11(join30(targetRoot, "package-lock.json")),
     scripts: pkg.scripts ?? {},
     hasNextDep: pkg.dependencies?.next !== void 0 || pkg.devDependencies?.next !== void 0,
     nodeRuntime: resolveNodeRuntimeDeclarations(declarations)
   };
 }
 async function ensureIgnoreFile(root, filename, entries, lists) {
-  const path7 = join29(root, filename);
+  const path7 = join30(root, filename);
   const rel = relative2(root, path7);
   if (!existsSync11(path7)) {
     await writeFile5(path7, entries.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile18(path7, "utf8");
+  const current = await readFile19(path7, "utf8");
   const missing = entries.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
@@ -19325,7 +19789,7 @@ async function ensurePrettierignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync11(join29(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync11(join30(opts.targetRoot, "package.json"));
   const lockLoad = await loadScaffoldLock(opts.targetRoot);
   const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
@@ -19344,7 +19808,7 @@ async function runScaffold(opts) {
       lists.present.push(SCAFFOLD_LOCK_REL);
     } else {
       lists.created.push(SCAFFOLD_LOCK_REL);
-      log34.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
+      log35.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
     }
   } else if (lockLoad.existed) {
     lists.present.push(SCAFFOLD_LOCK_REL);
@@ -19357,7 +19821,7 @@ async function runScaffold(opts) {
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
-    log34.info(
+    log35.info(
       `wrote ${GATE_CONTRACT_REL} (stack: ${gates.stack}) \u2014 COMMIT it; 'factory run' requires the contract tracked`
     );
   } else {
@@ -19377,15 +19841,15 @@ async function runScaffold(opts) {
     }
     await ensurePrettierignore(opts.targetRoot, lists);
   } else {
-    log34.info(
+    log35.info(
       `skipping the CI net (${CI_NET_RELS.join(", ")}) \u2014 the quality-gate workflow renders for npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`
     );
   }
   if (lists.updated.length > 0) {
-    log34.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(", ")}`);
+    log35.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(", ")}`);
   }
   if (await recommendFastCheck(opts.targetRoot)) {
-    log34.info(
+    log35.info(
       "property-based testing: fast-check not installed \u2014 consider 'npm i -D fast-check' so the test-writer can write property tests (advisory only)"
     );
   }
@@ -19484,7 +19948,7 @@ var scaffoldCommand = {
 };
 
 // src/cli/subcommands/rescue.ts
-var log35 = createLogger("rescue");
+var log36 = createLogger("rescue");
 var RESCUE_HELP = `factory rescue \u2014 repair plumbing behind /factory:resume
 
 Usage:
@@ -19521,12 +19985,16 @@ a routed {kind:"nothing"} answer, not a usage error \u2014 safe to fire blind.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
+  factory rescue apply [--run <id>] [--task <id>]... [--answer <text>] [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
                        resettable set; a 'done' task is a loud error, a 'pending'
                        one is skipped. An explicitly-named dead-end IS reset.
+  --answer             Answer a needs-context failure's recorded question (Decision
+                       69). Requires exactly ONE --task, and that task must carry a
+                       recorded question (the scan line prints it). The answer is
+                       injected into the next producer spawn's prompt.
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
   --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
@@ -19622,6 +20090,11 @@ function repairHints(runId, scan) {
   if (scan.resettable.length > 0) {
     hints.push(`factory rescue apply --run ${runId}`);
   }
+  for (const t of scan.tasks) {
+    if (t.failure_class === "needs-context" && t.status === "failed") {
+      hints.push(`factory rescue apply --run ${runId} --task ${t.task_id} --answer "<answer>"`);
+    }
+  }
   for (const id of scan.dead_ends) {
     hints.push(`factory rescue apply --run ${runId} --task ${id} --include-dead-ends`);
   }
@@ -19688,6 +20161,8 @@ async function runApply(argv, overrides = {}) {
   if (args.flag("help") === true) {
     return emitHelp(APPLY_HELP);
   }
+  const answerFlag = args.flag("answer");
+  const answer = typeof answerFlag === "string" && answerFlag.length > 0 ? answerFlag : void 0;
   const { dataDir, state } = openState();
   const runId = await resolveRunIdOrCurrent(state, args, "rescue apply", overrides);
   const tasks = args.all("task");
@@ -19706,6 +20181,7 @@ async function runApply(argv, overrides = {}) {
     resetE2e,
     recheckRollup,
     resetTraceability,
+    ...answer !== void 0 ? { answer } : {},
     ...adoptedDone.length > 0 ? { adoptedDone } : {}
   });
   if (result.touched) {
@@ -19744,7 +20220,7 @@ async function emitAutoPage(gh, run9, scan, reason, adoption) {
       commented = true;
     }
   } catch (err) {
-    log35.warn(
+    log36.warn(
       `run '${run9.run_id}': could not post self-heal page comment: ${err instanceof Error ? err.message : String(err)}`
     );
   }
@@ -20129,7 +20605,7 @@ var nextActionCommand = {
 };
 
 // src/cli/subcommands/next.ts
-var log36 = createLogger("next-task");
+var log37 = createLogger("next-task");
 var HELP8 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
@@ -20194,7 +20670,7 @@ async function runNextTask(argv, overrides = {}) {
       const at2 = overrides.now?.() ?? nowIso();
       const adoption = await adoptForCli({ state: deps.state, git, gh, dataDir: deps.dataDir }, run9, at2);
       if (!adoption.ok) {
-        log36.warn(`adoption probe failed for run '${runId}': ${adoption.error} \u2014 emitting unchanged`);
+        log37.warn(`adoption probe failed for run '${runId}': ${adoption.error} \u2014 emitting unchanged`);
       } else if (adoption.changed) {
         emitJson({ ...await nextTask(deps, runId), adoption });
         return EXIT.OK;
@@ -20210,8 +20686,8 @@ var nextCommand = {
 };
 
 // src/cli/subcommands/statusline.ts
-import { readFile as readFile19 } from "node:fs/promises";
-import { join as join30 } from "node:path";
+import { readFile as readFile20 } from "node:fs/promises";
+import { join as join31 } from "node:path";
 
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
@@ -20223,7 +20699,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log37 = createLogger("cli:statusline");
+var log38 = createLogger("cli:statusline");
 var HELP9 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -20264,7 +20740,7 @@ async function renderProgress(deps, payload) {
     const dataDir = resolveDataDir(deps.dataDirOptions ?? {});
     const gitClient = deps.gitClient ?? new DefaultGitClient();
     const repo = await resolveRepo({ cwd, gitClient });
-    const raw = await readFile19(join30(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
+    const raw = await readFile20(join31(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run9 = JSON.parse(raw);
     if (typeof run9.run_id !== "string" || typeof run9.status !== "string") {
       return "";
@@ -20298,7 +20774,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log37.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log38.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
@@ -20307,7 +20783,7 @@ async function writeCache(rateLimits, deps) {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
     return null;
   } catch (err) {
-    log37.warn(`failed to write usage-cache.json: ${err.message}`);
+    log38.warn(`failed to write usage-cache.json: ${err.message}`);
     return `usage-cache unwritable: ${err.message}`;
   }
 }
@@ -20321,12 +20797,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log37.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log38.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log37.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log38.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -20358,10 +20834,10 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync12 } from "node:fs";
-import { readFile as readFile20 } from "node:fs/promises";
-import { join as join31 } from "node:path";
+import { readFile as readFile21 } from "node:fs/promises";
+import { join as join32 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log38 = createLogger("autonomy");
+var log39 = createLogger("autonomy");
 var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -20397,7 +20873,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join31(dataDir, "merged-settings.json");
+  return join32(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) {
@@ -20479,12 +20955,12 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path7 = join31(pluginRoot, ".claude-plugin", "plugin.json");
+  const path7 = join32(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync12(path7)) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile20(path7, "utf8"));
+    const parsed = JSON.parse(await readFile21(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") {
       return parsed.version;
     }
@@ -20496,23 +20972,23 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join31(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join32(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync12(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile20(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile21(userSettingsPath, "utf8"));
       if (isObject2(parsed)) {
         userSettings = parsed;
       } else {
-        log38.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+        log39.warn(`${userSettingsPath} is not a JSON object; ignoring`);
       }
     } catch (err) {
-      log38.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log39.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join31(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile20(templatePath, "utf8");
+  const templatePath = join32(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile21(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -20576,7 +21052,7 @@ async function readOnDiskVersion(path7) {
     return void 0;
   }
   try {
-    const parsed = JSON.parse(await readFile20(path7, "utf8"));
+    const parsed = JSON.parse(await readFile21(path7, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }

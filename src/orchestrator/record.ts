@@ -26,11 +26,13 @@ import {readFile} from 'node:fs/promises'
 import {isEnoent} from '../shared/fs-errors.js'
 import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
-import {markInFlight, escalateOrFail, applyProducerOutcome, type TaskStep} from './transitions.js'
+import {markInFlight, escalateOrFail, applyProducerOutcome, completeTask, type TaskStep} from './transitions.js'
+import {specTaskOf} from './handlers.js'
+import {appendLedgerEntries} from '../spec/ledger.js'
 import {taskWorktreePath} from './paths.js'
 import {canonicalizePath} from '../shared/index.js'
 import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
-import {classifyFailure, ESCALATION_CAP, parseProducerStatus} from '../producer/index.js'
+import {classifyFailure, ESCALATION_CAP, parseProducerStatus, type ProducerOutcome} from '../producer/index.js'
 import {nextPhase, phaseToInFlightStatus} from '../types/index.js'
 import {GateRunner} from '../verifier/deterministic/index.js'
 import {
@@ -54,11 +56,11 @@ import {
     type HoldoutVerdictStore,
     type HoldoutCheckResult,
 } from '../verifier/holdout/index.js'
-import {createLogger, UsageError} from '../shared/index.js'
+import {createLogger, nowIso, UsageError} from '../shared/index.js'
 import {emitMetric} from '../scoring/telemetry.js'
 import type {GateEvidence, GateVerdict, ReviewerResult, ProducerRole, TaskPhase, FixFinding} from '../types/index.js'
 import type {HandlerDeps} from './types.js'
-import type {StateManager} from './deps.js'
+import type {StateManager, RunState} from './deps.js'
 
 const log = createLogger('record')
 
@@ -134,12 +136,13 @@ function producerPhaseInfo(phase: string): {
 
 /** Record the producer status into state and return the next-step envelope. */
 export async function applyRecordProducer(
-    state: StateManager,
+    deps: RecordDeps,
     runId: string,
     taskId: string,
     phase: string,
     statusLine: string
 ): Promise<TransitionEnvelope> {
+    const {state} = deps
     const info = producerPhaseInfo(phase)
     // Defensive: nextPhase(phase) must equal the hardcoded resume target — keeps the
     // mapping honest if the phase order ever changes (LOUD on drift, never silent).
@@ -151,6 +154,13 @@ export async function applyRecordProducer(
         throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`)
     }
     const outcome = parseProducerStatus(statusLine)
+    // Decision 70: an ALREADY_SATISFIED claim is engine-VERIFIED here, before the
+    // shared transition seam (applyProducerOutcome throws on it by design).
+    if (outcome.status === 'already-satisfied') {
+        const step = await verifyAlreadySatisfied(deps, run, taskId, info.phase, outcome)
+        await persistStepCursor({state}, runId, taskId, step)
+        return {run_id: runId, task_id: taskId, step}
+    }
     const step = await applyProducerOutcome(
         {state},
         runId,
@@ -160,6 +170,96 @@ export async function applyRecordProducer(
     )
     await persistStepCursor({state}, runId, taskId, step)
     return {run_id: runId, task_id: taskId, step}
+}
+
+/**
+ * Engine verification of a producer's ALREADY_SATISFIED claim (Decision 70).
+ * All checks run at the spawn checkpoint's `tip_sha` — the PRE-producer tip — so a
+ * producer can never launder its own fresh commits into the claim:
+ *   1. a matching (phase, rung) spawn checkpoint must exist (it holds the tip);
+ *   2. at least one commit SHA must be cited;
+ *   3. the worktree is hard-reset to the checkpoint tip (claimant edits discarded);
+ *   4. every cited SHA must resolve AND be an ancestor of that tip;
+ *   5. the `test` gate must be GREEN at the untouched tip (the acceptance arbiter).
+ * Pass → append a durable spec-ledger entry + complete the task. Any reject →
+ * persist a fix_findings note and burn a rung via the normal ladder, resuming at
+ * the SAME producer phase (an unverified claim is a producer miss, not infra).
+ */
+async function verifyAlreadySatisfied(
+    deps: RecordDeps,
+    run: RunState,
+    taskId: string,
+    phase: TaskPhase,
+    outcome: Extract<ProducerOutcome, {status: 'already-satisfied'}>
+): Promise<TaskStep> {
+    const runId = run.run_id
+    const task = run.tasks[taskId]
+    if (task === undefined) {
+        throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`)
+    }
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId)
+
+    const reject = async (why: string): Promise<TaskStep> => {
+        const reason = `ALREADY_SATISFIED claim rejected: ${why}`
+        log.warn(`task '${taskId}': ${reason}`)
+        await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            fix_findings: [{reviewer: 'already-satisfied-verifier', description: reason}],
+        }))
+        return escalateOrFail(deps, runId, taskId, {action: 'retry', reason}, phase)
+    }
+
+    const checkpoint = task.spawn_in_flight
+    if (checkpoint?.phase !== phase || checkpoint.rung !== task.escalation_rung) {
+        return reject('no matching spawn checkpoint — the pre-producer tip cannot be established')
+    }
+    if (outcome.shas.length === 0) {
+        return reject('no commit SHAs cited as evidence')
+    }
+    // Verify at the checkpoint tip, discarding any claimant edits.
+    await deps.git.resetHardClean(checkpoint.tip_sha, {cwd: worktree})
+    for (const sha of outcome.shas) {
+        let resolved: string
+        try {
+            resolved = await deps.git.revParse(sha, {cwd: worktree})
+        } catch {
+            return reject(`cited SHA '${sha}' does not exist in the repository`)
+        }
+        let base: string
+        try {
+            base = await deps.git.mergeBase(resolved, checkpoint.tip_sha, {cwd: worktree})
+        } catch {
+            return reject(`cited SHA '${sha}' shares no history with the task base`)
+        }
+        if (base !== resolved) {
+            return reject(`cited SHA '${sha}' is not an ancestor of the task base — new work is not evidence`)
+        }
+    }
+    // The acceptance arbiter: the repo's test gate must already be green at the tip.
+    const gate = await new GateRunner().run({
+        ...buildGateContext(deps, runId, taskId, run.staging_branch),
+        gates: ['test'],
+    })
+    const red = gate.evidence.filter((e) => !e.observed)
+    if (red.length > 0) {
+        return reject(
+            `test gate is RED at the base tip (${red.map((e) => e.detail ?? e.gate).join('; ')}) — ` +
+                'the base does not satisfy the task'
+        )
+    }
+    await appendLedgerEntries(deps.dataDir, run.spec.repo, run.spec.spec_id, [
+        {
+            task_id: taskId,
+            run_id: runId,
+            shas: [...outcome.shas],
+            verified_at: nowIso(),
+            source: 'already-satisfied',
+        },
+    ])
+    log.info(
+        `task '${taskId}' verified ALREADY_SATISFIED (${outcome.shas.join(', ')}) — completing without producer work`
+    )
+    return completeTask(deps, runId, taskId)
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +610,8 @@ export async function applyRecordReviews(
             status: nextStatus,
             // A passing verify clears any stale fix-forward record from a prior blocked round.
             fix_findings: undefined,
+            // D71: ditto the failing-gate-set record — the gate passed, the streak is over.
+            last_failing_gates: undefined,
             // D68: the disposition ledger has served its purpose once the gate passes.
             review_dispositions: undefined,
             // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
@@ -543,20 +645,56 @@ export async function applyRecordReviews(
             // onto the ledger in the SAME write — the next panel spawn injects it so a
             // fresh-context reviewer cannot blindly re-raise an adjudicated claim.
             const round = task.escalation_rung + 1
-            await deps.state.updateTask(runId, taskId, (t) => ({
-                ...t,
-                fix_findings: fixFindings,
-                review_dispositions: appendDispositions(
-                    t.review_dispositions,
-                    composeDispositions(reviews, panel.adjudicated, round)
-                ),
-            }))
+            // D71: the sorted failing gate-id set of THIS round (holdout excluded —
+            // a quality mechanism the test-writer can neither see nor fix). When it is
+            // IDENTICAL to the previous blocked round's set, the RED test is the
+            // suspect arbiter: route the escalation to `tests` so the test-writer
+            // rederives from the acceptance criteria instead of re-rolling the
+            // implementer against a possibly-wrong test forever. tdd_exempt tasks
+            // have no test-writer to rederive — they stay on the exec route.
+            const failingEvidence = gateEvidence.filter((g) => g.gate !== 'holdout' && !g.observed)
+            const failingGates = failingEvidence.map((g) => g.gate).sort()
+            const prev = task.last_failing_gates
+            const sameGateSet = (a: readonly string[], b: readonly string[]): boolean =>
+                a.length === b.length && a.every((g, i) => g === b[i])
+            const repeatedSet =
+                failingGates.length > 0 &&
+                prev !== undefined &&
+                sameGateSet(failingGates, prev) &&
+                specTaskOf(deps.spec, taskId).tdd_exempt !== true
+            if (repeatedSet) {
+                const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join('; ')
+                await deps.state.updateTask(runId, taskId, (t) => ({
+                    ...t,
+                    test_revision_feedback:
+                        `merge gate failed twice consecutively with the identical failing gate set ` +
+                        `(${failingGates.join(', ')}): ${detail}`,
+                    // The streak record served its purpose; stale fix-forward instructions
+                    // target the OLD tests and must not steer the regenerated round.
+                    last_failing_gates: undefined,
+                    fix_findings: undefined,
+                    review_dispositions: appendDispositions(
+                        t.review_dispositions,
+                        composeDispositions(reviews, panel.adjudicated, round)
+                    ),
+                }))
+            } else {
+                await deps.state.updateTask(runId, taskId, (t) => ({
+                    ...t,
+                    fix_findings: fixFindings,
+                    last_failing_gates: failingGates.length > 0 ? failingGates : undefined,
+                    review_dispositions: appendDispositions(
+                        t.review_dispositions,
+                        composeDispositions(reviews, panel.adjudicated, round)
+                    ),
+                }))
+            }
             step = await escalateOrFail(
                 deps,
                 runId,
                 taskId,
                 classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
-                'exec'
+                repeatedSet ? 'tests' : 'exec'
             )
             await persistStepCursor(deps, runId, taskId, step)
             outcome = 'send-back'

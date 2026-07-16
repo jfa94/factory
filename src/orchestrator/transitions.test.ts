@@ -81,6 +81,7 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
                         ? {test_revision_feedback: t.test_revision_feedback}
                         : {}),
                     ...(t.e2e_feedback != null && t.e2e_feedback.length > 0 ? {e2e_feedback: t.e2e_feedback} : {}),
+                    ...(t.needs_context ? {needs_context: t.needs_context} : {}),
                     ...(t.spawn_in_flight ? {spawn_in_flight: t.spawn_in_flight} : {}),
                 },
             },
@@ -336,9 +337,15 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         expect(d.reason).toContain('unworkable')
     })
 
-    it('classifyProducerFailure: needs-context and error → retry (capability)', () => {
-        expect(classifyProducerFailure({status: 'needs-context', reason: 'r1'}).action).toBe('retry')
-        expect(classifyProducerFailure({status: 'error', reason: 'r2'}).action).toBe('retry')
+    it('classifyProducerFailure throws on needs-context and error (never a silent rung burn — Decisions 69/71)', () => {
+        expect(() => classifyProducerFailure({status: 'needs-context', reason: 'r1'})).toThrow(/needs-context/)
+        expect(() => classifyProducerFailure({status: 'error', reason: 'r2'})).toThrow(/error/)
+    })
+
+    it('classifyProducerFailure throws on already-satisfied (engine-verified BEFORE classification — Decision 70)', () => {
+        expect(() => classifyProducerFailure({status: 'already-satisfied', shas: ['abcdef0'], reason: 'r'})).toThrow(
+            /already-satisfied/
+        )
     })
 
     it('classifyProducerFailure: test-defective → retry (regenerate the RED test)', () => {
@@ -367,9 +374,9 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         expect(task.escalation_rung).toBe(0) // a success never bumps the rung
     })
 
-    it('applyProducerOutcome on a failure status escalates at the SAME producer phase', async () => {
+    it('applyProducerOutcome on error re-spawns at the SAME phase and rung (infra re-drive budget, Decision 71)', async () => {
         await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
-        const outcome: ProducerOutcome = {status: 'error', reason: 'tool crashed'}
+        const outcome: ProducerOutcome = {status: 'error', reason: 'unparseable producer status'}
         const step = await applyProducerOutcome(
             deps,
             RUN_ID,
@@ -378,9 +385,23 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
             outcome
         )
 
-        // error → retry → resumes at the producer phase (exec), rung bumped.
+        // A dead/no-STATUS spawn is an infra signal: same phase, rung UNCHANGED —
+        // the re-emission spends a spawn_in_flight.redrives slot, not a rung.
         expect(step).toEqual({done: false, phase: 'exec'})
-        expect((await readTask('t1')).escalation_rung).toBe(1)
+        expect((await readTask('t1')).escalation_rung).toBe(0)
+    })
+
+    it('applyProducerOutcome throws LOUD on already-satisfied (record.ts must verify the claim first — Decision 70)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        await expect(
+            applyProducerOutcome(
+                deps,
+                RUN_ID,
+                't1',
+                {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+                {status: 'already-satisfied', shas: ['abcdef0'], reason: 'claimed'}
+            )
+        ).rejects.toThrow(/already-satisfied/)
     })
 
     it('applyProducerOutcome on blocked-escalate fails immediately (spec-defect, no rung burn)', async () => {
@@ -428,12 +449,12 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
         expect(task.test_revision_feedback).toContain('auth.uid()')
     })
 
-    it('applyProducerOutcome on a non-exec test-defective escalates as a producer error (does not throw)', async () => {
+    it('applyProducerOutcome on a non-exec test-defective re-spawns same phase/rung (infra-grade nonsense signal)', async () => {
         await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
         const outcome: ProducerOutcome = {status: 'test-defective', reason: 'x'}
         // The parser is role-blind, so a test-writer can emit 'test-defective'.
-        // That signal is nonsensical for the role: classify as a producer error so
-        // the ladder records + caps it instead of escaping next-action's catch.
+        // That signal is nonsensical for the role — treat like a no-STATUS spawn:
+        // same phase, rung unchanged, bounded by the re-drive budget (Decision 71).
         const step = await applyProducerOutcome(
             deps,
             RUN_ID,
@@ -441,12 +462,72 @@ describe('orchestrator transitions (shared loop + CLI ladder/fail logic)', () =>
             {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
             outcome
         )
-        // error → retry → resumes at the SAME phase (tests), rung bumped.
         expect(step).toEqual({done: false, phase: 'tests'})
         const task = await readTask('t1')
-        expect(task.escalation_rung).toBe(1)
+        expect(task.escalation_rung).toBe(0)
         // test_revision_feedback is NOT set — only the exec path sets it.
         expect(task.test_revision_feedback).toBeUndefined()
+    })
+
+    // -- applyProducerOutcome: NEEDS_CONTEXT fail-fast (Decision 69) ----------
+
+    it('first NEEDS_CONTEXT persists the question and re-spawns at the SAME phase and rung (no rung burn)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
+            {status: 'needs-context', reason: 'was the run intended to start from a base that predates feat/x?'}
+        )
+
+        expect(step).toEqual({done: false, phase: 'tests'})
+        const task = await readTask('t1')
+        expect(task.escalation_rung).toBe(0)
+        expect(task.needs_context?.question).toContain('predates feat/x')
+    })
+
+    it('second consecutive NEEDS_CONTEXT fails the task needs-context with the question attached', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        await state.updateTask(RUN_ID, 't1', (t) => ({
+            ...t,
+            needs_context: {question: 'which base?', answer: 'a spent answer'},
+        }))
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'test-writer', phase: 'tests', resumePhase: 'exec'},
+            {status: 'needs-context', reason: 'still unclear which base was intended'}
+        )
+
+        expect(step.done).toBe(true)
+        if (!step.done || step.outcome.outcome !== 'failed') {
+            throw new Error('expected a failed outcome')
+        }
+        expect(step.outcome.failure_class).toBe('needs-context')
+        expect(step.outcome.reason).toContain('still unclear which base')
+        const task = await readTask('t1')
+        expect(task.status).toBe('failed')
+        expect(task.failure_class).toBe('needs-context')
+        // The question is refreshed to the CURRENT ask (spent answer dropped).
+        expect(task.needs_context).toEqual({question: 'still unclear which base was intended'})
+        expect(task.escalation_rung).toBe(0)
+    })
+
+    it('a producer done clears any pending needs_context (the question is resolved by construction)', async () => {
+        await seedTask({task_id: 't1', status: 'executing', escalation_rung: 0})
+        await state.updateTask(RUN_ID, 't1', (t) => ({...t, needs_context: {question: 'q?'}}))
+        const step = await applyProducerOutcome(
+            deps,
+            RUN_ID,
+            't1',
+            {role: 'implementer', phase: 'exec', resumePhase: 'verify'},
+            {status: 'done'}
+        )
+
+        expect(step).toEqual({done: false, phase: 'verify'})
+        expect((await readTask('t1')).needs_context).toBeUndefined()
     })
 
     it('a completed test-writer clears any pending test_revision_feedback (no stale leak)', async () => {

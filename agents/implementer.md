@@ -137,9 +137,19 @@ End your final message with a one-line summary then exactly one STATUS line:
   only to test-writer-authored tests (a `tdd_exempt` task has none).
 - `STATUS: BLOCKED — escalate: <reason>` — a fundamental spec/design flaw outside this task's
   scope (a spec-defect signal that routes straight to a drop). Nothing committed.
-- `STATUS: NEEDS_CONTEXT — <question>` — you need more context / a stronger model to proceed
-  (a retry signal, not a drop). Nothing committed.
+- `STATUS: NEEDS_CONTEXT — <question>` — a genuine QUESTION you cannot resolve from the repo,
+  spec, or prior-run evidence. Nothing committed. The engine re-spawns you ONCE at the same
+  rung with the question injected; if you ask again without resolving, the task fails loud
+  with class `needs-context` and the question is surfaced to a human (Decision 69). Exhaust
+  repo/spec evidence FIRST — never use this for a transient/environmental stop.
+- `STATUS: ALREADY_SATISFIED — <sha…>: <evidence>` — the task's acceptance criteria are ALREADY
+  met by the base you were spawned onto (a prior run shipped this work). Cite the commit SHA(s)
+  that carry it. Commit NOTHING — the engine verifies the claim at the pre-spawn checkpoint tip
+  (your own commits can never satisfy it): every cited SHA must exist and be an ancestor of that
+  tip, and the test gate must be green there. A verified claim completes the task and records it
+  in the spec's shipped-ledger; a REJECTED claim burns an escalation rung with the rejection
+  reason injected into the retry (Decision 70). Only claim this on real, citable evidence.
 
-A missing or unparseable STATUS line is treated as a producer error (retryable). Use
-`BLOCKED — escalate` ONLY for a genuine spec/design defect; use `test requires revision` when
-the RED test (not the spec) is what's wrong.
+A missing or unparseable STATUS line is treated as a producer error (re-spawned on the spawn
+re-drive budget, Decision 71). Use `BLOCKED — escalate` ONLY for a genuine spec/design defect;
+use `test requires revision` when the RED test (not the spec) is what's wrong.

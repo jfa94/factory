@@ -41,7 +41,6 @@ import {type HoldoutStore, InMemoryHoldoutStore} from '../verifier/holdout/index
 import {runTraceabilityEmit, runTraceabilityRecord, type ShipMode} from '../orchestrator/index.js'
 import {PANEL_ROLES} from '../verifier/judgment/index.js'
 import {fakeUsageSignal} from '../quota/index.js'
-import {ESCALATION_CAP} from '../producer/index.js'
 import type {RunState} from '../types/index.js'
 
 import {
@@ -398,10 +397,11 @@ describe('runner orchestrator seam — golden contract E2E', () => {
     })
 
     // -------------------------------------------------------------------------
-    // Scenario 3: Drop path — capability-budget failure → failed finalize (Decision 34)
+    // Scenario 3: Drop path — a persistently unparseable producer status spends the
+    // spawn re-drive budget → blocked-environmental → failed finalize (Decisions 34/71)
     // -------------------------------------------------------------------------
 
-    it('fails a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)', async () => {
+    it('fails a task whose producer never emits a parseable STATUS → blocked-environmental → finalizeRun produces failed (Decisions 34/71)', async () => {
         const request = specManifestTwo()
         await specStore.write(request, '# checkout spec\n\nvertical slice.', makePrd())
 
@@ -411,13 +411,12 @@ describe('runner orchestrator seam — golden contract E2E', () => {
             runId: RUN_ID,
         })
 
-        // Seed t2 at ESCALATION_CAP so the first producer failure fails it.
-        await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({...t, escalation_rung: ESCALATION_CAP}))
-
         const deps = makeDeps(request, 'no-merge')
 
-        // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE keyword)
-        // exercises the unparseable-producer-status path; at cap → capability-budget failure.
+        // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE
+        // keyword) — an infra signal (Decision 71): each emission re-spawns the same
+        // (phase, rung) spending one spawn re-drive slot; over the cap the task fails
+        // blocked-environmental (never a rung burn, never capability-budget).
         const answer = new AnswerBook({
             holdout: {runId: RUN_ID, store: holdout},
             producerStatuses: {
@@ -433,10 +432,10 @@ describe('runner orchestrator seam — golden contract E2E', () => {
         // t1 shipped normally.
         expect(nonNull(finalRun.tasks[TASK_ID]).status).toBe('done')
 
-        // t2 was failed as capability-budget.
+        // t2 was failed as blocked-environmental (spawn re-drive budget exhausted).
         const failedTask = nonNull(finalRun.tasks[TASK_ID_2])
         expect(failedTask.status).toBe('failed')
-        expect(failedTask.failure_class).toBe('capability-budget')
+        expect(failedTask.failure_class).toBe('blocked-environmental')
 
         // finalizeRun posted ONE failure comment on the PRD issue (fails surfaced there,
         // not as per-task GitHub issues) naming the failed task.

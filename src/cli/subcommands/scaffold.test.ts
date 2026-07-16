@@ -456,6 +456,27 @@ describe('runScaffold', () => {
         expect(second.files_updated).not.toContain('.github/workflows/quality-gate.yml')
     })
 
+    it('contract setup_steps render into the workflow and stay drift-stable across re-scaffolds (Decision 73)', async () => {
+        await runScaffold(baseArgs())
+        const gatesPath = join(root, '.factory', 'gates.json')
+        const contract = JSON.parse(await readFile(gatesPath, 'utf8')) as Record<string, unknown>
+        contract.setup_steps = [{uses: 'supabase/setup-cli@v1'}, {run: 'supabase start'}]
+        await writeFile(gatesPath, JSON.stringify(contract, null, 2) + '\n', 'utf8')
+
+        const second = await runScaffold(baseArgs())
+        expect(second.files_updated).toContain('.github/workflows/quality-gate.yml')
+        const wf = join(root, '.github', 'workflows', 'quality-gate.yml')
+        const written = await readFile(wf, 'utf8')
+        expect(written.match(/supabase\/setup-cli@v1/g)).toHaveLength(2) // quality + mutation jobs
+        expect(written.match(/supabase start/g)).toHaveLength(2)
+
+        // The whole point: the render is now contract-sourced, so a third scaffold
+        // sees zero drift (no more auto-update arms race against hand edits).
+        const third = await runScaffold(baseArgs())
+        expect(await readFile(wf, 'utf8')).toBe(written)
+        expect(third.files_updated).not.toContain('.github/workflows/quality-gate.yml')
+    })
+
     describe('stack-adaptive CI render (Decision 53)', () => {
         const wfPath = () => join(root, '.github', 'workflows', 'quality-gate.yml')
 

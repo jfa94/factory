@@ -34,6 +34,7 @@ import {FakeGitClient, FakeGhClient} from '../git/index.js'
 import {defaultConfig} from '../config/schema.js'
 import {FIVE_HOUR_WINDOW_SECONDS, SEVEN_DAY_WINDOW_SECONDS, type UsageReading} from '../quota/index.js'
 import {makeTempDataDir, seedRun} from '../cli/test-fixtures.js'
+import {appendLedgerEntries} from '../spec/ledger.js'
 
 const REPO = 'acme/widgets'
 
@@ -304,6 +305,111 @@ describe('createRun', () => {
         )
         // Nothing was created — the refusal is pre-run (no paid-run-then-fail).
         await expect(state.read('run-pre-s9')).rejects.toThrow()
+    })
+})
+
+describe('run create — ledger-aware seeding (Decision 70)', () => {
+    let dataDir: string
+    let state: StateManager
+    let store: SpecStore
+    const TIP = 'f'.repeat(40)
+    const STRAY = 'b'.repeat(40)
+
+    beforeEach(async () => {
+        dataDir = await makeTempDataDir('factory-ledger-seed-')
+        state = new StateManager({
+            dataDir,
+            lock: {stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50},
+        })
+        store = new SpecStore({dataDir, docsRoot: join(dataDir, '_docs')})
+        await store.write(makeSpec([{task_id: 't1'}, {task_id: 't2', depends_on: ['t1']}]), '# spec\n', makePrd())
+    })
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    function stagingDepsWith(git: FakeGitClient) {
+        return {
+            gitClient: git,
+            ghClient: new FakeGhClient(),
+            config: defaultConfig(),
+            targetRoot: '/target',
+            orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-led',
+            owner: 'acme',
+            repo: 'widgets',
+        }
+    }
+
+    it('seeds a task done when every ledger SHA is an ancestor of the fresh staging tip', async () => {
+        await appendLedgerEntries(dataDir, REPO, '42-checkout', [
+            {
+                task_id: 't1',
+                run_id: 'run-prev',
+                pr_number: 11,
+                shas: [TIP],
+                verified_at: '2026-07-01T00:00:00.000Z',
+                source: 'shipped',
+            },
+        ])
+        // The ledger SHA IS the staging tip → trivially an ancestor (fake merge-base convention).
+        const git = new FakeGitClient({remoteHeads: {develop: TIP}, localBranches: {[TIP]: {sha: TIP}}})
+
+        const r = await resolveOrCreateRun(
+            state,
+            store,
+            {repo: REPO, issue: 42, runId: 'run-led', intent: 'fresh'},
+            stagingDepsWith(git)
+        )
+
+        if (!('run' in r)) {
+            throw new Error('expected a created run')
+        }
+        expect(nonNull(r.run.tasks.t1).status).toBe('done')
+        expect(nonNull(r.run.tasks.t1).ended_at).toBeDefined()
+        // t2 has no ledger entry — untouched, and its dep edge on t1 is now satisfied.
+        expect(nonNull(r.run.tasks.t2).status).toBe('pending')
+    })
+
+    it('leaves the task pending when a ledger SHA is NOT an ancestor of the staging tip', async () => {
+        await appendLedgerEntries(dataDir, REPO, '42-checkout', [
+            {
+                task_id: 't1',
+                run_id: 'run-prev',
+                shas: [STRAY],
+                verified_at: '2026-07-01T00:00:00.000Z',
+                source: 'already-satisfied',
+            },
+        ])
+        // STRAY is unknown to the fake → rev-parse rejects → not an ancestor.
+        const git = new FakeGitClient({remoteHeads: {develop: TIP}, localBranches: {[TIP]: {sha: TIP}}})
+
+        const r = await resolveOrCreateRun(
+            state,
+            store,
+            {repo: REPO, issue: 42, runId: 'run-led2', intent: 'fresh'},
+            stagingDepsWith(git)
+        )
+
+        if (!('run' in r)) {
+            throw new Error('expected a created run')
+        }
+        expect(nonNull(r.run.tasks.t1).status).toBe('pending')
+    })
+
+    it('bare createRun (no staging deps) ignores the ledger — seeding is staging-gated', async () => {
+        await appendLedgerEntries(dataDir, REPO, '42-checkout', [
+            {
+                task_id: 't1',
+                run_id: 'run-prev',
+                shas: [TIP],
+                verified_at: '2026-07-01T00:00:00.000Z',
+                source: 'shipped',
+            },
+        ])
+
+        const run = await createRun(state, store, {repo: REPO, issue: 42, runId: 'run-led3'})
+
+        expect(nonNull(run.tasks.t1).status).toBe('pending')
     })
 })
 

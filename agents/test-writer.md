@@ -27,9 +27,11 @@ isolated tree, and commits made anywhere else are lost. Your prompt also carries
 structured task context: `taskId`, `title`, `description`, `acceptanceCriteria` (already
 holdout-stripped — these are the only criteria you may see), and `files`. It may also carry
 `priorFailures` — "don't do this" notes. If one says your **prior test was rejected as
-incorrect** by the implementer/reviewers, the earlier RED test was wrong: write a fresh
-BEHAVIORAL test from the criteria and do NOT repeat the rejected approach (in particular, do
-NOT re-pin a source literal — see Iron Law 6).
+incorrect** by the implementer/reviewers, OR that the **merge gate failed twice consecutively
+with the identical failing gate set** (the engine suspects the RED test as the broken arbiter —
+Decision 71), the earlier RED test was wrong: write a fresh BEHAVIORAL test from the criteria
+and do NOT repeat the rejected approach (in particular, do NOT re-pin a source literal — see
+Iron Law 6).
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
@@ -147,7 +149,18 @@ End your final message with a one-line summary then exactly one STATUS line:
 - `STATUS: DONE` — failing tests authored and committed (every new test fails correctly).
 - `STATUS: BLOCKED — escalate: <reason>` — the task is untestable as specified (contradictory
   or non-falsifiable criteria); a spec-defect signal that routes straight to a drop.
-- `STATUS: NEEDS_CONTEXT — <question>` — you need more context / a clarification to proceed.
+- `STATUS: NEEDS_CONTEXT — <question>` — a genuine QUESTION you cannot resolve from the repo,
+  spec, or prior-run evidence. The engine re-spawns you ONCE at the same rung with the
+  question injected; if you ask again without resolving, the task fails loud with class
+  `needs-context` and the question is surfaced to a human (Decision 69). Exhaust repo/spec
+  evidence FIRST — never use this for a transient/environmental stop.
+- `STATUS: ALREADY_SATISFIED — <sha…>: <evidence>` — the task's acceptance criteria are ALREADY
+  met AND covered by passing tests on the base you were spawned onto (a prior run shipped this
+  work). Cite the commit SHA(s) that carry it. Commit NOTHING — the engine verifies the claim at
+  the pre-spawn checkpoint tip (your own commits can never satisfy it): every cited SHA must
+  exist and be an ancestor of that tip, and the test gate must be green there. A verified claim
+  completes the task; a REJECTED claim burns an escalation rung with the rejection reason
+  injected into the retry (Decision 70). Only claim this on real, citable evidence.
 
-A missing or unparseable STATUS line is treated as a failure. Use `BLOCKED — escalate` ONLY
-for a genuine spec defect; for a transient/environmental stop, use `NEEDS_CONTEXT`.
+A missing or unparseable STATUS line is treated as a producer error (re-spawned on the spawn
+re-drive budget, Decision 71). Use `BLOCKED — escalate` ONLY for a genuine spec defect.

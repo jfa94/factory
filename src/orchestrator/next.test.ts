@@ -118,7 +118,10 @@ describe('nextTask', () => {
             expect(env.cascade_failed.slice().sort()).toEqual(['T2', 'T3'])
             expect(env.ready).toEqual(['T4'])
             const run = await deps.state.read(runId)
-            expect(run.tasks.T2?.failure_class).toBe('blocked-environmental')
+            // Decision 72: a cascade victim never ran — its class names the CAUSE
+            // (a failed dependency), not the environment, and rescue sees it recoverable.
+            expect(run.tasks.T2?.failure_class).toBe('blocked-dependency')
+            expect(scanRun(run).tasks.find((t) => t.task_id === 'T2')?.disposition).toBe('recoverable')
         } finally {
             await cleanup()
         }
@@ -1000,7 +1003,7 @@ describe('traceability gate (S9, Decision 47)', () => {
         }
     })
 
-    it('trace-suspended run (A2: no quota field) resumes through the gate back to traceability', async () => {
+    it('trace-suspended run (A2: no quota field) is PARKED — only `factory resume` re-enters traceability (Decision 72)', async () => {
         const {deps, runId, state, cleanup} = await makeOrchestratorDeps({
             tasks: [{task_id: 'T1'}],
         })
@@ -1018,10 +1021,31 @@ describe('traceability gate (S9, Decision 47)', () => {
                     ended_at: DONE_AT,
                 },
             }))
+            // next-task must NOT silently un-park (the --approve-spec / run-stop hole):
+            expect(await nextTask(deps, runId)).toMatchObject({kind: 'pause', scope: 'park'})
+            expect((await state.read(runId)).status).toBe('suspended')
+
+            // `factory resume` (planResume clears a quota-less suspend) is the un-park verb;
+            // after it, next-task routes back to traceability.
+            await state.update(runId, (s) => ({...s, status: 'running' as const}))
             expect((await nextTask(deps, runId)).kind).toBe('traceability')
-            const resumed = await state.read(runId)
-            expect(resumed.status).toBe('running')
-            expect(resumed.quota).toBeUndefined()
+        } finally {
+            await cleanup()
+        }
+    })
+
+    it('parked run (suspended, no quota, tasks still pending) → pause scope park, status untouched (Decision 72)', async () => {
+        const {deps, runId, state, cleanup} = await makeOrchestratorDeps({
+            tasks: [{task_id: 'T1'}],
+        })
+        try {
+            await state.update(runId, (s) => ({...s, status: 'suspended' as const}))
+            const env = await nextTask(deps, runId)
+            expect(env).toMatchObject({kind: 'pause', scope: 'park'})
+            if (env.kind === 'pause') {
+                expect(env.reason).toContain('factory resume')
+            }
+            expect((await state.read(runId)).status).toBe('suspended')
         } finally {
             await cleanup()
         }

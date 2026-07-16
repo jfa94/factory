@@ -246,6 +246,29 @@ describe('rescue scan/apply/auto', () => {
         expect(env.hints).toEqual([`factory rescue apply --run ${RUN} --reset-traceability`])
     })
 
+    it('scan surfaces a needs-context failure: question on the task line + an --answer hint (Decision 69)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            status: 'failed',
+            ended_at: AT,
+            tasks: {
+                q: task({
+                    task_id: 'q',
+                    status: 'failed',
+                    failure_class: 'needs-context',
+                    failure_reason: 'producer needs context (asked twice without resolving): which auth provider?',
+                    needs_context: {question: 'which auth provider?'},
+                }),
+            },
+        }))
+        const code = await runScan(['--run', RUN], {gitClient: new FakeGitClient(), ghClient: new FakeGhClient()})
+        expect(code).toBe(EXIT.OK)
+        const env = out()
+        const lines = env.tasks as Record<string, unknown>[]
+        expect(nonNull(lines.find((t) => t.task_id === 'q')).question).toBe('which auth provider?')
+        expect(env.hints).toContain(`factory rescue apply --run ${RUN} --task q --answer "<answer>"`)
+    })
+
     it('scan appends an additive recoverable-work survey from git (work field)', async () => {
         await seedMixed()
         // Give the stuck task a branch carrying committed work above the run's staging base.
@@ -449,6 +472,26 @@ describe('rescue scan/apply/auto', () => {
         expect(run.status).toBe('running')
         expect(run.e2e_phase?.status).toBeUndefined()
         expect(run.e2e_phase?.manifest).toHaveLength(1) // authored manifest preserved
+    })
+
+    it('apply --answer records the answer on the named needs-context task (Decision 69)', async () => {
+        await state.update(RUN, (s) => ({
+            ...s,
+            tasks: {
+                q: task({
+                    task_id: 'q',
+                    status: 'failed',
+                    failure_class: 'needs-context',
+                    failure_reason: 'asked twice: which auth provider?',
+                    needs_context: {question: 'which auth provider?'},
+                }),
+            },
+        }))
+        const code = await runApply(['--run', RUN, '--task', 'q', '--answer', 'use Supabase auth'], fakes())
+        expect(code).toBe(EXIT.OK)
+        const q = nonNull((await state.read(RUN)).tasks.q)
+        expect(q.status).toBe('pending')
+        expect(q.needs_context).toEqual({question: 'which auth provider?', answer: 'use Supabase auth'})
     })
 
     it('apply --task selects exactly the named tasks (repeatable)', async () => {

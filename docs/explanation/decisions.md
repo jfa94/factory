@@ -2772,6 +2772,20 @@ recovery is now kill+re-drive instead of liveness-check.
 (Decision 61/62): S1/3c handled silent DEATH; this handles silent HANGING. Mirrors the
 `MERGE_RESYNC_CAP` bounded-budget shape and hands over to Decision 48/60's bounded self-heal.
 
+**Addendum (2026-07-16, goodbyespy live-run finding #6):** The runner skill's `stale`
+branch previously treated ABSENCE of information as death — "TaskList shows nothing for
+the tracked agents" fell into the re-drive leg, and since TaskList does not reliably
+track background `Agent()` spawns, that read routinely killed LIVE work (the re-drive
+resets the task worktree to its checkpoint tip). The skill now requires **positive
+evidence of death for every tracked agent** before a stale re-drive: a completion/error
+task-notification received, an unfed results file on disk, or an explicit terminal
+TaskList entry. No information → do not touch the task; the `hung` hard band above is
+the backstop for a truly wedged spawn. The same rule applies to the
+stale-not-in-table compaction fallthrough. Accepted cost: a genuinely dead spawn with no
+evidence now waits out `hungSpawnMinutes` before recovery — the price of never killing
+live work on a guess. Skill-only change (`skills/pipeline-runner/SKILL.md`); no engine
+change.
+
 ---
 
 ## Decision 67 — Task Worktrees + Results Relocate into the Target Repo's `.claude/worktrees/`
@@ -2924,6 +2938,209 @@ on merit. Ledger is transient per task: nothing persists past ship, so no cross-
 parse); preserves D26 (citation-verify untouched), D27 (verify-then-fix — verifiers stay
 blind), D44 (panel construction unchanged), D43 (parsimony folds into the merged
 quality charter rather than a new seat).
+
+---
+
+## Decision 69 — NEEDS_CONTEXT Fails Fast and Surfaces the Question
+
+**Date:** 2026-07-16
+
+**Context:** goodbyespy live-run defect P0a. A producer returning `STATUS: NEEDS_CONTEXT`
+was classified as a retryable failure signal: `classifyProducerFailure` → `escalateOrFail`
+burned a rung, DROPPED the question, and re-spawned a byte-identical prompt (only the
+model dial changed). A question the repo genuinely cannot answer therefore consumed the
+whole escalation ladder — four identical asks — and terminated as a misleading
+`capability-budget` deadlock, with the actual question nowhere in state. User decision:
+fail fast + surface.
+
+**Decision:** NEEDS_CONTEXT is a QUESTION, not a capability failure. `applyProducerOutcome`:
+
+- **First ask** — persist `task.needs_context = {question}` (new additive-optional
+  `TaskState` field) and return same-phase/same-rung: the producer is re-spawned ONCE with
+  the question injected as a prior-failure note ("resolve from repo/spec evidence; only
+  return NEEDS_CONTEXT again if genuinely unanswerable"). No rung burn. The re-spawn rides
+  the matching `spawn_in_flight` checkpoint branch, so it spends one `redrives` slot —
+  accepted (max one re-ask per question; the cap is 2).
+- **Second consecutive ask** — the question is overwritten and the task fails LOUD with
+  new failure class `needs-context`, reason naming the question. `'needs-context'` is
+  removed from `classifyProducerFailure`'s `FailureSignal` union — the compiler now forces
+  a loud throw if it ever re-enters the rung-burn path.
+- **Answer channel** — rescue: `failed`+`needs-context` scans `recoverable` with the
+  question on the scan line; `rescue apply --task <id> --answer "<text>"` resets the task
+  preserving `needs_context` and writing the answer; the next spawn injects "a human
+  answered: <answer> — proceed". `rescue auto` excludes `needs-context` (self-heal has no
+  answer). A `done` producer outcome clears the field.
+
+**Consequences:** An unanswerable question stops the task after two asks total instead of
+deadlocking the ladder; the question survives into state, the rescue proposal, and the
+human's screen. The circuit breaker needed no change (its equality filter on
+`capability-budget` already excludes the new class).
+
+**Relationship:** Additive-optional on the Decision 5 frozen state (schema stays v3).
+Uses the Decision 66 redrive budget for the one re-ask; hands recovery to the
+Decision 22/60 rescue machinery via the new `--answer` channel.
+
+---
+
+## Decision 70 — ALREADY_SATISFIED Verdict + the Durable Per-Spec Shipped Ledger
+
+**Date:** 2026-07-16
+
+**Context:** goodbyespy live-run defect P0b. `run cancel` (then the only stop verb)
+forced a fresh `run create --spec-id` against a base branch that already contained most
+of the spec's work. Every task seeded `pending`; producers correctly recognized the work
+existed but had NO sanctioned way to say so — the harness forced them toward NEEDS_CONTEXT
+or fake re-implementation. User decision: an engine-verified ALREADY_SATISFIED verdict
+PLUS a durable per-spec record of what shipped (with PR numbers).
+
+**Decision:** Two cooperating pieces:
+
+1. **The producer verdict.** `STATUS: ALREADY_SATISFIED — <sha…>: <evidence>` joins the
+   producer protocol (both `agents/test-writer.md` and `agents/implementer.md`). The
+   claimant cites commit SHAs and commits NOTHING. The ENGINE verifies in `record.ts` at
+   the `spawn_in_flight` checkpoint's `tip_sha` — the pre-spawn tip, so a producer can
+   never launder its own fresh commits into the claim: `resetHardClean(tip)`, every cited
+   SHA must resolve AND be an ancestor of the tip, then the `test` gate must pass at that
+   tip. Pass → `completeTask` + a `source: 'already-satisfied'` ledger entry. Reject (no
+   SHAs / unknown SHA / non-ancestor / red tests) → `fix_findings` gains an
+   `already-satisfied-verifier` record and the normal escalation burns a rung — a false
+   claim is a capability failure. `applyProducerOutcome` throws loud if the outcome ever
+   reaches it unverified. The `tests` spawn now threads `task.fix_findings` as
+   confirmedBlockers (exec already did), so the rejection reason reaches the retry prompt.
+2. **The ledger.** `specs/<repo>/<spec-id>/ledger.json` (sibling of `tasks.json`; zod;
+   ENOENT → empty, garbage → loud): `{task_id, run_id, pr_number?, shas[], verified_at,
+   source: 'shipped' | 'already-satisfied'}`. Write sites: finalize appends one `shipped`
+   entry per `done` task **inside the merged-rollup branch only** (SHA = the post-rollup
+   `develop` tip — task squash SHAs are never ancestors of future bases), skipping debug
+   runs; `record.ts` appends on a verified already-satisfied claim. Read site:
+   `createRunFromManifest` seeds any task whose latest ledger entry's SHAs are ALL
+   ancestors of the fresh staging tip directly to `done` — a re-run of a shipped spec
+   starts where reality is instead of re-litigating it. Ledger IO failure in finalize
+   logs loud but never fails finalize (the verdict covers the gap next run).
+
+**Consequences:** Base-satisfied tasks cost one producer spawn (or zero, when the ledger
+seeds them) instead of a full TDD pipeline against already-merged work; PR numbers are
+durably queryable per spec. No file lock on the ledger — single-process writers today.
+
+**Relationship:** Extends the Decision 46 committed-contract philosophy to spec-level
+provenance; the verification reuses the Decision 5 checkpoint tip and the gate-subsetting
+seam. Complements Decision 72 (`run stop`) — together they remove both halves of the
+cancel→blind-recreate failure chain.
+
+---
+
+## Decision 71 — Dead Spawns Spend Redrives, Not Rungs; Repeated Identical Gate Failures Rederive the Tests
+
+**Date:** 2026-07-16
+
+**Context:** goodbyespy live-run defect P1 (two heads of one waste pattern). (a) A spawn
+that died without a parseable STATUS was classified `error` → `escalateOrFail` burned a
+rung on ZERO information — three infrastructure hiccups exhausted a ladder. (b) The
+merge-gate send-back loop always routed to `exec`: when the TESTS were the defect (a
+degenerate assertion no implementation can satisfy), the implementer was re-spawned
+against the same failing gate set forever, burning the ladder without ever touching the
+actual defect.
+
+**Decision:**
+
+- **C2 — `error` is a re-drive, not an escalation.** `applyProducerOutcome` on `error`
+  logs and returns same-phase/same-rung; the next `next-action` re-entry hits the
+  matching-checkpoint branch, increments `redrives`, and past `SPAWN_REDRIVE_CAP` (2)
+  fails `blocked-environmental` (Decision 66's exact outcome, message widened to name
+  "no parseable STATUS"). The nonsensical non-exec `test-defective` branch routes the
+  same way; `FailureSignal`'s producer union shrank to `'blocked-escalate' |
+  'test-defective'` with loud guards.
+- **C1 — same failing gates twice → rederive the tests.** The merge-gate send-back leg
+  records the sorted failing-gate set (minus `holdout` — a leak guard, and tests cannot
+  fix a holdout miss) in transient `task.last_failing_gates`. If the next verdict fails
+  with the IDENTICAL set and the task is not `tdd_exempt`, the task escalates to `tests`
+  with `test_revision_feedback` naming the repeated set — the Decision 38 machinery
+  end-to-end (the regenerating test-writer clears the feedback on done). `fix_findings`
+  is cleared (stale against regenerated tests); `review_dispositions` survives. Cleared
+  on advance, rescue reset, and done.
+
+**Consequences:** Infrastructure noise can no longer masquerade as capability failure;
+the degenerate-test loop breaks after exactly two identical gate failures instead of
+never. A rung still burns on the tests route — rederiving tests IS an escalation.
+
+**Relationship:** C2 completes Decision 66 (one bounded budget for ALL dead-spawn
+shapes); C1 reuses Decision 38's test-revision channel rather than adding a new one.
+
+---
+
+## Decision 72 — `run stop` Parks; `cancel` Sweeps and Warns; Cascade Victims Are `blocked-dependency`
+
+**Date:** 2026-07-16
+
+**Context:** goodbyespy live-run defect P2 — the root of the P0 chain. `run cancel` was
+the ONLY stop verb, and it is terminal: state failed, staging deleted. An operator who
+just wanted to pause overnight had to cancel, then blind-recreate — landing on the
+advanced-base minefield Decision 70 addresses. Cancel also left in-flight task rows
+`executing`/`reviewing` inside a failed run (undiagnosable wreckage), and its cascade
+sweep mislabeled never-ran dependents `blocked-environmental` (rescue-recoverable ≠ true:
+nothing environmental happened to them).
+
+**Decision:**
+
+- **`factory run stop`** — the park verb: sets `status: 'suspended'` with NO quota
+  checkpoint, tasks untouched; idempotent on an already-parked run; loud on a terminal
+  one. Plain `factory resume` un-parks (planResume already clears a quota-less suspend
+  unconditionally — resume IS the sign-off). Stderr names `factory resume` and points at
+  `run cancel` only as the destructive alternative.
+- **The park guard.** `next.ts` gains guard 1b: `suspended` + `quota === undefined` →
+  `pause` envelope with new scope `'park'`, BEFORE the checkpoint-clearing steps — which
+  are now also gated on `run.quota !== undefined`. This closes the latent hole where any
+  `next-task` call silently un-parked a suspended run (the A2 invariant holds: every
+  quota-caused stop writes `run.quota`; a quota-less suspend is always a deliberate park).
+  A parked run reports 'park' even when all tasks are terminal — stop means stop; resume
+  then finalizes.
+- **Cancel hygiene.** Before finalizing, `run cancel` sweeps every in-flight task to
+  `failed`/`blocked-environmental` ("run cancelled by operator") so the terminal state is
+  self-describing; help and output carry an irreversibility warning naming `run stop`.
+- **`blocked-dependency`.** The orchestrator's cascade fail (a dependency failed → the
+  dependent never ran) now uses this new failure class; rescue scans it `recoverable`
+  (reset the dependency, the victim retries as-is). Circuit-breaker and e2e-assessment
+  sweeps STAY `blocked-environmental` — those tasks were stopped by a systemic halt, not
+  a dependency edge.
+
+**Consequences:** Overnight pause is now `stop` + `resume` — no state loss, no
+recreation, no ledger round-trip. The suspend semantics split cleanly: quota-suspends
+auto-clear on the gate, parks never auto-clear.
+
+**Relationship:** Closes the operational gap that caused Decision 70's scenario.
+Extends the Decision 35/50 lifecycle-verbs line with the fourth verb (start / repair /
+debug / **park**). The park-guard scope joins the QuotaStop scopes on the pause envelope.
+
+---
+
+## Decision 73 — `setup_steps`: CI Environment Boot Lives in the Gate Contract
+
+**Date:** 2026-07-16
+
+**Context:** goodbyespy live-run defect P2b — the scaffold arms race. Its test suite
+needs a booted Supabase; the managed `quality-gate.yml` had no sanctioned way to express
+that, so the operator hand-edited the workflow — and every rescaffold detected drift on
+the plugin-MANAGED file and auto-reverted the edit ("auto-updated … quality-gate.yml",
+every run). Managed-file auto-update and per-repo env boot were structurally at war.
+
+**Decision:** The committed gate contract (`.factory/gates.json`, Decision 46) gains
+optional `setup_steps`: an array of strict step objects — exactly one of `uses` (with
+optional `with` inputs) or `run`, optional `name` (zod superRefine). The workflow
+renderer emits them after the package-manager setup in BOTH the `# factory:setup` region
+(quality job) and the `# factory:mutation-setup` region (the mutation shards boot the
+test suite too, carrying the shard's slice-guard condition). goodbyespy's case becomes
+six committed lines of gates.json (`{uses: "supabase/setup-cli@v1"}` +
+`{run: "supabase start"}`) instead of doomed hand edits; the render is contract-sourced,
+so repeated scaffolds are byte-stable.
+
+**Consequences:** Hand edits to the managed workflow remain unsupported — but the reason
+to make them is gone. Steps are rendered verbatim into repo-committed CI (same trust
+level as the hand edit they replace); the contract stays TCB-write-denied, so producers
+cannot inject steps mid-run.
+
+**Relationship:** Extends Decision 46 (the contract as the single committed source of
+gate truth) and Decision 53 (one render source for local + CI parity) to the environment
+the gates run IN.
 
 ---
 

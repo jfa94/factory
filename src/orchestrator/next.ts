@@ -109,7 +109,8 @@ export type NextTask =
       })
     | (NextContext & {
           readonly kind: 'pause'
-          readonly scope: QuotaStop['scope']
+          /** `'park'` (Decision 72): a non-quota suspend — only `factory resume` un-parks it. */
+          readonly scope: QuotaStop['scope'] | 'park'
           readonly reason: string
           readonly resets_at_epoch?: number
       })
@@ -262,6 +263,20 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
         )
     }
 
+    // 1b. Park guard (Decision 72): a suspended run WITHOUT a quota checkpoint is a
+    //     deliberate park (`run stop`, `--approve-spec` spec sign-off, a stage
+    //     crash-suspend) — quota-caused stops ALWAYS carry `run.quota` (A2). The
+    //     step-2/step-4 checkpoint clears below must never silently un-park it; only
+    //     `factory resume` (planResume clears a quota-less suspend) continues the run.
+    if (run.status === 'suspended' && run.quota === undefined) {
+        return {
+            ...ctx(),
+            kind: 'pause',
+            scope: 'park',
+            reason: 'run is parked (suspended without a quota checkpoint) — `factory resume` to continue',
+        }
+    }
+
     // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run
     //    early-returns here (a finished run must never write a pause checkpoint). But a
     //    run whose tasks are all terminal yet whose e2e/docs phase is still pending is NOT
@@ -358,7 +373,10 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
                 deps,
                 runId,
                 t.task_id,
-                'blocked-environmental',
+                // Decision 72: the class names the CAUSE (a failed dependency, not the
+                // environment) — rescue treats it recoverable; the breaker's equality
+                // filter and the scoring enum need no change.
+                'blocked-dependency',
                 `dependency '${unsatisfied}' did not complete (failed or missing)`
             )
             cascadeFailed.push(t.task_id)

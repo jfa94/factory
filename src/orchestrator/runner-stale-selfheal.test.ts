@@ -27,8 +27,9 @@ describe('runner protocol wires the S1/3c stall-TTL self-heal', () => {
         expect(skill).toMatch(/next-action --run <run_id> --task <task>\s+# WITHOUT --results/)
     })
 
-    it('a still-running spawn is never killed on a stale flag (false-positive guard)', () => {
-        expect(skill).toContain('check TaskList for whether its tracked agent task-ids are still')
+    it('a stale re-drive requires POSITIVE death evidence — absence of information never kills (Decision 66 addendum)', () => {
+        expect(skill).toContain('POSITIVE evidence of death')
+        expect(skill).toContain('is NOT death evidence')
         expect(skill).toContain('false positive')
     })
 

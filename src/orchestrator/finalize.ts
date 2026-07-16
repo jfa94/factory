@@ -57,6 +57,7 @@ import {
 import type {ShipMode} from './types.js'
 import {atomicWriteFile, createLogger, nowIso} from '../shared/index.js'
 import {runReportPath} from '../core/state/paths.js'
+import {appendLedgerEntries} from '../spec/ledger.js'
 
 const log = createLogger('finalize')
 
@@ -283,6 +284,37 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             // banked for rescue / inspection.
             await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch)
             await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch)
+
+            // Decision 70 — durable shipped-ledger: one `source: 'shipped'` entry per done
+            // task, keyed to the POST-rollup develop tip (task squash SHAs are never
+            // ancestors of future bases; the rollup tip is). Debug runs skipped — a debug
+            // session is not a PRD delivery. Ledger IO failure logs LOUD but never fails
+            // finalize (the ALREADY_SATISFIED verdict covers the gap on the next run).
+            if (!run.debug) {
+                try {
+                    await deps.git.fetch('origin', deps.config.git.baseBranch)
+                    const developTip = await deps.git.revParse(`origin/${deps.config.git.baseBranch}`)
+                    const done = Object.values(run.tasks).filter((t) => t.status === 'done')
+                    await appendLedgerEntries(
+                        deps.dataDir,
+                        run.spec.repo,
+                        run.spec.spec_id,
+                        done.map((t) => ({
+                            task_id: t.task_id,
+                            run_id: runId,
+                            ...(t.pr_number !== undefined ? {pr_number: t.pr_number} : {}),
+                            shas: [developTip],
+                            verified_at: now,
+                            source: 'shipped' as const,
+                        }))
+                    )
+                } catch (err) {
+                    log.error(
+                        `shipped-ledger append failed for '${run.spec.spec_id}' (finalize continues; ` +
+                            `the next run falls back to the ALREADY_SATISFIED verdict): ${String(err)}`
+                    )
+                }
+            }
         }
 
         // Persist the rollup outcome (finding #5, minimal surface): a not-yet-landed

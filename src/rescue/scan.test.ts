@@ -121,6 +121,24 @@ describe('scanRun — resettable / dead_ends / needs_rescue', () => {
         expect(scan.needs_rescue).toBe(true)
     })
 
+    it('failed+needs-context is recoverable and the scan line carries the recorded question (Decision 69)', () => {
+        const scan = scanRun(
+            mkRun([
+                {
+                    task_id: 'q',
+                    status: 'failed',
+                    failure_class: 'needs-context',
+                    failure_reason: 'producer needs context (asked twice without resolving): which auth provider?',
+                    needs_context: {question: 'which auth provider?'},
+                },
+            ])
+        )
+        const line = nonNull(scan.tasks.find((t) => t.task_id === 'q'))
+        expect(line.disposition).toBe('recoverable')
+        expect(line.question).toBe('which auth provider?')
+        expect(scan.resettable).toEqual(['q'])
+    })
+
     it('needs_rescue is false when nothing is stuck or recoverable', () => {
         const scan = scanRun(
             mkRun([

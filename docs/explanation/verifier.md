@@ -235,6 +235,16 @@ the producer re-attempts. A structurally-unfixable gate or an environmental bloc
 is classified-before-retry and fails immediately without burning a rung. See
 [producer-ladder.md](./producer-ladder.md).
 
+**Identical-gate-set escalation to `tests` ([Decision 71](./decisions.md)).** By default
+the escalation re-rolls the **implementer**. But the engine records the failing
+deterministic-gate id set (sorted, holdout excluded) of each blocked verify on
+`task.last_failing_gates`. When the **next** blocked verify fails the **identical** set,
+the RED test is the suspect arbiter — re-rolling the implementer against a possibly-wrong
+test would loop forever — so the escalation is routed to the **`tests`** phase instead: the
+test-writer rederives from the acceptance criteria, steered by a `test_revision_feedback`
+note naming the repeated gate set. A `tdd_exempt` task has no test-writer to rederive, so it
+stays on the implementer route.
+
 The human-facing block reason names what actually failed. A single shared helper
 (`mergeGateBlockReason`, `src/core/state/derive.ts`) is the source of truth for both
 live verify paths — the fresh-review path (`runPanel` in `panel-run.ts`) and the

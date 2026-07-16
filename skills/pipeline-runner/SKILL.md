@@ -232,16 +232,26 @@ REFILL (run at loop entry and after every completion):
                   # then the S1/3c advisory self-heal, before the ready-fill loop, so a
                   # revived task reclaims its slot ahead of new work:
                   for each id in env.stale that IS in the table:
-                    check TaskList for whether its tracked agent task-ids are still
-                    running. If ANY still is → false positive (a slow-but-alive spawn,
-                    e.g. a deep verify panel that outlived the TTL) — do NOT touch it;
-                    the heartbeat re-checks next cycle. This liveness check is the ONLY
-                    guard against killing a live spawn: there is no safe non-destructive
-                    way to "just refresh spawned_at" on a timer — the sole re-drive
-                    mechanism (orchestrator.ts, on next-action re-entry) resets the task
-                    worktree to its checkpoint tip, so a periodic no-op ping would itself
-                    destroy a live agent's uncommitted/committed-since-spawn work.
-                    Else (every tracked agent already finished/errored/unaccounted-for):
+                    re-drive ONLY on POSITIVE evidence of death for EVERY tracked agent
+                    of the task — any of, per agent:
+                      • a completion/error task-notification for it was received, or
+                      • its results file exists but was never fed back, or
+                      • TaskList explicitly lists it in a TERMINAL state (completed /
+                        failed / stopped).
+                    ANY agent still listed as running → false positive (a slow-but-alive
+                    spawn, e.g. a deep verify panel that outlived the TTL) — do NOT touch
+                    it. And ABSENCE of information (TaskList shows nothing for the id,
+                    no notification, no results file) is NOT death evidence — TaskList
+                    does not reliably track background Agent spawns, so "shows nothing"
+                    routinely means "still running, just not visible". Do NOT touch the
+                    task; the heartbeat re-checks next cycle and the engine's env.hung
+                    hard band (Decision 66) is the backstop for a truly wedged spawn.
+                    This evidence rule is the ONLY guard against killing a live spawn:
+                    there is no safe non-destructive way to "just refresh spawned_at" on
+                    a timer — the sole re-drive mechanism (orchestrator.ts, on
+                    next-action re-entry) resets the task worktree to its checkpoint tip,
+                    so a re-drive on a guess destroys a live agent's work.
+                    Only with positive death evidence for EVERY tracked agent:
                       TaskStop each tracked agent id (harmless if already dead)
                       remove the task from the table
                       tenv = factory next-action --run <run_id> --task <task>   # WITHOUT --results
@@ -251,8 +261,12 @@ REFILL (run at loop entry and after every completion):
                         "done"  → report tenv.outcome; REFILL again
                         "pause" → PAUSE CONVERGENCE
                   for each id in env.stale NOT in the table (compaction/context-loss —
-                  nothing tracked to liveness-check): re-drive it the same way (idempotent
-                  per the Compaction recovery note below).
+                  nothing tracked): the SAME evidence rule applies — re-drive only on
+                  positive death evidence (an unfed results file on disk, or a TaskList
+                  entry you can attribute to the task listed terminal). No evidence →
+                  leave it to the env.hung band; a wrong re-drive here destroys live
+                  work that survived compaction (idempotent per the Compaction recovery
+                  note below when evidence IS present).
                   then, for each task in env.ready (order preserved — in-flight tasks are
                   listed first) that is NOT already in the table, while the table has
                   fewer than env.max_parallel tasks:

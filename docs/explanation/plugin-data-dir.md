@@ -3,8 +3,12 @@
 All run/spec state lives OUTSIDE the target repo, under factory's canonical
 plugin data dir (`~/.claude/plugins/data/factory-<marketplace-id>`); the
 [configuration reference](../reference/configuration.md#data-dir-claude_plugin_data) documents the
-resolution rules and the redirect WARN. This page explains **why** the redirect
-exists and why the WARN is benign.
+resolution rules and the redirect notice. This page explains **why** the redirect
+exists and why the notice is benign.
+
+A **successful** redirect logs at **DEBUG** (Fix 8) — it is self-correcting, so it
+stays out of normal output; only a real fault inside the expected data dir (an
+unparseable `marketplace.json`) still logs at WARN.
 
 ## Root cause (why it happens, why it's benign)
 
@@ -22,14 +26,14 @@ side:
 2. **Backstop — the `CLAUDE_PLUGIN_ROOT` self-correct.** When a session was
    _not_ launched through merged settings (a foreign value leaked in),
    `resolveDataDir()` re-derives the canonical dir from `CLAUDE_PLUGIN_ROOT`
-   (the per-plugin anchor Claude Code injects reliably) and the WARN is simply
-   **evidence the backstop fired** — not a factory misconfiguration.
+   (the per-plugin anchor Claude Code injects reliably) and the DEBUG notice is
+   simply **evidence the backstop fired** — not a factory misconfiguration.
 
-## Why the WARN repeats across commands
+## Why the notice repeats across commands
 
 The once-per-process dedup cannot span processes, and every `factory` CLI call
-is a fresh process, so each command re-derives and re-warns once. It is
-cosmetic; correctness (state always under factory's own dir) is already
+is a fresh process, so each command re-derives and re-notifies once (at DEBUG). It
+is cosmetic; correctness (state always under factory's own dir) is already
 guaranteed by the two layers above. The only way to silence it permanently is
 to stop the foreign export — i.e. set `CLAUDE_PLUGIN_DATA` to factory's
 canonical dir in your shell profile, or launch through `merged-settings.json`

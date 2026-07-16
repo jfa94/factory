@@ -45,20 +45,27 @@ out of context — re-executes. This is why fails carry a closed failure class
 human what to do, and tells the ladder whether to retry.
 
 The producer's own terminal STATUS line (`agents/implementer.md`) parses into a
-closed outcome union (`src/producer/agents.ts`) that `classifyFailure` reads:
+closed outcome union (`src/producer/agents.ts`). Only the two **classified-failure**
+outcomes reach `classifyFailure`; the rest are handled by `applyProducerOutcome`
+(`src/orchestrator/transitions.ts`) **before** classification — routing one of them
+into `classifyFailure` throws loud, since none is a rung-burning capability failure:
 
-| Producer outcome   | STATUS line                                                   | Classifies as                                  |
-| ------------------ | ------------------------------------------------------------- | ---------------------------------------------- |
-| `done`             | `STATUS: DONE` / `STATUS: DONE_WITH_CONCERNS`                 | success — advance                              |
-| `blocked-escalate` | `STATUS: BLOCKED — escalate: <reason>`                        | terminal `spec-defect`                         |
-| `test-defective`   | `STATUS: BLOCKED — escalate: test requires revision <reason>` | `capability` — retry (regenerate the RED test) |
-| `needs-context`    | `STATUS: NEEDS_CONTEXT — <question>`                          | `capability` — retry                           |
-| `error`            | unparseable / empty                                           | `capability` — retry                           |
+| Producer outcome    | STATUS line                                                   | Handled as                                                                                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `done`              | `STATUS: DONE` / `STATUS: DONE_WITH_CONCERNS`                 | success — advance                                                                                                                                                                                                             |
+| `already-satisfied` | `STATUS: ALREADY_SATISFIED — <shas>: <evidence>`              | **verified** (not classified — Decision 70): `record.ts` checks the cited SHAs against the base (ancestry + test gate). Verified → complete the task + append a `ledger.json` entry; rejected → `fix_findings` + a rung burn. |
+| `blocked-escalate`  | `STATUS: BLOCKED — escalate: <reason>`                        | terminal `spec-defect` (via `classifyFailure`)                                                                                                                                                                                |
+| `test-defective`    | `STATUS: BLOCKED — escalate: test requires revision <reason>` | `capability` — retry (regenerate the RED test) (via `classifyFailure`)                                                                                                                                                        |
+| `needs-context`     | `STATUS: NEEDS_CONTEXT — <question>`                          | **not classified** (Decision 69): first ask re-spawns ONCE at the same rung with the question injected; a second consecutive ask fails loud `needs-context` (rescue-recoverable, answered via `rescue apply --answer`).       |
+| `error`             | unparseable / empty                                           | **not classified** (Decision 71): spends one spawn **re-drive** slot (`SPAWN_REDRIVE_CAP`), never a rung; over-cap fails `blocked-environmental`.                                                                             |
 
 `test-defective` is split out of `blocked-escalate` by a single, deliberately
 **contiguous** uppercased substring — `TEST REQUIRES REVISION`. A genuine spec
 contradiction that merely _mentions_ "the criterion the test verifies" stays
 `blocked-escalate` (terminal). See [the recovery path](#the-test-defective-recovery-path).
+`ALREADY_SATISFIED` is parsed **before** `NEEDS_CONTEXT`, so a claim that also muses
+about missing context stays a verifiable claim; zero cited SHAs is not a parse error
+(the engine-side verifier rejects the unevidenced claim downstream).
 
 ## Rule 2 — Change a variable each rung
 
@@ -144,8 +151,9 @@ sequenceDiagram
   accepts `test-defective` **only** from the `exec` phase — only the implementer may
   judge a test defective. Because the status parser is role-blind, a non-exec role can
   still emit the signal; rather than throwing (which would escape `next-action`'s catch),
-  the outcome is reclassified as a producer **error** and routed through `escalateOrFail`,
-  so the ladder records and caps it like any other failure.
+  it is treated as an infra-grade garbage signal and **re-spawned at the same
+  `(phase, rung)` on the spawn re-drive budget** (Decision 71 — like a no-STATUS `error`),
+  not burning an escalation rung.
 - **Feedback carry.** The implementer's reason is persisted on the transient task
   field `test_revision_feedback`, then injected into the regenerating test-writer's
   `priorFailures` so it writes a behavioral test instead of re-pinning the same

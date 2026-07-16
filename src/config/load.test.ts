@@ -89,6 +89,32 @@ describe('resolveDataDir', () => {
             expect(warn).toHaveBeenCalledTimes(2)
         })
 
+        it('default sink: a successful auto-redirect logs at DEBUG, never WARN (self-correcting, Fix 8)', () => {
+            const pluginRoot = cacheRoot()
+            const writes: string[] = []
+            const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+                writes.push(String(chunk))
+                return true
+            })
+            const prev = process.env.FACTORY_LOG_LEVEL
+            process.env.FACTORY_LOG_LEVEL = 'debug'
+            try {
+                // No injected warn → the module's default logger sink decides the level.
+                resolveDataDir({env: {CLAUDE_PLUGIN_DATA: foreign(home)}, home, pluginRoot})
+                const line = writes.find((w) => w.includes('auto-redirected'))
+                expect(line).toBeDefined()
+                expect(line).toContain('[DEBUG]')
+                expect(line).not.toContain('[WARN]')
+            } finally {
+                spy.mockRestore()
+                if (prev === undefined) {
+                    Reflect.deleteProperty(process.env, 'FACTORY_LOG_LEVEL')
+                } else {
+                    process.env.FACTORY_LOG_LEVEL = prev
+                }
+            }
+        })
+
         it('emits an ACTIONABLE message naming the corrected dir + the permanent fix', () => {
             const pluginRoot = cacheRoot()
             const warn = vi.fn()

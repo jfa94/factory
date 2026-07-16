@@ -41,13 +41,13 @@ caller's checkout (see [reference/cli.md](../reference/cli.md#per-repo-current-r
 The `RescueScan` reports per-task
 dispositions:
 
-| Disposition   | Task shape                                                           | Default rescue action       |
-| ------------- | -------------------------------------------------------------------- | --------------------------- |
-| `shipped`     | `done` (merged)                                                      | Never touched.              |
-| `runnable`    | `pending`                                                            | The runner will pick it up. |
-| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase   | **Reset** to pending.       |
-| `recoverable` | `failed` + `blocked-environmental` — the blocker may have cleared    | **Reset** to pending.       |
-| `dead-end`    | `failed` + `spec-defect`/`capability-budget` — re-running repeats it | Left failed.                |
+| Disposition   | Task shape                                                                                                                                                                                                                                                                            | Default rescue action       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `shipped`     | `done` (merged)                                                                                                                                                                                                                                                                       | Never touched.              |
+| `runnable`    | `pending`                                                                                                                                                                                                                                                                             | The runner will pick it up. |
+| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase                                                                                                                                                                                                                    | **Reset** to pending.       |
+| `recoverable` | `failed` + `blocked-environmental` (blocker may have cleared), `needs-context` (a producer question a human can answer — [Decision 69](../explanation/decisions.md), step 3d), or `blocked-dependency` (a cascade victim that never ran — [Decision 72](../explanation/decisions.md)) | **Reset** to pending.       |
+| `dead-end`    | `failed` + `spec-defect`/`capability-budget` — re-running repeats it                                                                                                                                                                                                                  | Left failed.                |
 
 Key fields: `resettable` (= `stuck ∪ recoverable`), `dead_ends`, `needs_rescue`,
 and `would_deadlock` (true iff a re-drive would throw). If `needs_rescue` is false,
@@ -150,6 +150,23 @@ factory resume
 
 The re-entered `finalizeRun` re-runs the reconcile (now clean), pushes, opens the rollup PR,
 and overwrites the marker with the real rollup result.
+
+## 3d. Answer a needs-context question
+
+A task that failed `needs-context` ([Decision 69](../explanation/decisions.md)) asked a
+question the repo and spec could not answer — twice. The question is persisted on the task
+and printed on its `scan` line (the `question` field); `scan` also proposes the exact
+answer command as a `hint`. Reset the task **with the answer**, which is injected into the
+next producer's prompt:
+
+```bash
+factory rescue apply --task <id> --answer "<your answer>"
+```
+
+`--answer` requires exactly ONE `--task`, and that task must carry a recorded question
+(both are loud errors otherwise). The reset preserves the question and stamps the answer
+alongside it. `rescue auto` self-heal never touches a `needs-context` failure — there is no
+answer to give blind, so only this human channel clears it.
 
 ## 4. Reconcile git/GitHub drift
 

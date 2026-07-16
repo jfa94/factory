@@ -237,7 +237,7 @@ async function recordResults(
         if (results.producer === undefined) {
             throw new Error(`drive: phase '${phase}' expects producer-status results`)
         }
-        const env = await applyRecordProducer(deps.state, runId, taskId, phase, results.producer.status)
+        const env = await applyRecordProducer(record, runId, taskId, phase, results.producer.status)
         return env.step
     }
     // phase === "verify" (checked above via isSpawnPhase)
@@ -480,7 +480,8 @@ export async function nextAction(
                                 `hung spawn: re-drive budget (${SPAWN_REDRIVE_CAP}) for phase ` +
                                     `'${spawnPhase}' rung ${task.escalation_rung} exhausted — the spawn ` +
                                     `repeatedly exceeded the wall clock (config stallTtlMinutes/` +
-                                    `hungSpawnMinutes) without delivering results`
+                                    `hungSpawnMinutes) or died without a parseable STATUS ` +
+                                    `(Decision 71) without ever delivering usable results`
                             )
                             return doneFromStep(runId, taskId, step)
                         }

@@ -75,6 +75,21 @@ describe('effectiveAutoResets', () => {
         ).toEqual(['stuck', 'recover'])
     })
 
+    it('excludes a needs-context failure — self-heal has no answer (Decision 69)', () => {
+        expect(
+            effective([
+                {
+                    task_id: 'q',
+                    status: 'failed',
+                    failure_class: 'needs-context',
+                    failure_reason: 'asked twice: which auth provider?',
+                    needs_context: {question: 'which auth provider?'},
+                },
+                {task_id: 'fine', status: 'executing'},
+            ])
+        ).toEqual(['fine'])
+    })
+
     it('excludes a candidate depending on a dead-end (would re-cascade)', () => {
         expect(
             effective([

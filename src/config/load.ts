@@ -215,20 +215,28 @@ export function resolveDataDir(opts: DataDirOptions = {}): string {
             log.warn(m)
         })
 
+    // A SUCCESSFUL redirect is self-correcting → debug by default (Fix 8); real
+    // problems inside expectedDataDir (unparseable marketplace.json) keep `warn`.
+    const notifyRedirect =
+        opts.warn ??
+        ((m: string) => {
+            log.debug(m)
+        })
+
     const corrected = expectedDataDir({current, home, pluginRoot, warn})
     if (corrected != null && corrected.length > 0 && corrected !== current) {
-        // Fire the warning ONCE per distinct redirect per process (resolveDataDir is
+        // Fire the notice ONCE per distinct redirect per process (resolveDataDir is
         // called ~20×/command). Keyed on the (current, corrected) pair so a different
-        // leak still warns; JSON-encoded so the two paths can't ambiguously collide
+        // leak still notifies; JSON-encoded so the two paths can't ambiguously collide
         // (a path may contain spaces, so a raw separator would be unsound).
         const key = JSON.stringify([current ?? '', corrected])
         if (!warnedRedirects.has(key)) {
             warnedRedirects.add(key)
-            warn(
+            notifyRedirect(
                 `CLAUDE_PLUGIN_DATA is set to '${current ?? ''}', which belongs to ` +
                     `another plugin — factory auto-redirected to its canonical data dir ` +
                     `'${corrected}'. This is benign and self-corrected: no action is ` +
-                    `required for correctness. To silence this warning permanently, set ` +
+                    `required for correctness. To silence this notice permanently, set ` +
                     `CLAUDE_PLUGIN_DATA to factory's own dir ` +
                     `(e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
             )

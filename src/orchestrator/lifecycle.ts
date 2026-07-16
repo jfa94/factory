@@ -13,12 +13,62 @@
  */
 import {seedTaskRows, assertAcyclic, type StateManager} from '../core/state/index.js'
 import {epochToIso} from '../shared/time.js'
+import {createLogger, nowIso} from '../shared/index.js'
+import {latestByTask} from '../spec/ledger.js'
 import type {SpecStore, SpecManifest} from '../spec/index.js'
 import {planResume, type UsageReading} from '../quota/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
 import type {Config, RunState, RunStatus, TaskState} from '../types/index.js'
 import {ensureStaging, provisionProtection, runStagingBranch, type GitClient, type GhClient} from '../git/index.js'
 import {UsageError} from '../shared/usage-error.js'
+
+const log = createLogger('run')
+
+/**
+ * Decision 70 — flip seeded rows to `done` for tasks whose latest ledger entry's
+ * SHAs are ALL ancestors of the fresh staging tip. Mutates `seeded` in place
+ * (pre-persist — the run row is created from it right after). An unresolvable SHA
+ * is a normal NO (the base moved past it, or the commit never reached this remote).
+ */
+async function seedFromLedger(
+    specStore: SpecStore,
+    request: SpecManifest,
+    seeded: Record<string, TaskState>,
+    stagingDeps: RunStagingDeps,
+    stagingTip: string
+): Promise<void> {
+    const latest = latestByTask(await specStore.ledger(request.repo, request.spec_id))
+    if (latest.size === 0) {
+        return
+    }
+    const git = stagingDeps.gitClient
+    const cwd = stagingDeps.targetRoot
+    const isAncestor = async (sha: string): Promise<boolean> => {
+        try {
+            const resolved = await git.revParse(sha, {cwd})
+            return (await git.mergeBase(resolved, stagingTip, {cwd})) === resolved
+        } catch {
+            return false
+        }
+    }
+    const shippedIds: string[] = []
+    for (const [taskId, entry] of latest) {
+        const row = seeded[taskId]
+        if (row === undefined) {
+            continue // stale ledger entry for a task the (regenerated) spec no longer has
+        }
+        const checks = await Promise.all(entry.shas.map(isAncestor))
+        if (checks.every(Boolean)) {
+            seeded[taskId] = {...row, status: 'done', ended_at: nowIso()}
+            shippedIds.push(taskId)
+        }
+    }
+    if (shippedIds.length > 0) {
+        log.info(
+            `run create: seeded ${shippedIds.length} task(s) as already-shipped from ledger (${shippedIds.join(', ')})`
+        )
+    }
+}
 
 export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
     const ctx = {context: 'run create', specLabel: `spec ${request.spec_id}`}
@@ -187,13 +237,19 @@ async function createRunFromManifest(
     // + re-provision — rather than stranding a `running` row over missing/unprotected
     // staging that neither resume nor the task loop ever re-provisions.
     if (stagingDeps !== undefined) {
-        await ensureStaging({
+        const staging = await ensureStaging({
             gitClient: stagingDeps.gitClient,
             stagingBranch: branch,
             baseBranch: stagingDeps.config.git.baseBranch,
             cwd: stagingDeps.targetRoot,
             orchestratorWorktreePath: stagingDeps.orchestratorWorktreePath,
         })
+        // Decision 70 — ledger-aware seeding: a task whose latest ledger entry's SHAs are
+        // ALL ancestors of the fresh staging tip already shipped (a prior run's merged
+        // rollup or a verified ALREADY_SATISFIED claim) — seed it `done` so producers are
+        // never re-spawned onto work the base already contains. Staging-gated: the bare
+        // `createRun` direct-API path has no git client and seeds everything pending.
+        await seedFromLedger(specStore, request, seeded, stagingDeps, staging.stagingTip)
         await provisionProtection({
             ghClient: stagingDeps.ghClient,
             owner: stagingDeps.owner,

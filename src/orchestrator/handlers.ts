@@ -155,6 +155,32 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     }
 
     /**
+     * The open NEEDS_CONTEXT question (Decision 69), injected into BOTH producer
+     * roles: unanswered on the one same-rung re-ask (the agent must self-resolve or
+     * re-ask, at which point the task fails loud); answered after a rescue
+     * `--answer` reset (the human's reply rides `needs_context.answer`).
+     */
+    function needsContextNote(task: TaskState): PriorFailureNote[] {
+        if (task.needs_context === undefined) {
+            return []
+        }
+        const {question, answer} = task.needs_context
+        return [
+            {
+                rung: task.escalation_rung,
+                summary:
+                    answer !== undefined
+                        ? `A prior attempt stopped with NEEDS_CONTEXT and asked: "${question}". ` +
+                          `A human answered: "${answer}". Proceed using that answer.`
+                        : `A prior attempt stopped with NEEDS_CONTEXT and asked: "${question}". ` +
+                          `Resolve it from repo/spec evidence if at all possible; only if it is genuinely ` +
+                          `unanswerable from the repo and the spec, return STATUS: NEEDS_CONTEXT again ` +
+                          `(the task then stops and surfaces the question to a human).`,
+            },
+        ]
+    }
+
+    /**
      * Assemble a producer prompt-context for `(role, rung)` and return the
      * one-agent spawn request (prompt inlined verbatim, 3b(i)) that resumes at
      * `resumePhase`. The context is built from the holdout-stripped `visibleCriteria`
@@ -186,6 +212,10 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             files: specTask.files,
             rung,
             designSystemDocs,
+            // Fix 2: the spec's tests_to_write reach the test-writer (the gate at
+            // spec/gates.ts maps every criterion to one — dropping them here made the
+            // producer re-derive coverage blind). Implementer works from the tests.
+            ...(role === 'test-writer' ? {testsToWrite: specTask.tests_to_write} : {}),
             // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
             // the rung dial — a defective RED test must be steered away from on the very
             // first regeneration (rung 1), where the generic dial note is still off.
@@ -302,10 +332,17 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                           },
                       ]
                     : []
-            return producerSpawn('test-writer', specTask, ctx.run.run_id, task.escalation_rung, 'exec', [
-                ...revisionNote,
-                ...e2eFeedbackNote(task),
-            ])
+            return producerSpawn(
+                'test-writer',
+                specTask,
+                ctx.run.run_id,
+                task.escalation_rung,
+                'exec',
+                [...revisionNote, ...e2eFeedbackNote(task), ...needsContextNote(task)],
+                // D70: a rejected ALREADY_SATISFIED claim (or any tests-routed send-back)
+                // persists fix_findings — thread them so the test-writer sees the rejection.
+                task.fix_findings
+            )
         },
 
         /**
@@ -322,7 +359,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
                 ctx.run.run_id,
                 task.escalation_rung,
                 'verify',
-                e2eFeedbackNote(task),
+                [...e2eFeedbackNote(task), ...needsContextNote(task)],
                 // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
                 // gate-stderr record (record.ts persisted it on the wait-retry branch) —
                 // patches the specific verified misses instead of re-nuking.

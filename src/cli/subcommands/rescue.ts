@@ -80,12 +80,16 @@ a routed {kind:"nothing"} answer, not a usage error — safe to fire blind.`
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
+  factory rescue apply [--run <id>] [--task <id>]... [--answer <text>] [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--reset-traceability]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
                        resettable set; a 'done' task is a loud error, a 'pending'
                        one is skipped. An explicitly-named dead-end IS reset.
+  --answer             Answer a needs-context failure's recorded question (Decision
+                       69). Requires exactly ONE --task, and that task must carry a
+                       recorded question (the scan line prints it). The answer is
+                       injected into the next producer spawn's prompt.
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
   --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
@@ -210,6 +214,13 @@ function repairHints(runId: string, scan: RescueScan): string[] {
     if (scan.resettable.length > 0) {
         hints.push(`factory rescue apply --run ${runId}`)
     }
+    // Decision 69: a needs-context failure is best answered, not blindly reset — one
+    // hint per open question so /factory:resume can surface it verbatim.
+    for (const t of scan.tasks) {
+        if (t.failure_class === 'needs-context' && t.status === 'failed') {
+            hints.push(`factory rescue apply --run ${runId} --task ${t.task_id} --answer "<answer>"`)
+        }
+    }
     for (const id of scan.dead_ends) {
         hints.push(`factory rescue apply --run ${runId} --task ${id} --include-dead-ends`)
     }
@@ -299,6 +310,8 @@ export async function runApply(argv: string[], overrides: RescueOverrides = {}):
     if (args.flag('help') === true) {
         return emitHelp(APPLY_HELP)
     }
+    const answerFlag = args.flag('answer')
+    const answer = typeof answerFlag === 'string' && answerFlag.length > 0 ? answerFlag : undefined
 
     const {dataDir, state} = openState()
     const runId = await resolveRunIdOrCurrent(state, args, 'rescue apply', overrides)
@@ -326,6 +339,7 @@ export async function runApply(argv: string[], overrides: RescueOverrides = {}):
         resetE2e,
         recheckRollup,
         resetTraceability,
+        ...(answer !== undefined ? {answer} : {}),
         ...(adoptedDone.length > 0 ? {adoptedDone} : {}),
     })
     if (result.touched) {

@@ -163,10 +163,21 @@ export async function escalateOrFail(
     return {done: false, phase: resumePhase}
 }
 
-/** Map a non-`done` {@link ProducerOutcome} to a classify decision (Δ D). */
+/**
+ * Map a non-`done` {@link ProducerOutcome} to a classify decision (Δ D).
+ * `needs-context` and `error` throw LOUD: neither is a capability failure —
+ * both are handled by {@link applyProducerOutcome} BEFORE classification
+ * (Decisions 69/71), so a caller routing one here is a bug, not a rung burn.
+ */
 export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecision {
     if (outcome.status === 'done') {
         throw new Error("transitions: classifyProducerFailure called on a 'done' outcome")
+    }
+    if (outcome.status === 'needs-context' || outcome.status === 'error' || outcome.status === 'already-satisfied') {
+        throw new Error(
+            `transitions: classifyProducerFailure called on a '${outcome.status}' outcome — ` +
+                'handled before classification (Decisions 69/70/71), never a ladder retry'
+        )
     }
     return classifyFailure({
         kind: 'producer-status',
@@ -204,8 +215,57 @@ export async function applyProducerOutcome(
             // A completed test-writer re-run resolves any pending defect feedback — clear
             // it so a stale note never leaks into a later rung's regeneration.
             ...(opts.role === 'test-writer' ? {test_revision_feedback: undefined} : {}),
+            // A completed producer (any role) resolves any open NEEDS_CONTEXT question
+            // by construction (Decision 69) — clear it so a stale question never leaks.
+            needs_context: undefined,
         }))
         return {done: false, phase: opts.resumePhase}
+    }
+    // A dead/no-STATUS spawn is an INFRA signal, not producer incapability
+    // (Decision 71): re-spawn at the SAME (phase, rung). The re-emission hits the
+    // orchestrator's matching spawn_in_flight branch, which spends one `redrives`
+    // slot (cap SPAWN_REDRIVE_CAP) and fails `blocked-environmental` over-cap —
+    // exactly the Decision 66 outcome — instead of burning an escalation rung.
+    if (outcome.status === 'error') {
+        log.warn(
+            `task '${taskId}' producer spawn produced no usable STATUS (${outcome.reason}) — ` +
+                're-spawning at the same rung (spends one spawn re-drive slot)'
+        )
+        return {done: false, phase: opts.phase}
+    }
+    // NEEDS_CONTEXT is a QUESTION, not a capability failure (Decision 69): the
+    // first ask persists the question and re-spawns ONCE at the same rung with it
+    // injected (handlers' needsContextNote); a second consecutive ask fails LOUD
+    // with class `needs-context` so rescue can surface the question to a human.
+    if (outcome.status === 'needs-context') {
+        const run = await deps.state.read(runId)
+        const asked = run.tasks[taskId]?.needs_context !== undefined
+        await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            // Refresh to the CURRENT question (dropping any spent answer) so rescue
+            // always surfaces what the latest attempt actually asked.
+            needs_context: {question: outcome.reason},
+        }))
+        if (asked) {
+            return failStep(
+                deps,
+                runId,
+                taskId,
+                'needs-context',
+                `producer needs context (asked twice without resolving): ${outcome.reason}`
+            )
+        }
+        log.warn(`task '${taskId}' producer asked NEEDS_CONTEXT — one same-rung re-ask with the question injected`)
+        return {done: false, phase: opts.phase}
+    }
+    // An ALREADY_SATISFIED claim must be VERIFIED against git + the test gate by
+    // record.ts BEFORE this state seam (Decision 70) — reaching here unverified is
+    // an engine bug, never a silent complete or a rung burn.
+    if (outcome.status === 'already-satisfied') {
+        throw new Error(
+            `transitions: applyProducerOutcome called on an 'already-satisfied' outcome for task ` +
+                `'${taskId}' — the claim must be engine-verified in record.ts first (Decision 70)`
+        )
     }
     // A `test-defective` escalation (only the implementer raises it) recovers by
     // RE-RUNNING THE TEST-WRITER: persist the defect feedback and resume at `tests`
@@ -213,19 +273,13 @@ export async function applyProducerOutcome(
     if (outcome.status === 'test-defective') {
         if (opts.phase !== 'exec') {
             // The parser is role-blind, so a non-exec role can emit 'test-defective'.
-            // That signal is nonsensical for the role: classify as a producer error so
-            // the ladder records + caps it instead of escaping next-action's catch.
-            return escalateOrFail(
-                deps,
-                runId,
-                taskId,
-                classifyFailure({
-                    kind: 'producer-status',
-                    status: 'error',
-                    reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`,
-                }),
-                opts.phase
+            // Nonsensical for the role — an infra-grade garbage signal: re-spawn at the
+            // same (phase, rung) on the re-drive budget, like a no-STATUS spawn.
+            log.warn(
+                `task '${taskId}' emitted 'test-defective' from non-exec role '${opts.role}' — ` +
+                    're-spawning at the same rung (spends one spawn re-drive slot)'
             )
+            return {done: false, phase: opts.phase}
         }
         await deps.state.updateTask(runId, taskId, (t) => ({
             ...t,
