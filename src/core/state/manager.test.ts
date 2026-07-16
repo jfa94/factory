@@ -368,6 +368,23 @@ describe('enumeration: listRuns / findActiveByIssue (resolve-or-reuse)', () => {
             /2 active runs for issue #42.*factory:resume/s
         )
     })
+
+    it('hasOtherActiveForRepo: sibling-issue run counts, self and terminal runs do not (D74)', async () => {
+        const m = mgr()
+        await m.create({run_id: 'run-1', staging_branch: 'staging-run-1', spec: specA})
+        // Only itself is active → false.
+        expect(await m.hasOtherActiveForRepo(specA.repo, 'run-1')).toBe(false)
+        // A different-issue run on the SAME repo → true.
+        await m.create({run_id: 'run-2', staging_branch: 'staging-run-2', spec: specB})
+        expect(await m.hasOtherActiveForRepo(specA.repo, 'run-1')).toBe(true)
+        // Terminal sibling → false again.
+        await m.finalize('run-2', 'completed')
+        expect(await m.hasOtherActiveForRepo(specA.repo, 'run-1')).toBe(false)
+        // A run on another repo never counts.
+        expect(await m.hasOtherActiveForRepo('other/repo', 'run-1')).toBe(false)
+        // No exclusion (scaffold's probe): the active run itself counts.
+        expect(await m.hasOtherActiveForRepo(specA.repo)).toBe(true)
+    })
 })
 
 describe('findActiveByOwner — resolve the live run a session owns (run-isolation L1.3)', () => {

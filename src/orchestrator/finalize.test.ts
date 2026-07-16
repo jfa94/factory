@@ -730,6 +730,114 @@ describe('finalizeRun', () => {
         // (c) run reached completed.
         expect(res.run.status).toBe('completed')
     })
+
+    describe('D74 — run-scoped develop de-escalation (step 6.5)', () => {
+        const BASELINE = {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false}
+        const DONE: TaskSeed[] = [{task_id: 't1', status: 'done', pr_number: 11}]
+        const developPuts = () => gh.protectionPuts.filter((p) => p.branch === 'develop').map((p) => p.body)
+
+        it('completed + merged rollup → develop drops to baseline, after the staging branch GC', async () => {
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'live'), RUN_ID)
+
+            expect(result.rollup?.merged).toBe(true)
+            expect(developPuts()).toEqual([BASELINE])
+            expect(gh.calls.indexOf(`api DELETE refs/heads/staging-${RUN_ID}`)).toBeLessThan(
+                gh.calls.indexOf('api PUT protection develop')
+            )
+        })
+
+        it('completed + no-merge → baseline PUT (open PR is manual-merge; no armed auto-merge to protect)', async () => {
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'no-merge'), RUN_ID)
+
+            expect(result.rollup?.reason).toBe('no-merge')
+            expect(developPuts()).toEqual([BASELINE])
+        })
+
+        it('failed run (no rollup) → baseline PUT', async () => {
+            const tasks: TaskSeed[] = [{task_id: 't1', status: 'failed', failure_class: 'capability-budget'}]
+            await seed(tasks)
+            const result = await finalizeRun(makeDeps(makeSpec(tasks), 'live'), RUN_ID)
+
+            expect(result.rollup).toBeUndefined()
+            expect(developPuts()).toEqual([BASELINE])
+        })
+
+        it('auto-armed rollup → NO baseline PUT (de-escalating would land the armed auto-merge WITHOUT CI); the --recheck-rollup re-drive de-escalates once merged', async () => {
+            const {applyRescue} = await import('../rescue/apply.js')
+            await seed(DONE)
+            const spec = makeSpec(DONE)
+            gh.failMergeSquashUnlessAuto = new Error(
+                'GraphQL: Pull request is not mergeable: the base branch policy prohibits the merge. (mergePullRequest)'
+            )
+
+            const first = await finalizeRun(makeDeps(spec, 'live'), RUN_ID)
+            expect(first.rollup?.reason).toBe('auto-armed')
+            expect(developPuts()).toEqual([]) // strict profile stays — the PR is still gated
+
+            // The queued --auto merge lands externally; human reopens for a re-drive.
+            gh.setPr({...getOrThrow(gh.prs, `staging-${RUN_ID}`), state: 'MERGED'})
+            await applyRescue(state, RUN_ID, {recheckRollup: true})
+            const second = await finalizeRun(makeDeps(spec, 'live'), RUN_ID)
+
+            expect(second.rollup?.merged).toBe(true)
+            expect(developPuts()).toEqual([BASELINE]) // now it de-escalates
+        })
+
+        it('ci-failing rollup → NO baseline PUT (PR pending; rescue re-drives it later)', async () => {
+            gh = new FakeGhClient({checks: 'failing'})
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'live'), RUN_ID)
+
+            expect(result.rollup?.reason).toBe('ci-failing')
+            expect(developPuts()).toEqual([])
+        })
+
+        it('ci-timeout rollup → NO baseline PUT', async () => {
+            gh = new FakeGhClient({checks: 'pending'})
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'live'), RUN_ID)
+
+            expect(result.rollup?.reason).toBe('ci-timeout')
+            expect(developPuts()).toEqual([])
+        })
+
+        it('sibling active run on the same repo → NO baseline PUT (would strip its enforcement)', async () => {
+            await state.create({
+                run_id: 'run-sibling',
+                staging_branch: 'staging-run-sibling',
+                spec: {repo: REPO, spec_id: '7-search', issue_number: 7},
+            })
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'live'), RUN_ID)
+
+            expect(result.rollup?.merged).toBe(true)
+            expect(developPuts()).toEqual([])
+        })
+
+        it('debug run → NO baseline PUT (debug never escalates at create — symmetric exemption)', async () => {
+            await state.update(RUN_ID, (s) => ({...s, debug: true}))
+            await seed(DONE)
+            const result = await finalizeRun(makeDeps(makeSpec(DONE), 'live'), RUN_ID)
+
+            expect(result.rollup?.merged).toBe(true)
+            expect(developPuts()).toEqual([])
+        })
+
+        it('permanent mode → develop protection never touched', async () => {
+            await seed(DONE)
+            const config = defaultConfig()
+            const deps = {
+                ...makeDeps(makeSpec(DONE), 'live'),
+                config: {...config, git: {...config.git, developProtection: 'permanent' as const}},
+            }
+            const result = await finalizeRun(deps, RUN_ID)
+
+            expect(result.rollup?.merged).toBe(true)
+            expect(developPuts()).toEqual([])
+        })
+    })
 })
 
 // ---------------------------------------------------------------------------

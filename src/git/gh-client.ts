@@ -142,6 +142,12 @@ export interface GhClient {
 export interface ProtectionPutBody {
     requiredStatusChecks: string[]
     strict: boolean
+    /**
+     * `enforce_admins` — apply the rules to repo admins too. Defaults TRUE (the
+     * run/staging profiles). Develop's baseline profile (D74) sets FALSE so
+     * admins can push straight to develop between runs.
+     */
+    enforceAdmins?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +462,7 @@ export class DefaultGhClient implements GhClient {
                 strict: body.strict,
                 contexts: body.requiredStatusChecks,
             },
-            enforce_admins: true,
+            enforce_admins: body.enforceAdmins ?? true,
             required_pull_request_reviews: null,
             restrictions: null,
             // D55: GitHub defaults allow_deletions to FALSE, which made every leftover

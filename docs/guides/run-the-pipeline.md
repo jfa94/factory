@@ -22,8 +22,10 @@ The pipeline refuses to start against an unscaffolded or unprotected repo.
 
 If it refuses on missing branch protection, provision it or protect the `develop`
 branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md). (Scaffold
-protects `develop`; each run cuts its own private `staging-<run-id>` integration
-branch at create — there is no shared `staging` branch to protect.)
+writes develop's **baseline** protection; `run create` escalates it to the strict
+profile for the run's duration and every terminal path drops it back — Decision 74.
+Each run cuts its own private `staging-<run-id>` integration branch at create —
+there is no shared `staging` branch to protect.)
 
 ## 2. Start the run
 
@@ -59,7 +61,10 @@ TDD + the holdout), but **only when the whole PRD completed** (see [Read the
 outcome](#4-read-the-outcome)). Pass `--no-ship` to open the PRs but never merge.
 Ship mode **is persisted** on the run at create, so the runner,
 `/factory:resume`, and `finalize` read it back without re-passing. (`run finalize
---no-ship` overrides the persisted value for that one finalize call.)
+--no-ship` overrides the persisted value for that one finalize call.) `--no-ship`
+caveat (D74, run-scoped): finalize drops develop back to baseline protection with
+the rollup PR deliberately left open, so merging it later needs only the baseline
+checks green for non-admins (no Mutation Testing/strict), and admins can bypass.
 
 ### Start fresh vs. continue an existing run
 

@@ -23,6 +23,8 @@ import type {ProtectionApiResult} from '../../git/index.js'
 
 const cfg = defaultConfig()
 const BASE = cfg.git.baseBranch // "develop"
+/** cfg pinned to the pre-D74 permanent strict profile. */
+const PERMANENT_CFG = {...cfg, git: {...cfg.git, developProtection: 'permanent' as const}}
 const execFileAsync = promisify(execFile)
 
 /** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
@@ -395,14 +397,14 @@ describe('runScaffold', () => {
         ).rejects.toThrow(/refuses to start|protection/i)
     })
 
-    it('--provision writes protection then passes the gate', async () => {
+    it('--provision (permanent mode) writes the strict profile then passes the gate', async () => {
         const gh = new FakeGhClient() // starts unprotected
         const report = await runScaffold({
             targetRoot: root,
             templatesDir,
             owner: 'acme',
             repo: 'widgets',
-            config: cfg,
+            config: PERMANENT_CFG,
             dataDirRules: DATA_DIR_RULES,
             ghClient: gh,
             provision: true,
@@ -411,6 +413,96 @@ describe('runScaffold', () => {
         expect(report.protection.strict_up_to_date).toBe(true)
         // The PUT was issued against develop (the integration base), not a shared staging branch.
         expect(gh.calls).toContain(`api PUT protection ${BASE}`)
+    })
+
+    describe('D74 — run-scoped develop protection (the default mode)', () => {
+        const scaffoldArgs = (gh: FakeGhClient, extra: Partial<Parameters<typeof runScaffold>[0]> = {}) => ({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            dataDirRules: DATA_DIR_RULES,
+            ghClient: gh,
+            provision: false,
+            ...extra,
+        })
+
+        it('--provision writes the BASELINE profile (baseline contexts, strict off, admins bypass)', async () => {
+            const gh = new FakeGhClient() // starts unprotected
+            const report = await runScaffold(scaffoldArgs(gh, {provision: true}))
+            expect(gh.protectionPuts).toEqual([
+                {
+                    branch: BASE,
+                    body: {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
+                },
+            ])
+            expect(report.protection.provisioned).toBe(true)
+            expect(report.protection.strict_up_to_date).toBe(false)
+            expect(report.protection.required_status_checks).toEqual(['Quality', 'Security Scan'])
+        })
+
+        it('--provision DOWNGRADES a pre-existing permanent strict profile (the one-shot migration)', async () => {
+            const gh = new FakeGhClient({protection: {[BASE]: PROTECTED}})
+            const report = await runScaffold(scaffoldArgs(gh, {provision: true}))
+            expect(gh.protectionPuts.at(-1)?.body).toEqual({
+                requiredStatusChecks: ['Quality', 'Security Scan'],
+                strict: false,
+                enforceAdmins: false,
+            })
+            expect(report.protection.strict_up_to_date).toBe(false)
+        })
+
+        it('baseline-shaped protection passes the RELAXED gate without --provision', async () => {
+            const gh = new FakeGhClient({
+                protection: {
+                    [BASE]: {
+                        enabled: true,
+                        requiredStatusChecks: ['Quality', 'Security Scan'],
+                        strictUpToDate: false, // would REFUSE under the permanent gate
+                        hasMergeQueue: false,
+                    },
+                },
+            })
+            const report = await runScaffold(scaffoldArgs(gh))
+            expect(report.protection.enabled).toBe(true)
+            expect(gh.protectionPuts).toEqual([]) // probe-only, nothing written
+        })
+
+        it('refuses when a baseline context is missing (enablement alone is not enough)', async () => {
+            const gh = new FakeGhClient({
+                protection: {
+                    [BASE]: {
+                        enabled: true,
+                        requiredStatusChecks: ['Quality'],
+                        strictUpToDate: false,
+                        hasMergeQueue: false,
+                    },
+                },
+            })
+            await expect(runScaffold(scaffoldArgs(gh))).rejects.toThrow(/Security Scan/)
+        })
+
+        it('still refuses an unprotected develop without --provision', async () => {
+            await expect(runScaffold(scaffoldArgs(new FakeGhClient()))).rejects.toThrow(/protection/i)
+        })
+
+        it('--provision REFUSES while a run is active for the repo (would downgrade the escalated profile)', async () => {
+            const gh = new FakeGhClient({protection: {[BASE]: PROTECTED}})
+            await expect(
+                runScaffold(scaffoldArgs(gh, {provision: true, hasActiveRun: () => Promise.resolve(true)}))
+            ).rejects.toThrow(/active run/)
+            expect(gh.protectionPuts).toEqual([]) // refused BEFORE the PUT
+        })
+
+        it('permanent mode REFUSES a baseline-shaped (strict-off) protection', async () => {
+            const gh = new FakeGhClient({
+                protection: {
+                    [BASE]: {...PROTECTED, strictUpToDate: false},
+                },
+            })
+            await expect(runScaffold(scaffoldArgs(gh, {config: PERMANENT_CFG}))).rejects.toThrow(/strict/i)
+        })
     })
 
     const baseArgs = (config = cfg) => ({

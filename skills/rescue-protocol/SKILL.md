@@ -32,6 +32,10 @@ consent prompt. Never edit `state.json` by hand.
    Each is its own plan item carrying the assertion the human makes by approving it
    (`--reset-e2e`: the underlying cause no longer applies; `--recheck-rollup`: the queued
    merge landed; `--reset-traceability`: the unmet PRD intent is addressed).
+   D74 side effect worth naming in the plan: a run stuck `rollup_pending` keeps develop
+   on the STRICT protection profile (finalize never de-escalates while a rollup PR is
+   pending — dropping it could land an armed auto-merge without CI); the approved
+   `--recheck-rollup` re-drive is what frees develop back to baseline.
 6. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
 7. **`rescue-diagnostic` is read-only and advisory.** Its decision shapes the plan; it
    mutates nothing itself.

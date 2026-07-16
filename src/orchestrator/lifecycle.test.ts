@@ -741,6 +741,119 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
         expect(retry.kind).toBe('created')
     })
 
+    describe('D74 — run-scoped develop protection lifecycle', () => {
+        const makeStagingDeps = (gh: FakeGhClient, config = defaultConfig()) => {
+            const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})
+            git.setRemoteUrl('origin', `git@github.com:${REPO}.git`)
+            return {
+                gitClient: git,
+                ghClient: gh,
+                config,
+                targetRoot: '/target',
+                orchestratorWorktreePath: '/target/.claude/worktrees/orchestrator-run-a',
+                owner: 'acme',
+                repo: 'widgets',
+            }
+        }
+
+        it('create ESCALATES develop to the strict run profile, after the staging provision', async () => {
+            const gh = new FakeGhClient()
+            const r = await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-a'},
+                makeStagingDeps(gh)
+            )
+            expect(r.kind).toBe('created')
+            const develop = gh.protectionPuts.filter((p) => p.branch === 'develop')
+            expect(develop).toEqual([
+                {
+                    branch: 'develop',
+                    body: {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'], strict: true},
+                },
+            ])
+            // Ordering: the staging cut+protect lands first, then the develop escalation.
+            expect(gh.calls.indexOf('api PUT protection staging-run-a')).toBeLessThan(
+                gh.calls.indexOf('api PUT protection develop')
+            )
+        })
+
+        it('permanent mode: create never touches develop protection', async () => {
+            const gh = new FakeGhClient()
+            const config = defaultConfig()
+            const r = await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-a'},
+                makeStagingDeps(gh, {...config, git: {...config.git, developProtection: 'permanent'}})
+            )
+            expect(r.kind).toBe('created')
+            expect(gh.protectionPuts.some((p) => p.branch === 'develop')).toBe(false)
+        })
+
+        it('a develop-escalation failure persists NO run row — the retry creates fresh (A3 contract)', async () => {
+            const gh = new FakeGhClient()
+            gh.failPutProtectionFor = 'develop' // staging PUT succeeds, develop PUT throws
+            await expect(
+                resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-a'}, makeStagingDeps(gh))
+            ).rejects.toThrow(/simulated putProtection failure/)
+            expect(await state.findActiveByIssue(REPO, 42)).toBeNull()
+
+            const retry = await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-a'},
+                makeStagingDeps(new FakeGhClient())
+            )
+            expect(retry.kind).toBe('created')
+        })
+
+        it('--supersede DE-ESCALATES develop to baseline after the branch delete, then the create re-escalates', async () => {
+            await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
+            const gh = new FakeGhClient()
+            const r = await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-new', intent: 'supersede'},
+                makeStagingDeps(gh)
+            )
+            expect(r.kind).toBe('superseded')
+            const develop = gh.protectionPuts.filter((p) => p.branch === 'develop')
+            // Baseline first (the supersede teardown), then the fresh run's escalation.
+            expect(develop.map((p) => p.body)).toEqual([
+                {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
+                {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'], strict: true},
+            ])
+            // The baseline PUT lands only after the old branch is gone (auto-merge disarm order).
+            expect(gh.calls.indexOf('api DELETE refs/heads/staging-run-old')).toBeLessThan(
+                gh.calls.indexOf('api PUT protection develop')
+            )
+            // The final state is the escalated run profile (run-new is live).
+            expect(gh.protection.get('develop')?.strictUpToDate).toBe(true)
+        })
+
+        it('--supersede SKIPS the de-escalation while a sibling run (same repo, other issue) is active', async () => {
+            await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
+            await state.create({
+                run_id: 'run-sibling',
+                staging_branch: 'staging-run-sibling',
+                spec: {repo: REPO, spec_id: '7-search', issue_number: 7},
+            })
+            const gh = new FakeGhClient()
+            await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-new', intent: 'supersede'},
+                makeStagingDeps(gh)
+            )
+            const develop = gh.protectionPuts.filter((p) => p.branch === 'develop')
+            // ONLY the fresh run's escalation — no baseline dip that would strip the sibling.
+            expect(develop.map((p) => p.body)).toEqual([
+                {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'], strict: true},
+            ])
+        })
+    })
+
     it('--supersede stamps launch + conflict touches on the FRESH run (S11)', async () => {
         await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-old'})
         const git = new FakeGitClient({remoteHeads: {develop: 'sha-develop-1'}})

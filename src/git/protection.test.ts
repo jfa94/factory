@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {ProtectionMissingError, probeProtection, provisionProtection, requireProtectionOrRefuse} from './protection.js'
+import {
+    ProtectionMissingError,
+    probeProtection,
+    provisionProtection,
+    putBaselineProtection,
+    requireProtectionOrRefuse,
+} from './protection.js'
 import {FakeGhClient} from './fakes.js'
 import type {ProtectionApiResult} from './gh-client.js'
 
@@ -60,5 +66,44 @@ describe('#2 / Δ A — branch-protection refuse-to-run gate', () => {
         expect(after.enabled).toBe(true)
         expect(after.strictUpToDate).toBe(true)
         expect(() => requireProtectionOrRefuse(after, ['ci'], 'staging')).not.toThrow()
+    })
+
+    describe('D74 — develop baseline profile', () => {
+        it('putBaselineProtection writes ONE PUT: baseline contexts, strict OFF, enforce_admins OFF', async () => {
+            const gh = new FakeGhClient()
+            await putBaselineProtection({
+                ghClient: gh,
+                owner: 'o',
+                repo: 'r',
+                branch: 'develop',
+                contexts: ['Quality', 'Security Scan'],
+            })
+            expect(gh.protectionPuts).toEqual([
+                {
+                    branch: 'develop',
+                    body: {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
+                },
+            ])
+            const state = await probeProtection({ghClient: gh, owner: 'o', repo: 'r', branch: 'develop'})
+            expect(state).toMatchObject({
+                enabled: true,
+                strictUpToDate: false,
+                requiredStatusChecks: ['Quality', 'Security Scan'],
+            })
+        })
+
+        it('requireProtectionOrRefuse with requireStrict:false passes a strict-off state but still rejects missing contexts', () => {
+            const baseline = {...FULL, strictUpToDate: false, requiredStatusChecks: ['Quality', 'Security Scan']}
+            expect(() =>
+                requireProtectionOrRefuse(baseline, ['Quality', 'Security Scan'], 'develop', {requireStrict: false})
+            ).not.toThrow()
+            expect(() =>
+                requireProtectionOrRefuse(baseline, ['Quality', 'Mutation Testing'], 'develop', {requireStrict: false})
+            ).toThrow(/Mutation Testing/)
+            // Enablement is still mandatory.
+            expect(() =>
+                requireProtectionOrRefuse({...baseline, enabled: false}, [], 'develop', {requireStrict: false})
+            ).toThrow(ProtectionMissingError)
+        })
     })
 })

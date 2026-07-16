@@ -36,6 +36,7 @@ import {
     probeProtection,
     requireProtectionOrRefuse,
     provisionProtection,
+    putBaselineProtection,
     resolveRepo,
     splitRepoSlug,
     type GitClient,
@@ -51,6 +52,7 @@ import {
     type NodeRuntime,
     type NodeRuntimeDeclarations,
 } from '../../ci/index.js'
+import {StateManager} from '../../core/state/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
@@ -67,17 +69,24 @@ Usage:
   factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage]
 
 Copies the committed CI + gate-config templates and probes branch protection on
-develop (the integration base). Without --provision a repo whose develop branch is
-not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
-Per-run staging branches are minted at run create — scaffold no longer touches them.
-The managed quality-gate.yml is rendered with the configured quality.gateEnv
-(set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
+develop (the integration base). Default mode (git.developProtection=run-scoped, D74):
+an UNPROTECTED develop causes scaffold to REFUSE loudly; --provision writes the light
+BASELINE profile (git.developBaselineStatusChecks required for non-admins, strict off,
+admins push freely) — the strict CI profile is escalated per-run at run create and
+dropped when the run ends. Under git.developProtection=permanent the strict profile
+(strict up-to-date + git.developRequiredStatusChecks) is asserted/provisioned instead
+and never removed. Per-run staging branches are minted at run create — scaffold no
+longer touches them. The managed quality-gate.yml is rendered with the configured
+quality.gateEnv (set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
                         Auto-derived from the 'origin' remote when omitted; an
                         explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse)
+  --provision           Write branch protection if missing (default: refuse). In
+                        run-scoped mode the PUT always writes the BASELINE profile —
+                        re-running it is also the one-shot migration off the old
+                        permanent strict profile (refused while a run is active).
   --waive mutation      Record the mutation gate as deliberately waived in the gate
                         contract instead of refusing when stryker is not installed
   --waive coverage      Record the coverage gate as deliberately waived instead of
@@ -159,6 +168,14 @@ export interface ScaffoldOptions {
     readonly dataDirRules: TargetDataDirRules
     /** --provision: write protection when missing instead of refusing. */
     readonly provision: boolean
+    /**
+     * Answers "does ANY non-terminal run exist for this repo?" (D74). Guards the
+     * run-scoped `--provision` PUT: writing the baseline while a run is active
+     * would downgrade the escalated strict profile mid-run. The CLI wrapper wires
+     * the StateManager query; omitted (tests without run state) → treated as no
+     * active run.
+     */
+    readonly hasActiveRun?: () => Promise<boolean>
     /** --waive mutation: record the mutation gate as waived instead of refusing. */
     readonly waiveMutation?: boolean
     /** --waive coverage: record the coverage gate as waived instead of refusing. */
@@ -672,8 +689,17 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     // 4. branch protection on develop: probe → refuse-if-missing, OR provision when opted in.
     //    develop is a PRECONDITION — scaffold does not create it (a missing develop
     //    makes the probe fail loud, which is acceptable).
+    //    D74 (run-scoped, default): `--provision` writes the light BASELINE profile
+    //    (developBaselineStatusChecks for non-admins, strict off, admins bypass) —
+    //    the strict run profile is escalated per-run at `run create` and dropped at
+    //    every run-terminal path. The unconditional PUT is also the one-shot
+    //    migration for repos stuck on the old permanent strict profile.
+    //    `permanent`: the pre-D74 behavior verbatim.
     const branch = opts.config.git.baseBranch
-    const required = opts.config.git.developRequiredStatusChecks
+    const runScoped = opts.config.git.developProtection === 'run-scoped'
+    const required = runScoped
+        ? opts.config.git.developBaselineStatusChecks
+        : opts.config.git.developRequiredStatusChecks
     let state = await probeProtection({
         ghClient: opts.ghClient,
         owner: opts.owner,
@@ -682,18 +708,39 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     })
     let provisioned = false
     if (opts.provision) {
-        state = await provisionProtection({
-            ghClient: opts.ghClient,
-            owner: opts.owner,
-            repo: opts.repo,
-            branch,
-            requiredChecks: required,
-            provision: true,
-        })
+        if (runScoped) {
+            if (await (opts.hasActiveRun?.() ?? Promise.resolve(false))) {
+                throw new UsageError(
+                    `--provision refused: an active run exists for ${opts.owner}/${opts.repo} — writing the ` +
+                        `baseline now would downgrade the escalated protection on '${branch}' mid-run. ` +
+                        `Finish or cancel the run first.`
+                )
+            }
+            await putBaselineProtection({
+                ghClient: opts.ghClient,
+                owner: opts.owner,
+                repo: opts.repo,
+                branch,
+                contexts: required,
+            })
+            state = await probeProtection({ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch})
+        } else {
+            state = await provisionProtection({
+                ghClient: opts.ghClient,
+                owner: opts.owner,
+                repo: opts.repo,
+                branch,
+                requiredChecks: required,
+                provision: true,
+            })
+        }
         provisioned = true
     }
     // Assert the gate in both paths: a post-provision re-probe must satisfy it too.
-    requireProtectionOrRefuse(state, required, branch)
+    // Run-scoped asserts the RELAXED gate (enabled + baseline contexts, strict not
+    // required — the baseline deliberately runs strict-off); strict + full contexts
+    // are asserted per-run at escalation time instead.
+    requireProtectionOrRefuse(state, required, branch, {requireStrict: !runScoped})
 
     return {
         repo: `${opts.owner}/${opts.repo}`,
@@ -772,6 +819,7 @@ async function run(argv: string[]): Promise<ExitCode> {
         // Bake the resolved data dir into the target permission rules.
         dataDirRules: buildTargetDataDirRules({dataDir, home: homedir()}),
         provision: args.flag('provision') === true,
+        hasActiveRun: () => new StateManager({dataDir}).hasOtherActiveForRepo(`${owner}/${repo}`),
         waiveMutation: waived.includes('mutation'),
         waiveCoverage: waived.includes('coverage'),
     })

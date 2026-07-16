@@ -55,13 +55,15 @@ change to its default.
 
 ## Common adjustments
 
-| Goal                               | Command                                                             |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| Hold back more acceptance criteria | `factory configure --set quality.holdoutPercent=30`                 |
-| Raise the mutation bar             | `factory configure --set quality.mutationScoreTarget=90`            |
-| Use a custom security scanner      | `factory configure --set quality.securityCommand="my-sast --json"`  |
-| Auto-provision branch protection   | `factory configure --set git.provision=true`                        |
-| Re-tier producer models            | `factory configure --set quota.producerModels.high=claude-opus-4-6` |
+| Goal                               | Command                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| Hold back more acceptance criteria | `factory configure --set quality.holdoutPercent=30`                     |
+| Raise the mutation bar             | `factory configure --set quality.mutationScoreTarget=90`                |
+| Use a custom security scanner      | `factory configure --set quality.securityCommand="my-sast --json"`      |
+| Auto-provision branch protection   | `factory configure --set git.provision=true`                            |
+| Keep develop strict at all times   | `factory configure --set git.developProtection=permanent`               |
+| Change the at-rest develop checks  | `factory configure --set 'git.developBaselineStatusChecks=["Quality"]'` |
+| Re-tier producer models            | `factory configure --set quota.producerModels.high=claude-opus-4-6`     |
 
 ## Notes
 

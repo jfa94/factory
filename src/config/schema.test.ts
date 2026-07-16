@@ -41,6 +41,17 @@ describe('ConfigSchema', () => {
         expect(() => ConfigSchema.parse({review: {requireCrossVendor: 'off'}})).toThrow()
     })
 
+    it('git.developProtection defaults to run-scoped, accepts permanent, rejects anything else (D74)', () => {
+        expect(ConfigSchema.parse({}).git.developProtection).toBe('run-scoped')
+        expect(ConfigSchema.parse({git: {developProtection: 'permanent'}}).git.developProtection).toBe('permanent')
+        expect(() => ConfigSchema.parse({git: {developProtection: 'off'}})).toThrow()
+    })
+
+    it('git.developBaselineStatusChecks defaults to Quality + Security Scan (D74)', () => {
+        expect(ConfigSchema.parse({}).git.developBaselineStatusChecks).toEqual(['Quality', 'Security Scan'])
+        expect(ConfigSchema.parse({git: {developBaselineStatusChecks: []}}).git.developBaselineStatusChecks).toEqual([])
+    })
+
     it('quality.setupCommand is optional and round-trips when set', () => {
         expect(ConfigSchema.parse({}).quality.setupCommand).toBeUndefined()
         const cfg = ConfigSchema.parse({quality: {setupCommand: 'pnpm install --frozen-lockfile'}})

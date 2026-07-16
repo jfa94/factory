@@ -58,6 +58,9 @@ import {
     DefaultGhClient,
     resolveRepo,
     splitRepoSlug,
+    provisionProtection,
+    requireProtectionOrRefuse,
+    putBaselineProtection,
     type GitClient,
     type GhClient,
 } from '../../git/index.js'
@@ -506,6 +509,23 @@ export async function runResume(argv: string[], overrides: ResumeOverrides = {})
     if (envelope.kind === 'resumed' && envelope.cleared === true) {
         await emitMetric(dataDir, runId, 'human_touch', {kind: 'resume'}) // S11 mirror
     }
+    // D74 — run-scoped develop protection: a live run must run under the strict
+    // profile, so a resume idempotently re-escalates. Closes the rescued-run gap:
+    // finalize de-escalated at the terminal flip, rescue reopened the run — without
+    // this the re-driven rollup would land with only baseline GitHub-side enforcement.
+    if (envelope.kind === 'resumed' && config.git.developProtection === 'run-scoped') {
+        const {owner, repo} = splitRepoSlug(envelope.run.spec.repo)
+        const checks = config.git.developRequiredStatusChecks
+        const developState = await provisionProtection({
+            ghClient: gh,
+            owner,
+            repo,
+            branch: config.git.baseBranch,
+            requiredChecks: checks,
+            provision: true,
+        })
+        requireProtectionOrRefuse(developState, checks, config.git.baseBranch)
+    }
     emitJson({...envelope, adoption})
     return EXIT.OK
 }
@@ -826,6 +846,24 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
         try {
             await ghClient.deleteProtection(owner, repo, branch)
             await ghClient.deleteRemoteBranch(owner, repo, branch)
+            // D74 — run-scoped develop protection: the run is terminal (finalized
+            // 'failed' above, so it never counts as active itself); drop develop back
+            // to baseline unless a sibling run on the repo still needs the strict
+            // profile. Inside the try: a throw surfaces as cleanup_error and a re-run
+            // retries (idempotent PUT).
+            const config = loadConfig({dataDir})
+            if (
+                config.git.developProtection === 'run-scoped' &&
+                !(await state.hasOtherActiveForRepo(run.spec.repo, run.run_id))
+            ) {
+                await putBaselineProtection({
+                    ghClient,
+                    owner,
+                    repo,
+                    branch: config.git.baseBranch,
+                    contexts: config.git.developBaselineStatusChecks,
+                })
+            }
             cleanedUp = true
         } catch (err) {
             // The run is ALREADY failed — cancel's PRIMARY contract (abandon) is met. A genuine
@@ -855,7 +893,8 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
                 `resumable alternative)` +
                 (cleanup
                     ? `; staging branch '${branch}' + its task PRs torn down.`
-                    : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`)
+                    : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup ` +
+                      `(which also drops develop back to its baseline protection in run-scoped mode).`)
         )
     }
     return EXIT.OK

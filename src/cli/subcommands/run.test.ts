@@ -1275,6 +1275,54 @@ describe('runCancel (abandon a live run, Decision 35)', () => {
         expect(stderr).toContain('run stop')
         expect(stderr.toLowerCase()).toContain('not resumable')
     })
+
+    it('--cleanup drops develop to baseline AFTER the staging teardown (D74, run-scoped default)', async () => {
+        await seed('run-d74')
+        const gh = new FakeGhClient()
+        const {env} = await cancel(['--run', 'run-d74', '--cleanup'], {dataDir, ghClient: gh})
+
+        expect(env.cleaned_up).toBe(true)
+        expect(gh.protectionPuts).toEqual([
+            {
+                branch: 'develop',
+                body: {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
+            },
+        ])
+        // Staging branch (and its auto-merge-armable PRs) gone FIRST, then the downgrade.
+        expect(gh.calls.indexOf('api DELETE refs/heads/staging-run-d74')).toBeLessThan(
+            gh.calls.indexOf('api PUT protection develop')
+        )
+    })
+
+    it('no --cleanup leaves develop on the strict profile (D74) and the stderr hint says so', async () => {
+        await seed('run-d74-keep')
+        const gh = new FakeGhClient()
+        const {stderr} = await cancel(['--run', 'run-d74-keep'], {dataDir, ghClient: gh})
+        expect(gh.protectionPuts).toHaveLength(0)
+        expect(stderr).toContain('baseline protection')
+    })
+
+    it('--cleanup SKIPS the de-escalation while a sibling run on the repo is active (D74)', async () => {
+        await seed('run-d74-a')
+        await state.create({
+            run_id: 'run-d74-b',
+            staging_branch: 'staging-run-d74-b',
+            spec: {repo: REPO, spec_id: '7-search', issue_number: 7},
+        })
+        const gh = new FakeGhClient()
+        const {env} = await cancel(['--run', 'run-d74-a', '--cleanup'], {dataDir, ghClient: gh})
+        expect(env.cleaned_up).toBe(true)
+        expect(gh.protectionPuts).toHaveLength(0)
+    })
+
+    it('--cleanup in permanent mode never touches develop protection (D74)', async () => {
+        await writeFile(join(dataDir, 'config.json'), JSON.stringify({git: {developProtection: 'permanent'}}))
+        await seed('run-d74-perm')
+        const gh = new FakeGhClient()
+        const {env} = await cancel(['--run', 'run-d74-perm', '--cleanup'], {dataDir, ghClient: gh})
+        expect(env.cleaned_up).toBe(true)
+        expect(gh.protectionPuts).toHaveLength(0)
+    })
 })
 
 // ---------------------------------------------------------------------------
@@ -1683,5 +1731,41 @@ describe('runResume (factory resume)', () => {
         expect(env.kind).toBe('resumed') // adoption reopened it BEFORE applyResume's terminal guard
         expect((env.adoption as {ok: boolean; reopened: unknown}).reopened).toBe('rollup')
         expect((await state.read(runId)).status).toBe('running')
+    })
+
+    it('resume idempotently RE-ESCALATES develop to the strict run profile (D74, run-scoped default)', async () => {
+        await seedSuspended('run-d74-esc')
+        const gh = new FakeGhClient()
+        const {env} = await resume(['--run', 'run-d74-esc', '--ignore-quota'], {
+            gitClient: new FakeGitClient(),
+            ghClient: gh,
+        })
+        expect(env.kind).toBe('resumed')
+        expect(gh.protectionPuts).toEqual([
+            {
+                branch: 'develop',
+                body: {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'], strict: true},
+            },
+        ])
+    })
+
+    it('a fail-closed pause does NOT re-escalate develop (D74)', async () => {
+        await seedSuspended('run-d74-pause')
+        const gh = new FakeGhClient()
+        const {env} = await resume(['--run', 'run-d74-pause'], {gitClient: new FakeGitClient(), ghClient: gh})
+        expect(env.kind).toBe('pause')
+        expect(gh.protectionPuts).toHaveLength(0)
+    })
+
+    it('permanent mode: resume never touches develop protection (D74)', async () => {
+        await writeFile(join(dataDir, 'config.json'), JSON.stringify({git: {developProtection: 'permanent'}}))
+        await seedSuspended('run-d74-perm')
+        const gh = new FakeGhClient()
+        const {env} = await resume(['--run', 'run-d74-perm', '--ignore-quota'], {
+            gitClient: new FakeGitClient(),
+            ghClient: gh,
+        })
+        expect(env.kind).toBe('resumed')
+        expect(gh.protectionPuts).toHaveLength(0)
     })
 })

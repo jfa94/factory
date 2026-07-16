@@ -6661,14 +6661,33 @@ var GitSchema = external_exports.object({
   /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
   stagingBranch: external_exports.string().min(1).default("staging"),
   /**
-   * Required status-check contexts branch protection MUST enforce on DEVELOP
-   * (asserted at scaffold; provisioned with `--provision`). Defaults to the
-   * three contexts the rendered quality-gate workflow always reports
-   * (Decision 53) — the rollup PR cannot merge red. Protection itself
-   * (incl. strict-up-to-date) is mandatory regardless; see
-   * `requireProtectionOrRefuse`.
+   * Required status-check contexts of develop's RUN PROFILE — under
+   * `developProtection: "run-scoped"` (default) they are escalated onto
+   * develop for the duration of a run (Decision 74); under `"permanent"`
+   * they are asserted at scaffold and provisioned with `--provision`.
+   * Defaults to the three contexts the rendered quality-gate workflow
+   * always reports (Decision 53) — the rollup PR cannot merge red.
    */
   developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
+  /**
+   * Lifecycle of develop's protection profile (Decision 74).
+   * `run-scoped` (default): scaffold writes/asserts only the light BASELINE —
+   * `developBaselineStatusChecks` required for non-admins, strict off,
+   * `enforce_admins` OFF so repo admins can push straight to develop; `run
+   * create` escalates to the strict run profile (`developRequiredStatusChecks`
+   * + strict + enforce_admins) and every run-terminal path drops back to
+   * baseline. `permanent`: the strict profile is provisioned at scaffold and
+   * never removed (pre-D74 behavior). NOTE (run-scoped): escalation and
+   * de-escalation are full-replace PUTs — custom hand-made protection on
+   * develop is clobbered; use `permanent` to opt out.
+   */
+  developProtection: external_exports.enum(["run-scoped", "permanent"]).default("run-scoped"),
+  /**
+   * Required status-check contexts of develop's BASELINE profile (run-scoped
+   * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
+   * is active. Admins bypass (baseline sets `enforce_admins: false`).
+   */
+  developBaselineStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Security Scan"]),
   /**
    * Required status-check contexts provisioned onto each per-run
    * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
@@ -8506,6 +8525,18 @@ var StateManager = class _StateManager {
       );
     }
     return matches.length === 1 ? at(matches, 0) : null;
+  }
+  /**
+   * TRUE when another NON-terminal run (any issue) exists for `repo` besides
+   * `excludeRunId`. Active-run uniqueness is per (repo, issue) — two PRDs can
+   * have simultaneously active runs on one repo — so the D74 de-escalation
+   * sites (finalize / supersede / cancel `--cleanup`) and scaffold's
+   * `--provision` must not drop develop to baseline while a sibling run still
+   * relies on the strict profile.
+   */
+  async hasOtherActiveForRepo(repo, excludeRunId) {
+    const runs = await this.listRuns();
+    return runs.some((r) => r.spec.repo === repo && r.run_id !== excludeRunId && !isTerminalRunStatus(r.status));
   }
   /**
    * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first

@@ -83,6 +83,7 @@ export {
     createTaskPrIdempotent,
     MergeSerializer,
     provisionProtection,
+    putBaselineProtection,
     runScopedBranch,
     runStagingBranch,
     ensureStaging,

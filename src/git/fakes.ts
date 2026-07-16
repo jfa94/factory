@@ -398,6 +398,8 @@ export class FakeGhClient implements GhClient {
     readonly branchTips = new Map<string, string>()
     /** Branches whose protection was removed via deleteProtection. */
     readonly protectionDeletes: string[] = []
+    /** Ordered log of putProtection bodies — assert exact profiles (strict/contexts/enforceAdmins). */
+    readonly protectionPuts: {branch: string; body: ProtectionPutBody}[] = []
     /** Records each issueComment call (PRD delivered comment + failure comment). */
     readonly issueComments: {number: number; body: string; repo: string}[] = []
     /** Records each issueClose call (PRD closed on completed runs). */
@@ -429,6 +431,12 @@ export class FakeGhClient implements GhClient {
      * (already-gone 404/422 it would tolerate, so those need no simulation).
      */
     failDeleteProtection?: Error | undefined
+    /**
+     * When set, putProtection for THIS branch rejects (simulated 401/403/5xx) while
+     * other branches' PUTs still succeed — lets a test fail only the develop
+     * escalation after the staging provision already landed (D74).
+     */
+    failPutProtectionFor?: string
     /** When set, deleteRemoteBranch throws this (simulate a propagated 401/403/5xx). */
     failDeleteRemoteBranch?: Error
     /**
@@ -599,7 +607,11 @@ export class FakeGhClient implements GhClient {
         body: ProtectionPutBody,
         _opts?: GhOpts
     ): Promise<void> {
+        if (this.failPutProtectionFor === branch) {
+            return Promise.reject(new Error(`simulated putProtection failure for '${branch}'`))
+        }
         this.calls.push(`api PUT protection ${branch}`)
+        this.protectionPuts.push({branch, body})
         const existing = this.protection.get(branch)
         this.protection.set(branch, {
             enabled: true,

@@ -72,7 +72,13 @@ export {MergeSerializer} from './serial-writer.js'
 export type {MergeSerializerOptions, MergeOutcome, MergeLockTuning} from './serial-writer.js'
 
 // branch-protection probe + gate (#2 / Δ A)
-export {probeProtection, requireProtectionOrRefuse, provisionProtection, ProtectionMissingError} from './protection.js'
+export {
+    probeProtection,
+    requireProtectionOrRefuse,
+    provisionProtection,
+    putBaselineProtection,
+    ProtectionMissingError,
+} from './protection.js'
 export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs} from './protection.js'
 
 // staging-init / reconcile

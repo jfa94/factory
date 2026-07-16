@@ -89,7 +89,13 @@ This is idempotent. It:
     CLI-resolved canonical data dir instead. See [Decision 17](../explanation/decisions.md#decision-17-coarse-bash-allow-with-hook-enforced-defense-in-depth);
 
 - probes branch protection on `develop` (the integration base) and **refuses loudly
-  if it is missing**.
+  if it is missing**. Protection is two-profile
+  ([Decision 74](../explanation/decisions.md#decision-74--run-scoped-develop-protection-two-profile-lifecycle),
+  default `git.developProtection: "run-scoped"`): at rest develop carries only the
+  **baseline** — `git.developBaselineStatusChecks` (Quality + Security Scan) for
+  non-admin PRs, admins bypass, no strict up-to-date — so you can push develop
+  directly between runs. `run create` escalates to the strict profile; every
+  run-terminal path drops it back.
 
 Scaffold does **not** create or protect a shared `staging` branch. Each run cuts its
 own private `staging-<run-id>` integration branch from `develop` at
@@ -109,18 +115,38 @@ re-scaffold to re-adopt the latest baseline.
 
 If scaffold refuses because `develop` is unprotected, you have two options.
 
-**Provision it** (writes branch protection on `develop`):
+**Provision it** (writes the mode's at-rest protection on `develop` — run-scoped:
+baseline; permanent: strict):
 
 ```bash
 factory scaffold --repo <owner/name> --provision
 ```
 
-**Or protect it manually** in the repo settings — enable strict "require branches
-to be up to date" plus your required status checks — then re-run
-`factory scaffold --repo <owner/name>` to re-verify.
+**Or protect it manually** in the repo settings — at minimum the baseline required
+status checks (in `permanent` mode also strict "require branches to be up to date") —
+then re-run `factory scaffold --repo <owner/name>` to re-verify.
 
 Do not proceed against an unprotected repo: the serial-writer's correctness
-depends on required-up-to-date protection.
+depends on required-up-to-date protection while a run is active.
+
+### Migrating a repo off the old permanent strict profile
+
+Repos scaffolded before Decision 74 carry the strict profile permanently (blocking
+direct pushes to develop). The one-shot fix is simply:
+
+```bash
+factory scaffold --provision        # downgrades develop to the baseline
+```
+
+(Refused while a run is active on the repo.) Alternatively, the first run that
+reaches a terminal state after upgrading the plugin self-heals it, or write it by
+hand:
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/branches/develop/protection --input - <<'JSON'
+{"required_status_checks":{"strict":false,"contexts":["Quality","Security Scan"]},"enforce_admins":false,"required_pull_request_reviews":null,"restrictions":null,"allow_deletions":true}
+JSON
+```
 
 ## 3. Tune the branch contract (optional)
 

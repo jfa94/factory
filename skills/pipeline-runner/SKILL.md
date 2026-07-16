@@ -33,9 +33,10 @@ envelope names, feed the raw results back.**
    stop (the relaunch is the user's irreducible step; a running session cannot make
    itself autonomous). `factory autonomy status`/`ensure` remain the manual primitives.
 3. `factory scaffold` (idempotent; `--repo` is OPTIONAL — auto-derived from the
-   `origin` remote, pass `--repo <owner/name>` only to override. Refuses if staging
-   branch protection is missing → tell the user to re-run with `--provision` or
-   protect staging manually, then stop).
+   `origin` remote, pass `--repo <owner/name>` only to override. Refuses if develop's
+   branch protection is missing → tell the user to re-run with `--provision` (writes
+   the D74 baseline profile; `run create` escalates to the strict profile for the
+   run's duration) or protect develop manually, then stop).
 
 ## Phase 1 — Spec (unchanged, durable, apex-gated)
 

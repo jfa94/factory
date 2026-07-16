@@ -20,6 +20,10 @@
  *      staging branch (Decision 35: protection first, then branch — GitHub blocks
  *      deleting a protected ref). A `failed` run leaves develop untouched and keeps
  *      the branch + protection, banked for rescue / inspection.
+ *   6.5. (D74, run-scoped mode) de-escalate develop back to the BASELINE protection
+ *      profile — but never while a rollup PR is still pending (auto-armed/CI-blocked:
+ *      dropping the policy would let an armed auto-merge land WITHOUT CI) and never
+ *      while a sibling run on the same repo is still active.
  *   7. ONLY THEN flip the run terminal (state.finalize)
  *
  * state.finalize is LAST on purpose: a crash anywhere in 2–6 leaves the run
@@ -41,6 +45,7 @@ import {
     renderFailureComment,
     failureCommentMarker,
     recordRunFinalized,
+    putBaselineProtection,
     scanRun,
     effectiveAutoResets,
     SELF_HEAL_MAX_ATTEMPTS,
@@ -337,6 +342,31 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
         }))
     } else {
         log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`)
+    }
+
+    // 6.5. D74 — run-scoped develop protection: outcome shipped, drop develop back to
+    // the baseline profile. NEVER while a rollup PR is still pending (auto-armed /
+    // ci-failing / ci-timeout / not-mergeable — de-escalating would let an armed
+    // auto-merge land WITHOUT CI; the `run.rollup` pointer keeps the run recoverable
+    // and a --recheck-rollup re-drive lands here again once it merges), and never
+    // while a sibling run on the same repo is active. Debug runs are symmetric-exempt:
+    // they never escalate at create (debugSeed's createRun carries no stagingDeps), so
+    // they never de-escalate here. Idempotent PUT, placed before the terminal flip so
+    // a throw leaves the run resumable.
+    const rollupPending = rollupResult !== undefined && !rollupResult.merged && rollupResult.reason !== 'no-merge'
+    if (
+        !run.debug &&
+        deps.config.git.developProtection === 'run-scoped' &&
+        !rollupPending &&
+        !(await deps.state.hasOtherActiveForRepo(run.spec.repo, runId))
+    ) {
+        await putBaselineProtection({
+            ghClient: deps.gh,
+            owner: deps.owner,
+            repo: deps.repo,
+            branch: deps.config.git.baseBranch,
+            contexts: deps.config.git.developBaselineStatusChecks,
+        })
     }
 
     // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).

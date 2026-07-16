@@ -481,6 +481,19 @@ export class StateManager {
     }
 
     /**
+     * TRUE when another NON-terminal run (any issue) exists for `repo` besides
+     * `excludeRunId`. Active-run uniqueness is per (repo, issue) — two PRDs can
+     * have simultaneously active runs on one repo — so the D74 de-escalation
+     * sites (finalize / supersede / cancel `--cleanup`) and scaffold's
+     * `--provision` must not drop develop to baseline while a sibling run still
+     * relies on the strict profile.
+     */
+    async hasOtherActiveForRepo(repo: string, excludeRunId?: string): Promise<boolean> {
+        const runs = await this.listRuns()
+        return runs.some((r) => r.spec.repo === repo && r.run_id !== excludeRunId && !isTerminalRunStatus(r.status))
+    }
+
+    /**
      * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
      * (empty session → `[]`). The raw list behind {@link findActiveByOwner}: callers
      * that must DISTINGUISH "none owned" from "ambiguous (≥2 owned)" — e.g. `run cancel`,

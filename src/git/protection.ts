@@ -66,11 +66,15 @@ export async function probeProtection(args: ProbeProtectionArgs): Promise<Protec
  * Verify-and-REFUSE gate. Throws {@link ProtectionMissingError} when protection
  * is missing, strict-up-to-date is off (the serial-writer's backbone — Δ L), or
  * any `requiredChecks` context is not enforced. Returns the state on success.
+ * `opts.requireStrict: false` skips the strict check — develop's BASELINE
+ * profile (D74) deliberately runs strict-off, so the run-scoped scaffold gate
+ * asserts only enablement + the baseline contexts.
  */
 export function requireProtectionOrRefuse(
     state: ProtectionState,
     requiredChecks: readonly string[],
-    branch: string = GIT_DEFAULTS.stagingBranch
+    branch: string = GIT_DEFAULTS.stagingBranch,
+    opts: {requireStrict?: boolean} = {}
 ): ProtectionState {
     const reasons: string[] = []
     if (!state.enabled) {
@@ -79,7 +83,7 @@ export function requireProtectionOrRefuse(
     // strict-up-to-date is the GitHub-backed half of required-branches-up-to-date
     // (Δ L). Without it the serial writer cannot trust that a "merge now" lands on
     // top of the latest staging.
-    if (!state.strictUpToDate) {
+    if (!state.strictUpToDate && (opts.requireStrict ?? true)) {
         reasons.push('required_status_checks.strict (branches up-to-date) is OFF')
     }
     for (const check of requiredChecks) {
@@ -125,5 +129,32 @@ export async function provisionProtection(args: ProvisionProtectionArgs): Promis
         owner: args.owner,
         repo: args.repo,
         branch,
+    })
+}
+
+/** Args to {@link putBaselineProtection}. */
+export interface PutBaselineProtectionArgs {
+    ghClient: GhClient
+    owner: string
+    repo: string
+    branch: string
+    /** Baseline contexts (config `git.developBaselineStatusChecks`). */
+    contexts: readonly string[]
+}
+
+/**
+ * Write develop's light BASELINE profile (D74): `contexts` required for
+ * non-admins, strict OFF, `enforce_admins` OFF (repo admins push freely).
+ * Idempotent full-replace PUT — deliberately NOT `deleteProtection`: develop
+ * must never be left wholly unprotected. Used by the run-scoped scaffold
+ * (`--provision`) and every run-terminal de-escalation (finalize / supersede /
+ * cancel `--cleanup`).
+ */
+export async function putBaselineProtection(args: PutBaselineProtectionArgs): Promise<void> {
+    log.info(`writing baseline branch protection for ${args.owner}/${args.repo}@${args.branch}`)
+    await args.ghClient.putProtection(args.owner, args.repo, args.branch, {
+        requiredStatusChecks: [...args.contexts],
+        strict: false,
+        enforceAdmins: false,
     })
 }

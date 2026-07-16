@@ -19,7 +19,15 @@ import type {SpecStore, SpecManifest} from '../spec/index.js'
 import {planResume, type UsageReading} from '../quota/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
 import type {Config, RunState, RunStatus, TaskState} from '../types/index.js'
-import {ensureStaging, provisionProtection, runStagingBranch, type GitClient, type GhClient} from '../git/index.js'
+import {
+    ensureStaging,
+    provisionProtection,
+    putBaselineProtection,
+    requireProtectionOrRefuse,
+    runStagingBranch,
+    type GitClient,
+    type GhClient,
+} from '../git/index.js'
 import {UsageError} from '../shared/usage-error.js'
 
 const log = createLogger('run')
@@ -258,6 +266,25 @@ async function createRunFromManifest(
             requiredChecks: stagingDeps.config.git.stagingRequiredStatusChecks,
             provision: true,
         })
+        // D74 (run-scoped, default): escalate develop from its baseline to the strict
+        // run profile BEFORE the run row persists — same rollback contract as the
+        // staging cut above (a throw leaves no phantom run; the retry re-escalates
+        // idempotently). A failure AFTER this PUT but before create leaves develop
+        // strict with no run — over-protected only, self-healed by the next run's
+        // terminal de-escalation.
+        if (stagingDeps.config.git.developProtection === 'run-scoped') {
+            const base = stagingDeps.config.git.baseBranch
+            const checks = stagingDeps.config.git.developRequiredStatusChecks
+            const developState = await provisionProtection({
+                ghClient: stagingDeps.ghClient,
+                owner: stagingDeps.owner,
+                repo: stagingDeps.repo,
+                branch: base,
+                requiredChecks: checks,
+                provision: true,
+            })
+            requireProtectionOrRefuse(developState, checks, base)
+        }
     }
 
     // D57: seed tasks + the launch touch IN the create payload — one write births a
@@ -341,6 +368,24 @@ async function supersedeRun(state: StateManager, existing: RunState, stagingDeps
     const branch = existing.staging_branch
     await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch)
     await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch)
+    // D74: drop develop back to baseline AFTER the branch delete (deleting the head
+    // branch auto-closes its PRs, disarming any stray auto-merge first) and before
+    // the terminal write. Skipped while a sibling run (another issue, same repo)
+    // still relies on the strict profile. The follow-up create re-escalates — two
+    // extra PUTs, but correct in every partial-failure interleaving (a supersede
+    // whose create then fails must not strand strict protection).
+    if (
+        stagingDeps.config.git.developProtection === 'run-scoped' &&
+        !(await state.hasOtherActiveForRepo(existing.spec.repo, existing.run_id))
+    ) {
+        await putBaselineProtection({
+            ghClient: stagingDeps.ghClient,
+            owner: stagingDeps.owner,
+            repo: stagingDeps.repo,
+            branch: stagingDeps.config.git.baseBranch,
+            contexts: stagingDeps.config.git.developBaselineStatusChecks,
+        })
+    }
     await state.finalize(existing.run_id, 'superseded') // terminal LAST (resume-safe)
 }
 

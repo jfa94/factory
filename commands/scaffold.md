@@ -6,7 +6,7 @@ arguments:
       description: "Target GitHub repo as <owner>/<name> (defaults to the current repo's origin)"
       required: false
     - name: '--provision'
-      description: 'Write branch protection on develop if missing (default: refuse when unprotected)'
+      description: 'Write the baseline branch protection on develop (default: refuse when unprotected)'
       required: false
 ---
 
@@ -67,6 +67,15 @@ This is idempotent. It:
   (`develop` is a precondition — scaffold does not create it. Per-run staging branches
   `staging-<run-id>` are minted at `run create`, not here.)
 
+Protection is **two-profile** (Decision 74, default `git.developProtection: "run-scoped"`):
+scaffold writes/asserts only the **baseline** — required checks
+`git.developBaselineStatusChecks` (default Quality + Security Scan) for non-admin PRs,
+no strict up-to-date, `enforce_admins: false` so admins can push develop directly. The
+full strict profile (`git.developRequiredStatusChecks`, strict, admins enforced) is
+escalated by `run create` and dropped back to baseline when the run ends. With
+`git.developProtection: "permanent"` scaffold writes the strict profile once and the
+engine never touches it again (the pre-D74 behavior).
+
 Print the emitted `ScaffoldReport` JSON: `files_created`, `files_present`, `files_updated`, and
 `protection`.
 
@@ -76,16 +85,22 @@ If scaffold refuses because `develop` is unprotected, the run cannot start safel
 (serial-writer correctness depends on required-up-to-date protection, Δ A/L). Offer the user
 two options:
 
-- **Provision it** (writes branch protection on `develop`): re-run with `--provision`.
+- **Provision it** (writes the baseline protection on `develop`): re-run with `--provision`.
 
     ```bash
     factory scaffold --provision        # --repo auto-derived from origin
     ```
 
-- **Protect it manually** in the repo settings (strict "require branches to be up to date"
-    - the required status checks), then re-run `factory scaffold`.
+- **Protect it manually** in the repo settings (at minimum the baseline required status
+  checks; in `permanent` mode also strict "require branches to be up to date"), then
+  re-run `factory scaffold`.
 
 Do not proceed against an unprotected repo.
+
+Notes (run-scoped mode): re-running `factory scaffold --provision` is also the **one-shot
+migration** for a repo stuck on the old permanent strict profile — it downgrades develop
+to the baseline. It refuses while a factory run is active on the repo (it would strip the
+escalated profile mid-run).
 
 ## Step 4 — Summary
 
@@ -93,7 +108,9 @@ Report:
 
 - Files created by scaffold vs. already present, plus any outdated files auto-refreshed
   (`files_updated`). Remind the user to COMMIT `.factory/scaffold.lock` alongside the seeds.
-- Protection on `develop`: enabled / strict-up-to-date / required checks / whether just provisioned.
+- Protection on `develop`: enabled / strict-up-to-date / required checks / whether just
+  provisioned (in run-scoped mode the healthy at-rest shape is the baseline: the two
+  baseline checks, strict off).
 
 Then remind the user:
 

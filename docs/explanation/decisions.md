@@ -3009,7 +3009,7 @@ PLUS a durable per-spec record of what shipped (with PR numbers).
    confirmedBlockers (exec already did), so the rejection reason reaches the retry prompt.
 2. **The ledger.** `specs/<repo>/<spec-id>/ledger.json` (sibling of `tasks.json`; zod;
    ENOENT → empty, garbage → loud): `{task_id, run_id, pr_number?, shas[], verified_at,
-   source: 'shipped' | 'already-satisfied'}`. Write sites: finalize appends one `shipped`
+source: 'shipped' | 'already-satisfied'}`. Write sites: finalize appends one `shipped`
    entry per `done` task **inside the merged-rollup branch only** (SHA = the post-rollup
    `develop` tip — task squash SHAs are never ancestors of future bases), skipping debug
    runs; `record.ts` appends on a verified already-satisfied claim. Read site:
@@ -3049,7 +3049,7 @@ actual defect.
   fails `blocked-environmental` (Decision 66's exact outcome, message widened to name
   "no parseable STATUS"). The nonsensical non-exec `test-defective` branch routes the
   same way; `FailureSignal`'s producer union shrank to `'blocked-escalate' |
-  'test-defective'` with loud guards.
+'test-defective'` with loud guards.
 - **C1 — same failing gates twice → rederive the tests.** The merge-gate send-back leg
   records the sorted failing-gate set (minus `holdout` — a leak guard, and tests cannot
   fix a holdout miss) in transient `task.last_failing_gates`. If the next verdict fails
@@ -3141,6 +3141,76 @@ cannot inject steps mid-run.
 **Relationship:** Extends Decision 46 (the contract as the single committed source of
 gate truth) and Decision 53 (one render source for local + CI parity) to the environment
 the gates run IN.
+
+---
+
+## Decision 74 — Run-Scoped Develop Protection (two-profile lifecycle)
+
+**Date:** 2026-07-16
+
+**Context:** `scaffold --provision` wrote PERMANENT strict protection on develop (full
+checks, strict up-to-date, `enforce_admins: true`) and nothing ever removed it — so
+scaffolded repos blocked the owner from pushing develop directly even with no factory
+run in sight. The operator wants develop always protected, but only lightly outside runs.
+
+**Decision:** Two profiles, one knob (`git.developProtection`, default `run-scoped`):
+
+- **baseline** (at rest): required checks `git.developBaselineStatusChecks` (default
+  Quality + Security Scan), `strict: false`, `enforce_admins: false`. Non-admin PRs into
+  develop still need the checks green; **admins bypass everything** (GitHub semantics:
+  required checks block direct pushes, so admin bypass is what restores the owner's
+  direct-push freedom).
+- **run profile** (escalated): `git.developRequiredStatusChecks`, `strict: true`,
+  `enforce_admins: true` — the pre-D74 payload.
+
+Lifecycle: scaffold writes/asserts the baseline (relaxed gate: contexts required, strict
+not) → `run create` escalates (before the run row persists — same rollback contract as
+the staging cut) → terminal paths de-escalate: finalize (before the terminal flip),
+supersede (after the old branch delete), `run cancel --cleanup` (inside the retryable
+teardown). `factory resume` idempotently RE-escalates, closing the rescued-run gap
+(finalize de-escalated at `failed`, rescue reopened the run). Stateless by design: no
+`developEscalated` run flag — every de-escalation is an idempotent full-replace PUT.
+
+Two guards make de-escalation safe:
+
+1. **Pending-rollup guard** (finalize): rollup arms GitHub auto-merge when branch policy
+   blocks the immediate merge (`auto-armed`); dropping protection then would merge the PR
+   WITHOUT CI. The predicate is inverted for robustness — de-escalate only when the
+   rollup is merged, absent, `no-merge`, or the run failed; any pending reason
+   (`auto-armed`/`ci-failing`/`ci-timeout`/`not-mergeable`) keeps the strict profile, and
+   the `--recheck-rollup` re-drive de-escalates once the PR lands.
+2. **Sibling-run guard** (all sites): active-run uniqueness is per (repo, issue), so two
+   PRDs can run on one repo; `StateManager.hasOtherActiveForRepo` skips the downgrade
+   while a sibling is live. Scaffold `--provision` likewise refuses mid-run.
+
+Migration for already-scaffolded repos: re-run `factory scaffold --provision` (one-shot
+downgrade to baseline); or just wait — the first run-terminal after the upgrade
+self-heals; or hand-write it:
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/branches/develop/protection --input - <<'JSON'
+{"required_status_checks":{"strict":false,"contexts":["Quality","Security Scan"]},"enforce_admins":false,"required_pull_request_reviews":null,"restrictions":null,"allow_deletions":true}
+JSON
+```
+
+**Consequences (accepted):** run-scoped mode OWNS develop's protection shape — custom
+manual rules are clobbered by the full-replace PUTs (`permanent` is the escape hatch).
+Admins can even force-push develop at baseline (GitHub's `enforce_admins:false` bypasses
+all rules) — that is the requested freedom. A `no-merge` run de-escalates with its rollup
+PR open on purpose: merging it later needs only baseline checks for non-admins. A run
+closed-unmerged (surfaced-for-human in adoption) leaves develop strict until the operator
+acts — over-protection only, never a CI bypass. Runs reopened in-session via `next`
+(adoption, not `factory resume`) don't re-escalate; their rollup is engine-CI-gated
+(`waitForCi`) regardless. Debug runs (Decision 39) are symmetric-exempt: they never
+escalate at create (`debugSeed`'s `createRun` carries no stagingDeps), so their finalize
+never de-escalates — a debug session rides whatever profile is live. A crash between
+escalation and the run row leaves develop strict with no run — self-heals at the next
+terminal.
+
+**Relationship:** Refines Decision 35 (protection lifecycle around per-run branches) and
+Decision 33's serial-writer correctness (the strict profile still guards develop for the
+entire life of every run); extends Decision 60's adoption story (`--recheck-rollup`
+re-drive is the pending-rollup exit).
 
 ---
 

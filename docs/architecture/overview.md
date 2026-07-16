@@ -104,7 +104,7 @@ sequenceDiagram
 
   Note over O,CLI: Phase 0 — Preconditions
   O->>CLI: factory scaffold --repo o/n
-  CLI-->>O: CI net + develop protection (or REFUSE)
+  CLI-->>O: CI net + develop baseline protection (or REFUSE; run create escalates, D74)
 
   Note over O,CLI: Phase 1 — Spec (bounded generate ⇄ review)
   O->>CLI: factory spec resolve/gate/store

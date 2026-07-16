@@ -6257,14 +6257,33 @@ var GitSchema = external_exports.object({
   /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
   stagingBranch: external_exports.string().min(1).default("staging"),
   /**
-   * Required status-check contexts branch protection MUST enforce on DEVELOP
-   * (asserted at scaffold; provisioned with `--provision`). Defaults to the
-   * three contexts the rendered quality-gate workflow always reports
-   * (Decision 53) — the rollup PR cannot merge red. Protection itself
-   * (incl. strict-up-to-date) is mandatory regardless; see
-   * `requireProtectionOrRefuse`.
+   * Required status-check contexts of develop's RUN PROFILE — under
+   * `developProtection: "run-scoped"` (default) they are escalated onto
+   * develop for the duration of a run (Decision 74); under `"permanent"`
+   * they are asserted at scaffold and provisioned with `--provision`.
+   * Defaults to the three contexts the rendered quality-gate workflow
+   * always reports (Decision 53) — the rollup PR cannot merge red.
    */
   developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
+  /**
+   * Lifecycle of develop's protection profile (Decision 74).
+   * `run-scoped` (default): scaffold writes/asserts only the light BASELINE —
+   * `developBaselineStatusChecks` required for non-admins, strict off,
+   * `enforce_admins` OFF so repo admins can push straight to develop; `run
+   * create` escalates to the strict run profile (`developRequiredStatusChecks`
+   * + strict + enforce_admins) and every run-terminal path drops back to
+   * baseline. `permanent`: the strict profile is provisioned at scaffold and
+   * never removed (pre-D74 behavior). NOTE (run-scoped): escalation and
+   * de-escalation are full-replace PUTs — custom hand-made protection on
+   * develop is clobbered; use `permanent` to opt out.
+   */
+  developProtection: external_exports.enum(["run-scoped", "permanent"]).default("run-scoped"),
+  /**
+   * Required status-check contexts of develop's BASELINE profile (run-scoped
+   * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
+   * is active. Admins bypass (baseline sets `enforce_admins: false`).
+   */
+  developBaselineStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Security Scan"]),
   /**
    * Required status-check contexts provisioned onto each per-run
    * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
@@ -7769,6 +7788,18 @@ var StateManager = class _StateManager {
     return matches.length === 1 ? at(matches, 0) : null;
   }
   /**
+   * TRUE when another NON-terminal run (any issue) exists for `repo` besides
+   * `excludeRunId`. Active-run uniqueness is per (repo, issue) — two PRDs can
+   * have simultaneously active runs on one repo — so the D74 de-escalation
+   * sites (finalize / supersede / cancel `--cleanup`) and scaffold's
+   * `--provision` must not drop develop to baseline while a sibling run still
+   * relies on the strict profile.
+   */
+  async hasOtherActiveForRepo(repo, excludeRunId) {
+    const runs = await this.listRuns();
+    return runs.some((r) => r.spec.repo === repo && r.run_id !== excludeRunId && !isTerminalRunStatus(r.status));
+  }
+  /**
    * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
    * (empty session → `[]`). The raw list behind {@link findActiveByOwner}: callers
    * that must DISTINGUISH "none owned" from "ambiguous (≥2 owned)" — e.g. `run cancel`,
@@ -8798,7 +8829,7 @@ var DefaultGhClient = class {
         strict: body.strict,
         contexts: body.requiredStatusChecks
       },
-      enforce_admins: true,
+      enforce_admins: body.enforceAdmins ?? true,
       required_pull_request_reviews: null,
       restrictions: null,
       // D55: GitHub defaults allow_deletions to FALSE, which made every leftover
@@ -9273,12 +9304,12 @@ async function probeProtection(args) {
     hasMergeQueue: result.hasMergeQueue
   };
 }
-function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS5.stagingBranch) {
+function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS5.stagingBranch, opts = {}) {
   const reasons = [];
   if (!state.enabled) {
     reasons.push("no branch protection is configured");
   }
-  if (!state.strictUpToDate) {
+  if (!state.strictUpToDate && (opts.requireStrict ?? true)) {
     reasons.push("required_status_checks.strict (branches up-to-date) is OFF");
   }
   for (const check of requiredChecks) {
@@ -9306,6 +9337,14 @@ async function provisionProtection(args) {
     owner: args.owner,
     repo: args.repo,
     branch
+  });
+}
+async function putBaselineProtection(args) {
+  log12.info(`writing baseline branch protection for ${args.owner}/${args.repo}@${args.branch}`);
+  await args.ghClient.putProtection(args.owner, args.repo, args.branch, {
+    requiredStatusChecks: [...args.contexts],
+    strict: false,
+    enforceAdmins: false
   });
 }
 
@@ -14332,6 +14371,16 @@ async function finalizeRun(deps, runId) {
   } else {
     log21.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
+  const rollupPending = rollupResult !== void 0 && !rollupResult.merged && rollupResult.reason !== "no-merge";
+  if (!run9.debug && deps.config.git.developProtection === "run-scoped" && !rollupPending && !await deps.state.hasOtherActiveForRepo(run9.spec.repo, runId)) {
+    await putBaselineProtection({
+      ghClient: deps.gh,
+      owner: deps.owner,
+      repo: deps.repo,
+      branch: deps.config.git.baseBranch,
+      contexts: deps.config.git.developBaselineStatusChecks
+    });
+  }
   const finalized = await deps.state.finalize(runId, terminal);
   const rollupNote = rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` + (rollupResult.merged ? "" : ` (${rollupResult.reason})`) : ", no rollup";
   log21.info(
@@ -17281,6 +17330,19 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
       requiredChecks: stagingDeps.config.git.stagingRequiredStatusChecks,
       provision: true
     });
+    if (stagingDeps.config.git.developProtection === "run-scoped") {
+      const base = stagingDeps.config.git.baseBranch;
+      const checks = stagingDeps.config.git.developRequiredStatusChecks;
+      const developState = await provisionProtection({
+        ghClient: stagingDeps.ghClient,
+        owner: stagingDeps.owner,
+        repo: stagingDeps.repo,
+        branch: base,
+        requiredChecks: checks,
+        provision: true
+      });
+      requireProtectionOrRefuse(developState, checks, base);
+    }
   }
   return state.create({
     run_id: opts.runId,
@@ -17307,6 +17369,15 @@ async function supersedeRun(state, existing, stagingDeps) {
   const branch = existing.staging_branch;
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+  if (stagingDeps.config.git.developProtection === "run-scoped" && !await state.hasOtherActiveForRepo(existing.spec.repo, existing.run_id)) {
+    await putBaselineProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch: stagingDeps.config.git.baseBranch,
+      contexts: stagingDeps.config.git.developBaselineStatusChecks
+    });
+  }
   await state.finalize(existing.run_id, "superseded");
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
@@ -17930,6 +18001,19 @@ async function runResume(argv, overrides = {}) {
   if (envelope.kind === "resumed" && envelope.cleared === true) {
     await emitMetric(dataDir, runId, "human_touch", { kind: "resume" });
   }
+  if (envelope.kind === "resumed" && config.git.developProtection === "run-scoped") {
+    const { owner, repo } = splitRepoSlug(envelope.run.spec.repo);
+    const checks = config.git.developRequiredStatusChecks;
+    const developState = await provisionProtection({
+      ghClient: gh,
+      owner,
+      repo,
+      branch: config.git.baseBranch,
+      requiredChecks: checks,
+      provision: true
+    });
+    requireProtectionOrRefuse(developState, checks, config.git.baseBranch);
+  }
   emitJson({ ...envelope, adoption });
   return EXIT.OK;
 }
@@ -18127,6 +18211,16 @@ async function runCancel(argv, overrides = {}) {
     try {
       await ghClient.deleteProtection(owner, repo, branch);
       await ghClient.deleteRemoteBranch(owner, repo, branch);
+      const config = loadConfig({ dataDir });
+      if (config.git.developProtection === "run-scoped" && !await state.hasOtherActiveForRepo(run9.spec.repo, run9.run_id)) {
+        await putBaselineProtection({
+          ghClient,
+          owner,
+          repo,
+          branch: config.git.baseBranch,
+          contexts: config.git.developBaselineStatusChecks
+        });
+      }
       cleanedUp = true;
     } catch (err) {
       cleanupError = err instanceof Error ? err.message : String(err);
@@ -18144,7 +18238,7 @@ async function runCancel(argv, overrides = {}) {
     );
   } else {
     emitError(
-      `run ${run9.run_id} cancelled (marked failed; NOT resumable \u2014 \`factory run stop\` is the resumable alternative)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
+      `run ${run9.run_id} cancelled (marked failed; NOT resumable \u2014 \`factory run stop\` is the resumable alternative)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup (which also drops develop back to its baseline protection in run-scoped mode).`)
     );
   }
   return EXIT.OK;
@@ -19559,17 +19653,24 @@ Usage:
   factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage]
 
 Copies the committed CI + gate-config templates and probes branch protection on
-develop (the integration base). Without --provision a repo whose develop branch is
-not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
-Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
-The managed quality-gate.yml is rendered with the configured quality.gateEnv
-(set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
+develop (the integration base). Default mode (git.developProtection=run-scoped, D74):
+an UNPROTECTED develop causes scaffold to REFUSE loudly; --provision writes the light
+BASELINE profile (git.developBaselineStatusChecks required for non-admins, strict off,
+admins push freely) \u2014 the strict CI profile is escalated per-run at run create and
+dropped when the run ends. Under git.developProtection=permanent the strict profile
+(strict up-to-date + git.developRequiredStatusChecks) is asserted/provisioned instead
+and never removed. Per-run staging branches are minted at run create \u2014 scaffold no
+longer touches them. The managed quality-gate.yml is rendered with the configured
+quality.gateEnv (set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
                         Auto-derived from the 'origin' remote when omitted; an
                         explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse)
+  --provision           Write branch protection if missing (default: refuse). In
+                        run-scoped mode the PUT always writes the BASELINE profile \u2014
+                        re-running it is also the one-shot migration off the old
+                        permanent strict profile (refused while a run is active).
   --waive mutation      Record the mutation gate as deliberately waived in the gate
                         contract instead of refusing when stryker is not installed
   --waive coverage      Record the coverage gate as deliberately waived instead of
@@ -19865,7 +19966,8 @@ async function runScaffold(opts) {
     lists.present.push(settingsRel);
   }
   const branch = opts.config.git.baseBranch;
-  const required = opts.config.git.developRequiredStatusChecks;
+  const runScoped = opts.config.git.developProtection === "run-scoped";
+  const required = runScoped ? opts.config.git.developBaselineStatusChecks : opts.config.git.developRequiredStatusChecks;
   let state = await probeProtection({
     ghClient: opts.ghClient,
     owner: opts.owner,
@@ -19874,17 +19976,33 @@ async function runScaffold(opts) {
   });
   let provisioned = false;
   if (opts.provision) {
-    state = await provisionProtection({
-      ghClient: opts.ghClient,
-      owner: opts.owner,
-      repo: opts.repo,
-      branch,
-      requiredChecks: required,
-      provision: true
-    });
+    if (runScoped) {
+      if (await (opts.hasActiveRun?.() ?? Promise.resolve(false))) {
+        throw new UsageError(
+          `--provision refused: an active run exists for ${opts.owner}/${opts.repo} \u2014 writing the baseline now would downgrade the escalated protection on '${branch}' mid-run. Finish or cancel the run first.`
+        );
+      }
+      await putBaselineProtection({
+        ghClient: opts.ghClient,
+        owner: opts.owner,
+        repo: opts.repo,
+        branch,
+        contexts: required
+      });
+      state = await probeProtection({ ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch });
+    } else {
+      state = await provisionProtection({
+        ghClient: opts.ghClient,
+        owner: opts.owner,
+        repo: opts.repo,
+        branch,
+        requiredChecks: required,
+        provision: true
+      });
+    }
     provisioned = true;
   }
-  requireProtectionOrRefuse(state, required, branch);
+  requireProtectionOrRefuse(state, required, branch, { requireStrict: !runScoped });
   return {
     repo: `${opts.owner}/${opts.repo}`,
     files_created: lists.created,
@@ -19936,6 +20054,7 @@ async function run5(argv) {
     // Bake the resolved data dir into the target permission rules.
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
     provision: args.flag("provision") === true,
+    hasActiveRun: () => new StateManager({ dataDir }).hasOtherActiveForRepo(`${owner}/${repo}`),
     waiveMutation: waived.includes("mutation"),
     waiveCoverage: waived.includes("coverage")
   });
