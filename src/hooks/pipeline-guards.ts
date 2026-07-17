@@ -131,9 +131,14 @@ function isPlausiblyUnderClaudeWorktrees(p: string): boolean {
  * common case (no target anywhere near `.claude/worktrees/`) now costs one path
  * split instead of an unconditional `resolveDataDir`.
  *
- * Fail-closed: a target inside a worktree whose data dir or run state cannot be
- * resolved denies (corruption/misconfiguration is never silently allowed). A
- * target outside every worktree is not a producer write → no scope.
+ * Fail-closed, but only for CORRUPTION: a target inside a worktree whose data dir
+ * cannot be resolved, or whose run state EXISTS but cannot be parsed, denies
+ * (corruption/misconfiguration is never silently allowed). A run id with NO state
+ * on disk (ENOENT) is a positive "not a factory worktree" signal — Claude Code's
+ * native session worktrees share the `.claude/worktrees` root (Decision 67), so a
+ * plain `<repo>/.claude/worktrees/<session>/…` write parses as a run/task that was
+ * never created; that passes through (D11). A target outside every worktree is not
+ * a producer write → no scope.
  */
 async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDeps): Promise<HookDecision | null> {
     const targets = filePathsOf(input)
@@ -178,12 +183,18 @@ async function decideWriteScope(input: HookInput | null, deps: PipelineGuardsDep
         let run: RunState
         try {
             run = await loadRunById(dataDir, ref.run_id)
-        } catch {
-            // The path names a worktree but its run state cannot be read → fail closed.
+        } catch (err) {
+            // No run state EXISTS for this id → a native Claude Code session worktree
+            // merely sharing the `.claude/worktrees` root (D11) — not a producer
+            // write → pass through. A run that EXISTS but can't be read/parsed is
+            // corruption → fail closed.
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                continue
+            }
             return deny(
                 'test_writer_scope_broken',
                 `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', ` +
-                    `whose run state is missing or corrupt; failing closed.`
+                    `whose run state exists but cannot be read; failing closed.`
             )
         }
 

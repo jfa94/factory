@@ -9216,10 +9216,13 @@ async function decideWriteScope(input, deps) {
     let run;
     try {
       run = await loadRunById(dataDir, ref.run_id);
-    } catch {
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        continue;
+      }
       return deny(
         "test_writer_scope_broken",
-        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', whose run state is missing or corrupt; failing closed.`
+        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', whose run state exists but cannot be read; failing closed.`
       );
     }
     const activeTask = resolveActiveTask(run, ref.task_id);

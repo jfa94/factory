@@ -719,7 +719,7 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 **Choice:** A hook never asks "what is the active run?" via the shared mutable pointer (`runs/current`). Each guard **derives the owning run from the signal it already holds**, so N runs across different repos run concurrently — each with TDD enforced — while same-repo simultaneous `run create`s stay serialized:
 
-- **Write-scope arm** (the TDD rail in `pipeline-guards.ts`) derives `{run_id, task_id}` from the **target file path**. A producer writes into `<repo-root>/.claude/worktrees/<run_id>/<task_id>/…`; Claude's `Edit`/`Write` `file_path` is absolute, so the path encodes both ids (`runTaskForPath`, `hook-context.ts`). A target under no worktree is not a producer write → pass through (the bug fixed: an unrelated session editing a non-test file no longer trips the live run's test-writer scope). A target under a worktree whose run/task is missing or corrupt → **fail closed** (deny). (The worktrees root was `<dataDir>/worktrees` when this decision landed; [Decision 67](#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees) RE-ROOTED it to the target repo. It is still a required, caller-resolved anchor — now git-derived (`workDir`, `loadCliDeps`) rather than dataDir-derived — never an unanchored segment scan.)
+- **Write-scope arm** (the TDD rail in `pipeline-guards.ts`) derives `{run_id, task_id}` from the **target file path**. A producer writes into `<repo-root>/.claude/worktrees/<run_id>/<task_id>/…`; Claude's `Edit`/`Write` `file_path` is absolute, so the path encodes both ids (`runTaskForPath`, `hook-context.ts`). A target under no worktree is not a producer write → pass through (the bug fixed: an unrelated session editing a non-test file no longer trips the live run's test-writer scope). A target under a worktree whose run state EXISTS but is corrupt → **fail closed** (deny); a run id with NO state on disk (ENOENT) passes through — it names a native session worktree sharing the root, not a factory task (D11 amendment under Decision 67). (The worktrees root was `<dataDir>/worktrees` when this decision landed; [Decision 67](#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees) RE-ROOTED it to the target repo. It is still a required, caller-resolved anchor — now git-derived (`workDir`, `loadCliDeps`) rather than dataDir-derived — never an unanchored segment scan.)
 - **Bash arms** (nested-shell, ship) scope by **owner session**: the live run whose `owner_session` equals `CLAUDE_CODE_SESSION_ID` (`StateManager.findActiveByOwner`). No owning run → pass through; env id absent → retain prior behavior (these arms are lower-stakes — nested-shell is a rail, ship is dormant — so they carry the only residual runtime assumption, isolated from the critical write arm).
 - **Stop gate** resolves the run **owned by the stopping session** (`findActiveByOwner(stoppingSession)`) instead of `readCurrent()`, so a clobber can no longer make a stopping owner finalize the wrong run; unknown session → degrade to `readCurrent()`.
 - **`holdout-guard`** reads only `dataDir` — correctly global, untouched.
@@ -2880,6 +2880,21 @@ Extends Decision 2's `.claude/worktrees/` convention from the orchestrator workt
 worktree. The PreToolUse `.claude/` guard in `templates/settings.autonomous.json` already
 carved out `(^|/)\.claude/worktrees/` unconditionally — written to mirror this exemption, it
 had simply never been fed a matching path.
+
+**Amendment (2026-07-17, v1.43.1 — D11): ENOENT is pass-through, not fail-closed.** The
+relocation put factory worktrees under the SAME root Claude Code's native worktree feature
+uses in the same repo. This decision's prose anticipated the cross-repo collision (the root
+anchor defends it) but missed the same-repo one: a native session worktree write
+(`<repo>/.claude/worktrees/<session>/src/x.ts`) anchors to the correct repo root, parses as
+`<session>/src`, and `loadRunById` throws ENOENT — which the write-scope arm mapped to a
+fail-closed deny, bricking every Edit/Write in every non-factory session worktree of a
+plugin-bearing repo (defect D11, found live 2026-07-16). It also latently denied writes in
+factory's own single-segment `orchestrator-<run>` worktree. Fix (`decideWriteScope`,
+`src/hooks/pipeline-guards.ts`): a run id with NO state on disk (`err.code === 'ENOENT'`) is a
+positive "this run was never created → not a factory worktree" signal → pass through; a run
+whose state EXISTS but cannot be read/parsed is corruption → still fail closed. Re-rooting
+factory worktrees to a `factory/` subdir was considered and rejected: bigger diff, breaks
+paused runs' on-disk layout, and doesn't fix the orchestrator-worktree case.
 
 ---
 

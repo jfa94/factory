@@ -215,10 +215,23 @@ describe('pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
         expect(consulted).toBe(false)
     })
 
-    it('fails closed when the worktree path matches but the run state is missing/corrupt', async () => {
+    // D11 regression: Claude Code's native session worktrees share the
+    // `.claude/worktrees` root (Decision 67). A write there parses as a run/task
+    // whose state was NEVER CREATED (ENOENT) — that is a positive "not a factory
+    // worktree" signal and must pass through, not brick the session.
+    it('allows a write in a native session worktree — run state absent (ENOENT)', async () => {
+        const enoent = Object.assign(new Error("ENOENT: no such file 'state.json'"), {code: 'ENOENT'})
+        const d = await decidePipelineGuards(writeInWorktree('my-session', 'src', 'feature.ts'), {
+            ...DATA,
+            loadRunById: withRunById(enoent),
+        })
+        expect(isDeny(d)).toBe(false)
+    })
+
+    it('fails closed when the run state EXISTS but cannot be read/parsed (corrupt)', async () => {
         const d = await decidePipelineGuards(writeInWorktree('run-x', 't1', 'src/feature.ts'), {
             ...DATA,
-            loadRunById: withRunById(new Error('ENOENT: state.json')),
+            loadRunById: withRunById(new Error('state.json: invalid schema')),
         })
         expect(isDeny(d)).toBe(true)
     })
