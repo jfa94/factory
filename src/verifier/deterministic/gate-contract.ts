@@ -74,11 +74,37 @@ export function validateGateCommand(command: string): CommandValidation {
     return validateCommand(command, isAllowedGateRunner)
 }
 
+/**
+ * Where the repo's mutable source lives when no `roots` is contracted. The
+ * historical assumption (`src/`) — repos with a different layout (e.g. Next.js
+ * app-dir: `app/`, `components/`, `utils/`) MUST contract explicit roots or the
+ * mutation gate silently never matches a file (the goodbyespy no-op).
+ */
+export const MUTATION_DEFAULT_ROOTS: readonly string[] = ['src'] as const
+
+/** One path segment of a plain repo-relative directory path: no globs, no separators. */
+const ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/
+
+const RootsSchema = z
+    .array(
+        z
+            .string()
+            .refine((r) => r.split('/').every((seg) => ROOT_SEGMENT_RE.test(seg)), {
+                message: 'mutation root must be a plain repo-relative directory path (no globs, no leading /)',
+            })
+            .refine((r) => r.split('/').every((seg) => seg !== '..' && seg !== '.'), {
+                message: "mutation root must not contain '.' or '..' segments",
+            })
+    )
+    .nonempty('mutation roots must name at least one directory')
+
 const ContractedSchema = z
     .object({
         contracted: z.literal(true),
         /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
         command: z.string().optional(),
+        /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
+        roots: RootsSchema.optional(),
     })
     .strict()
 
@@ -145,6 +171,13 @@ export const GateContractSchema = z
     .superRefine((contract, issues) => {
         for (const id of GATE_IDS) {
             const entry = contract.gates[id]
+            if (entry.contracted && entry.roots !== undefined && id !== 'mutation') {
+                issues.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['gates', id, 'roots'],
+                    message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`,
+                })
+            }
             if (!entry.contracted || entry.command === undefined) {
                 continue
             }
@@ -285,6 +318,19 @@ export function classifySkip(reason: string): SkipClass {
  * command — the loader's schema already rejects those, so reaching one here
  * means a contract bypassed validation (structural, loud).
  */
+/**
+ * The mutation gate's mutable-source roots: the contracted `roots` when present,
+ * else {@link MUTATION_DEFAULT_ROOTS}. Shared by the local gate's scope filter and
+ * the CI render so the two enforcers can never disagree on where source lives.
+ */
+export function mutationRoots(contract: GateContract | undefined): readonly string[] {
+    const entry = contract?.gates.mutation
+    if (entry !== undefined && entry.contracted && entry.roots !== undefined) {
+        return entry.roots
+    }
+    return MUTATION_DEFAULT_ROOTS
+}
+
 export function contractCommand(contract: GateContract | undefined, id: GateId): readonly string[] | undefined {
     const entry = contract?.gates[id]
     if (entry === undefined || !entry.contracted || entry.command === undefined) {

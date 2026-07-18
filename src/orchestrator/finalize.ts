@@ -38,6 +38,7 @@
 import {
     decideFinalize,
     rollup,
+    DEFAULT_POLL_INTERVAL_MS,
     loadGateContract,
     enumerateGatesInForce,
     buildPartialReport,
@@ -251,6 +252,9 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             title: rollupTitle(report),
             body: markdown,
             merge: deps.shipMode === 'live',
+            // A6: CI wait budget from config (minutes → polls); deps.rollup (tests)
+            // still overrides.
+            maxPolls: Math.ceil((deps.config.git.rollupCiWaitMinutes * 60_000) / DEFAULT_POLL_INTERVAL_MS),
             ...(deps.rollup ?? {}),
         })
         // Capture in a const so the state.update mutator closure below sees the

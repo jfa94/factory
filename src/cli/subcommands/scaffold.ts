@@ -29,7 +29,8 @@ import {fileURLToPath} from 'node:url'
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {parseArgs, optionalString} from '../args.js'
 import {emitJson, emitHelp} from '../io.js'
-import {createLogger} from '../../shared/index.js'
+import {createLogger, nonNull} from '../../shared/index.js'
+import {STRYKER_CONFIG_BASENAMES} from '../../shared/gate-config-names.js'
 import {
     DefaultGitClient,
     DefaultGhClient,
@@ -46,6 +47,7 @@ import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
 import {
     injectGateEnvIntoWorkflow,
     renderQualityGate,
+    renderMutationNightly,
     resolveNodeRuntimeDeclarations,
     NODE_VERSION_FILE,
     NVMRC_FILE,
@@ -56,7 +58,7 @@ import {StateManager} from '../../core/state/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
-import {GATE_CONTRACT_REL} from '../../verifier/deterministic/gate-contract.js'
+import {GATE_CONTRACT_REL, mutationRoots} from '../../verifier/deterministic/gate-contract.js'
 import type {GateContractStack} from '../../verifier/deterministic/gate-contract.js'
 import {UsageError} from '../../shared/usage-error.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
@@ -286,13 +288,24 @@ const LEGACY_E2E_EXAMPLE_HASHES: readonly string[] = [
     '629824a48477223cfcef02bcb6c850aa9622d73d41c93bc3b76486831a98770e',
 ]
 
+/** The nightly warm-base workflow — rendered only when mutation is contracted. */
+const MUTATION_NIGHTLY_REL = '.github/workflows/mutation-nightly.yml'
+
+/** The stryker seed — deferred to pass 2a: its `mutate` globs render from the contract's roots. */
+const STRYKER_SEED_REL = '.stryker.config.json'
+
 /** The managed CI net: rendered from the gate contract in pass 2 (npm stack only). */
-const CI_NET_RELS: readonly string[] = [QUALITY_GATE_REL, '.github/scripts/shard-mutation-scope.mjs']
+const CI_NET_RELS: readonly string[] = [
+    QUALITY_GATE_REL,
+    '.github/scripts/shard-mutation-scope.mjs',
+    MUTATION_NIGHTLY_REL,
+]
 
 const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
     {rel: QUALITY_GATE_REL, policy: 'managed'},
     {rel: '.github/scripts/shard-mutation-scope.mjs', policy: 'managed'},
-    {rel: '.stryker.config.json', policy: 'seed', nodeOnly: true},
+    {rel: MUTATION_NIGHTLY_REL, policy: 'managed'},
+    {rel: STRYKER_SEED_REL, policy: 'seed', nodeOnly: true},
     {rel: '.dependency-cruiser.cjs', policy: 'seed', nodeOnly: true},
     {rel: 'eslint.config.mjs', policy: 'seed', nodeOnly: true},
     // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
@@ -568,8 +581,8 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     const lockLoad = await loadScaffoldLock(opts.targetRoot)
     const lock: LockState = {seeds: {...lockLoad.lock.seeds}, dirty: false}
     for (const entry of TEMPLATE_MANIFEST) {
-        if (CI_NET_RELS.includes(entry.rel)) {
-            continue // the managed CI net renders AFTER the contract (pass 2)
+        if (CI_NET_RELS.includes(entry.rel) || entry.rel === STRYKER_SEED_REL) {
+            continue // the managed CI net + stryker seed render AFTER the contract (pass 2)
         }
         if (entry.nodeOnly === true && !isNodePackage) {
             continue
@@ -581,9 +594,12 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     // hashes would strand those seeds as permanently "customized". A garbage lock
     // is rewritten valid; a lock that would be empty and didn't exist is skipped
     // (no `{seeds:{}}` noise on non-node targets where every seed is skipped).
+    let lockReported = false
     if (lock.dirty || lockLoad.invalid) {
         const toSave: ScaffoldLock = {version: 1, seeds: lock.seeds}
         await saveScaffoldLock(opts.targetRoot, toSave)
+        lock.dirty = false
+        lockReported = true
         if (lockLoad.existed) {
             lists.present.push(SCAFFOLD_LOCK_REL)
         } else {
@@ -592,6 +608,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         }
     } else if (lockLoad.existed) {
         lists.present.push(SCAFFOLD_LOCK_REL)
+        lockReported = true
     }
 
     // 2. The GATE CONTRACT (S7, Decision 46): resolve the stack + write
@@ -613,6 +630,48 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         lists.present.push(GATE_CONTRACT_REL)
     }
 
+    // 2a. The stryker SEED, deferred until the contract exists: its `mutate` globs
+    //     render from the contracted mutation roots (A4), and seeding is
+    //     SHADOW-GUARDED (A5): when any OTHER Stryker config basename exists, the
+    //     project already owns mutation config — writing ours could silently shadow
+    //     it (Stryker's discovery is first-existing-wins), so scaffold refuses to
+    //     seed and names the file discovery actually loads.
+    if (isNodePackage) {
+        const present = STRYKER_CONFIG_BASENAMES.filter((b) => existsSync(join(opts.targetRoot, b)))
+        const others = present.filter((b) => b !== STRYKER_SEED_REL)
+        if (others.length > 0) {
+            log.warn(
+                `not seeding ${STRYKER_SEED_REL}: found existing Stryker config(s) ${others.join(', ')} — ` +
+                    `discovery order loads '${nonNull(present[0])}'; consolidate into ONE config ` +
+                    `(shadowed siblings are silently ignored by Stryker)`
+            )
+        } else {
+            const roots = mutationRoots(gates.contract)
+            const includes = roots.map((r) => `"${r}/**/*.ts"`).join(',\n        ')
+            const entry = nonNull(TEMPLATE_MANIFEST.find((e) => e.rel === STRYKER_SEED_REL))
+            await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock, (text) =>
+                text.replace('"src/**/*.ts"', includes)
+            )
+            // A written/refreshed seed recorded a new lock hash — persist it (the
+            // pass-1 save already happened; TS CFA can't see applyTemplate's mutation
+            // of lock.dirty, so key off the file lists instead).
+            const wroteSeed = lists.created.includes(STRYKER_SEED_REL) || lists.updated.includes(STRYKER_SEED_REL)
+            if (wroteSeed) {
+                await saveScaffoldLock(opts.targetRoot, {version: 1, seeds: lock.seeds})
+                lock.dirty = false
+                if (!lockReported) {
+                    if (lockLoad.existed) {
+                        lists.present.push(SCAFFOLD_LOCK_REL)
+                    } else {
+                        lists.created.push(SCAFFOLD_LOCK_REL)
+                        log.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) — COMMIT it alongside the seeds`)
+                    }
+                    lockReported = true
+                }
+            }
+        }
+    }
+
     // 2b. The managed CI net, RENDERED from the contract (Decision 53): one source
     //     of truth for the local GateRunner and CI. quality-gate.yml gets the
     //     per-stack setup + gate steps plus the configured quality.gateEnv. Non-npm
@@ -624,6 +683,12 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
             if (!CI_NET_RELS.includes(entry.rel)) {
                 continue
             }
+            // The nightly warm-base workflow exists ONLY where mutation is contracted
+            // (renderMutationNightly returns null otherwise) — no cron burn on repos
+            // that waived mutation.
+            if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
+                continue
+            }
             const transform =
                 entry.rel === QUALITY_GATE_REL
                     ? (text: string) =>
@@ -631,7 +696,9 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
                               renderQualityGate(text, {contract: gates.contract, ...facts}),
                               opts.config.quality.gateEnv
                           )
-                    : undefined
+                    : entry.rel === MUTATION_NIGHTLY_REL
+                      ? (text: string) => nonNull(renderMutationNightly(text, {contract: gates.contract, ...facts}))
+                      : undefined
             await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, undefined, transform)
         }
         // The shard script above is an esbuild bundle in the plugin's own style —

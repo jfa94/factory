@@ -17,6 +17,7 @@ jobs:
   quality:
     name: Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       # factory:setup
@@ -25,6 +26,7 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: quality
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -48,27 +50,33 @@ jobs:
           extra_args: --only-verified
 
   # factory:mutation-begin
-  # Mutation testing strategy (2026-05-18; rebalanced 2026-06-18):
+  # Mutation testing strategy (redesigned 2026-07-18):
+  #   Runs ONLY on PRs targeting develop (the rollup — the merge point it
+  #     actually gates). Task PRs into staging-* skip it: the factory's local
+  #     per-task gate already enforced mutation pre-merge, nothing waits on the
+  #     CI result there (stagingRequiredStatusChecks is empty), and PR-scoped
+  #     caches can't warm anything downstream.
   #   mutation-scope: single runner. Diffs HEAD against origin/<base_ref>
-  #     to produce a comma-separated list of changed src .ts files, then
+  #     to produce a comma-separated list of changed mutable .ts files, then
   #     splits them into 4 shards via `.github/scripts/shard-mutation-scope.mjs`
   #     (JSON job output).
   #   mutation: matrix x4. Each shard runs `stryker run --mutate <slice>`
-  #     against its slice, with its own incremental cache + incrementalFile.
-  #   Why: develop-target full-scope was hitting ~3.5h wall-clock as the
-  #     mutable surface grew. Tight scope + 4-way shard drops typical
-  #     rollups to ~10-30 min slowest-shard. Empty slices no-op.
-  #   Balancing: the shard script is cost-aware — LPT (longest-processing-time)
-  #     bin-packing weighted by per-file source-lines, NOT round-robin by file
-  #     count. Round-robin overloaded shard 1 (remainder skew + `git diff`
-  #     sorting the heavy foundational modules into low-index shards), making
-  #     it a ~1h long pole while the rest finished in 10-15 min. The script is a
-  #     checked-in build artifact generated from the plugin's tested TS source
-  #     (src/bin/shard-mutation-scope.ts); the factory scaffolds + auto-updates
-  #     it as a plugin-managed file.
+  #     against its slice, restoring its incremental cache. Empty slices no-op.
+  #   Sharding is STABLE-HASH (fnv1a(path) % 4), not cost-balanced: a file's
+  #     shard never depends on the rest of the scope, so per-shard incremental
+  #     caches stay aligned with the nightly full-surface seeding run on develop
+  #     (mutation-nightly.yml — default-branch caches are readable by every PR).
+  #     With warm caches only genuinely changed mutants re-run, which beats any
+  #     single-run bin-packing (the retired LPT-by-sloc reshuffled files between
+  #     shards as scopes changed, invalidating exactly those caches). The script
+  #     is a checked-in build artifact generated from the plugin's tested TS
+  #     source (src/bin/shard-mutation-scope.ts); the factory scaffolds +
+  #     auto-updates it as a plugin-managed file.
   mutation-scope:
     name: Mutation Scope
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.base_ref == 'develop'
     needs: quality
     outputs:
       shards: ${{ steps.split.outputs.shards }}
@@ -103,11 +111,9 @@ jobs:
               echo 'shards=["","","",""]' >> "$GITHUB_OUTPUT"
               exit 0
           fi
-          # Cost-aware split: LPT bin-packing weighted by per-file source-lines
-          # (.github/scripts/shard-mutation-scope.mjs), replacing the old
-          # round-robin-by-count that overloaded shard 1. The script reads each
-          # scoped file's sloc from the checked-out tree and emits the 4-element
-          # shards JSON. Uses ubuntu's preinstalled node (no setup-node needed).
+          # Stable-hash split (fnv1a(path) % 4): a file's shard depends only on
+          # its path, keeping per-shard incremental caches aligned with the
+          # nightly seeding run. Uses ubuntu's preinstalled node.
           shards_json=$(node .github/scripts/shard-mutation-scope.mjs "$SCOPE")
           echo "any=true" >> "$GITHUB_OUTPUT"
           echo "shards=$shards_json" >> "$GITHUB_OUTPUT"
@@ -115,6 +121,7 @@ jobs:
   mutation:
     name: Mutation
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: mutation-scope
     strategy:
       fail-fast: false
@@ -155,6 +162,7 @@ jobs:
         run: |
           pnpm exec stryker run \
               --mutate "$SLICE" \
+              --concurrency 2 \
               --incrementalFile "reports/mutation/.stryker-incremental-shard-${{ matrix.shard }}.json"
       - name: Save Stryker incremental cache (shard ${{ matrix.shard }})
         if: success() && steps.slice.outputs.slice != ''
@@ -178,6 +186,7 @@ jobs:
   mutation-testing:
     name: Mutation Testing
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [mutation-scope, mutation]
     if: always()
     steps:
@@ -188,6 +197,13 @@ jobs:
         run: |
           echo "mutation-scope: $SCOPE_RESULT"
           echo "mutation:       $MUTATION_RESULT"
+          # Scope skipped = PR does not target develop (mutation runs on the
+          # rollup only); the aggregator reports green so the universal check
+          # name stays satisfiable everywhere.
+          if [[ "$SCOPE_RESULT" == "skipped" ]]; then
+            echo "Mutation testing skipped (PR does not target develop)."
+            exit 0
+          fi
           if [[ "$SCOPE_RESULT" != "success" ]]; then
             echo "::error::mutation-scope did not succeed"
             exit 1

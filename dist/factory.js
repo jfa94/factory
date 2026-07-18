@@ -6306,7 +6306,14 @@ var GitSchema = external_exports.object({
    * Branch-name prefix for run-scoped task branches (Δ M). The full name is
    * `<branchPrefix>/<run_id>/<task_id>`.
    */
-  branchPrefix: external_exports.string().min(1).default("factory")
+  branchPrefix: external_exports.string().min(1).default("factory"),
+  /**
+   * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
+   * before giving up with `ci-timeout`. Sized above the slowest expected
+   * quality-gate run (mutation on a cold cache); a timeout still parks the
+   * run recoverably (`factory resume` re-enters the poll).
+   */
+  rollupCiWaitMinutes: external_exports.number().int().positive().default(30)
 }).transform((git) => ({
   ...git,
   developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
@@ -11389,10 +11396,21 @@ function isAllowedGateRunner(argv) {
 function validateGateCommand(command) {
   return validateCommand(command, isAllowedGateRunner);
 }
+var MUTATION_DEFAULT_ROOTS = ["src"];
+var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+var RootsSchema = external_exports.array(
+  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
+    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
+  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
+    message: "mutation root must not contain '.' or '..' segments"
+  })
+).nonempty("mutation roots must name at least one directory");
 var ContractedSchema = external_exports.object({
   contracted: external_exports.literal(true),
   /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-  command: external_exports.string().optional()
+  command: external_exports.string().optional(),
+  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
+  roots: RootsSchema.optional()
 }).strict();
 var UncontractedSchema = external_exports.object({
   contracted: external_exports.literal(false),
@@ -11428,6 +11446,13 @@ var GateContractSchema = external_exports.object({
 }).strict().superRefine((contract, issues) => {
   for (const id of GATE_IDS) {
     const entry = contract.gates[id];
+    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "roots"],
+        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
+      });
+    }
     if (!entry.contracted || entry.command === void 0) {
       continue;
     }
@@ -11497,6 +11522,13 @@ var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-s
 function classifySkip(reason) {
   return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
 }
+function mutationRoots(contract) {
+  const entry = contract?.gates.mutation;
+  if (entry !== void 0 && entry.contracted && entry.roots !== void 0) {
+    return entry.roots;
+  }
+  return MUTATION_DEFAULT_ROOTS;
+}
 function contractCommand(contract, id) {
   const entry = contract?.gates[id];
   if (entry === void 0 || !entry.contracted || entry.command === void 0) {
@@ -11543,8 +11575,8 @@ function isDocsPath(file) {
   }
   return false;
 }
-function isMutableSrc(file) {
-  if (!/^src\/.*\.ts$/.test(file)) {
+function isMutableSrc(file, roots = ["src"]) {
+  if (!file.endsWith(".ts") || !roots.some((r) => file.startsWith(r + "/"))) {
     return false;
   }
   if (/\.(test|spec|d)\.ts$/.test(file)) {
@@ -11561,8 +11593,8 @@ function isMutableSrc(file) {
   }
   return true;
 }
-function mutationScope(changedFiles) {
-  return filterDedup(changedFiles, isMutableSrc);
+function mutationScope(changedFiles, roots = ["src"]) {
+  return filterDedup(changedFiles, (f) => isMutableSrc(f, roots));
 }
 function diffScopedTestFiles(changedFiles) {
   return filterDedup(changedFiles, isTestPath);
@@ -11913,7 +11945,7 @@ var mutationStrategy = {
       return ran("mutation", false, `base-missing: ${base} not found`);
     }
     const changed = await ctx.tools.git.changedFiles(base, opts);
-    const scope = mutationScope(changed);
+    const scope = mutationScope(changed, mutationRoots(ctx.contract));
     if (scope.length === 0) {
       return skip("mutation", "no-mutable-changes");
     }
@@ -14324,6 +14356,9 @@ async function finalizeRun(deps, runId) {
       title: rollupTitle(report),
       body: markdown,
       merge: deps.shipMode === "live",
+      // A6: CI wait budget from config (minutes → polls); deps.rollup (tests)
+      // still overrides.
+      maxPolls: Math.ceil(deps.config.git.rollupCiWaitMinutes * 6e4 / DEFAULT_POLL_INTERVAL_MS),
       ...deps.rollup ?? {}
     });
     const rr = rollupResult;
@@ -19258,6 +19293,15 @@ function waivedMutationBlock(reason) {
     `    - run: echo 'Mutation testing waived (gate contract): ${quoted}'`
   ];
 }
+var DEFAULT_ROOTS_PATHSPEC = "'src/**/*.ts'";
+function rootsPathspec(roots) {
+  return roots.map((r) => `'${r}/**/*.ts'`).join(" ");
+}
+function applyMutationRoots(lines, contract) {
+  const roots = mutationRoots(contract);
+  const spec = rootsPathspec(roots);
+  return spec === DEFAULT_ROOTS_PATHSPEC ? lines : lines.map((l) => l.replace(DEFAULT_ROOTS_PATHSPEC, spec));
+}
 function renderMutationRegion(lines, opts) {
   const begin = lines.findIndex((l) => l.trim() === "# factory:mutation-begin");
   const end = lines.findIndex((l) => l.trim() === "# factory:mutation-end");
@@ -19273,10 +19317,28 @@ function renderMutationRegion(lines, opts) {
   }
   let kept = [...lines.slice(0, begin), ...lines.slice(begin + 1, end), ...lines.slice(end + 1)];
   kept = replaceMarker(kept, "# factory:mutation-setup", mutationSetupBlock(opts));
+  kept = applyMutationRoots(kept, opts.contract);
   if (opts.packageManager === "npm") {
     kept = kept.map((l) => l.replace("pnpm exec stryker run \\", "npx stryker run \\"));
   }
   return kept;
+}
+function renderMutationNightly(template, opts) {
+  if (opts.contract.stack !== "npm") {
+    throw new Error(
+      `renderMutationNightly: stack '${opts.contract.stack}' is not supported \u2014 the CI quality gate renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)`
+    );
+  }
+  if (!opts.contract.gates.mutation.contracted) {
+    return null;
+  }
+  let lines = template.split("\n");
+  lines = replaceMarker(lines, "# factory:mutation-setup", mutationSetupBlock(opts));
+  lines = applyMutationRoots(lines, opts.contract);
+  if (opts.packageManager === "npm") {
+    lines = lines.map((l) => l.replace("pnpm exec stryker run \\", "npx stryker run \\"));
+  }
+  return lines.join("\n");
 }
 function renderQualityGate(template, opts) {
   if (opts.contract.stack !== "npm") {
@@ -19449,7 +19511,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold-gates.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync9, readdirSync, statSync } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname10, join as join28 } from "node:path";
 function detectStack(targetRoot) {
@@ -19497,6 +19559,30 @@ async function denoHasBuildTask(targetRoot) {
 }
 var yes = { contracted: true };
 var no = (reason) => ({ contracted: false, reason });
+var MUTATION_ROOT_CANDIDATES = [
+  "app",
+  "components",
+  "lib",
+  "utils",
+  "db",
+  "server",
+  "hooks"
+];
+function hasMutableTs(targetRoot, root) {
+  const abs = join28(targetRoot, root);
+  if (!existsSync9(abs) || !statSync(abs).isDirectory()) {
+    return false;
+  }
+  const entries = readdirSync(abs, { recursive: true, encoding: "utf8" });
+  return entries.some((rel) => isMutableSrc(`${root}/${rel.replaceAll("\\", "/")}`, [root]));
+}
+function detectMutationRoots(targetRoot) {
+  if (hasMutableTs(targetRoot, "src")) {
+    return void 0;
+  }
+  const roots = MUTATION_ROOT_CANDIDATES.filter((r) => hasMutableTs(targetRoot, r));
+  return roots.length > 0 ? roots : [];
+}
 async function resolveNpm(opts) {
   const pkg = await readPackageJson(opts.targetRoot);
   const floor = [];
@@ -19515,10 +19601,16 @@ async function resolveNpm(opts) {
   }
   const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join28(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
-  if (strykerResolvable) {
-    mutation = yes;
-  } else if (opts.waiveMutation) {
+  if (opts.waiveMutation) {
     mutation = no("waived via --waive mutation");
+  } else if (strykerResolvable) {
+    const roots = detectMutationRoots(opts.targetRoot);
+    if (roots?.length === 0) {
+      throw new Error(
+        `scaffold: mutation gate: no mutable-source roots found \u2014 no src/ and none of ${MUTATION_ROOT_CANDIDATES.join("/")} contain mutable .ts files. Contracting mutation would make the "Mutation Testing" check a silent no-op; add explicit roots to .factory/gates.json (gates.mutation.roots) or pass --waive mutation`
+      );
+    }
+    mutation = roots === void 0 ? yes : { contracted: true, roots: [...roots] };
   } else {
     throw new Error(
       "scaffold: mutation gate: stryker not installed \u2014 install @stryker-mutator/core or pass --waive mutation to record the waiver"
@@ -19741,11 +19833,18 @@ var LEGACY_E2E_EXAMPLE_HASHES = [
   "2fcc468328b2070bd07ede3e524bf1bf33ec2957d2d0e9bef29302251a24356d",
   "629824a48477223cfcef02bcb6c850aa9622d73d41c93bc3b76486831a98770e"
 ];
-var CI_NET_RELS = [QUALITY_GATE_REL, ".github/scripts/shard-mutation-scope.mjs"];
+var MUTATION_NIGHTLY_REL = ".github/workflows/mutation-nightly.yml";
+var STRYKER_SEED_REL = ".stryker.config.json";
+var CI_NET_RELS = [
+  QUALITY_GATE_REL,
+  ".github/scripts/shard-mutation-scope.mjs",
+  MUTATION_NIGHTLY_REL
+];
 var TEMPLATE_MANIFEST = [
   { rel: QUALITY_GATE_REL, policy: "managed" },
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
-  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
+  { rel: MUTATION_NIGHTLY_REL, policy: "managed" },
+  { rel: STRYKER_SEED_REL, policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
   { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
   // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
@@ -19902,7 +20001,7 @@ async function runScaffold(opts) {
   const lockLoad = await loadScaffoldLock(opts.targetRoot);
   const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
-    if (CI_NET_RELS.includes(entry.rel)) {
+    if (CI_NET_RELS.includes(entry.rel) || entry.rel === STRYKER_SEED_REL) {
       continue;
     }
     if (entry.nodeOnly === true && !isNodePackage) {
@@ -19910,9 +20009,12 @@ async function runScaffold(opts) {
     }
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock2);
   }
+  let lockReported = false;
   if (lock2.dirty || lockLoad.invalid) {
     const toSave = { version: 1, seeds: lock2.seeds };
     await saveScaffoldLock(opts.targetRoot, toSave);
+    lock2.dirty = false;
+    lockReported = true;
     if (lockLoad.existed) {
       lists.present.push(SCAFFOLD_LOCK_REL);
     } else {
@@ -19921,6 +20023,7 @@ async function runScaffold(opts) {
     }
   } else if (lockLoad.existed) {
     lists.present.push(SCAFFOLD_LOCK_REL);
+    lockReported = true;
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -19936,16 +20039,54 @@ async function runScaffold(opts) {
   } else {
     lists.present.push(GATE_CONTRACT_REL);
   }
+  if (isNodePackage) {
+    const present = STRYKER_CONFIG_BASENAMES.filter((b) => existsSync11(join30(opts.targetRoot, b)));
+    const others = present.filter((b) => b !== STRYKER_SEED_REL);
+    if (others.length > 0) {
+      log35.warn(
+        `not seeding ${STRYKER_SEED_REL}: found existing Stryker config(s) ${others.join(", ")} \u2014 discovery order loads '${nonNull(present[0])}'; consolidate into ONE config (shadowed siblings are silently ignored by Stryker)`
+      );
+    } else {
+      const roots = mutationRoots(gates.contract);
+      const includes = roots.map((r) => `"${r}/**/*.ts"`).join(",\n        ");
+      const entry = nonNull(TEMPLATE_MANIFEST.find((e) => e.rel === STRYKER_SEED_REL));
+      await applyTemplate(
+        entry,
+        opts.templatesDir,
+        opts.targetRoot,
+        lists,
+        lock2,
+        (text) => text.replace('"src/**/*.ts"', includes)
+      );
+      const wroteSeed = lists.created.includes(STRYKER_SEED_REL) || lists.updated.includes(STRYKER_SEED_REL);
+      if (wroteSeed) {
+        await saveScaffoldLock(opts.targetRoot, { version: 1, seeds: lock2.seeds });
+        lock2.dirty = false;
+        if (!lockReported) {
+          if (lockLoad.existed) {
+            lists.present.push(SCAFFOLD_LOCK_REL);
+          } else {
+            lists.created.push(SCAFFOLD_LOCK_REL);
+            log35.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
+          }
+          lockReported = true;
+        }
+      }
+    }
+  }
   if (gates.contract.stack === "npm") {
     const facts = await readWorkflowFacts(opts.targetRoot);
     for (const entry of TEMPLATE_MANIFEST) {
       if (!CI_NET_RELS.includes(entry.rel)) {
         continue;
       }
+      if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
+        continue;
+      }
       const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(
         renderQualityGate(text, { contract: gates.contract, ...facts }),
         opts.config.quality.gateEnv
-      ) : void 0;
+      ) : entry.rel === MUTATION_NIGHTLY_REL ? (text) => nonNull(renderMutationNightly(text, { contract: gates.contract, ...facts })) : void 0;
       await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, void 0, transform);
     }
     await ensurePrettierignore(opts.targetRoot, lists);

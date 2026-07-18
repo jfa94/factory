@@ -1,123 +1,47 @@
 import {escapeStrykerGlob} from './scope.js'
-// Import `at` directly from assert.js, NOT the ../../shared/index.js barrel: this
-// module is bundled into the dependency-free scaffold template
-// templates/.github/scripts/shard-mutation-scope.mjs, and the barrel re-exports
-// file-lock.js → proper-lockfile, which would drag a third-party dep into it.
-import {at} from '../../shared/assert.js'
 
 /**
- * Cost-aware mutation sharding (the balancer behind the CI `mutation-scope` job).
+ * Stable-hash mutation sharding (the splitter behind the CI `mutation-scope` job
+ * and the nightly warm-base seeding run).
  *
- * The factory CI splits a PR's changed mutable-source files across N parallel
- * Stryker shards. The original template split round-robin by file COUNT
- * (`i % N`), which is blind to per-file mutation cost and systematically
- * overloaded the low-index shard (remainder skew + `git diff` sorting the heavy
- * foundational modules early). This module replaces that with **LPT
- * (Longest-Processing-Time) greedy bin-packing** weighted by a cheap cost proxy.
+ * A file's shard is a pure function of its PATH — `fnv1a(path) % n` — so the
+ * assignment is stable across diffs, branches, and repo evolution. That stability
+ * is the point: each shard owns a Stryker incremental cache, and the nightly
+ * develop run seeds those caches for the WHOLE mutable surface (default-branch
+ * caches are readable by every PR). A PR's diff files land on exactly the shards
+ * whose caches already hold their prior results, so only genuinely changed
+ * mutants re-run. The previous LPT-by-sloc packer balanced a single run better,
+ * but reshuffled files between shards whenever the scope changed — invalidating
+ * the incremental caches that dominate real-world cost.
  *
- * Pure string/number functions — no I/O, deterministic. {@link sloc} is the
- * weight proxy; {@link shardByCost} is the weight-agnostic packer (a better
- * signal — e.g. prior-run mutant counts — can drop straight in). The CLI shim
- * (`src/bin/shard-mutation-scope.ts`, bundled to the scaffold template) is the
- * only I/O layer: it reads each scoped file and feeds its sloc here.
+ * Pure string/number functions — no I/O, deterministic.
  */
 
-/**
- * Source-lines-of-code: physical lines MINUS blank lines, comment-only lines
- * (line comments, block comments, and ` * ` JSDoc continuations), and import / re-export
- * statements (single- and multi-line). A weight proxy for mutant count that —
- * unlike raw line count — does not over-weight this codebase's heavily-JSDoc'd
- * foundational modules (the very files the balancer is trying to spread out).
- *
- * Deliberately a heuristic, not a parser: weights only need to rank files, so a
- * line straddling code and a block-comment terminator is allowed to count as a comment.
- */
-export function sloc(text: string): number {
-    let count = 0
-    let inBlockComment = false
-    let inImport = false
-    for (const raw of text.split('\n')) {
-        const line = raw.trim()
-
-        if (inBlockComment) {
-            if (line.includes('*/')) {
-                inBlockComment = false
-            }
-            continue // the whole line is comment
-        }
-        if (inImport) {
-            // Multi-line import/export — terminates at the statement's `;`.
-            if (line.includes(';')) {
-                inImport = false
-            }
-            continue
-        }
-
-        if (line === '') {
-            continue
-        }
-        if (line.startsWith('//')) {
-            continue
-        }
-        if (line.startsWith('*')) {
-            continue
-        } // JSDoc continuation
-        if (line.startsWith('/*')) {
-            if (!line.includes('*/')) {
-                inBlockComment = true
-            }
-            continue
-        }
-        if (/^import\b/.test(line) || /^export\b.*\bfrom\b/.test(line)) {
-            // Opens a (possibly multi-line) import/export-from; skip until terminated.
-            if (!line.includes(';')) {
-                inImport = true
-            }
-            continue
-        }
-
-        count++
+/** 32-bit FNV-1a over the code units of `s`. */
+export function fnv1a(s: string): number {
+    let h = 0x811c9dc5
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i)
+        h = Math.imul(h, 0x01000193)
     }
-    return count
+    return h >>> 0
 }
 
 /**
- * Split `files` across `n` shards by **LPT greedy bin-packing**: sort by weight
- * descending (ties broken by path ascending — deterministic, so identical inputs
- * always yield identical assignments and per-shard incremental caches don't churn
- * gratuitously), then assign each file to the currently-lightest shard.
+ * Split `files` across `n` shards by stable hash: `shard(file) = fnv1a(file) % n`.
  *
- * `weights[i]` is the cost of `files[i]`; a missing/`NaN` weight defaults to `1`.
  * Returns EXACTLY `n` comma-joined CSV strings (the `mutation` matrix is static
  * `[1..n]` and indexes the result positionally), so an empty input yields `n`
- * empty strings. Mirrors the CSV the workflow feeds to `stryker run --mutate`.
+ * empty strings. Paths are glob-escaped for Stryker's `--mutate` matcher; input
+ * order is preserved within a shard.
  */
-export function shardByCost(files: readonly string[], weights: readonly number[], n: number): string[] {
-    const bins: {load: number; files: string[]}[] = Array.from({length: Math.max(0, n)}, () => ({
-        load: 0,
-        files: [],
-    }))
+export function shardByHash(files: readonly string[], n: number): string[] {
+    const bins: string[][] = Array.from({length: Math.max(0, n)}, () => [])
     if (bins.length === 0) {
         return []
     }
-
-    const items = files.map((file, i) => {
-        const w = weights[i]
-        return {file, weight: typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 1}
-    })
-    // Heaviest first; stable tie-break by path keeps assignment deterministic.
-    items.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
-
-    for (const {file, weight} of items) {
-        let lightest = at(bins, 0)
-        for (const bin of bins) {
-            if (bin.load < lightest.load) {
-                lightest = bin
-            }
-        }
-        lightest.files.push(file)
-        lightest.load += weight
+    for (const file of files) {
+        bins[fnv1a(file) % bins.length]?.push(file)
     }
-
-    return bins.map((b) => b.files.map(escapeStrykerGlob).join(','))
+    return bins.map((b) => b.map(escapeStrykerGlob).join(','))
 }

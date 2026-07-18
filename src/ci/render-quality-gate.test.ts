@@ -11,6 +11,7 @@ import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {
     renderQualityGate,
+    renderMutationNightly,
     CI_RENDERED_GATES,
     LOCAL_ONLY_GATES,
     type RenderQualityGateOpts,
@@ -312,5 +313,62 @@ describe('renderQualityGate — non-npm stacks refuse', () => {
             },
         }
         expect(() => renderQualityGate(template, {...NPM_OPTS, contract: deno})).toThrow(/deno/)
+    })
+})
+
+describe('mutation roots substitution (A4) + renderMutationNightly (A2)', () => {
+    let nightly: string
+    beforeAll(async () => {
+        nightly = await readFile(join(resolveTemplatesDir(), '.github', 'workflows', 'mutation-nightly.yml'), 'utf8')
+    })
+
+    const rootsOpts = (roots: [string, ...string[]] | undefined): RenderQualityGateOpts => ({
+        ...NPM_OPTS,
+        contract: npmContract({mutation: roots === undefined ? {contracted: true} : {contracted: true, roots}}),
+    })
+
+    it('renderQualityGate rewrites the diff pathspec from contracted roots', () => {
+        const out = renderQualityGate(template, rootsOpts(['app', 'utils']))
+        expect(out).toContain("-- 'app/**/*.ts' 'utils/**/*.ts'")
+        expect(out).not.toContain("'src/**/*.ts'")
+    })
+
+    it("default roots (['src'] / omitted) leave the template pathspec untouched", () => {
+        const out = renderQualityGate(template, rootsOpts(undefined))
+        expect(out).toContain("-- 'src/**/*.ts'")
+    })
+
+    it('renderMutationNightly: contracted → rendered with setup, roots, npm rewrite', () => {
+        const out = renderMutationNightly(nightly, {...rootsOpts(['app']), packageManager: 'npm'})
+        expect(out).not.toBeNull()
+        expect(out).toContain("git ls-files -- 'app/**/*.ts'")
+        expect(out).not.toContain('# factory:mutation-setup')
+        expect(out).toContain('npx stryker run \\')
+        expect(out).not.toContain('pnpm exec stryker')
+        expect(out).toContain('actions/cache/save')
+    })
+
+    it('renderMutationNightly: pnpm keeps pnpm exec', () => {
+        const out = renderMutationNightly(nightly, {...PNPM_OPTS})
+        expect(out).toContain('pnpm exec stryker run \\')
+    })
+
+    it('renderMutationNightly: mutation waived → null (no nightly workflow)', () => {
+        const out = renderMutationNightly(nightly, {
+            ...NPM_OPTS,
+            contract: npmContract({mutation: {contracted: false, reason: 'waived via --waive mutation'}}),
+        })
+        expect(out).toBeNull()
+    })
+
+    it('renderMutationNightly refuses non-npm stacks loud', () => {
+        const contract = {...npmContract(), stack: 'deno' as const}
+        expect(() => renderMutationNightly(nightly, {...NPM_OPTS, contract})).toThrow(/not supported/)
+    })
+
+    it('PR and nightly shard cache keys share one scheme (restore-keys prefix alignment)', () => {
+        const key = /key: \$\{\{ runner\.os \}\}-stryker-shard-\$\{\{ matrix\.shard \}\}-\$\{\{ github\.sha \}\}/
+        expect(template).toMatch(key)
+        expect(nightly).toMatch(key)
     })
 })

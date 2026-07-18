@@ -1,0 +1,125 @@
+name: Mutation Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-nightly
+  cancel-in-progress: true
+
+# The factory renders this MANAGED workflow per-repo from the committed gate
+# contract (.factory/gates.json). It is the WARM BASE for quality-gate.yml's
+# mutation matrix: a scheduled run on the default branch mutates the WHOLE
+# mutable surface and saves the per-shard Stryker incremental caches there —
+# where actions/cache makes them readable by every PR (caches saved by PR runs
+# are scoped to that PR's merge ref and reach nothing else). PR shards restore
+# these caches and re-run only genuinely changed mutants. Off the critical
+# path: nothing waits on this workflow; a red run is a score/tooling signal,
+# not a merge block. Sharding is the same stable hash as the PR workflow
+# (fnv1a(path) % 4 via .github/scripts/shard-mutation-scope.mjs), so a file's
+# nightly shard IS its PR shard.
+#
+# GitHub fires schedule/workflow_dispatch only from the DEFAULT branch's copy
+# of this file, so a copy must live there even when the default branch carries
+# no other CI; both jobs check out `develop` explicitly (the factory's
+# integration branch — the surface PRs actually mutate against), and caches
+# saved by default-branch runs are readable from every PR.
+jobs:
+  mutation-scope:
+    name: Mutation Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.split.outputs.shards }}
+      any: ${{ steps.split.outputs.any }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: develop
+      - name: Compute full mutable surface
+        id: compute
+        run: |
+          mapfile -t files < <(
+              git ls-files -- 'src/**/*.ts' \
+              | grep -Ev '\.(test|spec|d)\.ts$|/types/|/data/|/index\.ts$' || true
+          )
+          if [ ${#files[@]} -eq 0 ]; then
+              echo "scope=" >> "$GITHUB_OUTPUT"
+          else
+              printf -v joined '%s,' "${files[@]}"
+              echo "scope=${joined%,}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Split scope into 4 shards
+        id: split
+        env:
+          SCOPE: ${{ steps.compute.outputs.scope }}
+        run: |
+          if [ -z "$SCOPE" ]; then
+              echo 'any=false' >> "$GITHUB_OUTPUT"
+              echo 'shards=["","","",""]' >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          shards_json=$(node .github/scripts/shard-mutation-scope.mjs "$SCOPE")
+          echo "any=true" >> "$GITHUB_OUTPUT"
+          echo "shards=$shards_json" >> "$GITHUB_OUTPUT"
+
+  mutation:
+    name: Mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: mutation-scope
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Shard slice
+        id: slice
+        env:
+          SHARDS_JSON: ${{ needs.mutation-scope.outputs.shards }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          slice=$(echo "$SHARDS_JSON" | jq -r --argjson i $((SHARD - 1)) '.[$i]')
+          echo "slice=$slice" >> "$GITHUB_OUTPUT"
+      - name: Skip when no scope
+        if: needs.mutation-scope.outputs.any != 'true' || steps.slice.outputs.slice == ''
+        run: 'echo "Shard ${{ matrix.shard }}: no files; skipping."'
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: develop
+        if: steps.slice.outputs.slice != ''
+      # factory:mutation-setup
+      - name: Restore Stryker incremental cache (shard ${{ matrix.shard }})
+        if: steps.slice.outputs.slice != ''
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: reports/mutation/.stryker-incremental-shard-${{ matrix.shard }}.json
+          key: ${{ runner.os }}-stryker-shard-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-stryker-shard-${{ matrix.shard }}-
+      - name: Run Stryker on shard ${{ matrix.shard }}
+        if: steps.slice.outputs.slice != ''
+        env:
+          SLICE: ${{ steps.slice.outputs.slice }}
+        run: |
+          pnpm exec stryker run \
+              --mutate "$SLICE" \
+              --concurrency 2 \
+              --incrementalFile "reports/mutation/.stryker-incremental-shard-${{ matrix.shard }}.json"
+      # Save even after a below-threshold (red) Stryker exit: the incremental
+      # file is still written and is exactly what warms the PR shards.
+      - name: Save Stryker incremental cache (shard ${{ matrix.shard }})
+        if: always() && steps.slice.outputs.slice != ''
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: reports/mutation/.stryker-incremental-shard-${{ matrix.shard }}.json
+          key: ${{ runner.os }}-stryker-shard-${{ matrix.shard }}-${{ github.sha }}
+      - name: Upload shard report
+        if: always() && steps.slice.outputs.slice != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-shard-${{ matrix.shard }}
+          path: reports/mutation/
+          retention-days: 7

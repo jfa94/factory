@@ -35,7 +35,7 @@ export type {
 } from './gh-client.js'
 
 // staging → develop rollup (WS12 / §④, Δ S)
-export {rollup} from './rollup.js'
+export {rollup, DEFAULT_POLL_INTERVAL_MS} from './rollup.js'
 export type {RollupArgs, RollupResult, RollupNotMergedReason} from './rollup.js'
 
 // run-scoped branch naming (Δ M)

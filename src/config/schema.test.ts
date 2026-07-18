@@ -16,6 +16,15 @@ describe('ConfigSchema', () => {
         // Top-level.
         expect(cfg.maxConsecutiveFailures).toBe(3)
         expect(cfg.maxParallelTasks).toBe(3)
+        // A6: rollup CI wait budget (minutes) — sized above a cold-cache mutation run.
+        expect(cfg.git.rollupCiWaitMinutes).toBe(30)
+    })
+
+    it('git.rollupCiWaitMinutes accepts a positive int, rejects zero/negative/fractional', () => {
+        expect(ConfigSchema.parse({git: {rollupCiWaitMinutes: 45}}).git.rollupCiWaitMinutes).toBe(45)
+        expect(() => ConfigSchema.parse({git: {rollupCiWaitMinutes: 0}})).toThrow()
+        expect(() => ConfigSchema.parse({git: {rollupCiWaitMinutes: -5}})).toThrow()
+        expect(() => ConfigSchema.parse({git: {rollupCiWaitMinutes: 1.5}})).toThrow()
     })
 
     it('stale overlay keys (pruned config fields) are stripped, not fatal', () => {

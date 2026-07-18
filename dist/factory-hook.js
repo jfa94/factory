@@ -6710,7 +6710,14 @@ var GitSchema = external_exports.object({
    * Branch-name prefix for run-scoped task branches (Δ M). The full name is
    * `<branchPrefix>/<run_id>/<task_id>`.
    */
-  branchPrefix: external_exports.string().min(1).default("factory")
+  branchPrefix: external_exports.string().min(1).default("factory"),
+  /**
+   * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
+   * before giving up with `ci-timeout`. Sized above the slowest expected
+   * quality-gate run (mutation on a cold cache); a timeout still parks the
+   * run recoverably (`factory resume` re-enters the poll).
+   */
+  rollupCiWaitMinutes: external_exports.number().int().positive().default(30)
 }).transform((git) => ({
   ...git,
   developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")

@@ -77,6 +77,10 @@ async function seedNpmFixture(dir: string): Promise<void> {
         'utf8'
     )
     await writeFile(join(dir, 'tsconfig.json'), '{}\n', 'utf8')
+    // Mutation roots detection (A4): a mutable src/ file so contracting mutation
+    // doesn't trip the no-roots loud refusal.
+    await mkdir(join(dir, 'src'), {recursive: true})
+    await writeFile(join(dir, 'src', 'main.ts'), 'export const one = 1\n', 'utf8')
 }
 
 beforeEach(async () => {
@@ -830,7 +834,10 @@ describe('runScaffold', () => {
             )
             await expect(runScaffold(baseArgs())).rejects.toThrow(/--waive mutation/)
             const lock = await readLock()
-            expect(Object.keys(lock.seeds)).toContain('.stryker.config.json')
+            // The stryker seed renders AFTER the contract (A4 roots) so it is NOT
+            // here — a pass-1 seed proves the early save.
+            expect(Object.keys(lock.seeds)).toContain('eslint.config.mjs')
+            expect(Object.keys(lock.seeds)).not.toContain('.stryker.config.json')
         })
 
         it('is idempotent: a second unchanged run leaves the lock byte-identical', async () => {
@@ -997,6 +1004,77 @@ describe('runScaffold', () => {
             await expect(runScaffold(baseArgs())).rejects.toThrow(/INVALID/)
             // The corrupt file is left for the user — scaffold never clobbers it.
             expect(await readFile(gatesPath(), 'utf8')).toBe('{"version": 1}')
+        })
+    })
+
+    describe('mutation roots + nightly + shadow guard (A2/A4/A5)', () => {
+        it('writes the managed mutation-nightly.yml when mutation is contracted', async () => {
+            const report = await runScaffold(baseArgs())
+            expect(report.files_created).toContain('.github/workflows/mutation-nightly.yml')
+            const nightly = await readFile(join(root, '.github', 'workflows', 'mutation-nightly.yml'), 'utf8')
+            expect(nightly).toContain('workflow_dispatch')
+            expect(nightly).not.toContain('# factory:mutation-setup')
+        })
+
+        it('skips mutation-nightly.yml when mutation is waived', async () => {
+            // Remove stryker from the fixture → --waive mutation path.
+            await writeFile(
+                join(root, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    engines: {node: '>=22'},
+                    scripts: {build: 'b'},
+                    devDependencies: {vitest: '^2.0.0', '@vitest/coverage-v8': '^2.0.0'},
+                }),
+                'utf8'
+            )
+            const report = await runScaffold({...baseArgs(), waiveMutation: true})
+            expect(report.files_created).not.toContain('.github/workflows/mutation-nightly.yml')
+            expect(existsSync(join(root, '.github', 'workflows', 'mutation-nightly.yml'))).toBe(false)
+        })
+
+        it('non-src roots flow into the stryker seed mutate globs, the workflow pathspec, and the nightly', async () => {
+            await rm(join(root, 'src'), {recursive: true, force: true})
+            await mkdir(join(root, 'app'), {recursive: true})
+            await writeFile(join(root, 'app', 'page.ts'), 'export const p = 1\n', 'utf8')
+            await mkdir(join(root, 'db'), {recursive: true})
+            await writeFile(join(root, 'db', 'schema.ts'), 'export const s = 1\n', 'utf8')
+            await runScaffold(baseArgs())
+
+            const contract = JSON.parse(await readFile(join(root, '.factory', 'gates.json'), 'utf8')) as {
+                gates: {mutation: {roots?: string[]}}
+            }
+            expect(contract.gates.mutation.roots).toEqual(['app', 'db'])
+
+            const stryker = JSON.parse(await readFile(join(root, '.stryker.config.json'), 'utf8')) as {
+                mutate: string[]
+            }
+            expect(stryker.mutate).toContain('app/**/*.ts')
+            expect(stryker.mutate).toContain('db/**/*.ts')
+            expect(stryker.mutate).not.toContain('src/**/*.ts')
+
+            const wf = await readFile(join(root, '.github', 'workflows', 'quality-gate.yml'), 'utf8')
+            expect(wf).toContain("-- 'app/**/*.ts' 'db/**/*.ts'")
+            const nightly = await readFile(join(root, '.github', 'workflows', 'mutation-nightly.yml'), 'utf8')
+            expect(nightly).toContain("git ls-files -- 'app/**/*.ts' 'db/**/*.ts'")
+        })
+
+        it('shadow guard: an existing sibling stryker config blocks seeding (A5)', async () => {
+            await writeFile(join(root, '.stryker.config.mjs'), 'export default {}\n', 'utf8')
+            const report = await runScaffold(baseArgs())
+            expect(existsSync(join(root, '.stryker.config.json'))).toBe(false)
+            expect(report.files_created).not.toContain('.stryker.config.json')
+        })
+
+        it('re-scaffold with roots is idempotent (seed stays pristine-tracked, no spurious update)', async () => {
+            await rm(join(root, 'src'), {recursive: true, force: true})
+            await mkdir(join(root, 'app'), {recursive: true})
+            await writeFile(join(root, 'app', 'page.ts'), 'export const p = 1\n', 'utf8')
+            await runScaffold(baseArgs())
+            const second = await runScaffold(baseArgs())
+            expect(second.files_updated).toEqual([])
+            expect(second.files_present).toContain('.stryker.config.json')
+            expect(second.files_present).toContain('.github/workflows/mutation-nightly.yml')
         })
     })
 })

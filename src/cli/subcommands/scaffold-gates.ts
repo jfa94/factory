@@ -12,9 +12,10 @@
  * committed contract).
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
-import {existsSync} from 'node:fs'
+import {existsSync, readdirSync, statSync} from 'node:fs'
 import {mkdir, readFile, writeFile} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
+import {isMutableSrc} from '../../verifier/deterministic/scope.js'
 import {
     GATE_CONTRACT_REL,
     GateContractSchema,
@@ -103,6 +104,45 @@ export interface ResolveGatesOptions {
 const yes: GateContractEntry = {contracted: true}
 const no = (reason: string): GateContractEntry => ({contracted: false, reason})
 
+/**
+ * Top-level directories probed for mutable source when the historical `src/`
+ * layout is absent (e.g. Next.js app-dir repos). Order is the contracted order.
+ */
+export const MUTATION_ROOT_CANDIDATES: readonly string[] = [
+    'app',
+    'components',
+    'lib',
+    'utils',
+    'db',
+    'server',
+    'hooks',
+] as const
+
+/** Does `root` (repo-relative top-level dir) contain at least one mutable .ts file? */
+function hasMutableTs(targetRoot: string, root: string): boolean {
+    const abs = join(targetRoot, root)
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+        return false
+    }
+    const entries = readdirSync(abs, {recursive: true, encoding: 'utf8'})
+    return entries.some((rel) => isMutableSrc(`${root}/${rel.replaceAll('\\', '/')}`, [root]))
+}
+
+/**
+ * Detect the repo's mutable-source roots for the mutation contract. `src/` wins
+ * (the default — the contract omits `roots`); otherwise every candidate dir with
+ * mutable .ts files is contracted EXPLICITLY. An empty result with mutation
+ * contracted would be a silent no-op gate (the required "Mutation Testing" check
+ * passing without mutating a single file) — the caller refuses loudly instead.
+ */
+export function detectMutationRoots(targetRoot: string): readonly string[] | undefined {
+    if (hasMutableTs(targetRoot, 'src')) {
+        return undefined
+    }
+    const roots = MUTATION_ROOT_CANDIDATES.filter((r) => hasMutableTs(targetRoot, r))
+    return roots.length > 0 ? roots : []
+}
+
 async function resolveNpm(opts: ResolveGatesOptions): Promise<GateContract> {
     const pkg = await readPackageJson(opts.targetRoot)
     // FLOOR: test + type + build must all be contractable — collect every shortfall
@@ -123,10 +163,21 @@ async function resolveNpm(opts: ResolveGatesOptions): Promise<GateContract> {
     const strykerResolvable =
         hasDep(pkg, '@stryker-mutator/core') || existsSync(join(opts.targetRoot, 'node_modules', '.bin', 'stryker'))
     let mutation: GateContractEntry
-    if (strykerResolvable) {
-        mutation = yes
-    } else if (opts.waiveMutation) {
+    // The explicit waiver wins even with stryker installed — the no-roots refusal
+    // below names --waive mutation as its exit, so the flag must actually take it.
+    if (opts.waiveMutation) {
         mutation = no('waived via --waive mutation')
+    } else if (strykerResolvable) {
+        const roots = detectMutationRoots(opts.targetRoot)
+        if (roots?.length === 0) {
+            throw new Error(
+                'scaffold: mutation gate: no mutable-source roots found — no src/ and none of ' +
+                    `${MUTATION_ROOT_CANDIDATES.join('/')} contain mutable .ts files. Contracting mutation ` +
+                    'would make the "Mutation Testing" check a silent no-op; add explicit roots to ' +
+                    '.factory/gates.json (gates.mutation.roots) or pass --waive mutation'
+            )
+        }
+        mutation = roots === undefined ? yes : {contracted: true, roots: [...roots] as [string, ...string[]]}
     } else {
         throw new Error(
             'scaffold: mutation gate: stryker not installed — install @stryker-mutator/core ' +

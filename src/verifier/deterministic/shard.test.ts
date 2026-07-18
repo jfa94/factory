@@ -1,139 +1,84 @@
 /**
- * Cost-aware mutation sharding vectors. Pins the two invariants the CI workflow
+ * Stable-hash mutation sharding vectors. Pins the two invariants the CI workflow
  * depends on (output length === shard count; empty scope → empty shards) plus the
- * balance/determinism properties that make LPT strictly better than the retired
- * round-robin split.
+ * property the hash split exists for: a file's shard NEVER depends on what else
+ * is in scope, so per-shard incremental caches stay aligned across PRs, rollups,
+ * and the nightly full-surface seeding run.
  */
 import {describe, expect, it} from 'vitest'
-import {shardByCost, sloc} from './shard.js'
-import {at, nonNull} from '../../shared/index.js'
+import {fnv1a, shardByHash} from './shard.js'
 
-/** The retired round-robin split (`i % n`), kept here only as a balance baseline. */
-function roundRobin(files: readonly string[], n: number): string[][] {
-    const bins: string[][] = Array.from({length: n}, () => [])
-    files.forEach((f, i) => at(bins, i % n).push(f))
-    return bins
-}
-
-/** Makespan = the heaviest shard's total weight (the wall-clock long pole). */
-function makespan(shards: string[], weightOf: (file: string) => number): number {
-    return Math.max(...shards.map((csv) => (csv === '' ? 0 : csv.split(',').reduce((s, f) => s + weightOf(f), 0))))
-}
-
-describe('shardByCost — structural contracts (load-bearing for the CI matrix)', () => {
+describe('shardByHash — structural contracts (load-bearing for the CI matrix)', () => {
     it('returns exactly n shards regardless of file count', () => {
-        expect(shardByCost([], [], 4)).toHaveLength(4)
-        expect(shardByCost(['a.ts'], [10], 4)).toHaveLength(4)
-        expect(shardByCost(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'], [1, 1, 1, 1, 1], 4)).toHaveLength(4)
+        expect(shardByHash([], 4)).toHaveLength(4)
+        expect(shardByHash(['a.ts'], 4)).toHaveLength(4)
+        expect(shardByHash(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'], 4)).toHaveLength(4)
     })
 
     it('maps an empty scope to n empty strings', () => {
-        expect(shardByCost([], [], 4)).toEqual(['', '', '', ''])
+        expect(shardByHash([], 4)).toEqual(['', '', '', ''])
+    })
+
+    it('returns [] for n === 0', () => {
+        expect(shardByHash(['a.ts'], 0)).toEqual([])
     })
 
     it('partitions every file exactly once (no loss, no duplication)', () => {
         const files = ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/e.ts', 'src/f.ts']
-        const out = shardByCost(files, [5, 4, 3, 2, 1, 1], 4)
+        const out = shardByHash(files, 4)
         const placed = out.flatMap((csv) => (csv === '' ? [] : csv.split(',')))
         expect(placed.slice().sort()).toEqual(files.slice().sort())
         expect(placed).toHaveLength(files.length)
     })
 })
 
-describe('shardByCost — balance & determinism', () => {
-    it('isolates a single dominant file and spreads the rest', () => {
-        const files = ['heavy.ts', 'a.ts', 'b.ts', 'c.ts']
-        const weights = [100, 1, 1, 1]
-        const out = shardByCost(files, weights, 4)
-        const heavyShard = out.find((csv) => csv.split(',').includes('heavy.ts'))
-        expect(heavyShard).toBe('heavy.ts') // alone in its shard
-    })
-
+describe('shardByHash — stability (the whole point)', () => {
     it('is deterministic — identical inputs yield identical assignments', () => {
         const files = ['src/x.ts', 'src/y.ts', 'src/z.ts', 'src/w.ts']
-        const weights = [3, 3, 3, 3] // all ties — tie-break must be stable
-        expect(shardByCost(files, weights, 4)).toEqual(shardByCost(files, weights, 4))
+        expect(shardByHash(files, 4)).toEqual(shardByHash(files, 4))
     })
 
-    it('breaks weight ties by path ascending (stable, order-independent)', () => {
-        const asc = shardByCost(['a.ts', 'b.ts'], [5, 5], 2)
-        const desc = shardByCost(['b.ts', 'a.ts'], [5, 5], 2)
-        expect(asc).toEqual(desc)
-    })
-
-    it('beats round-robin makespan on a skewed distribution (the whole point)', () => {
-        // `git diff` sorts heavy foundational modules early — the pathological case.
-        const files = [
-            'src/cli/a.ts',
-            'src/cli/b.ts',
-            'src/core/c.ts',
-            'src/core/d.ts',
-            'src/util/e.ts',
-            'src/util/f.ts',
-            'src/util/g.ts',
-        ]
-        const weight: Record<string, number> = {
-            'src/cli/a.ts': 60,
-            'src/cli/b.ts': 50,
-            'src/core/c.ts': 40,
-            'src/core/d.ts': 30,
-            'src/util/e.ts': 5,
-            'src/util/f.ts': 4,
-            'src/util/g.ts': 3,
+    it("a file's shard is independent of the rest of the scope", () => {
+        const surface = Array.from({length: 40}, (_, i) => `src/mod-${i}/file-${i}.ts`)
+        const full = shardByHash(surface, 4)
+        const shardOf = (file: string, shards: string[]): number =>
+            shards.findIndex((csv) => csv.split(',').includes(file))
+        // Every subset — a PR diff — lands each file on its full-surface shard.
+        const diff = [surface[3], surface[17], surface[31]] as string[]
+        const diffShards = shardByHash(diff, 4)
+        for (const file of diff) {
+            expect(shardOf(file, diffShards)).toBe(shardOf(file, full))
         }
-        const weights = files.map((f) => nonNull(weight[f]))
-        const lpt = makespan(shardByCost(files, weights, 4), (f) => nonNull(weight[f]))
-        const rr = Math.max(...roundRobin(files, 4).map((bin) => bin.reduce((s, f) => s + nonNull(weight[f]), 0)))
-        expect(lpt).toBeLessThanOrEqual(rr)
-        // Concretely: LPT lands the optimal 60 long-pole; round-robin stacks 60+5=65.
-        expect(lpt).toBe(60)
-        expect(rr).toBeGreaterThan(lpt)
     })
 
-    it('defaults missing / non-positive weights to 1', () => {
-        const out = shardByCost(['a.ts', 'b.ts'], [], 2)
-        // Both weight-1 → one per shard.
-        expect(out.filter((csv) => csv !== '')).toHaveLength(2)
+    it('spreads a realistic surface across all shards', () => {
+        const surface = Array.from({length: 100}, (_, i) => `src/dir-${i % 7}/module-${i}.ts`)
+        const out = shardByHash(surface, 4)
+        expect(out.every((csv) => csv !== '')).toBe(true)
     })
 })
 
-describe('shardByCost — glob escaping for --mutate CSV', () => {
+describe('shardByHash — glob escaping for --mutate CSV', () => {
     it('escapes glob metacharacters in dynamic-route paths', () => {
         const files = ['src/app/feedback/[token]/actions.ts', 'src/normal.ts']
-        const out = shardByCost(files, [1, 1], 2)
+        const out = shardByHash(files, 2)
         const entries = out.flatMap((csv) => (csv === '' ? [] : csv.split(',')))
         expect(entries).toContain('src/app/feedback/[[]token[]]/actions.ts')
         expect(entries).toContain('src/normal.ts')
         expect(entries).not.toContain('src/app/feedback/[token]/actions.ts')
     })
+
+    it('hashes the RAW path, not the escaped form (escaping must not move a file)', () => {
+        const raw = 'src/app/[id]/page.ts'
+        const out = shardByHash([raw], 4)
+        expect(out[fnv1a(raw) % 4]).toBe('src/app/[[]id[]]/page.ts')
+    })
 })
 
-describe('sloc — weight proxy strips noise', () => {
-    it('excludes blank, comment, and import/export-from lines', () => {
-        const src = [
-            "import { x } from './x';", // import
-            "export { y } from './y';", // re-export
-            '', // blank
-            '// a line comment', // comment
-            '/* one-line block */', // comment
-            '/*', // block open
-            ' * jsdoc continuation', // comment
-            ' */', // block close
-            'const a = 1;', // CODE
-            'function f() {', // CODE
-            '  return a;', // CODE
-            '}', // CODE
-        ].join('\n')
-        expect(sloc(src)).toBe(4)
-    })
-
-    it('counts multi-line imports as a single skipped statement', () => {
-        const src = ['import {', '  a,', '  b,', "} from './mod';", 'const z = a + b;'].join('\n')
-        expect(sloc(src)).toBe(1)
-    })
-
-    it('returns 0 for an empty or comment-only file', () => {
-        expect(sloc('')).toBe(0)
-        expect(sloc('// just\n// comments\n')).toBe(0)
+describe('fnv1a — pinned vectors (assignment must never drift between releases)', () => {
+    it('matches the FNV-1a 32-bit reference values', () => {
+        expect(fnv1a('')).toBe(0x811c9dc5)
+        expect(fnv1a('a')).toBe(0xe40c292c)
+        expect(fnv1a('foobar')).toBe(0xbf9cf968)
     })
 })

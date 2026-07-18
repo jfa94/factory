@@ -11,6 +11,7 @@
  * npm-stack only (covers both npm and pnpm package managers). deno/custom throw
  * loud — scaffold skips the CI net for them with a per-stack reason.
  */
+import {mutationRoots} from '../verifier/deterministic/gate-contract.js'
 import type {GateContract, GateContractEntry, SetupStep} from '../verifier/deterministic/gate-contract.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
 import type {NodeRuntime} from './node-runtime.js'
@@ -275,6 +276,25 @@ function waivedMutationBlock(reason: string): readonly string[] {
     ]
 }
 
+/**
+ * The templates' scope computations carry the default-roots pathspec literal
+ * (`'src/**\/*.ts'`); a contract with non-default mutation roots re-points them.
+ * Replacing the literal keeps the templates valid workflows on their own while
+ * making the CI scope, the local gate's {@link mutationScope}, and the seeded
+ * stryker `mutate` globs agree on ONE roots source (the contract).
+ */
+const DEFAULT_ROOTS_PATHSPEC = "'src/**/*.ts'"
+
+function rootsPathspec(roots: readonly string[]): string {
+    return roots.map((r) => `'${r}/**/*.ts'`).join(' ')
+}
+
+function applyMutationRoots(lines: string[], contract: GateContract): string[] {
+    const roots = mutationRoots(contract)
+    const spec = rootsPathspec(roots)
+    return spec === DEFAULT_ROOTS_PATHSPEC ? lines : lines.map((l) => l.replace(DEFAULT_ROOTS_PATHSPEC, spec))
+}
+
 /** Collapse the `# factory:mutation-begin` … `# factory:mutation-end` region. */
 function renderMutationRegion(lines: string[], opts: RenderQualityGateOpts): string[] {
     const begin = lines.findIndex((l) => l.trim() === '# factory:mutation-begin')
@@ -292,10 +312,36 @@ function renderMutationRegion(lines: string[], opts: RenderQualityGateOpts): str
     // Contracted: keep the region, drop the marker lines, fill the shard setup.
     let kept = [...lines.slice(0, begin), ...lines.slice(begin + 1, end), ...lines.slice(end + 1)]
     kept = replaceMarker(kept, '# factory:mutation-setup', mutationSetupBlock(opts))
+    kept = applyMutationRoots(kept, opts.contract)
     if (opts.packageManager === 'npm') {
         kept = kept.map((l) => l.replace('pnpm exec stryker run \\', 'npx stryker run \\'))
     }
     return kept
+}
+
+/**
+ * Render the mutation-nightly warm-base workflow (the scheduled default-branch
+ * run that seeds the per-shard incremental caches every PR restores). Returns
+ * null when the contract waives mutation — the scaffold then writes no nightly
+ * workflow at all. Same npm-stack constraint as {@link renderQualityGate}.
+ */
+export function renderMutationNightly(template: string, opts: RenderQualityGateOpts): string | null {
+    if (opts.contract.stack !== 'npm') {
+        throw new Error(
+            `renderMutationNightly: stack '${opts.contract.stack}' is not supported — the CI quality gate ` +
+                'renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)'
+        )
+    }
+    if (!opts.contract.gates.mutation.contracted) {
+        return null
+    }
+    let lines = template.split('\n')
+    lines = replaceMarker(lines, '# factory:mutation-setup', mutationSetupBlock(opts))
+    lines = applyMutationRoots(lines, opts.contract)
+    if (opts.packageManager === 'npm') {
+        lines = lines.map((l) => l.replace('pnpm exec stryker run \\', 'npx stryker run \\'))
+    }
+    return lines.join('\n')
 }
 
 /**
