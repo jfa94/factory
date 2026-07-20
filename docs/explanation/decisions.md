@@ -3332,6 +3332,16 @@ PR-side gate keeps its explicit `--concurrency 2` since it is diff-scoped and fa
 Per-file shard == PR shard preserved (same `fnv1a % SHARD_COUNT`), so cache keys still
 align; the old 4-shard caches never seeded, so the reshuffle invalidates nothing.
 
+**Amendment (2026-07-20, v1.45.2 — quarantined files dropped from mutation scope).**
+Repos may quarantine legacy files from mutation scoring with a file-wide
+`// Stryker disable all: <reason>` marker on line 1 (goodbyespy's rebuild debt
+ledger). Such files yield only Ignored mutants, and a shard whose slice contains
+nothing else aborts Stryker's dry run with "No tests were executed" (exit 1) —
+observed on goodbyespy PR #76 where 3 of 8 shards drew all-quarantined slices.
+Both workflow templates' scope-compute steps now drop marker-bearing files before
+sharding (an `awk` first-line check; the shard script itself stays pure/no-I/O).
+Contract: the marker must be the file's FIRST line to be recognised.
+
 ---
 
 ## Open Questions
