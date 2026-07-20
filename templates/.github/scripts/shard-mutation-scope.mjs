@@ -26,7 +26,7 @@ function shardByHash(files, n) {
 }
 
 // src/bin/shard-mutation-scope.ts
-var SHARD_COUNT = 4;
+var SHARD_COUNT = 8;
 function main(scopeCsv) {
   const files = scopeCsv.split(",").map((f) => f.trim()).filter((f) => f !== "");
   const shards = shardByHash(files, SHARD_COUNT);

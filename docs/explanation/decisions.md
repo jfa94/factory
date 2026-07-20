@@ -3318,6 +3318,30 @@ vocabulary), Decision 53 (managed CI net — second rendered workflow), Decision
 (baseline still drops only "Mutation Testing"); supersedes the cost-aware LPT
 sharding note in Decision 42-era templates.
 
+**Amendment 2026-07-20 (v1.45.1) — 8 shards, 360 m nightly budget:** the warm-base
+seeder never completed on a large surface. outsidey's full scope (~227 files /
+~16.2 k mutants) split 4 ways left the worst shard needing ~7 h at `--concurrency 2`
+on a 2-vCPU private-repo runner — past GitHub's hard 6 h job cap — so every nightly
+job hit `timeout-minutes: 180` and Stryker (which writes the incremental file only at
+run end) cached nothing; the warm base never seeded. Shard count is the only lever
+that beats the 6 h cap. `SHARD_COUNT` 4→8 (`src/bin/shard-mutation-scope.ts`, matched
+in both workflow templates' matrices and the `"","",…` empty-scope fallbacks); nightly
+`timeout-minutes` 180→360; the nightly's pinned `--concurrency 2` dropped so Stryker
+auto-detects cores (identical on a 2-core runner, a free upgrade if runners grow — the
+PR-side gate keeps its explicit `--concurrency 2` since it is diff-scoped and fast).
+Per-file shard == PR shard preserved (same `fnv1a % SHARD_COUNT`), so cache keys still
+align; the old 4-shard caches never seeded, so the reshuffle invalidates nothing.
+
+**Amendment (2026-07-20, v1.45.2 — quarantined files dropped from mutation scope).**
+Repos may quarantine legacy files from mutation scoring with a file-wide
+`// Stryker disable all: <reason>` marker on line 1 (goodbyespy's rebuild debt
+ledger). Such files yield only Ignored mutants, and a shard whose slice contains
+nothing else aborts Stryker's dry run with "No tests were executed" (exit 1) —
+observed on goodbyespy PR #76 where 3 of 8 shards drew all-quarantined slices.
+Both workflow templates' scope-compute steps now drop marker-bearing files before
+sharding (an `awk` first-line check; the shard script itself stays pure/no-I/O).
+Contract: the marker must be the file's FIRST line to be recognised.
+
 ---
 
 ## Open Questions
