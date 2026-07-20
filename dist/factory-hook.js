@@ -9074,12 +9074,175 @@ var MERGE_LOCK_DEFAULTS = {
   retryMaxTimeout: 1e3
 };
 
+// src/shared/command-allowlist.ts
+var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+function runnerName(argv) {
+  const bin = argv[0] ?? "";
+  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+}
+function validateCommand(command, isAllowedRunner) {
+  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (!SAFE_TOKEN.test(t)) {
+      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
+    }
+  }
+  if (tokens[0] === void 0) {
+    return { ok: false, reason: "unsafe_command", detail: "empty command" };
+  }
+  if (!isAllowedRunner(tokens)) {
+    return {
+      ok: false,
+      reason: "unallowed_runner",
+      detail: `runner '${runnerName(tokens)}' not allowlisted`
+    };
+  }
+  return { ok: true, argv: tokens };
+}
+
+// src/verifier/deterministic/gate-id.ts
+var GATE_IDS = [
+  "test",
+  "tdd",
+  "coverage",
+  "mutation",
+  "sast",
+  "type",
+  "lint",
+  "build"
+];
+
+// src/verifier/deterministic/gate-contract.ts
+var log15 = createLogger("gate-contract");
+var MUTATION_CHECK_CONTEXT = "Mutation Testing";
+var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
+var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
+function isAllowedGateRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  switch (runner) {
+    case "deno":
+      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
+    case "go":
+      return a1 === "test";
+    case "cargo":
+      return a1 === "test" || a1 === "check" || a1 === "build";
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return a1 === "run" && argv[2] !== void 0;
+    case "vitest":
+    case "tsc":
+    case "eslint":
+    case "jest":
+    case "mocha":
+    case "pytest":
+      return true;
+    default:
+      return false;
+  }
+}
+function validateGateCommand(command) {
+  return validateCommand(command, isAllowedGateRunner);
+}
+var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+var RootsSchema = external_exports.array(
+  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
+    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
+  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
+    message: "mutation root must not contain '.' or '..' segments"
+  })
+).nonempty("mutation roots must name at least one directory");
+var ContractedSchema = external_exports.object({
+  contracted: external_exports.literal(true),
+  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+  command: external_exports.string().optional(),
+  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
+  roots: RootsSchema.optional()
+}).strict();
+var UncontractedSchema = external_exports.object({
+  contracted: external_exports.literal(false),
+  /** Why this gate is waived — required; the committed audit trail. */
+  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
+}).strict();
+var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var SetupStepSchema = external_exports.object({
+  name: external_exports.string().min(1).optional(),
+  uses: external_exports.string().min(1).optional(),
+  with: external_exports.record(external_exports.string()).optional(),
+  run: external_exports.string().min(1).optional()
+}).strict().superRefine((step, issues) => {
+  if (step.uses === void 0 === (step.run === void 0)) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "setup step requires exactly one of 'uses' or 'run'"
+    });
+  }
+  if (step.with !== void 0 && step.uses === void 0) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "'with' is only allowed on a 'uses' step"
+    });
+  }
+});
+var GateContractSchema = external_exports.object({
+  version: external_exports.literal(1),
+  stack: external_exports.enum(GATE_CONTRACT_STACKS),
+  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
+  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
+  setup_steps: external_exports.array(SetupStepSchema).optional(),
+  /**
+   * Extra required CI contexts for this repo's develop branch, merged into
+   * BOTH protection profiles (run + baseline) — additive-only per-repo
+   * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
+   * rejected here — it has its own switch below.
+   */
+  requiredChecks: external_exports.array(external_exports.string().min(1, "requiredChecks entries must be non-empty")).refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
+    message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles \u2014 use requireMutationAtRest instead`
+  }).optional(),
+  /**
+   * Keep `'Mutation Testing'` required on develop's BASELINE profile too
+   * (at rest, between runs) instead of the default run-profile-only.
+   */
+  requireMutationAtRest: external_exports.boolean().optional()
+}).strict().superRefine((contract, issues) => {
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "roots"],
+        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
+      });
+    }
+    if (!entry.contracted || entry.command === void 0) {
+      continue;
+    }
+    if (!COMMAND_GATES.includes(id)) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
+      });
+      continue;
+    }
+    const v = validateGateCommand(entry.command);
+    if (!v.ok) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `${v.reason}: ${v.detail}`
+      });
+    }
+  }
+});
+
 // src/git/protection.ts
-var log15 = createLogger("git");
+var log16 = createLogger("git");
 var GIT_DEFAULTS5 = GitSchema.parse({});
 
 // src/git/staging.ts
-var log16 = createLogger("git");
+var log17 = createLogger("git");
 var GIT_DEFAULTS6 = GitSchema.parse({});
 
 // src/hooks/hook-context.ts
@@ -9298,7 +9461,7 @@ async function runPipelineGuards(_argv = [], deps = {}) {
 }
 
 // src/hooks/subagent-stop.ts
-var log17 = createLogger("hook:subagent-stop");
+var log18 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -9349,7 +9512,7 @@ async function handleSubagentStop(input, deps = {}) {
   const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
     if (sessionId !== void 0) {
-      log17.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
+      log18.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
     }
     return null;
   }
@@ -9361,7 +9524,7 @@ async function handleSubagentStop(input, deps = {}) {
       try {
         transcriptText = await deps.readTranscript(transcriptPath);
       } catch (err) {
-        log17.warn(
+        log18.warn(
           `could not read transcript '${transcriptPath}': ${err.message} \u2014 falling back to last_assistant_message / single-reviewing-task resolution`
         );
         transcriptText = void 0;
@@ -9379,17 +9542,17 @@ async function handleSubagentStop(input, deps = {}) {
     }
   }
   if (taskId.length === 0) {
-    log17.error(
+    log18.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 orchestrator record is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log17.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
+    log18.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log17.info(
+  log18.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 orchestrator records reviews via the drive --results record)`
   );
   return null;
@@ -9400,19 +9563,19 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch (err) {
-    log17.error(`malformed SubagentStop input: ${err.message}`);
+    log18.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log17.error(`SubagentStop handler error: ${err.message}`);
+    log18.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
 
 // src/hooks/stop-gate.ts
-var log18 = createLogger("hook:stop-gate");
+var log19 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, stoppingSession) {
   if (run === null) {
@@ -9443,25 +9606,25 @@ async function runStopGate(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     stoppingSession = sessionIdOf(parseHookInput(raw));
   } catch (err) {
-    log18.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log19.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
   try {
     run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
     if (run === null && stoppingSession !== void 0) {
-      log18.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
+      log19.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
     }
   } catch (err) {
     const rawMsg = err.message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
     const reason = `could not enumerate run state: ${rawMsg}. Investigate the factory data directory before stopping.`;
-    log18.error(reason);
+    log19.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
   const action = decideStop(run, stoppingSession);
   if (action.kind === "allow-unfinalized") {
-    log18.info(
+    log19.info(
       `run ${action.run_id}: all tasks terminal but the run is not finalized \u2014 left running; \`factory resume\` will run the real finalize`
     );
   }
@@ -9482,7 +9645,7 @@ function runSessionStart(_argv = [], deps = {}) {
 }
 
 // src/scoring/telemetry.ts
-var log19 = createLogger("telemetry");
+var log20 = createLogger("telemetry");
 async function writeMetric(dataDir, runId, event, data, opts) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9494,7 +9657,7 @@ async function writeMetric(dataDir, runId, event, data, opts) {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
     return { record, written: true };
   } catch (err) {
-    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log20.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
     return { record, written: false };
   }
 }
@@ -9503,7 +9666,7 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
 }
 
 // src/hooks/notification.ts
-var log20 = createLogger("hook:notification");
+var log21 = createLogger("hook:notification");
 async function handleNotification(input, deps = {}) {
   if (typeof input?.message !== "string" || !/permission/i.test(input.message)) {
     return;
@@ -9532,7 +9695,7 @@ async function runNotification(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     await handleNotification(parseHookInput(raw), deps);
   } catch (err) {
-    log20.error(`Notification handler error: ${err.message}`);
+    log21.error(`Notification handler error: ${err.message}`);
   }
   return EXIT.OK;
 }

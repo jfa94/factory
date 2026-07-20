@@ -38,6 +38,8 @@ export interface CliDeps extends HandlerDeps {
     readonly state: StateManager
     /** The run snapshot read while wiring (saves a re-read in the common case). */
     readonly run: RunState
+    /** Target repo main-worktree root (gate-contract reads, e.g. finalize's required-check extras). */
+    readonly targetRoot: string
 }
 
 /** Options for {@link loadCliDeps}. */
@@ -130,5 +132,6 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
         designSystemDocs: () => findDesignSystemDocs(repoRoot),
         state,
         run,
+        targetRoot: repoRoot,
     }
 }

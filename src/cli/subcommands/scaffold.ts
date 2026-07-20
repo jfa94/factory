@@ -37,6 +37,7 @@ import {
     probeProtection,
     requireProtectionOrRefuse,
     provisionProtection,
+    effectiveProfiles,
     putBaselineProtection,
     resolveRepo,
     splitRepoSlug,
@@ -58,7 +59,7 @@ import {StateManager} from '../../core/state/index.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
-import {GATE_CONTRACT_REL, mutationRoots} from '../../verifier/deterministic/gate-contract.js'
+import {GATE_CONTRACT_REL, mutationRoots, requiredCheckExtras} from '../../verifier/deterministic/gate-contract.js'
 import type {GateContractStack} from '../../verifier/deterministic/gate-contract.js'
 import {UsageError} from '../../shared/usage-error.js'
 import {withUsageGuard, type Subcommand} from '../registry-types.js'
@@ -764,9 +765,10 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     //    `permanent`: the pre-D74 behavior verbatim.
     const branch = opts.config.git.baseBranch
     const runScoped = opts.config.git.developProtection === 'run-scoped'
-    const required = runScoped
-        ? opts.config.git.developBaselineStatusChecks
-        : opts.config.git.developRequiredStatusChecks
+    // Per-repo extras (gates.json `requiredChecks` / `requireMutationAtRest`)
+    // merge into both profiles — additive-only, so risk-invariance holds.
+    const profiles = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract))
+    const required = runScoped ? profiles.baseline : profiles.run
     let state = await probeProtection({
         ghClient: opts.ghClient,
         owner: opts.owner,

@@ -3236,6 +3236,25 @@ to maintain: the ONLY check the baseline drops is mutation testing. An explicitl
 value (including `[]`) overrides the derivation; the derived value is never persisted
 (sparse-overlay semantics, `src/config/save.ts`).
 
+**Amended 2026-07-20 — per-repo required checks via the gate contract (v1.45.0):** factory
+config is global-only, so a per-repo protection requirement had no home. Two optional
+top-level fields in the committed `.factory/gates.json` (Decision 46 philosophy) now tune the
+develop profiles the engine actually PUTs (`effectiveProfiles`, `src/git/protection.ts`),
+**additive-only** — a contract can add required contexts, never drop a config-required one:
+
+- **`requiredChecks: string[]`** — extra required CI contexts merged into **both** profiles
+  (run + baseline). E.g. outsidey declares `["pgTAP"]`, goodbyespy `["CI"]`. `"Mutation
+Testing"` is rejected here (it is owned by the profiles).
+- **`requireMutationAtRest: boolean`** — keep `"Mutation Testing"` required on the **baseline**
+  profile too (reversing this decision's default that the baseline drops exactly mutation); a
+  no-op when the run profile dropped the context entirely.
+
+Both never throw at load (`loadRequiredCheckExtras`, `requiredCheckExtras` in
+`gate-contract.ts`): absent → no extras, invalid → no extras + a loud warn — the
+de-escalation paths (finalize / supersede / `cancel --cleanup`) must not fail on a broken
+contract. All six protection PUT sites merge the extras: scaffold provisioning, run-start
+escalate + supersede, resume re-escalate + `cancel --cleanup`, and finalize de-escalate (the
+last gains an optional `targetRoot` dep wired from `CliDeps`).
 
 ---
 

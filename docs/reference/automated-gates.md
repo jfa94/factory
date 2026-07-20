@@ -134,6 +134,31 @@ and `with` **only** alongside `uses`. Hand edits to the managed `quality-gate.ym
 reverted as drift — declare the step in the contract instead. See
 [Scaffold a repo § setup_steps](../guides/scaffold-a-repo.md) for the how-to.
 
+### Per-repo required checks (`requiredChecks`, `requireMutationAtRest`)
+
+Factory config is **global-only**, so a per-repo branch-protection requirement has no
+home there — it lives in the committed contract instead (Decision 46 philosophy). Two
+optional top-level fields in `.factory/gates.json` tune the develop protection profiles
+the engine PUTs to GitHub (`effectiveProfiles`, `src/git/protection.ts`), **additive-only**
+— a contract can add required contexts, never remove a config-required one:
+
+- **`requiredChecks?: string[]`** — extra required CI contexts merged into **both**
+  develop profiles (the strict run profile and the at-rest baseline). Example: outsidey
+  declares `["pgTAP"]`, goodbyespy `["CI"]`. `"Mutation Testing"` is **rejected** here —
+  it is owned by the profiles; use `requireMutationAtRest` instead.
+- **`requireMutationAtRest?: boolean`** — keep `"Mutation Testing"` required on develop's
+  **baseline** profile (at rest, between runs) instead of the default run-profile-only.
+  A no-op if the run profile dropped the context entirely (a contract cannot resurrect a
+  check the config removed).
+
+Both degrade safely: an absent or invalid contract yields no extras (a loud warn on
+invalid), so the de-escalation paths (finalize / supersede / `cancel --cleanup`) never
+fail on a broken contract (`loadRequiredCheckExtras`,
+`src/verifier/deterministic/gate-contract.ts`). The extras apply at every protection PUT
+site: scaffold provisioning, run-start escalate/supersede, resume re-escalate,
+`cancel --cleanup`, and finalize de-escalate. See
+[`git` configuration](configuration.md#git) for the profile knobs the extras merge into.
+
 ## Gates in force (S3)
 
 The gates the merge gate will actually enforce for a run are **derived from the

@@ -84,6 +84,7 @@ export {
     MergeSerializer,
     provisionProtection,
     putBaselineProtection,
+    effectiveProfiles,
     runScopedBranch,
     runStagingBranch,
     ensureStaging,

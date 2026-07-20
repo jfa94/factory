@@ -77,9 +77,10 @@ export {
     requireProtectionOrRefuse,
     provisionProtection,
     putBaselineProtection,
+    effectiveProfiles,
     ProtectionMissingError,
 } from './protection.js'
-export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs} from './protection.js'
+export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs, EffectiveProfiles} from './protection.js'
 
 // staging-init / reconcile
 export {ensureStaging} from './staging.js'

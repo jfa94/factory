@@ -22,14 +22,24 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
 import {readFile} from 'node:fs/promises'
+import {createLogger} from '../../shared/index.js'
 import {isEnoent} from '../../shared/fs-errors.js'
 import {join} from 'node:path'
 import {z} from 'zod'
 import {runnerName, validateCommand, type CommandValidation} from '../../shared/command-allowlist.js'
 import {GATE_IDS, type GateId} from './gate-id.js'
 
+const log = createLogger('gate-contract')
+
 /** Where the contract lives, relative to the target repo root / worktree. */
 export const GATE_CONTRACT_REL = '.factory/gates.json'
+
+/**
+ * The mutation aggregator's CI context name — the literal the managed
+ * quality-gate.yml job reports and the config baseline derivation filters
+ * (src/config/schema.ts, D74 amendment).
+ */
+export const MUTATION_CHECK_CONTEXT = 'Mutation Testing'
 
 /** The stacks the scaffold resolution table knows how to contract. */
 export const GATE_CONTRACT_STACKS = ['npm', 'deno', 'custom'] as const
@@ -166,6 +176,23 @@ export const GateContractSchema = z
             .strict(),
         /** CI env-boot steps rendered into the managed workflow (Decision 73). */
         setup_steps: z.array(SetupStepSchema).optional(),
+        /**
+         * Extra required CI contexts for this repo's develop branch, merged into
+         * BOTH protection profiles (run + baseline) — additive-only per-repo
+         * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
+         * rejected here — it has its own switch below.
+         */
+        requiredChecks: z
+            .array(z.string().min(1, 'requiredChecks entries must be non-empty'))
+            .refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
+                message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles — use requireMutationAtRest instead`,
+            })
+            .optional(),
+        /**
+         * Keep `'Mutation Testing'` required on develop's BASELINE profile too
+         * (at rest, between runs) instead of the default run-profile-only.
+         */
+        requireMutationAtRest: z.boolean().optional(),
     })
     .strict()
     .superRefine((contract, issues) => {
@@ -329,6 +356,33 @@ export function mutationRoots(contract: GateContract | undefined): readonly stri
         return entry.roots
     }
     return MUTATION_DEFAULT_ROOTS
+}
+
+/** The contract's per-repo branch-protection extras (defaults: none). */
+export interface RequiredCheckExtras {
+    readonly requiredChecks: readonly string[]
+    readonly requireMutationAtRest: boolean
+}
+
+export function requiredCheckExtras(contract: GateContract | undefined): RequiredCheckExtras {
+    return {
+        requiredChecks: contract?.requiredChecks ?? [],
+        requireMutationAtRest: contract?.requireMutationAtRest ?? false,
+    }
+}
+
+/**
+ * Load the repo's branch-protection extras from its committed contract. NEVER
+ * throws: absent → no extras; invalid → no extras + a LOUD warn. Deliberate —
+ * the de-escalation paths (finalize/supersede/cancel) call this and a failed
+ * de-escalate is worse than a missing extra check.
+ */
+export async function loadRequiredCheckExtras(rootAbs: string): Promise<RequiredCheckExtras> {
+    const load = await loadGateContract(rootAbs)
+    if (load.state === 'invalid') {
+        log.warn(`${GATE_CONTRACT_REL} at ${rootAbs} is invalid — per-repo required checks ignored: ${load.error}`)
+    }
+    return requiredCheckExtras(load.state === 'ok' ? load.contract : undefined)
 }
 
 export function contractCommand(contract: GateContract | undefined, id: GateId): readonly string[] | undefined {

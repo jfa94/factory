@@ -20,6 +20,7 @@ import {planResume, type UsageReading} from '../quota/index.js'
 import {isTerminalRunStatus} from '../types/index.js'
 import type {Config, RunState, RunStatus, TaskState} from '../types/index.js'
 import {
+    effectiveProfiles,
     ensureStaging,
     provisionProtection,
     putBaselineProtection,
@@ -28,6 +29,7 @@ import {
     type GitClient,
     type GhClient,
 } from '../git/index.js'
+import {loadRequiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
 import {UsageError} from '../shared/usage-error.js'
 
 const log = createLogger('run')
@@ -274,7 +276,11 @@ async function createRunFromManifest(
         // terminal de-escalation.
         if (stagingDeps.config.git.developProtection === 'run-scoped') {
             const base = stagingDeps.config.git.baseBranch
-            const checks = stagingDeps.config.git.developRequiredStatusChecks
+            // Per-repo extras from the committed gate contract (requiredChecks).
+            const checks = effectiveProfiles(
+                stagingDeps.config.git,
+                await loadRequiredCheckExtras(stagingDeps.targetRoot)
+            ).run
             const developState = await provisionProtection({
                 ghClient: stagingDeps.ghClient,
                 owner: stagingDeps.owner,
@@ -383,7 +389,8 @@ async function supersedeRun(state: StateManager, existing: RunState, stagingDeps
             owner: stagingDeps.owner,
             repo: stagingDeps.repo,
             branch: stagingDeps.config.git.baseBranch,
-            contexts: stagingDeps.config.git.developBaselineStatusChecks,
+            contexts: effectiveProfiles(stagingDeps.config.git, await loadRequiredCheckExtras(stagingDeps.targetRoot))
+                .baseline,
         })
     }
     await state.finalize(existing.run_id, 'superseded') // terminal LAST (resume-safe)
