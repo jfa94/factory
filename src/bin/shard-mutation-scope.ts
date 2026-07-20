@@ -11,14 +11,19 @@
  * stdout. No I/O — the caller owns scope computation (git diff for PRs, git
  * ls-files for the nightly full surface).
  *
- * The shard count is fixed to match the workflows' static `[1,2,3,4]` matrix and
+ * The shard count is fixed to match the workflows' static `[1..8]` matrix and
  * the "Mutation Testing" branch-protection check; do not make it dynamic without
  * also reworking that contract.
  */
 import {shardByHash} from '../verifier/deterministic/shard.js'
 
-/** Matches the static `mutation` matrix in templates/.github/workflows/quality-gate.yml. */
-export const SHARD_COUNT = 4
+/**
+ * Matches the static `mutation` matrix in templates/.github/workflows/quality-gate.yml
+ * AND mutation-nightly.yml. 8 (not 4): the nightly warm-base run mutates the WHOLE
+ * mutable surface, and on a 2-vCPU runner a quarter of a large surface busts GitHub's
+ * 6h job cap; halving each shard keeps the slowest under the 360m nightly timeout.
+ */
+export const SHARD_COUNT = 8
 
 function main(scopeCsv: string): void {
     const files = scopeCsv

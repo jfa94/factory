@@ -58,11 +58,11 @@ jobs:
   #     caches can't warm anything downstream.
   #   mutation-scope: single runner. Diffs HEAD against origin/<base_ref>
   #     to produce a comma-separated list of changed mutable .ts files, then
-  #     splits them into 4 shards via `.github/scripts/shard-mutation-scope.mjs`
+  #     splits them into 8 shards via `.github/scripts/shard-mutation-scope.mjs`
   #     (JSON job output).
-  #   mutation: matrix x4. Each shard runs `stryker run --mutate <slice>`
+  #   mutation: matrix x8. Each shard runs `stryker run --mutate <slice>`
   #     against its slice, restoring its incremental cache. Empty slices no-op.
-  #   Sharding is STABLE-HASH (fnv1a(path) % 4), not cost-balanced: a file's
+  #   Sharding is STABLE-HASH (fnv1a(path) % 8), not cost-balanced: a file's
   #     shard never depends on the rest of the scope, so per-shard incremental
   #     caches stay aligned with the nightly full-surface seeding run on develop
   #     (mutation-nightly.yml — default-branch caches are readable by every PR).
@@ -101,17 +101,17 @@ jobs:
               printf -v joined '%s,' "${files[@]}"
               echo "scope=${joined%,}" >> "$GITHUB_OUTPUT"
           fi
-      - name: Split scope into 4 shards
+      - name: Split scope into 8 shards
         id: split
         env:
           SCOPE: ${{ steps.compute.outputs.scope }}
         run: |
           if [ -z "$SCOPE" ]; then
               echo 'any=false' >> "$GITHUB_OUTPUT"
-              echo 'shards=["","","",""]' >> "$GITHUB_OUTPUT"
+              echo 'shards=["","","","","","","",""]' >> "$GITHUB_OUTPUT"
               exit 0
           fi
-          # Stable-hash split (fnv1a(path) % 4): a file's shard depends only on
+          # Stable-hash split (fnv1a(path) % 8): a file's shard depends only on
           # its path, keeping per-shard incremental caches aligned with the
           # nightly seeding run. Uses ubuntu's preinstalled node.
           shards_json=$(node .github/scripts/shard-mutation-scope.mjs "$SCOPE")
@@ -126,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Shard slice
         id: slice
