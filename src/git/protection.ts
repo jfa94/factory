@@ -10,12 +10,43 @@
  */
 import {createLogger} from '../shared/index.js'
 import {GitSchema} from '../config/schema.js'
+import {MUTATION_CHECK_CONTEXT, type RequiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
 import type {GhClient} from './gh-client.js'
 import type {ProtectionApiResult} from './gh-client.js'
 
 const log = createLogger('git')
 
 const GIT_DEFAULTS = GitSchema.parse({})
+
+/** The two develop profiles a protection PUT can write (D74). */
+export interface EffectiveProfiles {
+    /** Strict run profile — required while a factory run is live. */
+    readonly run: string[]
+    /** Light baseline profile — required at rest, between runs. */
+    readonly baseline: string[]
+}
+
+/**
+ * The develop profiles ACTUALLY written to GitHub: global config ∪ the repo's
+ * contracted extras (`.factory/gates.json`). ADDITIVE-ONLY — a contract can add
+ * required contexts (`requiredChecks`) or keep mutation required at rest
+ * (`requireMutationAtRest`); it can never remove a config-required context.
+ */
+export function effectiveProfiles(
+    git: {
+        readonly developRequiredStatusChecks: readonly string[]
+        readonly developBaselineStatusChecks: readonly string[]
+    },
+    extras: RequiredCheckExtras
+): EffectiveProfiles {
+    const union = (...lists: readonly (readonly string[])[]) => [...new Set(lists.flat())]
+    const run = union(git.developRequiredStatusChecks, extras.requiredChecks)
+    // requireMutationAtRest only adds mutation to the baseline when the run
+    // profile actually requires it — a config that dropped the context entirely
+    // must not have the contract resurrect it at rest only.
+    const atRest = extras.requireMutationAtRest && run.includes(MUTATION_CHECK_CONTEXT) ? [MUTATION_CHECK_CONTEXT] : []
+    return {run, baseline: union(git.developBaselineStatusChecks, extras.requiredChecks, atRest)}
+}
 
 /** Typed protection state the gate reasons over. */
 export interface ProtectionState {

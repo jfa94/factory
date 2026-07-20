@@ -133,3 +133,19 @@ describe('diffScopedTestFiles (Δ O diff-scoped unit)', () => {
         expect(diffScopedTestFiles(changed)).toEqual(['src/foo.test.ts', 'tests/x.ts'])
     })
 })
+
+describe('mutation roots (A4)', () => {
+    it('isMutableSrc honors explicit roots', () => {
+        expect(isMutableSrc('app/page.ts', ['app', 'utils'])).toBe(true)
+        expect(isMutableSrc('utils/format.ts', ['app', 'utils'])).toBe(true)
+        expect(isMutableSrc('src/foo.ts', ['app', 'utils'])).toBe(false)
+        expect(isMutableSrc('app/page.test.ts', ['app'])).toBe(false)
+        expect(isMutableSrc('app/types/api.ts', ['app'])).toBe(false)
+        expect(isMutableSrc('appendix/x.ts', ['app'])).toBe(false) // prefix, not dir
+    })
+
+    it('mutationScope filters by roots', () => {
+        const changed = ['app/page.ts', 'db/schema.ts', 'src/foo.ts', 'app/page.test.ts']
+        expect(mutationScope(changed, ['app', 'db'])).toEqual(['app/page.ts', 'db/schema.ts'])
+    })
+})

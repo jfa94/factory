@@ -6306,7 +6306,14 @@ var GitSchema = external_exports.object({
    * Branch-name prefix for run-scoped task branches (Δ M). The full name is
    * `<branchPrefix>/<run_id>/<task_id>`.
    */
-  branchPrefix: external_exports.string().min(1).default("factory")
+  branchPrefix: external_exports.string().min(1).default("factory"),
+  /**
+   * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
+   * before giving up with `ci-timeout`. Sized above the slowest expected
+   * quality-gate run (mutation on a cold cache); a timeout still parks the
+   * run recoverably (`factory resume` re-enters the poll).
+   */
+  rollupCiWaitMinutes: external_exports.number().int().positive().default(30)
 }).transform((git) => ({
   ...git,
   developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
@@ -9283,9 +9290,263 @@ var MergeSerializer = class {
   }
 };
 
+// src/verifier/deterministic/gate-contract.ts
+import { readFile as readFile4 } from "node:fs/promises";
+import { join as join6 } from "node:path";
+
+// src/shared/command-allowlist.ts
+var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+function runnerName(argv) {
+  const bin = argv[0] ?? "";
+  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+}
+function validateCommand(command, isAllowedRunner) {
+  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (!SAFE_TOKEN.test(t)) {
+      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
+    }
+  }
+  if (tokens[0] === void 0) {
+    return { ok: false, reason: "unsafe_command", detail: "empty command" };
+  }
+  if (!isAllowedRunner(tokens)) {
+    return {
+      ok: false,
+      reason: "unallowed_runner",
+      detail: `runner '${runnerName(tokens)}' not allowlisted`
+    };
+  }
+  return { ok: true, argv: tokens };
+}
+
+// src/verifier/deterministic/gate-id.ts
+var GATE_IDS = [
+  "test",
+  "tdd",
+  "coverage",
+  "mutation",
+  "sast",
+  "type",
+  "lint",
+  "build"
+];
+
+// src/verifier/deterministic/gate-contract.ts
+var log12 = createLogger("gate-contract");
+var GATE_CONTRACT_REL = ".factory/gates.json";
+var MUTATION_CHECK_CONTEXT = "Mutation Testing";
+var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
+var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
+function isAllowedGateRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  switch (runner) {
+    case "deno":
+      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
+    case "go":
+      return a1 === "test";
+    case "cargo":
+      return a1 === "test" || a1 === "check" || a1 === "build";
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return a1 === "run" && argv[2] !== void 0;
+    case "vitest":
+    case "tsc":
+    case "eslint":
+    case "jest":
+    case "mocha":
+    case "pytest":
+      return true;
+    default:
+      return false;
+  }
+}
+function validateGateCommand(command) {
+  return validateCommand(command, isAllowedGateRunner);
+}
+var MUTATION_DEFAULT_ROOTS = ["src"];
+var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+var RootsSchema = external_exports.array(
+  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
+    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
+  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
+    message: "mutation root must not contain '.' or '..' segments"
+  })
+).nonempty("mutation roots must name at least one directory");
+var ContractedSchema = external_exports.object({
+  contracted: external_exports.literal(true),
+  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+  command: external_exports.string().optional(),
+  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
+  roots: RootsSchema.optional()
+}).strict();
+var UncontractedSchema = external_exports.object({
+  contracted: external_exports.literal(false),
+  /** Why this gate is waived — required; the committed audit trail. */
+  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
+}).strict();
+var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var SetupStepSchema = external_exports.object({
+  name: external_exports.string().min(1).optional(),
+  uses: external_exports.string().min(1).optional(),
+  with: external_exports.record(external_exports.string()).optional(),
+  run: external_exports.string().min(1).optional()
+}).strict().superRefine((step, issues) => {
+  if (step.uses === void 0 === (step.run === void 0)) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "setup step requires exactly one of 'uses' or 'run'"
+    });
+  }
+  if (step.with !== void 0 && step.uses === void 0) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "'with' is only allowed on a 'uses' step"
+    });
+  }
+});
+var GateContractSchema = external_exports.object({
+  version: external_exports.literal(1),
+  stack: external_exports.enum(GATE_CONTRACT_STACKS),
+  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
+  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
+  setup_steps: external_exports.array(SetupStepSchema).optional(),
+  /**
+   * Extra required CI contexts for this repo's develop branch, merged into
+   * BOTH protection profiles (run + baseline) — additive-only per-repo
+   * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
+   * rejected here — it has its own switch below.
+   */
+  requiredChecks: external_exports.array(external_exports.string().min(1, "requiredChecks entries must be non-empty")).refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
+    message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles \u2014 use requireMutationAtRest instead`
+  }).optional(),
+  /**
+   * Keep `'Mutation Testing'` required on develop's BASELINE profile too
+   * (at rest, between runs) instead of the default run-profile-only.
+   */
+  requireMutationAtRest: external_exports.boolean().optional()
+}).strict().superRefine((contract, issues) => {
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "roots"],
+        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
+      });
+    }
+    if (!entry.contracted || entry.command === void 0) {
+      continue;
+    }
+    if (!COMMAND_GATES.includes(id)) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
+      });
+      continue;
+    }
+    const v = validateGateCommand(entry.command);
+    if (!v.ok) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `${v.reason}: ${v.detail}`
+      });
+    }
+  }
+});
+async function loadGateContract(rootAbs) {
+  let raw;
+  try {
+    raw = await readFile4(join6(rootAbs, GATE_CONTRACT_REL), "utf8");
+  } catch (err) {
+    if (isEnoent(err)) {
+      return { state: "absent" };
+    }
+    return { state: "invalid", error: `unreadable: ${err.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { state: "invalid", error: `not JSON: ${err.message}` };
+  }
+  const result = GateContractSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    return { state: "invalid", error: issues };
+  }
+  return { state: "ok", contract: result.data };
+}
+var DEFAULT_GATES = ["test", "tdd", "type"];
+function defaultGatesForStack(stack) {
+  return stack === "deno" ? DEFAULT_GATES : [...DEFAULT_GATES, "build"];
+}
+function enumerateGatesInForce(contract) {
+  const contracted = [];
+  const skipped = [];
+  for (const id of GATE_IDS) {
+    const entry = contract.gates[id];
+    if (entry.contracted) {
+      contracted.push(id);
+    } else {
+      skipped.push({ id, reason: entry.reason });
+    }
+  }
+  const skippedById = new Map(skipped.map((s) => [s.id, s.reason]));
+  const warnings = defaultGatesForStack(contract.stack).filter((id) => skippedById.has(id)).map(
+    (id) => `default-set gate '${id}' is not contracted: ${skippedById.get(id) ?? ""} \u2014 the merge gate will not enforce it`
+  );
+  return { contracted, skipped, warnings };
+}
+var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
+function classifySkip(reason) {
+  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
+}
+function mutationRoots(contract) {
+  const entry = contract?.gates.mutation;
+  if (entry !== void 0 && entry.contracted && entry.roots !== void 0) {
+    return entry.roots;
+  }
+  return MUTATION_DEFAULT_ROOTS;
+}
+function requiredCheckExtras(contract) {
+  return {
+    requiredChecks: contract?.requiredChecks ?? [],
+    requireMutationAtRest: contract?.requireMutationAtRest ?? false
+  };
+}
+async function loadRequiredCheckExtras(rootAbs) {
+  const load = await loadGateContract(rootAbs);
+  if (load.state === "invalid") {
+    log12.warn(`${GATE_CONTRACT_REL} at ${rootAbs} is invalid \u2014 per-repo required checks ignored: ${load.error}`);
+  }
+  return requiredCheckExtras(load.state === "ok" ? load.contract : void 0);
+}
+function contractCommand(contract, id) {
+  const entry = contract?.gates[id];
+  if (entry === void 0 || !entry.contracted || entry.command === void 0) {
+    return void 0;
+  }
+  const v = validateGateCommand(entry.command);
+  if (!v.ok) {
+    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
+  }
+  return v.argv;
+}
+
 // src/git/protection.ts
-var log12 = createLogger("git");
+var log13 = createLogger("git");
 var GIT_DEFAULTS5 = GitSchema.parse({});
+function effectiveProfiles(git, extras) {
+  const union = (...lists) => [...new Set(lists.flat())];
+  const run9 = union(git.developRequiredStatusChecks, extras.requiredChecks);
+  const atRest = extras.requireMutationAtRest && run9.includes(MUTATION_CHECK_CONTEXT) ? [MUTATION_CHECK_CONTEXT] : [];
+  return { run: run9, baseline: union(git.developBaselineStatusChecks, extras.requiredChecks, atRest) };
+}
 var ProtectionMissingError = class extends Error {
   branch;
   reasons;
@@ -9335,7 +9596,7 @@ async function provisionProtection(args) {
   if (!args.provision) {
     throw new Error("provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection");
   }
-  log12.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  log13.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
     requiredStatusChecks: [...args.requiredChecks],
     strict: true
@@ -9348,7 +9609,7 @@ async function provisionProtection(args) {
   });
 }
 async function putBaselineProtection(args) {
-  log12.info(`writing baseline branch protection for ${args.owner}/${args.repo}@${args.branch}`);
+  log13.info(`writing baseline branch protection for ${args.owner}/${args.repo}@${args.branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, args.branch, {
     requiredStatusChecks: [...args.contexts],
     strict: false,
@@ -9357,7 +9618,7 @@ async function putBaselineProtection(args) {
 }
 
 // src/git/staging.ts
-var log13 = createLogger("git");
+var log14 = createLogger("git");
 var GIT_DEFAULTS6 = GitSchema.parse({});
 async function ensureStaging(args) {
   const remote = args.remote ?? "origin";
@@ -9373,7 +9634,7 @@ async function ensureStaging(args) {
     if (baseHead === null) {
       throw new Error(`staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`);
     }
-    log13.info(`creating ${staging} from ${remote}/${base}`);
+    log14.info(`creating ${staging} from ${remote}/${base}`);
     await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base);
     await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.orchestratorWorktreePath });
     return { created: true, stagingTip: baseHead };
@@ -9388,7 +9649,7 @@ async function ensureStaging(args) {
     cwd: args.cwd
   });
   if (mergeBase === stagingTip) {
-    log13.info(`fast-forwarding ${staging} to ${remote}/${base}`);
+    log14.info(`fast-forwarding ${staging} to ${remote}/${base}`);
     await materializeStagingWorktree(args.gitClient, args.orchestratorWorktreePath, staging, remote, base);
     await args.gitClient.push(remote, staging, { cwd: args.orchestratorWorktreePath });
     return { created: false, stagingTip: baseTip };
@@ -9766,7 +10027,7 @@ function buildRunSummary(run9, report, opts = {}) {
 }
 
 // src/scoring/telemetry.ts
-var log14 = createLogger("telemetry");
+var log15 = createLogger("telemetry");
 async function writeMetric(dataDir, runId, event, data, opts) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9778,7 +10039,7 @@ async function writeMetric(dataDir, runId, event, data, opts) {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
     return { record, written: true };
   } catch (err) {
-    log14.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log15.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
     return { record, written: false };
   }
 }
@@ -9819,7 +10080,7 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
     }
   }
   if (dropped > 0) {
-    log14.warn(
+    log15.warn(
       `telemetry: ${dropped} metric write(s) dropped this run (${report.run_id}); the metrics stream is incomplete`
     );
     await writeMetric(dataDir, report.run_id, "telemetry.writes_dropped", { dropped }, { now });
@@ -9943,8 +10204,8 @@ function aggregateReviewerValue(runs) {
 
 // src/quota/usage-source.ts
 import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
-import { join as join6 } from "node:path";
-var log15 = createLogger("quota:usage");
+import { join as join7 } from "node:path";
+var log16 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -9977,7 +10238,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log15.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log16.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -10003,7 +10264,7 @@ function readingFromCache(raw, nowEpoch2) {
   };
 }
 function usageCachePath(dataDir) {
-  return join6(dataDir, "usage-cache.json");
+  return join7(dataDir, "usage-cache.json");
 }
 var StatuslineUsageSignal = class {
   opts;
@@ -10023,14 +10284,14 @@ var StatuslineUsageSignal = class {
     }
     const file = usageCachePath(dataDir);
     if (!existsSync7(file)) {
-      log15.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch (err) {
-      log15.warn(
+      log16.warn(
         `usage-cache.json is malformed at ${file}: ${err.message}; emitting unavailable sentinel`
       );
       return unavailable("usage-cache-malformed");
@@ -10240,7 +10501,7 @@ function parsePrd(raw, source) {
 }
 
 // src/spec/gh.ts
-var log16 = createLogger("spec:gh");
+var log17 = createLogger("spec:gh");
 var GhAuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -10298,7 +10559,7 @@ var RealGhClient = class {
     const rawBody = typeof parsed.body === "string" ? parsed.body : "";
     const { body, body_truncated } = this.capBody(rawBody);
     if (body_truncated) {
-      log16.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+      log17.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
       (l) => l != null && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
@@ -10323,12 +10584,12 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { access as access2, readFile as readFile5, readdir as readdir2, rm as rm2 } from "node:fs/promises";
-import { join as join8 } from "node:path";
+import { access as access2, readFile as readFile6, readdir as readdir2, rm as rm2 } from "node:fs/promises";
+import { join as join9 } from "node:path";
 
 // src/spec/ledger.ts
-import { readFile as readFile4, mkdir as mkdir6 } from "node:fs/promises";
-import { join as join7, dirname as dirname6 } from "node:path";
+import { readFile as readFile5, mkdir as mkdir6 } from "node:fs/promises";
+import { join as join8, dirname as dirname6 } from "node:path";
 var LEDGER_FILE = "ledger.json";
 var LedgerEntrySchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -10342,13 +10603,13 @@ var LedgerEntrySchema = external_exports.object({
 }).strict();
 var LedgerSchema = external_exports.object({ entries: external_exports.array(LedgerEntrySchema) }).strict();
 function ledgerPath(dataDir, repo, specId) {
-  return join7(specDir(dataDir, repo, specId), LEDGER_FILE);
+  return join8(specDir(dataDir, repo, specId), LEDGER_FILE);
 }
 async function readLedger(dataDir, repo, specId) {
   const path7 = ledgerPath(dataDir, repo, specId);
   let raw;
   try {
-    raw = await readFile4(path7, "utf8");
+    raw = await readFile5(path7, "utf8");
   } catch (err) {
     if (isEnoent(err)) {
       return { entries: [] };
@@ -10373,7 +10634,7 @@ function latestByTask(ledger) {
 }
 
 // src/spec/store.ts
-var log17 = createLogger("spec:store");
+var log18 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
 var PRD_FILE = "prd.json";
@@ -10402,7 +10663,7 @@ var SpecStore = class {
   docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
-    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
+    this.docsRoot = opts.docsRoot ?? join9(process.cwd(), "docs");
   }
   /** Read the spec's shipped-work ledger (Decision 70). ENOENT → empty; garbage → LOUD. */
   async ledger(repo, specId) {
@@ -10421,7 +10682,7 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`resolveByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -10461,7 +10722,7 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -10478,14 +10739,14 @@ var SpecStore = class {
     for (const specId of matches) {
       await rm2(specDir(this.dataDir, repo, specId), { recursive: true, force: true });
     }
-    log17.info(`deleted spec(s) for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`);
+    log18.info(`deleted spec(s) for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`);
     return true;
   }
   /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile5(join8(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
+    const tasksRaw = await readFile6(join9(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join9(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -10516,11 +10777,11 @@ var SpecStore = class {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
-    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
-    await atomicWriteFile(join8(dir, PRD_FILE), stringifyJson(prd));
+    await atomicWriteFile(join9(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join9(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join9(dir, PRD_FILE), stringifyJson(prd));
     await atomicWriteFile(
-      join8(dir, META_FILE),
+      join9(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -10531,15 +10792,15 @@ var SpecStore = class {
     const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
     let mirrored = true;
     try {
-      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
-      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
+      await atomicWriteFile(join9(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join9(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
-      log17.warn(
+      log18.warn(
         `could not write reviewable copy to ${reviewDir} (${err instanceof Error ? err.message : String(err)}) \u2014 the canonical spec at ${dir} is unaffected; run continues`
       );
     }
-    log17.info(
+    log18.info(
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
@@ -10547,7 +10808,7 @@ var SpecStore = class {
   /** True iff the durable PRD snapshot exists for `(repo, specId)` — S9. */
   async hasPrd(repo, specId) {
     try {
-      await access2(join8(specDir(this.dataDir, repo, specId), PRD_FILE));
+      await access2(join9(specDir(this.dataDir, repo, specId), PRD_FILE));
       return true;
     } catch {
       return false;
@@ -10558,10 +10819,10 @@ var SpecStore = class {
    * snapshot is missing — never a silent null (traceability would audit nothing).
    */
   async readPrd(repo, specId) {
-    const path7 = join8(specDir(this.dataDir, repo, specId), PRD_FILE);
+    const path7 = join9(specDir(this.dataDir, repo, specId), PRD_FILE);
     let raw;
     try {
-      raw = await readFile5(path7, "utf8");
+      raw = await readFile6(path7, "utf8");
     } catch (err) {
       if (isEnoent(err)) {
         throw new Error(
@@ -10581,8 +10842,8 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile5(join8(dir, META_FILE), "utf8");
-    const parsed = parseJson(raw, join8(dir, META_FILE));
+    const raw = await readFile6(join9(dir, META_FILE), "utf8");
+    const parsed = parseJson(raw, join9(dir, META_FILE));
     const meta = parsed !== null && typeof parsed === "object" ? parsed : {};
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -10965,7 +11226,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/build.ts
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
@@ -10973,10 +11234,10 @@ var ATTEMPTS_FILE = "attempts.json";
 function scratchPaths(scratchRoot, repo, issue) {
   const dir = specBuildDir(scratchRoot, repo, issue);
   return {
-    prdPath: join9(dir, PRD_FILE2),
-    generatedPath: join9(dir, GENERATED_FILE),
-    verdictPath: join9(dir, VERDICT_FILE),
-    attemptsPath: join9(dir, ATTEMPTS_FILE)
+    prdPath: join10(dir, PRD_FILE2),
+    generatedPath: join10(dir, GENERATED_FILE),
+    verdictPath: join10(dir, VERDICT_FILE),
+    attemptsPath: join10(dir, ATTEMPTS_FILE)
   };
 }
 async function readAttempts(attemptsPath) {
@@ -11306,18 +11567,6 @@ function classifyFailure(signal) {
 // src/producer/escalation.ts
 var ESCALATION_CAP = 4;
 
-// src/verifier/deterministic/gate-id.ts
-var GATE_IDS = [
-  "test",
-  "tdd",
-  "coverage",
-  "mutation",
-  "sast",
-  "type",
-  "lint",
-  "build"
-];
-
 // src/verifier/deterministic/strategy.ts
 function ran(gate, observed, detail) {
   const evidence = detail === void 0 ? { gate, observed } : { gate, observed, detail };
@@ -11325,188 +11574,6 @@ function ran(gate, observed, detail) {
 }
 function skip(gate, reason) {
   return { kind: "skip", gate, reason };
-}
-
-// src/verifier/deterministic/gate-contract.ts
-import { readFile as readFile6 } from "node:fs/promises";
-import { join as join10 } from "node:path";
-
-// src/shared/command-allowlist.ts
-var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
-function runnerName(argv) {
-  const bin = argv[0] ?? "";
-  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-}
-function validateCommand(command, isAllowedRunner) {
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
-  for (const t of tokens) {
-    if (!SAFE_TOKEN.test(t)) {
-      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
-    }
-  }
-  if (tokens[0] === void 0) {
-    return { ok: false, reason: "unsafe_command", detail: "empty command" };
-  }
-  if (!isAllowedRunner(tokens)) {
-    return {
-      ok: false,
-      reason: "unallowed_runner",
-      detail: `runner '${runnerName(tokens)}' not allowlisted`
-    };
-  }
-  return { ok: true, argv: tokens };
-}
-
-// src/verifier/deterministic/gate-contract.ts
-var GATE_CONTRACT_REL = ".factory/gates.json";
-var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
-function isAllowedGateRunner(argv) {
-  const runner = runnerName(argv);
-  const a1 = argv[1];
-  switch (runner) {
-    case "deno":
-      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
-    case "go":
-      return a1 === "test";
-    case "cargo":
-      return a1 === "test" || a1 === "check" || a1 === "build";
-    case "npm":
-    case "pnpm":
-    case "yarn":
-      return a1 === "run" && argv[2] !== void 0;
-    case "vitest":
-    case "tsc":
-    case "eslint":
-    case "jest":
-    case "mocha":
-    case "pytest":
-      return true;
-    default:
-      return false;
-  }
-}
-function validateGateCommand(command) {
-  return validateCommand(command, isAllowedGateRunner);
-}
-var ContractedSchema = external_exports.object({
-  contracted: external_exports.literal(true),
-  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-  command: external_exports.string().optional()
-}).strict();
-var UncontractedSchema = external_exports.object({
-  contracted: external_exports.literal(false),
-  /** Why this gate is waived — required; the committed audit trail. */
-  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
-}).strict();
-var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
-var SetupStepSchema = external_exports.object({
-  name: external_exports.string().min(1).optional(),
-  uses: external_exports.string().min(1).optional(),
-  with: external_exports.record(external_exports.string()).optional(),
-  run: external_exports.string().min(1).optional()
-}).strict().superRefine((step, issues) => {
-  if (step.uses === void 0 === (step.run === void 0)) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "setup step requires exactly one of 'uses' or 'run'"
-    });
-  }
-  if (step.with !== void 0 && step.uses === void 0) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "'with' is only allowed on a 'uses' step"
-    });
-  }
-});
-var GateContractSchema = external_exports.object({
-  version: external_exports.literal(1),
-  stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
-  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
-  setup_steps: external_exports.array(SetupStepSchema).optional()
-}).strict().superRefine((contract, issues) => {
-  for (const id of GATE_IDS) {
-    const entry = contract.gates[id];
-    if (!entry.contracted || entry.command === void 0) {
-      continue;
-    }
-    if (!COMMAND_GATES.includes(id)) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
-      });
-      continue;
-    }
-    const v = validateGateCommand(entry.command);
-    if (!v.ok) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `${v.reason}: ${v.detail}`
-      });
-    }
-  }
-});
-async function loadGateContract(rootAbs) {
-  let raw;
-  try {
-    raw = await readFile6(join10(rootAbs, GATE_CONTRACT_REL), "utf8");
-  } catch (err) {
-    if (isEnoent(err)) {
-      return { state: "absent" };
-    }
-    return { state: "invalid", error: `unreadable: ${err.message}` };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    return { state: "invalid", error: `not JSON: ${err.message}` };
-  }
-  const result = GateContractSchema.safeParse(parsed);
-  if (!result.success) {
-    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-    return { state: "invalid", error: issues };
-  }
-  return { state: "ok", contract: result.data };
-}
-var DEFAULT_GATES = ["test", "tdd", "type"];
-function defaultGatesForStack(stack) {
-  return stack === "deno" ? DEFAULT_GATES : [...DEFAULT_GATES, "build"];
-}
-function enumerateGatesInForce(contract) {
-  const contracted = [];
-  const skipped = [];
-  for (const id of GATE_IDS) {
-    const entry = contract.gates[id];
-    if (entry.contracted) {
-      contracted.push(id);
-    } else {
-      skipped.push({ id, reason: entry.reason });
-    }
-  }
-  const skippedById = new Map(skipped.map((s) => [s.id, s.reason]));
-  const warnings = defaultGatesForStack(contract.stack).filter((id) => skippedById.has(id)).map(
-    (id) => `default-set gate '${id}' is not contracted: ${skippedById.get(id) ?? ""} \u2014 the merge gate will not enforce it`
-  );
-  return { contracted, skipped, warnings };
-}
-var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
-function classifySkip(reason) {
-  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
-}
-function contractCommand(contract, id) {
-  const entry = contract?.gates[id];
-  if (entry === void 0 || !entry.contracted || entry.command === void 0) {
-    return void 0;
-  }
-  const v = validateGateCommand(entry.command);
-  if (!v.ok) {
-    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
-  }
-  return v.argv;
 }
 
 // src/verifier/deterministic/scope.ts
@@ -11543,8 +11610,8 @@ function isDocsPath(file) {
   }
   return false;
 }
-function isMutableSrc(file) {
-  if (!/^src\/.*\.ts$/.test(file)) {
+function isMutableSrc(file, roots = ["src"]) {
+  if (!file.endsWith(".ts") || !roots.some((r) => file.startsWith(r + "/"))) {
     return false;
   }
   if (/\.(test|spec|d)\.ts$/.test(file)) {
@@ -11561,8 +11628,8 @@ function isMutableSrc(file) {
   }
   return true;
 }
-function mutationScope(changedFiles) {
-  return filterDedup(changedFiles, isMutableSrc);
+function mutationScope(changedFiles, roots = ["src"]) {
+  return filterDedup(changedFiles, (f) => isMutableSrc(f, roots));
 }
 function diffScopedTestFiles(changedFiles) {
   return filterDedup(changedFiles, isTestPath);
@@ -11913,7 +11980,7 @@ var mutationStrategy = {
       return ran("mutation", false, `base-missing: ${base} not found`);
     }
     const changed = await ctx.tools.git.changedFiles(base, opts);
-    const scope = mutationScope(changed);
+    const scope = mutationScope(changed, mutationRoots(ctx.contract));
     if (scope.length === 0) {
       return skip("mutation", "no-mutable-changes");
     }
@@ -12049,7 +12116,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log18 = createLogger("gate-runner");
+var log19 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -12102,7 +12169,7 @@ var GateRunner = class {
         const reason = `uncontracted: ${entry.reason}`;
         report.push({ gate: id, outcome: { kind: "skip", gate: id, reason } });
         skipped.push({ gate: id, reason });
-        log18.debug(`gate ${id} skipped: ${reason}`);
+        log19.debug(`gate ${id} skipped: ${reason}`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -12120,14 +12187,14 @@ var GateRunner = class {
       let outcome = await strategy.run(sctx);
       if (outcome.kind === "skip" && classifySkip(outcome.reason) === "tooling") {
         outcome = ran(id, false, `contracted-but-unrunnable: ${outcome.reason}`);
-        log18.warn(`gate ${id} contracted but unrunnable \u2014 failing loud`);
+        log19.warn(`gate ${id} contracted but unrunnable \u2014 failing loud`);
       }
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
         evidence.push(outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log18.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log19.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -12138,7 +12205,7 @@ var GateRunner = class {
 // src/verifier/deterministic/tdd-exempt.ts
 import { readFile as readFile7 } from "node:fs/promises";
 import path2 from "node:path";
-var log19 = createLogger("verifier:tdd-exempt");
+var log20 = createLogger("verifier:tdd-exempt");
 function isTddExempt(taskId, tasksJson, packageJson) {
   const list = extractTaskList(tasksJson);
   for (const entry of list) {
@@ -12176,14 +12243,14 @@ async function readJsonOrNull(file) {
     raw = await readFile7(file, "utf8");
   } catch (err) {
     if (!isEnoent(err)) {
-      log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
+      log20.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
     }
     return null;
   }
   try {
     return JSON.parse(raw);
   } catch (err) {
-    log19.warn(`could not parse '${file}': ${err.message} \u2014 treating as not exempt`);
+    log20.warn(`could not parse '${file}': ${err.message} \u2014 treating as not exempt`);
     return null;
   }
 }
@@ -12493,12 +12560,12 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log40 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log40.code !== 0) {
-      throw new Error(`git log ${base}..HEAD failed (code=${log40.code ?? "null"}): ${log40.stderr.trim()}`);
+    const log41 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log41.code !== 0) {
+      throw new Error(`git log ${base}..HEAD failed (code=${log41.code ?? "null"}): ${log41.stderr.trim()}`);
     }
-    assertNotTruncated(log40, "git log (tdd classification)");
-    const shas = splitLines(log40.stdout).reverse();
+    assertNotTruncated(log41, "git log (tdd classification)");
+    const shas = splitLines(log41.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -12775,7 +12842,7 @@ async function resolveCodexCrossVendor(codexModel, probe = codexProbe) {
 }
 
 // src/verifier/judgment/finding.ts
-var log20 = createLogger("finding");
+var log21 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingBaseSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -12867,7 +12934,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log20.warn(
+    log21.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -12880,7 +12947,7 @@ function parseRawReview(raw) {
   warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
   if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
     const overflow = result.findings.length - MAX_FINDINGS_PER_REVIEW;
-    log20.warn(
+    log21.warn(
       `review parse: reviewer '${reviewerLabel}' exceeded the findings cap (${result.findings.length} > ${MAX_FINDINGS_PER_REVIEW}) \u2014 kept the first ${MAX_FINDINGS_PER_REVIEW}, ${overflow} truncated into dropped_by_cap`
     );
     result = {
@@ -12890,7 +12957,7 @@ function parseRawReview(raw) {
     };
   }
   if (result.dropped_by_cap !== void 0 && result.dropped_by_cap > 0) {
-    log20.warn(
+    log21.warn(
       `review parse: reviewer '${reviewerLabel}' dropped ${result.dropped_by_cap} finding(s) by cap \u2014 coverage is truncated, not exhaustive`
     );
   }
@@ -14262,7 +14329,7 @@ async function gcApplyStale(dir, gh, deleteRun) {
 }
 
 // src/orchestrator/finalize.ts
-var log21 = createLogger("finalize");
+var log22 = createLogger("finalize");
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
   return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
@@ -14282,7 +14349,7 @@ async function commentFailuresOnPrd(deps, run9, report) {
     number: report.issue_number
   });
   if (existing.some((body) => body.includes(marker))) {
-    log21.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
+    log22.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
     return false;
   }
   const selfHealEligible = (run9.self_heal?.attempts ?? 0) < SELF_HEAL_MAX_ATTEMPTS && effectiveAutoResets(run9, scanRun(run9)).length > 0;
@@ -14324,6 +14391,9 @@ async function finalizeRun(deps, runId) {
       title: rollupTitle(report),
       body: markdown,
       merge: deps.shipMode === "live",
+      // A6: CI wait budget from config (minutes → polls); deps.rollup (tests)
+      // still overrides.
+      maxPolls: Math.ceil(deps.config.git.rollupCiWaitMinutes * 6e4 / DEFAULT_POLL_INTERVAL_MS),
       ...deps.rollup ?? {}
     });
     const rr = rollupResult;
@@ -14362,7 +14432,7 @@ async function finalizeRun(deps, runId) {
             }))
           );
         } catch (err) {
-          log21.error(
+          log22.error(
             `shipped-ledger append failed for '${run9.spec.spec_id}' (finalize continues; the next run falls back to the ALREADY_SATISFIED verdict): ${String(err)}`
           );
         }
@@ -14377,7 +14447,7 @@ async function finalizeRun(deps, runId) {
       }
     }));
   } else {
-    log21.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
+    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const rollupPending = rollupResult !== void 0 && !rollupResult.merged && rollupResult.reason !== "no-merge";
   if (!run9.debug && deps.config.git.developProtection === "run-scoped" && !rollupPending && !await deps.state.hasOtherActiveForRepo(run9.spec.repo, runId)) {
@@ -14386,12 +14456,15 @@ async function finalizeRun(deps, runId) {
       owner: deps.owner,
       repo: deps.repo,
       branch: deps.config.git.baseBranch,
-      contexts: deps.config.git.developBaselineStatusChecks
+      contexts: effectiveProfiles(
+        deps.config.git,
+        deps.targetRoot !== void 0 ? await loadRequiredCheckExtras(deps.targetRoot) : requiredCheckExtras(void 0)
+      ).baseline
     });
   }
   const finalized = await deps.state.finalize(runId, terminal);
   const rollupNote = rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` + (rollupResult.merged ? "" : ` (${rollupResult.reason})`) : ", no rollup";
-  log21.info(
+  log22.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed` + (failureCommentPosted ? ", PRD failure comment posted" : "") + rollupNote + `)`
   );
   return {
@@ -14420,7 +14493,7 @@ async function resolveGatesInForce(git) {
 }
 
 // src/orchestrator/transitions.ts
-var log22 = createLogger("transitions");
+var log23 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, phase) {
   const status = phaseToInFlightStatus(phase);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -14435,7 +14508,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function failTask(deps, runId, taskId, failureClass, reason) {
-  log22.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
+  log23.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "failed",
@@ -14474,7 +14547,7 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log22.info(`task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`);
+  log23.info(`task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`);
   return { done: false, phase: resumePhase };
 }
 function classifyProducerFailure(outcome) {
@@ -14507,7 +14580,7 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
     return { done: false, phase: opts.resumePhase };
   }
   if (outcome.status === "error") {
-    log22.warn(
+    log23.warn(
       `task '${taskId}' producer spawn produced no usable STATUS (${outcome.reason}) \u2014 re-spawning at the same rung (spends one spawn re-drive slot)`
     );
     return { done: false, phase: opts.phase };
@@ -14530,7 +14603,7 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
         `producer needs context (asked twice without resolving): ${outcome.reason}`
       );
     }
-    log22.warn(`task '${taskId}' producer asked NEEDS_CONTEXT \u2014 one same-rung re-ask with the question injected`);
+    log23.warn(`task '${taskId}' producer asked NEEDS_CONTEXT \u2014 one same-rung re-ask with the question injected`);
     return { done: false, phase: opts.phase };
   }
   if (outcome.status === "already-satisfied") {
@@ -14540,7 +14613,7 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   }
   if (outcome.status === "test-defective") {
     if (opts.phase !== "exec") {
-      log22.warn(
+      log23.warn(
         `task '${taskId}' emitted 'test-defective' from non-exec role '${opts.role}' \u2014 re-spawning at the same rung (spends one spawn re-drive slot)`
       );
       return { done: false, phase: opts.phase };
@@ -14974,7 +15047,7 @@ async function isDocsApplicable(repoRoot) {
 // src/orchestrator/record.ts
 import { readFile as readFile14 } from "node:fs/promises";
 import { sep as sep3 } from "node:path";
-var log23 = createLogger("record");
+var log24 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.phase);
@@ -15028,7 +15101,7 @@ async function verifyAlreadySatisfied(deps, run9, taskId, phase, outcome) {
   const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   const reject = async (why) => {
     const reason = `ALREADY_SATISFIED claim rejected: ${why}`;
-    log23.warn(`task '${taskId}': ${reason}`);
+    log24.warn(`task '${taskId}': ${reason}`);
     await deps.state.updateTask(runId, taskId, (t) => ({
       ...t,
       fix_findings: [{ reviewer: "already-satisfied-verifier", description: reason }]
@@ -15079,7 +15152,7 @@ async function verifyAlreadySatisfied(deps, run9, taskId, phase, outcome) {
       source: "already-satisfied"
     }
   ]);
-  log23.info(
+  log24.info(
     `task '${taskId}' verified ALREADY_SATISFIED (${outcome.shas.join(", ")}) \u2014 completing without producer work`
   );
   return completeTask(deps, runId, taskId);
@@ -15089,7 +15162,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log24.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -15183,7 +15256,7 @@ function enforcePanelRoster(reviews, expectedRoles = PANEL_ROLES) {
     if (expected.has(r.reviewer)) {
       return r;
     }
-    log23.warn(
+    log24.warn(
       `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${expectedRoles.length} expected panel roles may gate)`
     );
     return { ...r, verdict: "error" };
@@ -15191,7 +15264,7 @@ function enforcePanelRoster(reviews, expectedRoles = PANEL_ROLES) {
   const present = new Set(reviews.map((r) => r.reviewer));
   for (const role of expectedRoles) {
     if (!present.has(role)) {
-      log23.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
+      log24.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
       out.push({ reviewer: role, verdict: "error", findings: [] });
     }
   }
@@ -15224,7 +15297,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log23.warn(
+    log24.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -15379,7 +15452,7 @@ function isSpawnPhase(phase) {
 }
 
 // src/orchestrator/quota-gate.ts
-var log24 = createLogger("quota-gate");
+var log25 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, ignoreQuota = false) {
   if (ignoreQuota) {
     return null;
@@ -15393,7 +15466,7 @@ async function applyQuotaGate(deps, runId, ignoreQuota = false) {
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log25.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -15408,7 +15481,7 @@ async function applyQuotaGate(deps, runId, ignoreQuota = false) {
     }
     case "unavailable-halt": {
       const patch = buildUnavailableCheckpoint();
-      log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log25.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -15429,7 +15502,7 @@ function quotaStopFields(stop) {
 }
 
 // src/orchestrator/ship.ts
-var log25 = createLogger("ship");
+var log26 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
@@ -15449,7 +15522,7 @@ async function shipTask(deps, ctx) {
     if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) {
       throw err;
     }
-    log25.warn(
+    log26.warn(
       `task '${task.task_id}' push of '${branch}' rejected non-fast-forward \u2014 deleting the stale remote ref and retrying once`
     );
     await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch);
@@ -15491,14 +15564,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log25.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log26.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/orchestrator/orchestrator.ts
-var log26 = createLogger("orchestrator");
+var log27 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
 var SPAWN_REDRIVE_CAP = 2;
 var HOLDOUT_MAX_TURNS = 40;
@@ -15635,7 +15708,7 @@ async function resyncShipRetry(deps, runId, taskId, stagingBranch, reason) {
     );
     return { kind: "done", step };
   }
-  log26.info(
+  log27.info(
     `task '${taskId}' merge refused (${reason}); re-routing to exec to re-sync (attempt ${bumped.merge_resyncs}/${MERGE_RESYNC_CAP})`
   );
   return { kind: "continue" };
@@ -16341,7 +16414,7 @@ import { isAbsolute as isAbsolute2 } from "node:path";
 // src/orchestrator/e2e-shared.ts
 import { copyFile, mkdir as mkdir10, writeFile as writeFile2 } from "node:fs/promises";
 import { dirname as dirname9 } from "node:path";
-var log27 = createLogger("e2e");
+var log28 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
     await mkdir10(dirname9(to), { recursive: true });
@@ -16385,7 +16458,7 @@ async function markFailed(deps, runId, reason, attempts) {
       ended_at: nowIso()
     }
   }));
-  log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+  log28.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function findEntry(manifest, spec) {
   return manifest.find((e) => specPathMatches(spec.file, e.spec_path));
@@ -16495,7 +16568,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree, boot) {
 
 // src/orchestrator/e2e-suite.ts
 import { join as join21 } from "node:path";
-var log28 = createLogger("e2e");
+var log29 = createLogger("e2e");
 function buildAdjudicationPrompt(args) {
   const taskLines = specTaskLines(args.spec);
   const specLines = (rows) => rows.map((s) => {
@@ -16589,7 +16662,7 @@ async function retryAdjudicatorOrFail(deps, runId, worktree, reason, emit2) {
       }
     }
   );
-  log28.warn(
+  log29.warn(
     `run '${runId}': e2e-adjudicator attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} failed \u2014 re-spawning (${reason})`
   );
   return emit2(deps, runId);
@@ -16682,7 +16755,7 @@ async function recordAdjudication(deps, runId, run9, results, emit2) {
       e2e_phase: { ...s.e2e_phase, adjudication: void 0, adjudication_counts: counts }
     };
   });
-  log28.info(`run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`);
+  log29.info(`run '${runId}': e2e adjudication merged ${cursor.specs.length} updated spec(s) \u2014 re-running the suite`);
   return runSuiteAndDecide(deps, runId);
 }
 function throwawayConfigPath(worktree) {
@@ -16819,7 +16892,7 @@ async function runSuiteAndDecide(deps, runId) {
           adjudication: { specs: cursorSpecs, attempts: 0, requested_at: nowIso() }
         }
       }));
-      log28.info(`run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`);
+      log29.info(`run '${runId}': ${cursorSpecs.length} pre-existing failing spec(s) sent to adjudication`);
       return prepareAdjudicatorSpawn(deps, await deps.state.read(runId), runId, boot);
     }
   }
@@ -16868,12 +16941,12 @@ async function runSuiteAndDecide(deps, runId) {
       reopen_counts: reopenCounts
     }
   }));
-  log28.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
+  log29.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
   return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
 }
 
 // src/orchestrator/e2e-author.ts
-var log29 = createLogger("e2e");
+var log30 = createLogger("e2e");
 function buildAuthorPrompt(args) {
   const taskLines = specTaskLines(args.spec);
   return [
@@ -16955,7 +17028,7 @@ async function retryAuthorOrFail(deps, runId, worktree, reason, emit2) {
       author_attempts: attempts
     }
   }));
-  log29.warn(`run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`);
+  log30.warn(`run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed \u2014 re-spawning (${reason})`);
   return emit2(deps, runId);
 }
 async function recordAuthorResults(deps, runId, results, emit2) {
@@ -17037,7 +17110,7 @@ async function recordAuthorResults(deps, runId, results, emit2) {
 }
 
 // src/orchestrator/e2e.ts
-var log30 = createLogger("e2e");
+var log31 = createLogger("e2e");
 async function runE2eEmit(deps, runId) {
   const run9 = await deps.state.read(runId);
   const cfg = deps.config.e2e;
@@ -17045,7 +17118,7 @@ async function runE2eEmit(deps, runId) {
   if (boot === null) {
     const reason = "e2e phase has no boot config \u2014 the run-start assessment resolved none and no override is set; run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` then resume";
     await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-    log30.warn(`run '${runId}': ${reason}`);
+    log31.warn(`run '${runId}': ${reason}`);
     return { kind: "suspend", run_id: runId, reason };
   }
   if (run9.e2e_phase === void 0) {
@@ -17069,7 +17142,7 @@ async function runE2eRecord(deps, runId, results) {
 
 // src/orchestrator/assessment.ts
 import { join as join22 } from "node:path";
-var log31 = createLogger("e2e-assess");
+var log32 = createLogger("e2e-assess");
 var ASSESSOR_MODEL = "sonnet";
 var MAX_ASSESS_ATTEMPTS = 2;
 function assessmentWorktreePath(workDir, runId) {
@@ -17188,7 +17261,7 @@ async function failAssessment(deps, runId, reason, attempts) {
       ended_at: nowIso()
     }
   }));
-  log31.warn(`run '${runId}': e2e assessment failed \u2014 ${reason}`);
+  log32.warn(`run '${runId}': e2e assessment failed \u2014 ${reason}`);
   return { kind: "failed", run_id: runId, reason };
 }
 async function retryOrFail(deps, runId, reason, attempts) {
@@ -17199,7 +17272,7 @@ async function retryOrFail(deps, runId, reason, attempts) {
     ...s,
     e2e_assessment: { ...s.e2e_assessment ?? defaultAssessment(), attempts }
   }));
-  log31.warn(`run '${runId}': e2e assessment attempt ${attempts} failed (${reason}) \u2014 retrying`);
+  log32.warn(`run '${runId}': e2e assessment attempt ${attempts} failed (${reason}) \u2014 retrying`);
   return runAssessmentEmit(deps, runId);
 }
 async function runAssessmentRecord(deps, runId, results) {
@@ -17255,15 +17328,15 @@ async function runAssessmentRecord(deps, runId, results) {
   }));
   const doneMsg = `run '${runId}': e2e assessment done (${results.status}, ${results.affected_specs.length} affected spec(s)${warning !== void 0 ? `, warning: ${warning}` : ""})`;
   if (results.status === "degraded") {
-    log31.warn(doneMsg);
+    log32.warn(doneMsg);
   } else {
-    log31.info(doneMsg);
+    log32.info(doneMsg);
   }
   return { kind: "done", run_id: runId, ...warning !== void 0 ? { warning } : {} };
 }
 
 // src/orchestrator/lifecycle.ts
-var log32 = createLogger("run");
+var log33 = createLogger("run");
 async function seedFromLedger(specStore, request, seeded, stagingDeps, stagingTip) {
   const latest = latestByTask(await specStore.ledger(request.repo, request.spec_id));
   if (latest.size === 0) {
@@ -17292,7 +17365,7 @@ async function seedFromLedger(specStore, request, seeded, stagingDeps, stagingTi
     }
   }
   if (shippedIds.length > 0) {
-    log32.info(
+    log33.info(
       `run create: seeded ${shippedIds.length} task(s) as already-shipped from ledger (${shippedIds.join(", ")})`
     );
   }
@@ -17340,7 +17413,10 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     });
     if (stagingDeps.config.git.developProtection === "run-scoped") {
       const base = stagingDeps.config.git.baseBranch;
-      const checks = stagingDeps.config.git.developRequiredStatusChecks;
+      const checks = effectiveProfiles(
+        stagingDeps.config.git,
+        await loadRequiredCheckExtras(stagingDeps.targetRoot)
+      ).run;
       const developState = await provisionProtection({
         ghClient: stagingDeps.ghClient,
         owner: stagingDeps.owner,
@@ -17383,7 +17459,7 @@ async function supersedeRun(state, existing, stagingDeps) {
       owner: stagingDeps.owner,
       repo: stagingDeps.repo,
       branch: stagingDeps.config.git.baseBranch,
-      contexts: stagingDeps.config.git.developBaselineStatusChecks
+      contexts: effectiveProfiles(stagingDeps.config.git, await loadRequiredCheckExtras(stagingDeps.targetRoot)).baseline
     });
   }
   await state.finalize(existing.run_id, "superseded");
@@ -17516,12 +17592,13 @@ async function loadCliDeps(opts) {
     shipMode: opts.shipMode ?? run9.ship_mode,
     designSystemDocs: () => findDesignSystemDocs(repoRoot),
     state,
-    run: run9
+    run: run9,
+    targetRoot: repoRoot
   };
 }
 
 // src/cli/adoption.ts
-var log33 = createLogger("adoption");
+var log34 = createLogger("adoption");
 async function adoptForCli(deps, run9, at2) {
   let probe;
   try {
@@ -17542,7 +17619,7 @@ async function mirrorAdoption(dataDir, runId, report) {
     });
   }
   if (report.changed) {
-    log33.info(`run '${runId}': adoption \u2014 ${summarizeAdoption(report)}`);
+    log34.info(`run '${runId}': adoption \u2014 ${summarizeAdoption(report)}`);
   }
   return { ok: true, ...report };
 }
@@ -17690,6 +17767,13 @@ async function assertGateContract(cwd, gitClient) {
 }
 
 // src/cli/subcommands/run.ts
+async function targetRootOrCwd(git) {
+  try {
+    return await git.mainWorktreeRoot({ cwd: process.cwd() });
+  } catch {
+    return process.cwd();
+  }
+}
 var RUN_HELP = `factory run \u2014 create a run and drive its phases
 
 Usage:
@@ -18011,7 +18095,7 @@ async function runResume(argv, overrides = {}) {
   }
   if (envelope.kind === "resumed" && config.git.developProtection === "run-scoped") {
     const { owner, repo } = splitRepoSlug(envelope.run.spec.repo);
-    const checks = config.git.developRequiredStatusChecks;
+    const checks = effectiveProfiles(config.git, await loadRequiredCheckExtras(await targetRootOrCwd(git))).run;
     const developState = await provisionProtection({
       ghClient: gh,
       owner,
@@ -18226,7 +18310,15 @@ async function runCancel(argv, overrides = {}) {
           owner,
           repo,
           branch: config.git.baseBranch,
-          contexts: config.git.developBaselineStatusChecks
+          // Best-effort extras: cancel needs no cwd, so outside the repo
+          // this degrades to the config baseline (loadRequiredCheckExtras
+          // never throws — de-escalation must not fail on a missing contract).
+          contexts: effectiveProfiles(
+            config.git,
+            await loadRequiredCheckExtras(
+              await targetRootOrCwd(overrides.gitClient ?? new DefaultGitClient())
+            )
+          ).baseline
         });
       }
       cleanedUp = true;
@@ -19258,6 +19350,15 @@ function waivedMutationBlock(reason) {
     `    - run: echo 'Mutation testing waived (gate contract): ${quoted}'`
   ];
 }
+var DEFAULT_ROOTS_PATHSPEC = "'src/**/*.ts'";
+function rootsPathspec(roots) {
+  return roots.map((r) => `'${r}/**/*.ts'`).join(" ");
+}
+function applyMutationRoots(lines, contract) {
+  const roots = mutationRoots(contract);
+  const spec = rootsPathspec(roots);
+  return spec === DEFAULT_ROOTS_PATHSPEC ? lines : lines.map((l) => l.replace(DEFAULT_ROOTS_PATHSPEC, spec));
+}
 function renderMutationRegion(lines, opts) {
   const begin = lines.findIndex((l) => l.trim() === "# factory:mutation-begin");
   const end = lines.findIndex((l) => l.trim() === "# factory:mutation-end");
@@ -19273,10 +19374,28 @@ function renderMutationRegion(lines, opts) {
   }
   let kept = [...lines.slice(0, begin), ...lines.slice(begin + 1, end), ...lines.slice(end + 1)];
   kept = replaceMarker(kept, "# factory:mutation-setup", mutationSetupBlock(opts));
+  kept = applyMutationRoots(kept, opts.contract);
   if (opts.packageManager === "npm") {
     kept = kept.map((l) => l.replace("pnpm exec stryker run \\", "npx stryker run \\"));
   }
   return kept;
+}
+function renderMutationNightly(template, opts) {
+  if (opts.contract.stack !== "npm") {
+    throw new Error(
+      `renderMutationNightly: stack '${opts.contract.stack}' is not supported \u2014 the CI quality gate renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)`
+    );
+  }
+  if (!opts.contract.gates.mutation.contracted) {
+    return null;
+  }
+  let lines = template.split("\n");
+  lines = replaceMarker(lines, "# factory:mutation-setup", mutationSetupBlock(opts));
+  lines = applyMutationRoots(lines, opts.contract);
+  if (opts.packageManager === "npm") {
+    lines = lines.map((l) => l.replace("pnpm exec stryker run \\", "npx stryker run \\"));
+  }
+  return lines.join("\n");
 }
 function renderQualityGate(template, opts) {
   if (opts.contract.stack !== "npm") {
@@ -19341,7 +19460,7 @@ function resolveNodeRuntimeDeclarations(declarations) {
 import { mkdir as mkdir11, readFile as readFile16 } from "node:fs/promises";
 import { existsSync as existsSync8 } from "node:fs";
 import { join as join27 } from "node:path";
-var log34 = createLogger("cli:target-settings");
+var log35 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -19416,7 +19535,7 @@ async function readExistingSettings(path7) {
   if (isObject(parsed)) {
     return parsed;
   }
-  log34.warn(
+  log35.warn(
     `${path7} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
   );
   return {};
@@ -19449,7 +19568,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold-gates.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync9, readdirSync, statSync } from "node:fs";
 import { mkdir as mkdir12, readFile as readFile17, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname10, join as join28 } from "node:path";
 function detectStack(targetRoot) {
@@ -19497,6 +19616,30 @@ async function denoHasBuildTask(targetRoot) {
 }
 var yes = { contracted: true };
 var no = (reason) => ({ contracted: false, reason });
+var MUTATION_ROOT_CANDIDATES = [
+  "app",
+  "components",
+  "lib",
+  "utils",
+  "db",
+  "server",
+  "hooks"
+];
+function hasMutableTs(targetRoot, root) {
+  const abs = join28(targetRoot, root);
+  if (!existsSync9(abs) || !statSync(abs).isDirectory()) {
+    return false;
+  }
+  const entries = readdirSync(abs, { recursive: true, encoding: "utf8" });
+  return entries.some((rel) => isMutableSrc(`${root}/${rel.replaceAll("\\", "/")}`, [root]));
+}
+function detectMutationRoots(targetRoot) {
+  if (hasMutableTs(targetRoot, "src")) {
+    return void 0;
+  }
+  const roots = MUTATION_ROOT_CANDIDATES.filter((r) => hasMutableTs(targetRoot, r));
+  return roots.length > 0 ? roots : [];
+}
 async function resolveNpm(opts) {
   const pkg = await readPackageJson(opts.targetRoot);
   const floor = [];
@@ -19515,10 +19658,16 @@ async function resolveNpm(opts) {
   }
   const strykerResolvable = hasDep(pkg, "@stryker-mutator/core") || existsSync9(join28(opts.targetRoot, "node_modules", ".bin", "stryker"));
   let mutation;
-  if (strykerResolvable) {
-    mutation = yes;
-  } else if (opts.waiveMutation) {
+  if (opts.waiveMutation) {
     mutation = no("waived via --waive mutation");
+  } else if (strykerResolvable) {
+    const roots = detectMutationRoots(opts.targetRoot);
+    if (roots?.length === 0) {
+      throw new Error(
+        `scaffold: mutation gate: no mutable-source roots found \u2014 no src/ and none of ${MUTATION_ROOT_CANDIDATES.join("/")} contain mutable .ts files. Contracting mutation would make the "Mutation Testing" check a silent no-op; add explicit roots to .factory/gates.json (gates.mutation.roots) or pass --waive mutation`
+      );
+    }
+    mutation = roots === void 0 ? yes : { contracted: true, roots: [...roots] };
   } else {
     throw new Error(
       "scaffold: mutation gate: stryker not installed \u2014 install @stryker-mutator/core or pass --waive mutation to record the waiver"
@@ -19654,7 +19803,7 @@ async function saveScaffoldLock(targetRoot, lock2) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log35 = createLogger("scaffold");
+var log36 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -19741,11 +19890,18 @@ var LEGACY_E2E_EXAMPLE_HASHES = [
   "2fcc468328b2070bd07ede3e524bf1bf33ec2957d2d0e9bef29302251a24356d",
   "629824a48477223cfcef02bcb6c850aa9622d73d41c93bc3b76486831a98770e"
 ];
-var CI_NET_RELS = [QUALITY_GATE_REL, ".github/scripts/shard-mutation-scope.mjs"];
+var MUTATION_NIGHTLY_REL = ".github/workflows/mutation-nightly.yml";
+var STRYKER_SEED_REL = ".stryker.config.json";
+var CI_NET_RELS = [
+  QUALITY_GATE_REL,
+  ".github/scripts/shard-mutation-scope.mjs",
+  MUTATION_NIGHTLY_REL
+];
 var TEMPLATE_MANIFEST = [
   { rel: QUALITY_GATE_REL, policy: "managed" },
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
-  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
+  { rel: MUTATION_NIGHTLY_REL, policy: "managed" },
+  { rel: STRYKER_SEED_REL, policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
   { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
   // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
@@ -19767,7 +19923,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, lock2, tran
   const src = join30(templatesDir, ...segs);
   const dest = join30(targetRoot, ...segs);
   if (!existsSync11(src)) {
-    log35.warn(`template missing, skipping: ${src}`);
+    log36.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
@@ -19902,7 +20058,7 @@ async function runScaffold(opts) {
   const lockLoad = await loadScaffoldLock(opts.targetRoot);
   const lock2 = { seeds: { ...lockLoad.lock.seeds }, dirty: false };
   for (const entry of TEMPLATE_MANIFEST) {
-    if (CI_NET_RELS.includes(entry.rel)) {
+    if (CI_NET_RELS.includes(entry.rel) || entry.rel === STRYKER_SEED_REL) {
       continue;
     }
     if (entry.nodeOnly === true && !isNodePackage) {
@@ -19910,17 +20066,21 @@ async function runScaffold(opts) {
     }
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock2);
   }
+  let lockReported = false;
   if (lock2.dirty || lockLoad.invalid) {
     const toSave = { version: 1, seeds: lock2.seeds };
     await saveScaffoldLock(opts.targetRoot, toSave);
+    lock2.dirty = false;
+    lockReported = true;
     if (lockLoad.existed) {
       lists.present.push(SCAFFOLD_LOCK_REL);
     } else {
       lists.created.push(SCAFFOLD_LOCK_REL);
-      log35.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
+      log36.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
     }
   } else if (lockLoad.existed) {
     lists.present.push(SCAFFOLD_LOCK_REL);
+    lockReported = true;
   }
   const gates = await ensureGateContract({
     targetRoot: opts.targetRoot,
@@ -19930,11 +20090,46 @@ async function runScaffold(opts) {
   });
   if (gates.status === "created") {
     lists.created.push(GATE_CONTRACT_REL);
-    log35.info(
+    log36.info(
       `wrote ${GATE_CONTRACT_REL} (stack: ${gates.stack}) \u2014 COMMIT it; 'factory run' requires the contract tracked`
     );
   } else {
     lists.present.push(GATE_CONTRACT_REL);
+  }
+  if (isNodePackage) {
+    const present = STRYKER_CONFIG_BASENAMES.filter((b) => existsSync11(join30(opts.targetRoot, b)));
+    const others = present.filter((b) => b !== STRYKER_SEED_REL);
+    if (others.length > 0) {
+      log36.warn(
+        `not seeding ${STRYKER_SEED_REL}: found existing Stryker config(s) ${others.join(", ")} \u2014 discovery order loads '${nonNull(present[0])}'; consolidate into ONE config (shadowed siblings are silently ignored by Stryker)`
+      );
+    } else {
+      const roots = mutationRoots(gates.contract);
+      const includes = roots.map((r) => `"${r}/**/*.ts"`).join(",\n        ");
+      const entry = nonNull(TEMPLATE_MANIFEST.find((e) => e.rel === STRYKER_SEED_REL));
+      await applyTemplate(
+        entry,
+        opts.templatesDir,
+        opts.targetRoot,
+        lists,
+        lock2,
+        (text) => text.replace('"src/**/*.ts"', includes)
+      );
+      const wroteSeed = lists.created.includes(STRYKER_SEED_REL) || lists.updated.includes(STRYKER_SEED_REL);
+      if (wroteSeed) {
+        await saveScaffoldLock(opts.targetRoot, { version: 1, seeds: lock2.seeds });
+        lock2.dirty = false;
+        if (!lockReported) {
+          if (lockLoad.existed) {
+            lists.present.push(SCAFFOLD_LOCK_REL);
+          } else {
+            lists.created.push(SCAFFOLD_LOCK_REL);
+            log36.info(`wrote ${SCAFFOLD_LOCK_REL} (seed pristine-tracking) \u2014 COMMIT it alongside the seeds`);
+          }
+          lockReported = true;
+        }
+      }
+    }
   }
   if (gates.contract.stack === "npm") {
     const facts = await readWorkflowFacts(opts.targetRoot);
@@ -19942,23 +20137,26 @@ async function runScaffold(opts) {
       if (!CI_NET_RELS.includes(entry.rel)) {
         continue;
       }
+      if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
+        continue;
+      }
       const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(
         renderQualityGate(text, { contract: gates.contract, ...facts }),
         opts.config.quality.gateEnv
-      ) : void 0;
+      ) : entry.rel === MUTATION_NIGHTLY_REL ? (text) => nonNull(renderMutationNightly(text, { contract: gates.contract, ...facts })) : void 0;
       await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, void 0, transform);
     }
     await ensurePrettierignore(opts.targetRoot, lists);
   } else {
-    log35.info(
+    log36.info(
       `skipping the CI net (${CI_NET_RELS.join(", ")}) \u2014 the quality-gate workflow renders for npm-stack repos only; stack '${gates.stack}' relies on the local GateRunner`
     );
   }
   if (lists.updated.length > 0) {
-    log35.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(", ")}`);
+    log36.info(`auto-updated ${lists.updated.length} outdated scaffold file(s): ${lists.updated.join(", ")}`);
   }
   if (await recommendFastCheck(opts.targetRoot)) {
-    log35.info(
+    log36.info(
       "property-based testing: fast-check not installed \u2014 consider 'npm i -D fast-check' so the test-writer can write property tests (advisory only)"
     );
   }
@@ -19975,7 +20173,8 @@ async function runScaffold(opts) {
   }
   const branch = opts.config.git.baseBranch;
   const runScoped = opts.config.git.developProtection === "run-scoped";
-  const required = runScoped ? opts.config.git.developBaselineStatusChecks : opts.config.git.developRequiredStatusChecks;
+  const profiles = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract));
+  const required = runScoped ? profiles.baseline : profiles.run;
   let state = await probeProtection({
     ghClient: opts.ghClient,
     owner: opts.owner,
@@ -20075,7 +20274,7 @@ var scaffoldCommand = {
 };
 
 // src/cli/subcommands/rescue.ts
-var log36 = createLogger("rescue");
+var log37 = createLogger("rescue");
 var RESCUE_HELP = `factory rescue \u2014 repair plumbing behind /factory:resume
 
 Usage:
@@ -20347,7 +20546,7 @@ async function emitAutoPage(gh, run9, scan, reason, adoption) {
       commented = true;
     }
   } catch (err) {
-    log36.warn(
+    log37.warn(
       `run '${run9.run_id}': could not post self-heal page comment: ${err instanceof Error ? err.message : String(err)}`
     );
   }
@@ -20732,7 +20931,7 @@ var nextActionCommand = {
 };
 
 // src/cli/subcommands/next.ts
-var log37 = createLogger("next-task");
+var log38 = createLogger("next-task");
 var HELP8 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
@@ -20797,7 +20996,7 @@ async function runNextTask(argv, overrides = {}) {
       const at2 = overrides.now?.() ?? nowIso();
       const adoption = await adoptForCli({ state: deps.state, git, gh, dataDir: deps.dataDir }, run9, at2);
       if (!adoption.ok) {
-        log37.warn(`adoption probe failed for run '${runId}': ${adoption.error} \u2014 emitting unchanged`);
+        log38.warn(`adoption probe failed for run '${runId}': ${adoption.error} \u2014 emitting unchanged`);
       } else if (adoption.changed) {
         emitJson({ ...await nextTask(deps, runId), adoption });
         return EXIT.OK;
@@ -20826,7 +21025,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log38 = createLogger("cli:statusline");
+var log39 = createLogger("cli:statusline");
 var HELP9 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -20901,7 +21100,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log38.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log39.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
@@ -20910,7 +21109,7 @@ async function writeCache(rateLimits, deps) {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
     return null;
   } catch (err) {
-    log38.warn(`failed to write usage-cache.json: ${err.message}`);
+    log39.warn(`failed to write usage-cache.json: ${err.message}`);
     return `usage-cache unwritable: ${err.message}`;
   }
 }
@@ -20924,12 +21123,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log38.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log39.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log38.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log39.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -20964,7 +21163,7 @@ import { existsSync as existsSync12 } from "node:fs";
 import { readFile as readFile21 } from "node:fs/promises";
 import { join as join32 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log39 = createLogger("autonomy");
+var log40 = createLogger("autonomy");
 var HELP10 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -21108,10 +21307,10 @@ async function runAutonomyEnsure(opts = {}) {
       if (isObject2(parsed)) {
         userSettings = parsed;
       } else {
-        log39.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+        log40.warn(`${userSettingsPath} is not a JSON object; ignoring`);
       }
     } catch (err) {
-      log39.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log40.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join32(pluginRoot, "templates", "settings.autonomous.json");

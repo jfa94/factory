@@ -253,6 +253,13 @@ export const GitSchema = z
          * `<branchPrefix>/<run_id>/<task_id>`.
          */
         branchPrefix: z.string().min(1).default('factory'),
+        /**
+         * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
+         * before giving up with `ci-timeout`. Sized above the slowest expected
+         * quality-gate run (mutation on a cold cache); a timeout still parks the
+         * run recoverably (`factory resume` re-enters the poll).
+         */
+        rollupCiWaitMinutes: z.number().int().positive().default(30),
     })
     // Derived default (still "all defaults live in this file"): baseline = run
     // profile minus 'Mutation Testing' — the literal is the aggregator job name

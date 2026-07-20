@@ -3236,6 +3236,88 @@ to maintain: the ONLY check the baseline drops is mutation testing. An explicitl
 value (including `[]`) overrides the derivation; the derived value is never persisted
 (sparse-overlay semantics, `src/config/save.ts`).
 
+**Amended 2026-07-20 — per-repo required checks via the gate contract (v1.45.0):** factory
+config is global-only, so a per-repo protection requirement had no home. Two optional
+top-level fields in the committed `.factory/gates.json` (Decision 46 philosophy) now tune the
+develop profiles the engine actually PUTs (`effectiveProfiles`, `src/git/protection.ts`),
+**additive-only** — a contract can add required contexts, never drop a config-required one:
+
+- **`requiredChecks: string[]`** — extra required CI contexts merged into **both** profiles
+  (run + baseline). E.g. outsidey declares `["pgTAP"]`, goodbyespy `["CI"]`. `"Mutation
+Testing"` is rejected here (it is owned by the profiles).
+- **`requireMutationAtRest: boolean`** — keep `"Mutation Testing"` required on the **baseline**
+  profile too (reversing this decision's default that the baseline drops exactly mutation); a
+  no-op when the run profile dropped the context entirely.
+
+Both never throw at load (`loadRequiredCheckExtras`, `requiredCheckExtras` in
+`gate-contract.ts`): absent → no extras, invalid → no extras + a loud warn — the
+de-escalation paths (finalize / supersede / `cancel --cleanup`) must not fail on a broken
+contract. All six protection PUT sites merge the extras: scaffold provisioning, run-start
+escalate + supersede, resume re-escalate + `cancel --cleanup`, and finalize de-escalate (the
+last gains an optional `targetRoot` dep wired from `CliDeps`).
+
+---
+
+## Decision 75 — Mutation CI Redesign (develop-only, warm-base incremental, hash shards, roots)
+
+**Date:** 2026-07-18
+
+**Context:** Stryker dominated the CI merge gate: outsidey Quality Gate runs ranged
+7–50 min with one shard repeatedly a 40-minute pole, and every task PR burned
+~60–80 runner-minutes on mutation CI nothing waited on. Diagnosis found four
+compounding misconfigurations (a 60 s mutant timeout via a shadowed config,
+`concurrency: 4` on 2-vCPU runners, the per-mutant TypeScript checker, no
+`ignoreStatic`), a dead cache architecture (PR-scoped caches are unreadable by
+sibling PRs and the rollup; LPT-by-sloc resharding misaligned per-shard incremental
+files between runs), and one silent quality hole: goodbyespy has no `src/`, so the
+required "Mutation Testing" check passed in seconds having mutated nothing.
+
+**Decision:**
+
+1. **Seed retune** (`templates/.stryker.config.json`): `timeoutMS` 10 000, no
+   TypeScript checker (the `type` gate already runs `tsc --noEmit` on real code;
+   Stryker itself default-disabled the checker in v7), `ignoreStatic: true`
+   (perTest is forced by the vitest runner), no pinned `concurrency` (CI passes
+   `--concurrency 2` explicitly for its 2-vCPU runners).
+2. **Develop-only mutation CI:** the rendered quality-gate mutation region runs only
+   on PRs targeting develop (the rollup — the merge point it actually gates). Task
+   PRs into `staging-*` skip it: the local per-task gate already enforced mutation
+   pre-merge and `stagingRequiredStatusChecks` defaults `[]`, so the jobs were pure
+   burn. The "Mutation Testing" aggregator reports green on the skip path so the
+   universal check name stays satisfiable.
+3. **Warm-base incremental architecture:** a new MANAGED `mutation-nightly.yml`
+   (cron + dispatch, rendered only when mutation is contracted) mutates the FULL
+   mutable surface on the default branch nightly and saves per-shard incremental
+   caches there — where actions/cache makes them readable by every PR. Sharding
+   switched from LPT-by-sloc to STABLE HASH (`fnv1a(path) % 4`,
+   `src/verifier/deterministic/shard.ts`): a file's shard depends only on its path,
+   so PR shards always restore the cache the nightly seeded and re-run only
+   genuinely changed mutants.
+4. **Mutation roots as contract data** (fixes the silent no-op): optional
+   `gates.mutation.roots: string[]` in `.factory/gates.json` (default `["src"]`,
+   plain dirs, mutation gate only). Scaffold detects roots (`src/` wins; else
+   candidate dirs `app/components/lib/utils/db/server/hooks` with mutable `.ts`)
+   and REFUSES loudly when mutation would contract with zero roots. One source
+   feeds the local gate scope (`mutationScope`), both workflows' pathspecs
+   (renderer substitution), and the seeded stryker `mutate` globs.
+5. **Shadow guard:** scaffold refuses to seed `.stryker.config.json` when any
+   sibling Stryker config basename exists, naming the file discovery loads
+   (the 60 s-timeout bug was a factory seed silently shadowing a hand-tuned
+   `.stryker.config.mjs`).
+6. **CI wait budget as config:** `git.rollupCiWaitMinutes` (default 30) replaces the
+   hard-coded ~20 min poll bound in finalize's rollup CI wait — mutation on a cold
+   cache exceeded 20 min and produced `ci-timeout` stalls.
+
+**Consequences:** Task PRs spend zero mutation runner-minutes; rollup mutation cost
+drops to changed-mutants-only against a nightly warm base; the nightly is
+off-critical-path (reporting-only); goodbyespy-shaped repos get a real gate or a
+loud refusal, never a placebo check.
+
+**Relationship:** Refines Decision 46 (gate contract — `roots` is new contract
+vocabulary), Decision 53 (managed CI net — second rendered workflow), Decision 74
+(baseline still drops only "Mutation Testing"); supersedes the cost-aware LPT
+sharding note in Decision 42-era templates.
+
 ---
 
 ## Open Questions

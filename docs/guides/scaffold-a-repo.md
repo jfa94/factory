@@ -27,8 +27,19 @@ This is idempotent. It:
 - seeds the project-owned gate configs (`.stryker.config.json`,
   `.dependency-cruiser.cjs`, `eslint.config.mjs`) when the target is a Node package,
   resolves the repo's gate contract (`.factory/gates.json`), then writes the
-  plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
-  `.github/scripts/shard-mutation-scope.mjs` helper). The `quality-gate.yml` is
+  plugin-managed CI net (`.github/workflows/quality-gate.yml`, its
+  `.github/scripts/shard-mutation-scope.mjs` helper, and — only when mutation is
+  contracted — the warm-base `.github/workflows/mutation-nightly.yml`). The
+  `.stryker.config.json` seed is deferred until the contract exists so its `mutate`
+  globs render from the contracted mutation roots, and it is **shadow-guarded**:
+  scaffold refuses to seed it when any sibling Stryker config already exists, naming
+  the file Stryker's discovery would load instead. When the repo has no `src/`,
+  scaffold detects mutable-source roots from the candidate dirs
+  `app/components/lib/utils/db/server/hooks` and contracts them explicitly under
+  `gates.mutation.roots`; it **refuses loudly** if mutation would contract with zero
+  roots (add explicit roots or pass `--waive mutation`). See
+  [Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots).
+  The `quality-gate.yml` is
   **rendered per-repo from the gate contract** (Decision 53): the package-manager
   setup (lockfile-detected pnpm vs npm) and each gate step come from the contract, so
   CI runs the same checks the local merge gate enforces. npm-stack repos must commit

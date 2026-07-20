@@ -61,6 +61,7 @@ import {
     provisionProtection,
     requireProtectionOrRefuse,
     putBaselineProtection,
+    effectiveProfiles,
     type GitClient,
     type GhClient,
 } from '../../git/index.js'
@@ -75,7 +76,20 @@ import {
     type RunStagingDeps,
 } from '../../orchestrator/lifecycle.js'
 import {assertE2ePrereqs, assertGateContract} from '../../orchestrator/preflight.js'
-import {enumerateGatesInForce} from '../../verifier/deterministic/index.js'
+import {enumerateGatesInForce, loadRequiredCheckExtras} from '../../verifier/deterministic/index.js'
+
+/**
+ * Best-effort target-repo root for gate-contract reads: the main worktree root
+ * when cwd is inside a git repo, else cwd itself (loadRequiredCheckExtras
+ * tolerates a root without a contract — extras just default to none).
+ */
+async function targetRootOrCwd(git: GitClient): Promise<string> {
+    try {
+        return await git.mainWorktreeRoot({cwd: process.cwd()})
+    } catch {
+        return process.cwd()
+    }
+}
 
 const RUN_HELP = `factory run — create a run and drive its phases
 
@@ -515,7 +529,7 @@ export async function runResume(argv: string[], overrides: ResumeOverrides = {})
     // this the re-driven rollup would land with only baseline GitHub-side enforcement.
     if (envelope.kind === 'resumed' && config.git.developProtection === 'run-scoped') {
         const {owner, repo} = splitRepoSlug(envelope.run.spec.repo)
-        const checks = config.git.developRequiredStatusChecks
+        const checks = effectiveProfiles(config.git, await loadRequiredCheckExtras(await targetRootOrCwd(git))).run
         const developState = await provisionProtection({
             ghClient: gh,
             owner,
@@ -861,7 +875,15 @@ export async function runCancel(argv: string[], overrides: RunCancelOverrides = 
                     owner,
                     repo,
                     branch: config.git.baseBranch,
-                    contexts: config.git.developBaselineStatusChecks,
+                    // Best-effort extras: cancel needs no cwd, so outside the repo
+                    // this degrades to the config baseline (loadRequiredCheckExtras
+                    // never throws — de-escalation must not fail on a missing contract).
+                    contexts: effectiveProfiles(
+                        config.git,
+                        await loadRequiredCheckExtras(
+                            await targetRootOrCwd(overrides.gitClient ?? new DefaultGitClient())
+                        )
+                    ).baseline,
                 })
             }
             cleanedUp = true

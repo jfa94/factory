@@ -1,107 +1,35 @@
 #!/usr/bin/env node
 
-// src/bin/shard-mutation-scope.ts
-import { readFileSync } from "node:fs";
-
 // src/verifier/deterministic/scope.ts
 function escapeStrykerGlob(p) {
   return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
 }
 
-// src/shared/assert.ts
-function nonNull(x, msg) {
-  if (x == null) {
-    throw new Error(msg ?? "unexpected nullish value");
-  }
-  return x;
-}
-function at(a, i) {
-  return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
-}
-
 // src/verifier/deterministic/shard.ts
-function sloc(text) {
-  let count = 0;
-  let inBlockComment = false;
-  let inImport = false;
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (inBlockComment) {
-      if (line.includes("*/")) {
-        inBlockComment = false;
-      }
-      continue;
-    }
-    if (inImport) {
-      if (line.includes(";")) {
-        inImport = false;
-      }
-      continue;
-    }
-    if (line === "") {
-      continue;
-    }
-    if (line.startsWith("//")) {
-      continue;
-    }
-    if (line.startsWith("*")) {
-      continue;
-    }
-    if (line.startsWith("/*")) {
-      if (!line.includes("*/")) {
-        inBlockComment = true;
-      }
-      continue;
-    }
-    if (/^import\b/.test(line) || /^export\b.*\bfrom\b/.test(line)) {
-      if (!line.includes(";")) {
-        inImport = true;
-      }
-      continue;
-    }
-    count++;
+function fnv1a(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  return count;
+  return h >>> 0;
 }
-function shardByCost(files, weights, n) {
-  const bins = Array.from({ length: Math.max(0, n) }, () => ({
-    load: 0,
-    files: []
-  }));
+function shardByHash(files, n) {
+  const bins = Array.from({ length: Math.max(0, n) }, () => []);
   if (bins.length === 0) {
     return [];
   }
-  const items = files.map((file, i) => {
-    const w = weights[i];
-    return { file, weight: typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1 };
-  });
-  items.sort((a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-  for (const { file, weight } of items) {
-    let lightest = at(bins, 0);
-    for (const bin of bins) {
-      if (bin.load < lightest.load) {
-        lightest = bin;
-      }
-    }
-    lightest.files.push(file);
-    lightest.load += weight;
+  for (const file of files) {
+    bins[fnv1a(file) % bins.length]?.push(file);
   }
-  return bins.map((b) => b.files.map(escapeStrykerGlob).join(","));
+  return bins.map((b) => b.map(escapeStrykerGlob).join(","));
 }
 
 // src/bin/shard-mutation-scope.ts
 var SHARD_COUNT = 4;
-function weightOf(file) {
-  try {
-    return sloc(readFileSync(file, "utf8")) || 1;
-  } catch {
-    return 1;
-  }
-}
 function main(scopeCsv) {
   const files = scopeCsv.split(",").map((f) => f.trim()).filter((f) => f !== "");
-  const weights = files.map(weightOf);
-  const shards = shardByCost(files, weights, SHARD_COUNT);
+  const shards = shardByHash(files, SHARD_COUNT);
   process.stdout.write(JSON.stringify(shards) + "\n");
 }
 main(process.argv[2] ?? process.env.SCOPE ?? "");

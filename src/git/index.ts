@@ -35,7 +35,7 @@ export type {
 } from './gh-client.js'
 
 // staging → develop rollup (WS12 / §④, Δ S)
-export {rollup} from './rollup.js'
+export {rollup, DEFAULT_POLL_INTERVAL_MS} from './rollup.js'
 export type {RollupArgs, RollupResult, RollupNotMergedReason} from './rollup.js'
 
 // run-scoped branch naming (Δ M)
@@ -77,9 +77,10 @@ export {
     requireProtectionOrRefuse,
     provisionProtection,
     putBaselineProtection,
+    effectiveProfiles,
     ProtectionMissingError,
 } from './protection.js'
-export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs} from './protection.js'
+export type {ProtectionState, ProbeProtectionArgs, ProvisionProtectionArgs, EffectiveProfiles} from './protection.js'
 
 // staging-init / reconcile
 export {ensureStaging} from './staging.js'

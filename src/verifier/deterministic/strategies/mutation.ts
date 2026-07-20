@@ -32,6 +32,7 @@ import type {GateOutcome, GateStrategy, StrategyContext} from '../strategy.js'
 import {ran, skip} from '../strategy.js'
 import {mutationScope} from '../scope.js'
 import type {GateTools} from '../tools.js'
+import {mutationRoots} from '../gate-contract.js'
 import {STRYKER_CONFIG_BASENAMES} from '../../../shared/gate-config-names.js'
 
 /** Strict float compare: pass IFF score >= target (no rounding). */
@@ -74,7 +75,7 @@ export const mutationStrategy: GateStrategy<GateTools> = {
         }
 
         const changed = await ctx.tools.git.changedFiles(base, opts)
-        const scope = mutationScope(changed)
+        const scope = mutationScope(changed, mutationRoots(ctx.contract))
         if (scope.length === 0) {
             return skip('mutation', 'no-mutable-changes')
         }

@@ -103,7 +103,9 @@ pins that split explicitly so local-green can never silently diverge from CI-gre
 - `CI_RENDERED_GATES` = `type`, `lint`, `test`, `build`, `mutation` — rendered as CI
   steps (mutation via its own begin/end region, the other four as plain `- run:`
   steps). CI mirrors these so a task that passes the local gate also passes the repo's
-  own CI on the shipped commit.
+  own CI on the shipped commit. **Mutation is the exception on the base-ref axis**:
+  its region runs only on PRs targeting `develop` (the rollup), not on task PRs into
+  `staging-*` — see [CI runs mutation on the develop rollup only](#ci-runs-mutation-on-the-develop-rollup-only-decision-75).
 - `LOCAL_ONLY_GATES` = `tdd`, `coverage`, `sast` — enforced by the local runner but
   **not** rendered into CI:
     - `tdd` needs the pre-squash task branch (commit ordering); CI only ever sees the
@@ -131,6 +133,31 @@ mutants). Each step is strict: **exactly one** of `uses` or `run`, an optional `
 and `with` **only** alongside `uses`. Hand edits to the managed `quality-gate.yml` are
 reverted as drift — declare the step in the contract instead. See
 [Scaffold a repo § setup_steps](../guides/scaffold-a-repo.md) for the how-to.
+
+### Per-repo required checks (`requiredChecks`, `requireMutationAtRest`)
+
+Factory config is **global-only**, so a per-repo branch-protection requirement has no
+home there — it lives in the committed contract instead (Decision 46 philosophy). Two
+optional top-level fields in `.factory/gates.json` tune the develop protection profiles
+the engine PUTs to GitHub (`effectiveProfiles`, `src/git/protection.ts`), **additive-only**
+— a contract can add required contexts, never remove a config-required one:
+
+- **`requiredChecks?: string[]`** — extra required CI contexts merged into **both**
+  develop profiles (the strict run profile and the at-rest baseline). Example: outsidey
+  declares `["pgTAP"]`, goodbyespy `["CI"]`. `"Mutation Testing"` is **rejected** here —
+  it is owned by the profiles; use `requireMutationAtRest` instead.
+- **`requireMutationAtRest?: boolean`** — keep `"Mutation Testing"` required on develop's
+  **baseline** profile (at rest, between runs) instead of the default run-profile-only.
+  A no-op if the run profile dropped the context entirely (a contract cannot resurrect a
+  check the config removed).
+
+Both degrade safely: an absent or invalid contract yields no extras (a loud warn on
+invalid), so the de-escalation paths (finalize / supersede / `cancel --cleanup`) never
+fail on a broken contract (`loadRequiredCheckExtras`,
+`src/verifier/deterministic/gate-contract.ts`). The extras apply at every protection PUT
+site: scaffold provisioning, run-start escalate/supersede, resume re-escalate,
+`cancel --cleanup`, and finalize de-escalate. See
+[`git` configuration](configuration.md#git) for the profile knobs the extras merge into.
 
 ## Gates in force (S3)
 
@@ -169,7 +196,7 @@ not enforce it`). The created/superseded JSON envelope also carries `gates`
 | `test`     | The vitest-runnable changed test files pass (diff-scoped). Pure non-JS/non-runnable test sets (pgTAP, Go, `.d.ts`…) are **skipped** (not applicable — execution-only gate, `tdd` owns existence).                                              | Runnable tests fail or cannot run.                                                                                                                                              |
 | `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                                                                                                                                                 | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                                                                   |
 | `coverage` | Measures head (task worktree) and base (ephemeral detached worktree) with vitest's json-summary coverage reporter; no metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Either measurement fails (command error, summary missing/invalid), the base ref is unresolvable, or no coverage command is derivable from a non-vitest test command. See below. |
-| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.                                                                                                                          | Score below target, or no score is derivable from a present report (non-empty scope).                                                                                           |
+| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`. Scope = mutable `.ts` under the contracted `gates.mutation.roots` (default `["src"]`).                                   | Score below target, or no score is derivable from a present report (non-empty scope).                                                                                           |
 | `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                                                                                                                                              | Findings present (unless `quality.securityAllowFailures`).                                                                                                                      |
 | `type`     | The project type-check passes.                                                                                                                                                                                                                 | Type errors.                                                                                                                                                                    |
 | `lint`     | The linter passes.                                                                                                                                                                                                                             | Lint errors.                                                                                                                                                                    |
@@ -252,8 +279,21 @@ impl-before-test ordering blocks the task.
 ## The mutation gate in detail
 
 The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modified
-`src/**/*.ts` minus tests/types/data/index, mirroring CI) and reads
-`reports/mutation/mutation.json`.
+mutable `.ts` under the contracted **mutation roots** minus tests/types/data/index,
+mirroring CI) and reads `reports/mutation/mutation.json`.
+
+- **Mutable-source roots are contract data** ([Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots)).
+  `mutationScope` filters the diff to `.ts` files under the roots named by optional
+  `gates.mutation.roots` in `.factory/gates.json` (default `["src"]`; plain
+  repo-relative dirs, no globs; mutation gate only — the schema rejects `roots` on any
+  other gate). `mutationRoots(contract)` (`src/verifier/deterministic/gate-contract.ts`)
+  is the single source both the local scope filter and the CI render read, so they can
+  never disagree on where source lives. Scaffold detects the roots (`src/` wins; else
+  the candidate dirs `app/components/lib/utils/db/server/hooks` that contain mutable
+  `.ts`) and **refuses loudly** rather than contract mutation with zero roots — a repo
+  with no matching source would otherwise pass the required "Mutation Testing" check
+  having mutated nothing (the goodbyespy no-op). Add explicit `roots` or `--waive
+mutation` to opt out; `--waive mutation` wins even when Stryker is installed.
 
 - **Score is derived in-engine.** Stryker's stock `json` reporter writes a
   schema-1.0 report (`files` / `dependencies` / `system`) with **no**
@@ -281,6 +321,40 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
   — executable JS that would run inside the gate process) to shadow or weaken the
   gate config. The protected set and the gate's applicability set are both derived
   from one list (`src/shared/gate-config-names.ts`) with a drift-guard test.
+  Scaffold enforces the same at seed time: it **refuses to seed**
+  `.stryker.config.json` when any sibling Stryker config basename already exists,
+  warning which file Stryker's first-existing-wins discovery would actually load —
+  so the factory seed can never silently shadow a project's own hand-tuned config.
+  The seed also renders **after** the gate contract (pass 2a) so its `mutate` globs
+  come from the contracted roots.
+
+### CI runs mutation on the develop rollup only (Decision 75)
+
+The scaffolded quality-gate workflow's mutation region is guarded
+`if: github.base_ref == 'develop'` — it runs only on the **rollup PR** (into
+`develop`, the merge point mutation actually gates). Task PRs into `staging-*`
+skip it: the local per-task gate already enforced mutation pre-merge and
+`stagingRequiredStatusChecks` defaults `[]`, so the CI jobs were pure burn. The
+`mutation-testing` aggregator reports **green on the skip path** so the universal
+"Mutation Testing" check name stays satisfiable on every PR. Every quality-gate
+job now carries a `timeout-minutes` bound.
+
+CI cost is kept low by a **warm-base incremental** architecture. A second MANAGED
+workflow, `.github/workflows/mutation-nightly.yml` (rendered by
+`renderMutationNightly`, `src/ci/render-quality-gate.ts`; scaffolded **only** when
+mutation is contracted), runs the full mutable surface on the default branch
+nightly and saves per-shard Stryker incremental caches there — where
+`actions/cache` makes them readable by every PR. Sharding is a **stable hash**
+(`fnv1a(path) % 4`, `src/verifier/deterministic/shard.ts` / `src/bin/shard-mutation-scope.ts`),
+not cost-balanced: a file's shard depends only on its path, so a PR's diff files
+always land on the shard whose nightly-seeded cache already holds their results and
+only genuinely changed mutants re-run. The retired LPT-by-sloc packer balanced a
+single run better but reshuffled files between shards as scopes changed,
+invalidating exactly those caches. The seed `.stryker.config.json` is retuned to
+match: `timeoutMS: 10000`, no TypeScript checker (the `type` gate already runs
+`tsc --noEmit`), `ignoreStatic: true`, and no pinned `concurrency` (CI passes
+`--concurrency 2` for its 2-vCPU runners); `@stryker-mutator/typescript-checker`
+is no longer a scaffolded devDependency.
 
 ## Beyond the deterministic gates
 

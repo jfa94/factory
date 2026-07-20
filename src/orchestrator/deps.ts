@@ -84,10 +84,12 @@ export {
     MergeSerializer,
     provisionProtection,
     putBaselineProtection,
+    effectiveProfiles,
     runScopedBranch,
     runStagingBranch,
     ensureStaging,
     rollup,
+    DEFAULT_POLL_INTERVAL_MS,
 } from '../git/index.js'
 export type {
     GitClient,

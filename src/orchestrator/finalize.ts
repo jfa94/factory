@@ -38,6 +38,7 @@
 import {
     decideFinalize,
     rollup,
+    DEFAULT_POLL_INTERVAL_MS,
     loadGateContract,
     enumerateGatesInForce,
     buildPartialReport,
@@ -46,6 +47,7 @@ import {
     failureCommentMarker,
     recordRunFinalized,
     putBaselineProtection,
+    effectiveProfiles,
     scanRun,
     effectiveAutoResets,
     SELF_HEAL_MAX_ATTEMPTS,
@@ -61,6 +63,7 @@ import {
 } from './deps.js'
 import type {ShipMode} from './types.js'
 import {atomicWriteFile, createLogger, nowIso} from '../shared/index.js'
+import {loadRequiredCheckExtras, requiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
 import {runReportPath} from '../core/state/paths.js'
 import {appendLedgerEntries} from '../spec/ledger.js'
 
@@ -110,6 +113,12 @@ export interface FinalizeRunDeps {
     readonly nowIso?: string
     /** Rollup CI-poll tuning (tests inject a no-op sleep + a tiny budget). */
     readonly rollup?: Pick<RollupArgs, 'pollIntervalMs' | 'maxPolls' | 'sleep'>
+    /**
+     * Target repo main-worktree root — the gate-contract read for per-repo
+     * required-check extras (`requiredChecks`/`requireMutationAtRest`) at the
+     * baseline de-escalation. Optional: absent (bare test deps) → no extras.
+     */
+    readonly targetRoot?: string
 }
 
 /** The outcome of {@link finalizeRun}. */
@@ -251,6 +260,9 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             title: rollupTitle(report),
             body: markdown,
             merge: deps.shipMode === 'live',
+            // A6: CI wait budget from config (minutes → polls); deps.rollup (tests)
+            // still overrides.
+            maxPolls: Math.ceil((deps.config.git.rollupCiWaitMinutes * 60_000) / DEFAULT_POLL_INTERVAL_MS),
             ...(deps.rollup ?? {}),
         })
         // Capture in a const so the state.update mutator closure below sees the
@@ -365,7 +377,12 @@ export async function finalizeRun(deps: FinalizeRunDeps, runId: string): Promise
             owner: deps.owner,
             repo: deps.repo,
             branch: deps.config.git.baseBranch,
-            contexts: deps.config.git.developBaselineStatusChecks,
+            contexts: effectiveProfiles(
+                deps.config.git,
+                deps.targetRoot !== undefined
+                    ? await loadRequiredCheckExtras(deps.targetRoot)
+                    : requiredCheckExtras(undefined)
+            ).baseline,
         })
     }
 

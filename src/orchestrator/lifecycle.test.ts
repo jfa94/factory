@@ -12,8 +12,9 @@
  * envelopes, flag guards, preconditions) lives in src/cli/subcommands/run.test.ts.
  */
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {mkdir, rm, symlink} from 'node:fs/promises'
+import {mkdir, mkdtemp, rm, symlink, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
+import {tmpdir} from 'node:os'
 
 import {
     seedTasksFromSpec,
@@ -776,6 +777,54 @@ describe('resolveOrCreateRun (discriminated result, Decision 35)', () => {
             expect(gh.calls.indexOf('api PUT protection staging-run-a')).toBeLessThan(
                 gh.calls.indexOf('api PUT protection develop')
             )
+        })
+
+        it('create merges the gate contract extras (requiredChecks + requireMutationAtRest) into the profiles', async () => {
+            // A real target root with a committed gates.json carrying extras.
+            const root = await mkdtemp(join(tmpdir(), 'lifecycle-extras-'))
+            await mkdir(join(root, '.factory'), {recursive: true})
+            await writeFile(
+                join(root, '.factory/gates.json'),
+                JSON.stringify({
+                    version: 1,
+                    stack: 'npm',
+                    requiredChecks: ['pgTAP'],
+                    requireMutationAtRest: true,
+                    gates: {
+                        test: {contracted: true},
+                        tdd: {contracted: true},
+                        coverage: {contracted: false, reason: 'x'},
+                        mutation: {contracted: true},
+                        sast: {contracted: false, reason: 'x'},
+                        type: {contracted: true},
+                        lint: {contracted: true},
+                        build: {contracted: true},
+                    },
+                }),
+                'utf8'
+            )
+            const gh = new FakeGhClient()
+            const deps = {...makeStagingDeps(gh), targetRoot: root}
+            // Escalate (create) → run profile ∪ extras.
+            const r = await resolveOrCreateRun(state, store, {repo: REPO, issue: 42, runId: 'run-x'}, deps)
+            expect(r.kind).toBe('created')
+            expect(gh.protectionPuts.filter((p) => p.branch === 'develop').map((p) => p.body)).toEqual([
+                {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan', 'pgTAP'], strict: true},
+            ])
+            // Supersede teardown → baseline ∪ extras (+ mutation at rest).
+            const gh2 = new FakeGhClient()
+            const r2 = await resolveOrCreateRun(
+                state,
+                store,
+                {repo: REPO, issue: 42, runId: 'run-y', intent: 'supersede'},
+                {...makeStagingDeps(gh2), targetRoot: root}
+            )
+            expect(r2.kind).toBe('superseded')
+            expect(gh2.protectionPuts.filter((p) => p.branch === 'develop').map((p) => p.body)[0]).toEqual({
+                requiredStatusChecks: ['Quality', 'Security Scan', 'pgTAP', 'Mutation Testing'],
+                strict: false,
+                enforceAdmins: false,
+            })
         })
 
         it('permanent mode: create never touches develop protection', async () => {

@@ -9,6 +9,10 @@ import {
     contractCommand,
     enumerateGatesInForce,
     loadGateContract,
+    loadRequiredCheckExtras,
+    mutationRoots,
+    requiredCheckExtras,
+    MUTATION_CHECK_CONTEXT,
     validateGateCommand,
     type GateContract,
 } from './gate-contract.js'
@@ -309,5 +313,84 @@ describe('enumerateGatesInForce', () => {
         raw.stack = 'deno'
         ;(raw.gates as Record<string, unknown>).build = {contracted: false, reason: 'waived-by-stack: no emit step'}
         expect(enumerateGatesInForce(GateContractSchema.parse(raw)).warnings).toEqual([])
+    })
+})
+
+describe('mutation roots (A4 — the src/ assumption as data)', () => {
+    it('accepts contracted mutation with explicit roots', () => {
+        const raw = validContract()
+        ;(raw.gates as Record<string, unknown>).mutation = {contracted: true, roots: ['app', 'utils/db']}
+        expect(GateContractSchema.safeParse(raw).success).toBe(true)
+    })
+
+    it.each([[[]], [['src/**']], [['/abs']], [['a/../b']], [['..']], [['']]])('rejects invalid roots %j', (roots) => {
+        const raw = validContract()
+        ;(raw.gates as Record<string, unknown>).mutation = {contracted: true, roots}
+        expect(GateContractSchema.safeParse(raw).success).toBe(false)
+    })
+
+    it('rejects roots on a non-mutation gate', () => {
+        const raw = validContract()
+        ;(raw.gates as Record<string, unknown>).test = {contracted: true, roots: ['src']}
+        const parsed = GateContractSchema.safeParse(raw)
+        expect(parsed.success).toBe(false)
+        expect(JSON.stringify(!parsed.success && parsed.error.issues)).toContain('does not use mutable-source roots')
+    })
+
+    it("mutationRoots: contracted roots win; default ['src'] otherwise (incl. no contract)", () => {
+        const raw = validContract()
+        ;(raw.gates as Record<string, unknown>).mutation = {contracted: true, roots: ['app', 'db']}
+        expect(mutationRoots(GateContractSchema.parse(raw))).toEqual(['app', 'db'])
+        ;(raw.gates as Record<string, unknown>).mutation = {contracted: true}
+        expect(mutationRoots(GateContractSchema.parse(raw))).toEqual(['src'])
+        expect(mutationRoots(undefined)).toEqual(['src'])
+    })
+
+    it('mutationRoots ignores roots on a WAIVED mutation gate (defensive)', () => {
+        const contract = GateContractSchema.parse(validContract())
+        expect(mutationRoots(contract)).toEqual(['src'])
+    })
+})
+
+describe('requiredChecks / requireMutationAtRest (per-repo protection extras)', () => {
+    it('accepts requiredChecks + requireMutationAtRest', () => {
+        const raw = {...validContract(), requiredChecks: ['pgTAP', 'CI'], requireMutationAtRest: true}
+        const parsed = GateContractSchema.parse(raw)
+        expect(parsed.requiredChecks).toEqual(['pgTAP', 'CI'])
+        expect(parsed.requireMutationAtRest).toBe(true)
+    })
+
+    it('rejects an empty-string check', () => {
+        expect(GateContractSchema.safeParse({...validContract(), requiredChecks: ['']}).success).toBe(false)
+    })
+
+    it(`rejects '${MUTATION_CHECK_CONTEXT}' inside requiredChecks (it has its own switch)`, () => {
+        const parsed = GateContractSchema.safeParse({...validContract(), requiredChecks: [MUTATION_CHECK_CONTEXT]})
+        expect(parsed.success).toBe(false)
+        expect(JSON.stringify(!parsed.success && parsed.error.issues)).toContain('requireMutationAtRest')
+    })
+
+    it('requiredCheckExtras defaults: no contract → none', () => {
+        expect(requiredCheckExtras(undefined)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+        expect(requiredCheckExtras(GateContractSchema.parse(validContract()))).toEqual({
+            requiredChecks: [],
+            requireMutationAtRest: false,
+        })
+    })
+
+    it('loadRequiredCheckExtras: absent and invalid both degrade to no extras (never throws)', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'gate-contract-'))
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+        await mkdir(join(root, '.factory'), {recursive: true})
+        await writeFile(join(root, GATE_CONTRACT_REL), '{not json', 'utf8')
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+    })
+
+    it('loadRequiredCheckExtras reads a committed contract', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'gate-contract-'))
+        await mkdir(join(root, '.factory'), {recursive: true})
+        const raw = {...validContract(), requiredChecks: ['pgTAP'], requireMutationAtRest: true}
+        await writeFile(join(root, GATE_CONTRACT_REL), JSON.stringify(raw), 'utf8')
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: ['pgTAP'], requireMutationAtRest: true})
     })
 })

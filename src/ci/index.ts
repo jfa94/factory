@@ -4,7 +4,7 @@
  * `quality.gateEnv` into it (scaffold).
  */
 export {injectGateEnvIntoWorkflow} from './inject-gate-env.js'
-export {renderQualityGate, type RenderQualityGateOpts} from './render-quality-gate.js'
+export {renderQualityGate, renderMutationNightly, type RenderQualityGateOpts} from './render-quality-gate.js'
 export {
     NODE_VERSION_FILE,
     NVMRC_FILE,

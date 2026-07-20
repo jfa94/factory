@@ -82,9 +82,9 @@ export function isDocsPath(file: string): boolean {
  * narrower exclusion regex (it also drops `*.d.ts`, `types/`, `data/`, and any
  * `index.ts`, which the TDD test-path matrix does not).
  */
-export function isMutableSrc(file: string): boolean {
-    // Must be under src/ and a .ts file (the `:(glob)src/**/*.ts` pathspec).
-    if (!/^src\/.*\.ts$/.test(file)) {
+export function isMutableSrc(file: string, roots: readonly string[] = ['src']): boolean {
+    // Must be under a mutable-source root and a .ts file (the `<root>/**/*.ts` pathspecs).
+    if (!file.endsWith('.ts') || !roots.some((r) => file.startsWith(r + '/'))) {
         return false
     }
     // Exclusions: .test.ts / .spec.ts / .d.ts, /types/, /data/, index.ts (any dir).
@@ -112,8 +112,8 @@ export function isMutableSrc(file: string): boolean {
  * An EMPTY result means "no mutable changes" — the mutation strategy treats that
  * as a SKIP, never a pass-by-default.
  */
-export function mutationScope(changedFiles: readonly string[]): string[] {
-    return filterDedup(changedFiles, isMutableSrc)
+export function mutationScope(changedFiles: readonly string[], roots: readonly string[] = ['src']): string[] {
+    return filterDedup(changedFiles, (f) => isMutableSrc(f, roots))
 }
 
 /**

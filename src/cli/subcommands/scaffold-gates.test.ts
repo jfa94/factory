@@ -5,10 +5,10 @@
  * gh/git fakes needed.
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {detectStack, resolveGateContract, recommendFastCheck} from './scaffold-gates.js'
+import {detectMutationRoots, detectStack, resolveGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {DEFAULT_GATES} from '../../verifier/deterministic/index.js'
 
 let root: string
@@ -177,6 +177,8 @@ describe('resolveGateContract — refusals', () => {
 describe('DEFAULT_GATES ↔ resolver reality', () => {
     it('every resolver contracts every DEFAULT_GATES id (pins the floor constant to scaffold)', async () => {
         await npmFixture({'@stryker-mutator/core': '1', '@vitest/coverage-v8': '1'})
+        await mkdir(join(root, 'src'), {recursive: true})
+        await writeFile(join(root, 'src', 'main.ts'), 'export const one = 1\n', 'utf8')
         const npm = await resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
         for (const id of DEFAULT_GATES) {
             expect(npm.gates[id].contracted, `npm must contract '${id}'`).toBe(true)
@@ -187,5 +189,53 @@ describe('DEFAULT_GATES ↔ resolver reality', () => {
         for (const id of DEFAULT_GATES) {
             expect(deno.gates[id].contracted, `deno must contract '${id}'`).toBe(true)
         }
+    })
+})
+
+describe('detectMutationRoots + contract roots (A4)', () => {
+    const stryker = {'@stryker-mutator/core': '1', '@vitest/coverage-v8': '1'}
+
+    it('src/ with mutable .ts → default (contract omits roots)', async () => {
+        await npmFixture(stryker)
+        await mkdir(join(root, 'src'), {recursive: true})
+        await writeFile(join(root, 'src', 'a.ts'), 'export const a = 1\n', 'utf8')
+        const c = await resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
+        expect(c.gates.mutation).toEqual({contracted: true})
+        expect(detectMutationRoots(root)).toBeUndefined()
+    })
+
+    it('no src/: candidate dirs with mutable .ts are contracted explicitly', async () => {
+        await npmFixture(stryker)
+        await mkdir(join(root, 'app', 'account'), {recursive: true})
+        await writeFile(join(root, 'app', 'account', 'page.ts'), 'export const p = 1\n', 'utf8')
+        await mkdir(join(root, 'utils'), {recursive: true})
+        await writeFile(join(root, 'utils', 'fmt.ts'), 'export const f = 1\n', 'utf8')
+        // Dirs with only excluded files do NOT count as roots.
+        await mkdir(join(root, 'lib'), {recursive: true})
+        await writeFile(join(root, 'lib', 'x.test.ts'), 'export const t = 1\n', 'utf8')
+        const c = await resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
+        expect(c.gates.mutation).toEqual({contracted: true, roots: ['app', 'utils']})
+    })
+
+    it('src/ containing ONLY excluded files falls through to candidates', async () => {
+        await npmFixture(stryker)
+        await mkdir(join(root, 'src'), {recursive: true})
+        await writeFile(join(root, 'src', 'a.test.ts'), 'export const t = 1\n', 'utf8')
+        await mkdir(join(root, 'db'), {recursive: true})
+        await writeFile(join(root, 'db', 'schema.ts'), 'export const s = 1\n', 'utf8')
+        expect(detectMutationRoots(root)).toEqual(['db'])
+    })
+
+    it('stryker installed but NO mutable roots anywhere → loud refusal (never a silent no-op)', async () => {
+        await npmFixture(stryker)
+        await expect(
+            resolveGateContract({targetRoot: root, waiveMutation: false, waiveCoverage: false})
+        ).rejects.toThrow(/no mutable-source roots.*silent no-op/s)
+    })
+
+    it('--waive mutation sidesteps the roots refusal', async () => {
+        await npmFixture(stryker)
+        const c = await resolveGateContract({targetRoot: root, waiveMutation: true, waiveCoverage: false})
+        expect(c.gates.mutation).toEqual({contracted: false, reason: 'waived via --waive mutation'})
     })
 })

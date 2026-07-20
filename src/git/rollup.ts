@@ -29,8 +29,10 @@ const log = createLogger('git')
 
 const GIT_DEFAULTS = GitSchema.parse({})
 
-const DEFAULT_POLL_INTERVAL_MS = 15_000
-const DEFAULT_MAX_POLLS = 80 // ~20 min at 15s — the full-CI gate's outer bound.
+export const DEFAULT_POLL_INTERVAL_MS = 15_000
+// Fallback when the caller passes no maxPolls; finalize derives the real bound
+// from `git.rollupCiWaitMinutes` (default 30 min).
+const DEFAULT_MAX_POLLS = 80 // ~20 min at 15s
 
 const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 

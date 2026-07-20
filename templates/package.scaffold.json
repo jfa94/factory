@@ -4,7 +4,6 @@
         "@vitest/coverage-v8": "^4.1.2",
         "@stryker-mutator/core": "^9.0.0",
         "@stryker-mutator/vitest-runner": "^9.0.0",
-        "@stryker-mutator/typescript-checker": "^9.0.0",
         "dependency-cruiser": "^17.0.0"
     },
     "scripts": {
