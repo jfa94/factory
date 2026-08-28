@@ -3543,6 +3543,42 @@ the root:
 
 ---
 
+## Decision 76 — Prevent invalid specifications, TDD histories, and verifier associations
+
+**Date:** 2026-08-28
+
+**Context:** Run 494 exposed three upstream contract failures. A generated criterion
+contradicted an established RPC contract; a test-writer `DONE` advanced without a
+test-first commit and left an ordering defect no forward commit could repair; and a
+runner grouped verifier results under `finding-verifier` rather than the originating
+review role, producing verdicts that could never join to findings.
+
+**Decision:** The existing spec generator preserves established public contracts unless
+the PRD explicitly changes them. The existing spec reviewer inspects repository contracts
+for criteria affecting APIs/boundaries and blocks a narrowly impossible criterion through
+`acceptance_criteria` or `alignment`: contradiction without PRD authority, invariant-
+prohibited state, or satisfaction only by breaking unrelated documented behavior. Missing
+implementation is not evidence of impossibility, and the holdout contract is unchanged.
+
+On non-exempt test-writer `DONE`, the engine inspects commits since the spawn checkpoint.
+Advancement requires a task-tagged test/docs-only commit and forbids implementation-class
+commits. Failure consumes the shared rung and resumes at clean preflight; the final rung
+preserves the branch. A later TDD-gate failure routes directly to preflight for the same
+reason, but only before a PR exists. Published history is preserved and fails loudly.
+
+Review recording parses and validates source-role associations before holdout persistence,
+gate execution, or state mutation. Unknown verification reviewer labels and duplicate groups
+for one source reviewer are contract errors; file/line FIFO matching remains unchanged. The
+runner also checks the existing 300-character claim contract and never truncates output.
+
+**Consequences:** Impossible criteria are stopped at the existing specification authority;
+invalid test phases cannot enter immutable history unnoticed; clean recovery cannot rewrite
+a published branch; and verifier output cannot silently key itself under an unrelated agent
+identity. No new agent, score dimension, holdout verdict, generic evaluator retry, TDD
+exemption, or classifier weakening is introduced.
+
+---
+
 ## Open Questions
 
 ### Codex Plugin Availability

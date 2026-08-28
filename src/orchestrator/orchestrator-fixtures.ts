@@ -54,6 +54,12 @@ export function greenProbe(): FakeGitProbe {
             commit({sha: 'c1', files: ['src/x.test.ts'], tagged: true}),
             commit({sha: 'c2', files: ['src/x.ts'], tagged: true}),
         ],
+        // The test-writer DONE validator asks specifically for commits since the
+        // spawn checkpoint tip. The later full-history TDD gate still receives the
+        // complete test→implementation range above.
+        commitsByBase: {
+            'sha-staging': [commit({sha: 'c1', files: ['src/x.test.ts'], tagged: true})],
+        },
     })
 }
 

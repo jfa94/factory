@@ -26,7 +26,14 @@ import {readFile} from 'node:fs/promises'
 import {isEnoent} from '../shared/fs-errors.js'
 import {sep} from 'node:path'
 import {parseJson} from '../shared/json.js'
-import {markInFlight, escalateOrFail, applyProducerOutcome, completeTask, type TaskStep} from './transitions.js'
+import {
+    markInFlight,
+    escalateOrFail,
+    applyProducerOutcome,
+    completeTask,
+    failStep,
+    type TaskStep,
+} from './transitions.js'
 import {specTaskOf} from './handlers.js'
 import {appendLedgerEntries} from '../spec/ledger.js'
 import {taskWorktreePath} from './paths.js'
@@ -35,6 +42,7 @@ import {buildGateContext, appendHoldoutEvidence} from './gate-context.js'
 import {classifyFailure, ESCALATION_CAP, parseProducerStatus, type ProducerOutcome} from '../producer/index.js'
 import {nextPhase, phaseToInFlightStatus} from '../types/index.js'
 import {GateRunner} from '../verifier/deterministic/index.js'
+import {classifyCommit} from '../verifier/deterministic/tdd-classify.js'
 import {
     runPanel,
     parseRawReview,
@@ -149,10 +157,49 @@ export async function applyRecordProducer(
         throw new Error(`record-producer: phase order drift — nextPhase('${info.phase}') !== '${info.after}'`)
     }
     const run = await state.read(runId)
-    if (run.tasks[taskId] === undefined) {
+    const task = run.tasks[taskId]
+    if (task === undefined) {
         throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`)
     }
     const outcome = parseProducerStatus(statusLine)
+    // A non-exempt test-writer may advance only when this spawn actually produced
+    // at least one task-tagged test/docs-only commit and produced no implementation
+    // commit. Checking at DONE time keeps an invalid phase from becoming immutable
+    // history that the later full-history TDD gate can only reject forever.
+    if (info.role === 'test-writer' && outcome.status === 'done' && specTaskOf(deps.spec, taskId).tdd_exempt !== true) {
+        const checkpoint = task.spawn_in_flight
+        const worktree = taskWorktreePath(deps.workDir, runId, taskId)
+        let reason: string | undefined
+        if (checkpoint?.phase !== 'tests' || checkpoint.rung !== task.escalation_rung) {
+            reason = 'no matching tests-phase spawn checkpoint; cannot establish the test-writer commit range'
+        } else {
+            const commits = await deps.tools.git.commits(checkpoint.tip_sha, taskId, {cwd: worktree})
+            const implementation = commits.filter((commit) => classifyCommit(commit.files) === 'impl')
+            const taggedTestOrDocs = commits.some(
+                (commit) => commit.tagged && classifyCommit(commit.files) === 'test-only'
+            )
+            if (implementation.length > 0) {
+                reason =
+                    `test-writer phase contains implementation-class commit(s): ` +
+                    implementation.map((commit) => commit.sha).join(', ')
+            } else if (!taggedTestOrDocs) {
+                reason = 'test-writer phase produced no task-tagged test/docs-only commit'
+            }
+        }
+        if (reason !== undefined) {
+            const failure = `test-writer completion rejected: ${reason}`
+            await deps.state.updateTask(runId, taskId, (t) => ({
+                ...t,
+                fix_findings: [{reviewer: 'test-phase-validator', description: failure}],
+            }))
+            // The normal ladder owns the terminal-rung decision. A retry returns to
+            // preflight, whose replay-safe worktree setup resets the local branch to
+            // current staging. At the cap no preflight runs, preserving forensics.
+            const step = await escalateOrFail(deps, runId, taskId, {action: 'retry', reason: failure}, 'preflight')
+            await persistStepCursor({state}, runId, taskId, step)
+            return {run_id: runId, task_id: taskId, step}
+        }
+    }
     // Decision 70: an ALREADY_SATISFIED claim is engine-VERIFIED here, before the
     // shared transition seam (applyProducerOutcome throws on it by design).
     if (outcome.status === 'already-satisfied') {
@@ -497,6 +544,40 @@ export function makeReplayRunnerFactory(input: RecordReviewsInput): (review: Raw
 }
 
 /**
+ * Validate the runner's verifier grouping before any deterministic gate or state
+ * mutation. The grouping key is the originating review role, never the identity
+ * of the finding-verifier agent that produced the verdicts.
+ */
+export function validateVerificationAssociations(
+    reviews: readonly RawReview[],
+    verifications: readonly ReviewerVerifications[]
+): void {
+    const expected = [...new Set(reviews.map((review) => review.reviewer))]
+    const expectedText = expected.length > 0 ? expected.join(', ') : '(none)'
+    const seen = new Set<string>()
+    for (const verification of verifications) {
+        if (!expected.includes(verification.reviewer)) {
+            throw new UsageError(
+                `record-reviews: verification reviewer '${verification.reviewer}' has no originating review; ` +
+                    `expected one of: ${expectedText}`
+            )
+        }
+        if (seen.has(verification.reviewer)) {
+            throw new UsageError(
+                `record-reviews: duplicate verification group for reviewer '${verification.reviewer}'; ` +
+                    `expected at most one group for each of: ${expectedText}`
+            )
+        }
+        seen.add(verification.reviewer)
+    }
+}
+
+/** Parse the runner review payloads and validate verifier grouping as one fail-fast contract check. */
+export function validateRecordReviewAssociations(input: RecordReviewsInput): void {
+    validateVerificationAssociations(input.reviews.map(parseRawReview), input.verifications)
+}
+
+/**
  * Compose the D5 fix-forward record from a blocked verify pass: confirmed
  * reviewer blockers ∪ non-holdout FAILING gate evidence, mapped to the lean
  * {@link FixFinding} shape `record.ts` persists (never the full judgment
@@ -590,8 +671,10 @@ export async function applyRecordReviews(
     //    The expected roster is RE-DERIVED from the same worktree tip the spawn site
     //    derived from (Decision 51, derive-don't-store) — reviewers run in their own
     //    isolated worktrees, so the task tip is unchanged between spawn and record.
+    const parsedReviews = input.reviews.map(parseRawReview)
+    validateVerificationAssociations(parsedReviews, input.verifications)
     const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, {cwd: worktree})
-    const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable))
+    const reviews = enforcePanelRoster(parsedReviews, panelRolesFor(dbApplicable))
     const source = await buildWorktreeSource(worktree, reviews)
     const makeRunner = makeReplayRunnerFactory(input)
 
@@ -683,68 +766,93 @@ export async function applyRecordReviews(
             await persistStepCursor(deps, runId, taskId, step)
             outcome = 'environmental'
         } else {
-            // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
-            // escalating — the same "separate write ahead of the ladder transition"
-            // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
-            // `{...t}` spread then carries it across the rung bump while it clears reviewers.
-            const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
-            // D68: fold this round's dismissed claims (verifier-refuted + non-blocking)
-            // onto the ledger in the SAME write — the next panel spawn injects it so a
-            // fresh-context reviewer cannot blindly re-raise an adjudicated claim.
-            const round = task.escalation_rung + 1
-            // D71: the sorted failing gate-id set of THIS round (holdout excluded —
-            // a quality mechanism the test-writer can neither see nor fix). When it is
-            // IDENTICAL to the previous blocked round's set, the RED test is the
-            // suspect arbiter: route the escalation to `tests` so the test-writer
-            // rederives from the acceptance criteria instead of re-rolling the
-            // implementer against a possibly-wrong test forever. tdd_exempt tasks
-            // have no test-writer to rederive — they stay on the exec route.
-            const failingEvidence = gateEvidence.filter((g) => g.gate !== 'holdout' && !g.observed)
-            const failingGates = failingEvidence.map((g) => g.gate).sort()
-            const prev = task.last_failing_gates
-            const sameGateSet = (a: readonly string[], b: readonly string[]): boolean =>
-                a.length === b.length && a.every((g, i) => g === b[i])
-            const repeatedSet =
-                failingGates.length > 0 &&
-                prev !== undefined &&
-                sameGateSet(failingGates, prev) &&
-                specTaskOf(deps.spec, taskId).tdd_exempt !== true
-            if (repeatedSet) {
-                const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join('; ')
+            const tddFailure = gateEvidence.find((e) => e.gate === 'tdd' && !e.observed)
+            const nonExemptTddFailure = tddFailure !== undefined && specTaskOf(deps.spec, taskId).tdd_exempt !== true
+            if (nonExemptTddFailure && task.pr_number !== undefined) {
+                step = await failStep(
+                    deps,
+                    runId,
+                    taskId,
+                    'blocked-environmental',
+                    `invalid TDD history discovered after PR #${task.pr_number} was published; ` +
+                        `published history is preserved and cannot be automatically restarted: ` +
+                        (tddFailure.detail ?? 'tdd gate failed')
+                )
+                outcome = 'environmental'
+            } else if (nonExemptTddFailure) {
+                const failure = `TDD gate failed; restarting from clean preflight because forward commits cannot repair ordering: ${tddFailure.detail ?? 'tdd gate failed'}`
                 await deps.state.updateTask(runId, taskId, (t) => ({
                     ...t,
-                    test_revision_feedback:
-                        `merge gate failed twice consecutively with the identical failing gate set ` +
-                        `(${failingGates.join(', ')}): ${detail}`,
-                    // The streak record served its purpose; stale fix-forward instructions
-                    // target the OLD tests and must not steer the regenerated round.
+                    fix_findings: [{reviewer: 'tdd', description: failure}],
                     last_failing_gates: undefined,
-                    fix_findings: undefined,
-                    review_dispositions: appendDispositions(
-                        t.review_dispositions,
-                        composeDispositions(reviews, panel.adjudicated, round)
-                    ),
                 }))
+                step = await escalateOrFail(deps, runId, taskId, {action: 'retry', reason: failure}, 'preflight')
+                await persistStepCursor(deps, runId, taskId, step)
+                outcome = 'send-back'
             } else {
-                await deps.state.updateTask(runId, taskId, (t) => ({
-                    ...t,
-                    fix_findings: fixFindings,
-                    last_failing_gates: failingGates.length > 0 ? failingGates : undefined,
-                    review_dispositions: appendDispositions(
-                        t.review_dispositions,
-                        composeDispositions(reviews, panel.adjudicated, round)
-                    ),
-                }))
+                // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
+                // escalating — the same "separate write ahead of the ladder transition"
+                // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
+                // `{...t}` spread then carries it across the rung bump while it clears reviewers.
+                const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence)
+                // D68: fold this round's dismissed claims (verifier-refuted + non-blocking)
+                // onto the ledger in the SAME write — the next panel spawn injects it so a
+                // fresh-context reviewer cannot blindly re-raise an adjudicated claim.
+                const round = task.escalation_rung + 1
+                // D71: the sorted failing gate-id set of THIS round (holdout excluded —
+                // a quality mechanism the test-writer can neither see nor fix). When it is
+                // IDENTICAL to the previous blocked round's set, the RED test is the
+                // suspect arbiter: route the escalation to `tests` so the test-writer
+                // rederives from the acceptance criteria instead of re-rolling the
+                // implementer against a possibly-wrong test forever. tdd_exempt tasks
+                // have no test-writer to rederive — they stay on the exec route.
+                const failingEvidence = gateEvidence.filter((g) => g.gate !== 'holdout' && !g.observed)
+                const failingGates = failingEvidence.map((g) => g.gate).sort()
+                const prev = task.last_failing_gates
+                const sameGateSet = (a: readonly string[], b: readonly string[]): boolean =>
+                    a.length === b.length && a.every((g, i) => g === b[i])
+                const repeatedSet =
+                    failingGates.length > 0 &&
+                    prev !== undefined &&
+                    sameGateSet(failingGates, prev) &&
+                    specTaskOf(deps.spec, taskId).tdd_exempt !== true
+                if (repeatedSet) {
+                    const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join('; ')
+                    await deps.state.updateTask(runId, taskId, (t) => ({
+                        ...t,
+                        test_revision_feedback:
+                            `merge gate failed twice consecutively with the identical failing gate set ` +
+                            `(${failingGates.join(', ')}): ${detail}`,
+                        // The streak record served its purpose; stale fix-forward instructions
+                        // target the OLD tests and must not steer the regenerated round.
+                        last_failing_gates: undefined,
+                        fix_findings: undefined,
+                        review_dispositions: appendDispositions(
+                            t.review_dispositions,
+                            composeDispositions(reviews, panel.adjudicated, round)
+                        ),
+                    }))
+                } else {
+                    await deps.state.updateTask(runId, taskId, (t) => ({
+                        ...t,
+                        fix_findings: fixFindings,
+                        last_failing_gates: failingGates.length > 0 ? failingGates : undefined,
+                        review_dispositions: appendDispositions(
+                            t.review_dispositions,
+                            composeDispositions(reviews, panel.adjudicated, round)
+                        ),
+                    }))
+                }
+                step = await escalateOrFail(
+                    deps,
+                    runId,
+                    taskId,
+                    classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
+                    repeatedSet ? 'tests' : 'exec'
+                )
+                await persistStepCursor(deps, runId, taskId, step)
+                outcome = 'send-back'
             }
-            step = await escalateOrFail(
-                deps,
-                runId,
-                taskId,
-                classifyFailure({kind: 'merge-gate-blocked', reason: panel.result.reason}),
-                repeatedSet ? 'tests' : 'exec'
-            )
-            await persistStepCursor(deps, runId, taskId, step)
-            outcome = 'send-back'
         }
     } else {
         throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`)

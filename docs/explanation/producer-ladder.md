@@ -166,6 +166,21 @@ sequenceDiagram
 
 This path was added by [Decision 38](./decisions.md#decision-38--defective-red-test-recovery-the-implementer-reports-it-the-test-writer-regenerates-it).
 
+## Test-writer completion is a phase gate
+
+For a non-exempt task, `STATUS: DONE` from the test-writer is not enough to advance.
+The engine classifies commits after the recorded tests-phase spawn checkpoint and
+requires at least one task-tagged test/docs-only commit and zero implementation-class
+commits. No commits, untagged-only commits, or any implementation commit consume the
+normal rung and restart at `preflight`; replay-safe preflight resets the unpublished
+task branch to current staging before generating tests again. At the final rung the
+task fails without resetting, preserving the branch for diagnosis.
+
+If the full-history TDD gate nevertheless discovers invalid ordering during verify,
+the same preflight restart is used because forward commits cannot repair ordering.
+Once `pr_number` exists, automatic restart is forbidden: the published history is
+preserved and the task fails loudly. `tdd_exempt` and non-TDD retry routing are unchanged.
+
 ## What a fail becomes
 
 A failed task is terminal. At run finalize, every fail is surfaced as a single

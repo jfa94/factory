@@ -1230,6 +1230,37 @@ describe('applyRecordReviews record', () => {
         expect(gateRan).toBe(false)
     })
 
+    it('rejects an unknown verification reviewer before gates or state mutation', async () => {
+        const before = await state.read(RUN_ID)
+        const deps = makeDeps(new FakeGitProbe({commitsThrow: 'gate must not run'}))
+        const input: RecordReviewsInput = {
+            reviews: fullPanel(),
+            verifications: [{reviewer: 'finding-verifier', verdicts: []}],
+        }
+
+        await expect(applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)).rejects.toThrow(
+            /verification reviewer 'finding-verifier'.*expected one of:/
+        )
+        expect(await state.read(RUN_ID)).toEqual(before)
+    })
+
+    it('rejects duplicate verification groups for one source reviewer before gates or state mutation', async () => {
+        const before = await state.read(RUN_ID)
+        const deps = makeDeps(new FakeGitProbe({commitsThrow: 'gate must not run'}))
+        const input: RecordReviewsInput = {
+            reviews: fullPanel(),
+            verifications: [
+                {reviewer: 'quality-reviewer', verdicts: []},
+                {reviewer: 'quality-reviewer', verdicts: []},
+            ],
+        }
+
+        await expect(applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)).rejects.toThrow(
+            /duplicate verification group for reviewer 'quality-reviewer'/
+        )
+        expect(await state.read(RUN_ID)).toEqual(before)
+    })
+
     it('surfaces a cross-vendor ABSENCE on the envelope and LOUDLY warns (Δ U — never silently dropped)', async () => {
         const deps = makeDeps()
         const input: RecordReviewsInput = {
@@ -1338,6 +1369,78 @@ describe('applyRecordReviews record', () => {
         expect(task.escalation_rung).toBe(0)
     })
 
+    describe('TDD gate recovery', () => {
+        function invalidTddProbe(): FakeGitProbe {
+            return new FakeGitProbe({
+                refs: {'origin/staging-run-1': 'sha-base', HEAD: 'sha-head'},
+                commits: [commit({sha: 'impl-first', files: ['src/x.ts'], tagged: true})],
+            })
+        }
+
+        it('routes a pre-PR TDD failure directly to clean preflight and consumes the normal rung', async () => {
+            const env = await applyRecordReviews(makeDeps(invalidTddProbe()), RUN_ID, TASK_ID, verdictStore, {
+                reviews: fullPanel(),
+                verifications: [],
+            })
+
+            expect(env.step).toEqual({done: false, phase: 'preflight'})
+            const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
+            expect(task.escalation_rung).toBe(1)
+            expect(task.phase).toBe('preflight')
+            expect(task.fix_findings?.[0]?.reviewer).toBe('tdd')
+        })
+
+        it('fails at the terminal rung while preserving the invalid branch for forensics', async () => {
+            await state.updateTask(RUN_ID, TASK_ID, (t) => ({...t, escalation_rung: ESCALATION_CAP}))
+            const deps = makeDeps(invalidTddProbe())
+            const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, {
+                reviews: fullPanel(),
+                verifications: [],
+            })
+
+            expect(env.step.done).toBe(true)
+            const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
+            expect(task.failure_class).toBe('capability-budget')
+            expect(task.escalation_rung).toBe(ESCALATION_CAP)
+            expect((deps.git as FakeGitClient).calls.some((call) => call.startsWith('reset --hard'))).toBe(false)
+        })
+
+        it('does not restart published history when a PR already exists', async () => {
+            await state.updateTask(RUN_ID, TASK_ID, (t) => ({...t, pr_number: 494}))
+            const deps = makeDeps(invalidTddProbe())
+            const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, {
+                reviews: fullPanel(),
+                verifications: [],
+            })
+
+            expect(env.step.done).toBe(true)
+            if (!env.step.done) {
+                throw new Error('unreachable')
+            }
+            expect(env.step.outcome).toMatchObject({failure_class: 'blocked-environmental'})
+            if (env.step.outcome.outcome !== 'failed') {
+                throw new Error('unreachable')
+            }
+            expect(env.step.outcome.reason).toMatch(/after PR #494 was published/)
+            const task = nonNull((await state.read(RUN_ID)).tasks[TASK_ID])
+            expect(task.pr_number).toBe(494)
+            expect(task.escalation_rung).toBe(0)
+            expect((deps.git as FakeGitClient).calls.some((call) => call.startsWith('reset --hard'))).toBe(false)
+        })
+
+        it('keeps an exempt task on the existing generic retry route', async () => {
+            const env = await applyRecordReviews(
+                makeDeps(invalidTddProbe(), {tddExempt: true}),
+                RUN_ID,
+                TASK_ID,
+                verdictStore,
+                {reviews: fullPanel(), verifications: []}
+            )
+            expect(env.step).toEqual({done: false, phase: 'exec'})
+            expect(nonNull((await state.read(RUN_ID)).tasks[TASK_ID]).escalation_rung).toBe(1)
+        })
+    })
+
     it('gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)', async () => {
         // Probe seeded with ONLY origin/staging/<run-id>. If the record still passes
         // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will
@@ -1395,7 +1498,7 @@ const AS_STRAY = 'b'.repeat(40)
 
 async function seededProducerState(
     task: Partial<TaskState> = {},
-    opts: {redTests?: boolean} = {}
+    opts: {redTests?: boolean; probe?: FakeGitProbe; tddExempt?: boolean} = {}
 ): Promise<{dataDir: string; state: StateManager; pdeps: RecordDeps; git: FakeGitClient}> {
     const dataDir = await mkdtemp(join(tmpdir(), 'factory-record-producer-'))
     const state = new StateManager({
@@ -1431,11 +1534,16 @@ async function seededProducerState(
     })
     const pdeps: RecordDeps = {
         config: defaultConfig(),
-        spec: reviewsSpec(),
+        spec: reviewsSpec(opts.tddExempt ?? false),
         git,
         gh: new FakeGhClient(),
         tools: makeFakeTools({
-            git: greenProbe(),
+            git:
+                opts.probe ??
+                new FakeGitProbe({
+                    refs: {[AS_TIP]: AS_TIP, HEAD: 'sha-head'},
+                    commits: [commit({sha: 'test-1', files: ['src/x.test.ts'], tagged: true})],
+                }),
             ...(opts.redTests === true ? {vitest: new FakeVitest(proc(1, '', '2 tests failed'))} : {}),
         }),
         loadContract: contractedLoader({
@@ -1468,6 +1576,11 @@ describe('applyRecordProducer — DONE advances', () => {
     })
 
     it('tests/DONE records test-writer and advances to exec', async () => {
+        await state.updateTask(RUN_ID, 't1', (t) => ({
+            ...t,
+            phase: 'tests',
+            spawn_in_flight: {phase: 'tests', rung: 0, tip_sha: AS_TIP, spawned_at: 1, redrives: 0},
+        }))
         const env = await applyRecordProducer(pdeps, RUN_ID, 't1', 'tests', 'STATUS: DONE')
 
         expect(env.step).toEqual({done: false, phase: 'exec'})
@@ -1483,6 +1596,73 @@ describe('applyRecordProducer — DONE advances', () => {
         const task = nonNull((await state.read(RUN_ID)).tasks.t1)
         expect(task.producer_role).toBe('implementer')
         expect(task.status).toBe('reviewing') // markInFlight(verify)
+    })
+})
+
+describe('applyRecordProducer — test-writer phase validation', () => {
+    const checkpoint = {phase: 'tests' as const, rung: 0, tip_sha: AS_TIP, spawned_at: 1, redrives: 0}
+
+    async function runWith(commits: ReturnType<typeof commit>[], task: Partial<TaskState> = {}) {
+        const seeded = await seededProducerState(
+            {phase: 'tests', status: 'executing', spawn_in_flight: checkpoint, ...task},
+            {probe: new FakeGitProbe({refs: {[AS_TIP]: AS_TIP, HEAD: 'sha-head'}, commits})}
+        )
+        const env = await applyRecordProducer(seeded.pdeps, RUN_ID, 't1', 'tests', 'STATUS: DONE')
+        return {...seeded, env}
+    }
+
+    it.each([
+        ['no commits', []],
+        ['untagged test/docs-only commits', [commit({sha: 'u1', files: ['src/x.test.ts'], tagged: false})]],
+        ['implementation commits', [commit({sha: 'i1', files: ['src/x.ts'], tagged: true})]],
+    ])('rejects %s, consumes a rung, and returns to clean preflight', async (_label, commits) => {
+        const {dataDir, state, env} = await runWith(commits)
+        try {
+            expect(env.step).toEqual({done: false, phase: 'preflight'})
+            const task = nonNull((await state.read(RUN_ID)).tasks.t1)
+            expect(task.escalation_rung).toBe(1)
+            expect(task.phase).toBe('preflight')
+            expect(task.fix_findings?.[0]?.reviewer).toBe('test-phase-validator')
+        } finally {
+            await rm(dataDir, {recursive: true, force: true})
+        }
+    })
+
+    it.each([
+        ['tagged test commit', [commit({sha: 't1', files: ['src/x.test.ts'], tagged: true})]],
+        ['tagged documentation-only commit', [commit({sha: 'd1', files: ['docs/change.md'], tagged: true})]],
+    ])('accepts a %s', async (_label, commits) => {
+        const {dataDir, state, env} = await runWith(commits)
+        try {
+            expect(env.step).toEqual({done: false, phase: 'exec'})
+            expect(nonNull((await state.read(RUN_ID)).tasks.t1).producer_role).toBe('test-writer')
+        } finally {
+            await rm(dataDir, {recursive: true, force: true})
+        }
+    })
+
+    it('fails at the terminal rung without resetting or advancing the preserved branch', async () => {
+        const {dataDir, state, git, env} = await runWith([], {escalation_rung: ESCALATION_CAP})
+        try {
+            expect(env.step.done).toBe(true)
+            expect(nonNull((await state.read(RUN_ID)).tasks.t1).failure_class).toBe('capability-budget')
+            expect(git.calls.some((call) => call.startsWith('reset --hard'))).toBe(false)
+        } finally {
+            await rm(dataDir, {recursive: true, force: true})
+        }
+    })
+
+    it('leaves tdd_exempt completion behavior unchanged', async () => {
+        const seeded = await seededProducerState(
+            {phase: 'tests', status: 'executing'},
+            {probe: new FakeGitProbe({commits: []}), tddExempt: true}
+        )
+        try {
+            const env = await applyRecordProducer(seeded.pdeps, RUN_ID, 't1', 'tests', 'STATUS: DONE')
+            expect(env.step).toEqual({done: false, phase: 'exec'})
+        } finally {
+            await rm(seeded.dataDir, {recursive: true, force: true})
+        }
     })
 })
 

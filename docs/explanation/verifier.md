@@ -281,6 +281,12 @@ preserved by construction, never by trust.
 A reviewer that fails to produce a usable verdict is an `error`, not a silent
 `approve` — an unresolved verifier error never auto-ships.
 
+The runner groups finding-verifier verdicts by the **originating review role**, not
+by the verifier agent's identity. Before holdout persistence, deterministic gates,
+or state writes, the engine parses the reviews and rejects a verification group whose
+`reviewer` is not one of those source roles, or a second group for the same role. The
+existing file/line FIFO replay within a valid group is unchanged.
+
 ## How a blocked merge gate feeds back
 
 When the merge gate blocks, the verify record returns a bounded `wait-retry`. The orchestrator

@@ -50,9 +50,14 @@ command to obey.
    cycles, no dangling references.
 3. **Every acceptance criterion is testable** — a pass/fail predicate a test can assert.
    "Clear" ≠ testable. Restate or drop it.
-4. **No orphan tasks.** Every task ladders to a PRD-stated outcome. If you can't cite the
+4. **Preserve established contracts unless the PRD explicitly changes them.** A criterion is
+   impossible when it contradicts an established public contract without explicit PRD authority,
+   requires schema/invariant-prohibited state, or can only pass by breaking unrelated documented
+   behavior. Missing implementation alone is never evidence of impossibility. For criteria affecting
+   an existing API or boundary, inspect the repository's contract before emitting them.
+5. **No orphan tasks.** Every task ladders to a PRD-stated outcome. If you can't cite the
    PRD line it serves, it's scope creep — drop it.
-5. **Every task carries a judged `risk_tier` + `risk_rationale`.** The tier is the single
+6. **Every task carries a judged `risk_tier` + `risk_rationale`.** The tier is the single
    producer dial (Decision 25) — `low | medium | high` from difficulty × stakes. The
    rationale must justify the choice; it is not a coin flip.
 
@@ -141,6 +146,8 @@ Violating the letter of these rules violates the spirit. No exceptions.
     - `depends_on` acyclic, every id exists, no dangling refs; tasks touching overlapping files
       have an edge between them.
     - Acceptance criteria are all testable, none vague.
+    - Criteria affecting existing APIs/boundaries preserve repository contracts unless the PRD
+      explicitly authorizes the change; no criterion requires prohibited state or unrelated breakage.
     - Test coverage ≥1 per criterion + an error/boundary test where applicable (re-check the last
       few tasks — coverage degrades toward the end).
     - Vertical slices — first tasks are a tracer bullet, nothing is a bare horizontal layer.

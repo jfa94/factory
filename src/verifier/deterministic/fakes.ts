@@ -205,6 +205,8 @@ export interface FakeGitProbeOptions {
     readonly changedFiles?: readonly string[]
     /** Commits in base..HEAD, OLDEST-FIRST (the order the TDD gate classifies). */
     readonly commits?: readonly CommitInfo[]
+    /** Optional base-specific commit ranges; falls back to `commits` when absent. */
+    readonly commitsByBase?: Readonly<Record<string, readonly CommitInfo[]>>
     /** Throw on commits() to simulate a diff-tree failure (fail-closed test). */
     readonly commitsThrow?: string
 }
@@ -214,6 +216,7 @@ export class FakeGitProbe implements GitProbe {
     private readonly tree: string
     private readonly changed: readonly string[]
     private readonly commitList: readonly CommitInfo[]
+    private readonly commitsByBase: ReadonlyMap<string, readonly CommitInfo[]>
     private readonly commitsThrow: string | undefined
 
     constructor(opts: FakeGitProbeOptions = {}) {
@@ -221,6 +224,7 @@ export class FakeGitProbe implements GitProbe {
         this.tree = opts.treeSha ?? 'tree-0'
         this.changed = opts.changedFiles ?? []
         this.commitList = opts.commits ?? []
+        this.commitsByBase = new Map(Object.entries(opts.commitsByBase ?? {}))
         this.commitsThrow = opts.commitsThrow
     }
 
@@ -244,11 +248,11 @@ export class FakeGitProbe implements GitProbe {
         return Promise.resolve(this.changed)
     }
 
-    commits(_base: string, _taskId: string, _opts: ToolRunOpts): Promise<readonly CommitInfo[]> {
+    commits(base: string, _taskId: string, _opts: ToolRunOpts): Promise<readonly CommitInfo[]> {
         if (this.commitsThrow !== undefined) {
             return Promise.reject(new Error(this.commitsThrow))
         }
-        return Promise.resolve(this.commitList)
+        return Promise.resolve(this.commitsByBase.get(base) ?? this.commitList)
     }
 }
 

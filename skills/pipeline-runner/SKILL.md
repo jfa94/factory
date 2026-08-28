@@ -519,6 +519,8 @@ Write results files under `$RESULTS_DIR` (create the dir — see Phase 3's `ORCH
    the code, not be led toward the finder's prior. Append the worktree/base-ref pointer (`git -C <tenv.worktree> diff
 <tenv.base_ref>..HEAD`) same as every other reviewer. It returns
    `{ "holds": true|false, "note": "<why>" }`.
+   Before writing results, check that every finding `claim` is non-empty and at most 300
+   characters. Never truncate or rewrite it; malformed reviewer output must fail loud.
 4. Results file:
     ```json
     { "result_key": <tenv.result_key verbatim>,
@@ -539,6 +541,9 @@ Write results files under `$RESULTS_DIR` (create the dir — see Phase 3's `ORCH
     `crossVendorAbsent` ONLY when no cross-vendor reviewer actually ran (stamp
     absent, or the `codex exec` fallback fired) — never invent the reason: echo
     the stamp's reason or the runtime-failure detail exactly.
+    Group verdicts by the originating RawReview's `reviewer` role. The grouping key is
+    never `finding-verifier` (or any verifier agent identity), and emit at most one
+    verification group per source reviewer.
 
 ### Agent spawn rule
 

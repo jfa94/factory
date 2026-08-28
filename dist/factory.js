@@ -15175,10 +15175,40 @@ async function applyRecordProducer(deps, runId, taskId, phase, statusLine) {
     throw new Error(`record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`);
   }
   const run9 = await state.read(runId);
-  if (run9.tasks[taskId] === void 0) {
+  const task = run9.tasks[taskId];
+  if (task === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
+  if (info.role === "test-writer" && outcome.status === "done" && specTaskOf(deps.spec, taskId).tdd_exempt !== true) {
+    const checkpoint = task.spawn_in_flight;
+    const worktree = taskWorktreePath(deps.workDir, runId, taskId);
+    let reason;
+    if (checkpoint?.phase !== "tests" || checkpoint.rung !== task.escalation_rung) {
+      reason = "no matching tests-phase spawn checkpoint; cannot establish the test-writer commit range";
+    } else {
+      const commits = await deps.tools.git.commits(checkpoint.tip_sha, taskId, { cwd: worktree });
+      const implementation = commits.filter((commit2) => classifyCommit(commit2.files) === "impl");
+      const taggedTestOrDocs = commits.some(
+        (commit2) => commit2.tagged && classifyCommit(commit2.files) === "test-only"
+      );
+      if (implementation.length > 0) {
+        reason = `test-writer phase contains implementation-class commit(s): ` + implementation.map((commit2) => commit2.sha).join(", ");
+      } else if (!taggedTestOrDocs) {
+        reason = "test-writer phase produced no task-tagged test/docs-only commit";
+      }
+    }
+    if (reason !== void 0) {
+      const failure = `test-writer completion rejected: ${reason}`;
+      await deps.state.updateTask(runId, taskId, (t) => ({
+        ...t,
+        fix_findings: [{ reviewer: "test-phase-validator", description: failure }]
+      }));
+      const step2 = await escalateOrFail(deps, runId, taskId, { action: "retry", reason: failure }, "preflight");
+      await persistStepCursor({ state }, runId, taskId, step2);
+      return { run_id: runId, task_id: taskId, step: step2 };
+    }
+  }
   if (outcome.status === "already-satisfied") {
     const step2 = await verifyAlreadySatisfied(deps, run9, taskId, info.phase, outcome);
     await persistStepCursor({ state }, runId, taskId, step2);
@@ -15365,6 +15395,27 @@ function makeReplayRunnerFactory(input) {
     };
   };
 }
+function validateVerificationAssociations(reviews, verifications) {
+  const expected = [...new Set(reviews.map((review) => review.reviewer))];
+  const expectedText = expected.length > 0 ? expected.join(", ") : "(none)";
+  const seen = /* @__PURE__ */ new Set();
+  for (const verification of verifications) {
+    if (!expected.includes(verification.reviewer)) {
+      throw new UsageError(
+        `record-reviews: verification reviewer '${verification.reviewer}' has no originating review; expected one of: ${expectedText}`
+      );
+    }
+    if (seen.has(verification.reviewer)) {
+      throw new UsageError(
+        `record-reviews: duplicate verification group for reviewer '${verification.reviewer}'; expected at most one group for each of: ${expectedText}`
+      );
+    }
+    seen.add(verification.reviewer);
+  }
+}
+function validateRecordReviewAssociations(input) {
+  validateVerificationAssociations(input.reviews.map(parseRawReview), input.verifications);
+}
 function composeFixFindings(adjudicated, gateEvidence) {
   const fromReviewers = adjudicated.flatMap(
     (a) => a.confirmedBlockers.map((f) => ({
@@ -15405,8 +15456,10 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   }
   const worktree = taskWorktreePath(deps.workDir, runId, taskId);
   const baseRef = run9.staging_branch;
+  const parsedReviews = input.reviews.map(parseRawReview);
+  validateVerificationAssociations(parsedReviews, input.verifications);
   const dbApplicable = await touchesDatabase(deps.tools.git, baseRef, { cwd: worktree });
-  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview), panelRolesFor(dbApplicable));
+  const reviews = enforcePanelRoster(parsedReviews, panelRolesFor(dbApplicable));
   const source = await buildWorktreeSource(worktree, reviews);
   const makeRunner2 = makeReplayRunnerFactory(input);
   const gate = await new GateRunner().run(buildGateContext(deps, runId, taskId, baseRef));
@@ -15461,47 +15514,70 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       await persistStepCursor(deps, runId, taskId, step);
       outcome = "environmental";
     } else {
-      const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
-      const round = task.escalation_rung + 1;
-      const failingEvidence = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed);
-      const failingGates = failingEvidence.map((g) => g.gate).sort();
-      const prev = task.last_failing_gates;
-      const sameGateSet = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
-      const repeatedSet = failingGates.length > 0 && prev !== void 0 && sameGateSet(failingGates, prev) && specTaskOf(deps.spec, taskId).tdd_exempt !== true;
-      if (repeatedSet) {
-        const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join("; ");
+      const tddFailure = gateEvidence.find((e) => e.gate === "tdd" && !e.observed);
+      const nonExemptTddFailure = tddFailure !== void 0 && specTaskOf(deps.spec, taskId).tdd_exempt !== true;
+      if (nonExemptTddFailure && task.pr_number !== void 0) {
+        step = await failStep(
+          deps,
+          runId,
+          taskId,
+          "blocked-environmental",
+          `invalid TDD history discovered after PR #${task.pr_number} was published; published history is preserved and cannot be automatically restarted: ` + (tddFailure.detail ?? "tdd gate failed")
+        );
+        outcome = "environmental";
+      } else if (nonExemptTddFailure) {
+        const failure = `TDD gate failed; restarting from clean preflight because forward commits cannot repair ordering: ${tddFailure.detail ?? "tdd gate failed"}`;
         await deps.state.updateTask(runId, taskId, (t) => ({
           ...t,
-          test_revision_feedback: `merge gate failed twice consecutively with the identical failing gate set (${failingGates.join(", ")}): ${detail}`,
-          // The streak record served its purpose; stale fix-forward instructions
-          // target the OLD tests and must not steer the regenerated round.
-          last_failing_gates: void 0,
-          fix_findings: void 0,
-          review_dispositions: appendDispositions(
-            t.review_dispositions,
-            composeDispositions(reviews, panel.adjudicated, round)
-          )
+          fix_findings: [{ reviewer: "tdd", description: failure }],
+          last_failing_gates: void 0
         }));
+        step = await escalateOrFail(deps, runId, taskId, { action: "retry", reason: failure }, "preflight");
+        await persistStepCursor(deps, runId, taskId, step);
+        outcome = "send-back";
       } else {
-        await deps.state.updateTask(runId, taskId, (t) => ({
-          ...t,
-          fix_findings: fixFindings,
-          last_failing_gates: failingGates.length > 0 ? failingGates : void 0,
-          review_dispositions: appendDispositions(
-            t.review_dispositions,
-            composeDispositions(reviews, panel.adjudicated, round)
-          )
-        }));
+        const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
+        const round = task.escalation_rung + 1;
+        const failingEvidence = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed);
+        const failingGates = failingEvidence.map((g) => g.gate).sort();
+        const prev = task.last_failing_gates;
+        const sameGateSet = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
+        const repeatedSet = failingGates.length > 0 && prev !== void 0 && sameGateSet(failingGates, prev) && specTaskOf(deps.spec, taskId).tdd_exempt !== true;
+        if (repeatedSet) {
+          const detail = failingEvidence.map((g) => g.detail ?? `${g.gate} gate failed`).join("; ");
+          await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            test_revision_feedback: `merge gate failed twice consecutively with the identical failing gate set (${failingGates.join(", ")}): ${detail}`,
+            // The streak record served its purpose; stale fix-forward instructions
+            // target the OLD tests and must not steer the regenerated round.
+            last_failing_gates: void 0,
+            fix_findings: void 0,
+            review_dispositions: appendDispositions(
+              t.review_dispositions,
+              composeDispositions(reviews, panel.adjudicated, round)
+            )
+          }));
+        } else {
+          await deps.state.updateTask(runId, taskId, (t) => ({
+            ...t,
+            fix_findings: fixFindings,
+            last_failing_gates: failingGates.length > 0 ? failingGates : void 0,
+            review_dispositions: appendDispositions(
+              t.review_dispositions,
+              composeDispositions(reviews, panel.adjudicated, round)
+            )
+          }));
+        }
+        step = await escalateOrFail(
+          deps,
+          runId,
+          taskId,
+          classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
+          repeatedSet ? "tests" : "exec"
+        );
+        await persistStepCursor(deps, runId, taskId, step);
+        outcome = "send-back";
       }
-      step = await escalateOrFail(
-        deps,
-        runId,
-        taskId,
-        classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
-        repeatedSet ? "tests" : "exec"
-      );
-      await persistStepCursor(deps, runId, taskId, step);
-      outcome = "send-back";
     }
   } else {
     throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
@@ -15778,6 +15854,7 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
       `drive: task '${taskId}' has a withheld holdout answer key \u2014 verify results must include the holdout-validate raw output (results.holdout is missing)`
     );
   }
+  validateRecordReviewAssociations(results.reviews);
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
   if (results.holdout !== void 0) {
     const holdout = await applyRecordHoldout(

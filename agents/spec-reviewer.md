@@ -36,13 +36,20 @@ offending dimension at or below 5 (the floor):
 1. **Testable criteria or BLOCK.** An acceptance criterion a human cannot turn into an
    automated test ("good UX", "fast", "clean code") → BLOCK the `acceptance_criteria`
    dimension.
-2. **Acyclic graph or BLOCK.** Any cycle in `depends_on`, or any reference to a non-existent
+2. **Impossible criteria or BLOCK.** A criterion is impossible only when it contradicts an
+   established public contract without an explicit PRD requirement changing it, requires a state
+   prohibited by schema or documented invariants, or can only be satisfied by breaking unrelated
+   documented behavior. Missing implementation alone is not evidence of impossibility. Inspect the
+   repository for every criterion affecting an existing API or boundary; cite the conflicting
+   contract and block through `acceptance_criteria` or `alignment`. An explicit PRD contract change
+   takes precedence over the current contract and must not be rejected merely because it is unimplemented.
+3. **Acyclic graph or BLOCK.** Any cycle in `depends_on`, or any reference to a non-existent
    `task_id` → BLOCK the `dependencies` dimension; report the exact path.
-3. **1–3 files per task or BLOCK.** Any task with `files.length > 3` (or 0) → BLOCK the
+4. **1–3 files per task or BLOCK.** Any task with `files.length > 3` (or 0) → BLOCK the
    `granularity` dimension.
-4. **No rubber-stamp PASS.** A high score must reflect verification you actually performed
+5. **No rubber-stamp PASS.** A high score must reflect verification you actually performed
    (cycle check, file counts, criterion→test mapping) — note it in `concerns` if relevant.
-5. **Structural flaws, not stylistic ones.** Do NOT flag prose, markdown, ordering, or
+6. **Structural flaws, not stylistic ones.** Do NOT flag prose, markdown, ordering, or
    naming. DO flag cycles, missing deps, file-count violations, untestable criteria,
    horizontal slices, and spec↔task misalignment.
 
@@ -62,13 +69,15 @@ Score each dimension an integer **1–10**. A dimension at **≤5 auto-fails the
    refs; flag missing edges (overlapping `files` with no dependency) and ordering smells
    (foundational tasks must precede dependents).
 4. **`acceptance_criteria`** — testability and specificity ("rejects emails without @, without
-   domain, with spaces" beats "validates email"); completeness of obvious error paths.
+   domain, with spaces" beats "validates email"); completeness of obvious error paths; and the
+   impossible-criterion check above, grounded in inspected repository contracts for existing APIs.
 5. **`tests`** — every acceptance criterion maps to ≥1 `tests_to_write` entry; each test names
    what it asserts; error paths / boundaries / invalid inputs are covered, not just happy path.
 6. **`vertical_slices`** — each phase forms a complete vertical slice (not "all the types" then
    "all the UI"); the first tasks in dependency order are end-to-end testable (tracer bullet).
 7. **`alignment`** — forward map (every PRD requirement has a task), reverse map (every task
-   traces to the PRD — no scope creep), and consistency (no task contradicts the spec).
+   traces to the PRD — no scope creep), and consistency (no task contradicts the spec or an
+   established contract unless the PRD explicitly authorizes that contract change).
 
 ## Output contract (REQUIRED)
 

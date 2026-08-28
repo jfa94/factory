@@ -42,7 +42,13 @@ import {
 } from './deps.js'
 import type {UsageSignal} from './deps.js'
 import {markInFlight, completeTask, failStep, escalateOrFail, type TaskOutcome, type TaskStep} from './transitions.js'
-import {applyRecordProducer, applyRecordHoldout, applyRecordReviews, type RecordDeps} from './record.js'
+import {
+    applyRecordProducer,
+    applyRecordHoldout,
+    applyRecordReviews,
+    validateRecordReviewAssociations,
+    type RecordDeps,
+} from './record.js'
 import {makePhaseHandlers} from './handlers.js'
 import {runScopedBranch, resyncTaskBranchOntoStaging} from './deps.js'
 import {shipTask} from './ship.js'
@@ -253,6 +259,9 @@ async function recordResults(
                 `include the holdout-validate raw output (results.holdout is missing)`
         )
     }
+    // Validate the review/verifier association before holdout persistence or any
+    // deterministic gate. A malformed grouping must not leave a partial panel result.
+    validateRecordReviewAssociations(results.reviews)
     const verdictStore = new FsHoldoutVerdictStore(deps.dataDir)
     // Holdout BEFORE reviews — the record ordering the old skill enforced by prose.
     if (results.holdout !== undefined) {

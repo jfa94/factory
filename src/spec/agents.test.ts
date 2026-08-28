@@ -1,4 +1,5 @@
 import {describe, it, expect} from 'vitest'
+import {readFile} from 'node:fs/promises'
 import {buildGenerateSpawn, buildReviewSpawn, buildReviseSpawn, type GenerateResult} from './agents.js'
 import type {Prd} from './gh.js'
 import type {SpecTask} from './schema.js'
@@ -103,5 +104,25 @@ describe('buildReviseSpawn — feeds the prior spec + blockers back for an incre
         expect(s.context.prior_spec_md).toBe(generated.specMd)
         expect(s.context.prior_tasks).toEqual(generated.tasks)
         expect(s.context.review_feedback).toEqual(blockers)
+    })
+})
+
+describe('spec agent contract checks', () => {
+    it('requires the reviewer to block criteria that contradict documented APIs', async () => {
+        const prompt = await readFile(new URL('../../agents/spec-reviewer.md', import.meta.url), 'utf8')
+        const normalized = prompt.replace(/\s+/g, ' ')
+        expect(normalized).toMatch(/contradicts? an established public contract/)
+        expect(normalized).toContain('Inspect the repository for every criterion affecting an existing API or boundary')
+        expect(normalized).toContain('block through `acceptance_criteria` or `alignment`')
+        expect(normalized).toContain('cite the conflicting')
+    })
+
+    it('does not reject an explicit PRD contract change merely because implementation is missing', async () => {
+        const reviewer = await readFile(new URL('../../agents/spec-reviewer.md', import.meta.url), 'utf8')
+        const generator = await readFile(new URL('../../agents/spec-generator.md', import.meta.url), 'utf8')
+        expect(reviewer).toContain('explicit PRD contract change')
+        expect(reviewer).toContain('must not be rejected merely because it is unimplemented')
+        expect(reviewer).toContain('Missing implementation alone is not evidence of impossibility')
+        expect(generator).toContain('Preserve established contracts unless the PRD explicitly changes them')
     })
 })

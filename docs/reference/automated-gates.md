@@ -299,6 +299,11 @@ impl-before-test ordering blocks the task.
   **never** from `state.json` (derive-don't-store). For exotic test runners (Go,
   Ruby, Deno…), contract the test gate's `command` in the repo's committed
   `.factory/gates.json` (Decision 46) rather than bypassing enforcement.
+- **Tests-phase admission**: before a non-exempt test-writer `DONE` can advance,
+  commits since its spawn checkpoint must include a task-tagged test/docs-only
+  commit and no implementation-class commit. Failure spends the normal rung and
+  restarts from clean preflight while unpublished; a terminal-rung or post-PR
+  failure preserves history and stops loudly.
 
 ## The mutation gate in detail
 
