@@ -9663,7 +9663,7 @@ function runSessionStart(_argv = [], deps = {}) {
 import { relative as relative2, resolve as resolve4, sep as sep6 } from "node:path";
 
 // src/feature/store.ts
-import { readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
+import { access, mkdir as mkdir4, readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
 import { join as join6 } from "node:path";
 
 // src/feature/schema.ts
@@ -9776,7 +9776,9 @@ var AttemptSchema = external_exports.object({
   spec_digest: external_exports.string(),
   worktree: external_exports.string(),
   roles: external_exports.array(external_exports.string()),
-  issued_at: external_exports.string()
+  issued_at: external_exports.string(),
+  /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
+  redispatch: external_exports.array(external_exports.string()).optional()
 });
 var FeatureRunSchema = external_exports.object({
   version: external_exports.literal(VERSION),
@@ -9913,26 +9915,96 @@ var FeatureStore = class {
     const checked = ResultSchema.parse(result);
     await atomicWriteFile(join6(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
   }
-  async result(id, attemptId) {
-    try {
-      return ResultSchema.parse(
-        JSON.parse(await readFile2(join6(this.dir(id), "results", `${IdSchema.parse(attemptId)}.json`), "utf8"))
-      );
-    } catch (error) {
-      if (isEnoent(error)) {
-        return void 0;
+  /**
+   * Staged results live outside `runs-v2/**` so the driver session may write them
+   * (engine state stays read-only to agents). The file's existence is the submission.
+   */
+  stagedPaths(id, attempt, roles = attempt.roles) {
+    const dir = join6(this.dataDir, "staged-v2", IdSchema.parse(id), IdSchema.parse(attempt.id));
+    return Object.fromEntries(roles.map((role) => [role, join6(dir, `${IdSchema.parse(role)}.json`)]));
+  }
+  async stage(id, attempt, roles) {
+    const paths = this.stagedPaths(id, attempt, roles);
+    await mkdir4(join6(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
+    return paths;
+  }
+  /** Roles whose staged file exists (parseability not checked). */
+  async stagedPresent(id, attempt) {
+    const present = [];
+    for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
+      try {
+        await access(path);
+        present.push(role);
+      } catch (error) {
+        if (!isEnoent(error)) {
+          throw error;
+        }
       }
-      throw error;
     }
+    return present;
+  }
+  /**
+   * Read every role's staged file and merge them into one attempt result. A missing,
+   * half-written or schema-invalid file reads as "not yet"; only explicit recovery
+   * judges it. Identity fields must agree; any non-done status wins.
+   */
+  async staged(id, attempt) {
+    const parts = [];
+    const missing = [];
+    for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
+      try {
+        parts.push(ResultSchema.parse(JSON.parse(await readFile2(path, "utf8"))));
+      } catch (error) {
+        if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+          missing.push(role);
+        } else {
+          throw error;
+        }
+      }
+    }
+    const first = parts[0];
+    if (missing.length || first === void 0) {
+      return { missing };
+    }
+    if (parts.some(
+      (part) => part.attempt_id !== first.attempt_id || part.spec_digest !== first.spec_digest || part.head_sha !== first.head_sha
+    )) {
+      throw new Error("staged results disagree on attempt identity or HEAD");
+    }
+    const halted = parts.find((part) => part.status !== "done");
+    const reviews = parts.flatMap((part) => part.reviews ?? []);
+    return {
+      result: {
+        ...first,
+        ...halted ? { status: halted.status, message: halted.message } : {},
+        ...reviews.length ? { reviews } : {}
+      }
+    };
   }
 };
-function renderLedger(run) {
+function age(from, now) {
+  const minutes = Math.max(0, Math.round((Date.parse(now) - Date.parse(from)) / 6e4));
+  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
+}
+function nextCommand(run) {
+  if (terminal(run)) {
+    return "none (terminal)";
+  }
+  if (run.status === "parked") {
+    return `factory resume --run ${run.run_id}${run.question !== void 0 ? " --answer <text>" : ""}${run.in_flight ? " --recover (after its agent has stopped)" : ""}`;
+  }
+  return `factory next-action --run ${run.run_id} --driver <session>`;
+}
+function renderLedger(run, live = {}) {
+  const attempt = run.in_flight;
   return [
     `# Feature ${run.run_id}`,
     "",
-    `Status: ${run.status}. Resume: ${run.stage}, task ${run.task_index + 1}.`,
+    `Status: ${run.status} (persisted lifecycle, not proof of a live worker). Resume: ${run.stage}, task ${run.task_index + 1}.`,
     `Branch: ${run.branch}. Accepted HEAD: ${run.accepted_sha}. Spec: ${run.spec_digest}.`,
     run.stop_reason ? `Stopped: ${run.stop_reason.kind}: ${run.stop_reason.message}` : "",
+    attempt ? `In flight: ${attempt.stage} [${attempt.roles.join(", ")}] issued ${attempt.issued_at}${live.now !== void 0 ? ` (${age(attempt.issued_at, live.now)} ago)` : ""}.` + (live.staged ? ` Staged results: ${live.staged.length}/${attempt.roles.length}${live.staged.length ? ` (${live.staged.join(", ")})` : ""}.` : "") + (attempt.redispatch ? ` Redispatch: ${attempt.redispatch.join(", ")}.` : "") : "",
+    `Next: ${nextCommand(run)}`,
     "",
     "## Accepted tasks",
     "",
@@ -10020,22 +10092,37 @@ async function runFeatureGuard(_argv = []) {
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
 }
+async function decideFeatureStop(input, runs, store) {
+  const session = sessionIdOf(input);
+  if (session === void 0) {
+    return allow();
+  }
+  for (const run of runs) {
+    if (terminal(run) || run.owner_session !== session) {
+      continue;
+    }
+    const attempt = run.in_flight;
+    if (attempt && run.status !== "parked" && input?.stop_hook_active !== true && (await store.stagedPresent(run.run_id, attempt)).length === attempt.roles.length) {
+      return deny(
+        `Factory ${run.run_id}: attempt ${attempt.id} has a complete staged result the engine has not consumed. Run factory next-action --run ${run.run_id} --driver <session> and continue driving before stopping.`
+      );
+    }
+    process.stderr.write(
+      `Factory ${run.run_id}: ${run.status}; inspect factory state --run ${run.run_id} --ledger before resuming.
+`
+    );
+  }
+  return allow();
+}
 async function runFeatureStop(_argv = []) {
   try {
     const input = await readHookInput();
-    const session = sessionIdOf(input);
-    if (session === void 0) {
+    if (sessionIdOf(input) === void 0) {
       return EXIT.OK;
     }
-    const runs = await new FeatureStore(resolveDataDir()).list();
-    for (const run of runs) {
-      if (!terminal(run) && run.owner_session === session) {
-        process.stderr.write(
-          `Factory ${run.run_id}: ${run.status}; inspect factory state --run ${run.run_id} --ledger before resuming.
-`
-        );
-      }
-    }
+    const store = new FeatureStore(resolveDataDir());
+    const decision = await decideFeatureStop(input, await store.list(), store);
+    emitBlockDecision(decision, (text) => process.stdout.write(text));
     return EXIT.OK;
   } catch (error) {
     process.stderr.write(`Factory stop state error: ${error instanceof Error ? error.message : String(error)}
@@ -10047,7 +10134,10 @@ async function runFeatureStop(_argv = []) {
 // src/hooks/main.ts
 var hookRegistry = {
   "feature-guards": { describe: "PreToolUse: v2 producer scope and publication ownership", run: runFeatureGuard },
-  "feature-stop": { describe: "Stop: report owned v2 runs without mutating state", run: runFeatureStop },
+  "feature-stop": {
+    describe: "Stop: report owned v2 runs; block once when a complete staged result is unconsumed",
+    run: runFeatureStop
+  },
   "branch-protection": {
     describe: "PreToolUse Bash: block destructive git ops on protected branches",
     run: (argv) => runBranchProtection(argv)

@@ -69,6 +69,8 @@ export interface GateContext {
     readonly config: Config
     /** Injected tools (real Default* or fakes). */
     readonly tools: GateTools
+    /** Integrated (slice/feature) check: the test gate runs the whole suite. */
+    readonly full?: boolean
     /**
      * Which gates to run. Defaults to ALL ({@link GATE_IDS}). A gate not listed is
      * simply not run (distinct from a strategy-level skip, which IS recorded).
@@ -163,6 +165,7 @@ export class GateRunner {
                 baseRef: ctx.baseRef,
                 config: ctx.config,
                 tools: ctx.tools,
+                full: ctx.full,
                 exemptReader: ctx.exemptReader,
                 contract,
                 coverageStore: ctx.coverageStore,

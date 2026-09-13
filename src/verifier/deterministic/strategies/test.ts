@@ -39,8 +39,9 @@ export const testStrategy: GateStrategy<GateTools> = {
             )
         }
         const base = /^[a-f0-9]{40,64}$/.test(ctx.baseRef) ? ctx.baseRef : `origin/${ctx.baseRef}`
-        const changed = await ctx.tools.git.changedFiles(base, {cwd: ctx.worktree})
-        const scoped = diffScopedTestFiles(changed)
+        // An integrated check runs the whole suite: no scoping, and its label says so.
+        const scoped =
+            ctx.full === true ? [] : diffScopedTestFiles(await ctx.tools.git.changedFiles(base, {cwd: ctx.worktree}))
         const runnable = scoped.filter(isVitestRunnable)
         // Only non-JS/TS tests changed (e.g. pure pgTAP, Go, declaration files):
         // vitest can't execute them and "nothing ran" must never read as "passed".
@@ -57,7 +58,12 @@ export const testStrategy: GateStrategy<GateTools> = {
         }
         const observed = result.code === 0
         const skipped = scoped.length - runnable.length
-        const scope = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : 'un-scoped'
+        const scope =
+            ctx.full === true
+                ? 'full-suite'
+                : runnable.length > 0
+                  ? `diff-scoped (${runnable.length} test file(s))`
+                  : 'un-scoped'
         const detail =
             `vitest exit=${result.code ?? 'null'} ${scope}` +
             (skipped > 0 ? `; ${skipped} non-vitest file(s) not executed` : '')

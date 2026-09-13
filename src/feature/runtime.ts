@@ -123,6 +123,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             worktree: run.worktree,
             baseRef,
             config: this.config,
+            full,
         }
         const outputs: ProcResult[] = []
         const testResult = await new GateRunner().run({
@@ -132,7 +133,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 ...tools,
                 vitest: {
                     run: async (files, options) => {
-                        const output = await tools.vitest.run(full ? [] : files, options)
+                        const output = await tools.vitest.run(files, options)
                         outputs.push(output)
                         return output
                     },

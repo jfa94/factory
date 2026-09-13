@@ -80,6 +80,8 @@ export interface StrategyContext<TTools> {
     readonly config: Config
     /** Injected tool wrappers (real or fake). */
     readonly tools: TTools
+    /** Integrated (slice/feature) check: the test gate runs the whole suite, never diff-scoped. */
+    readonly full?: boolean | undefined
     /**
      * tdd_exempt resolver (tasks.json / package.json, never state.json). Required by
      * the tdd strategy; other strategies ignore it. Optional so non-TDD callers need

@@ -114,6 +114,16 @@ describe('testStrategy — vitest test files', () => {
         expect(at(fakeVitest.calls, 0).files).toEqual([])
     })
 
+    it('an integrated (full) check runs the whole suite and labels it full-suite, never diff-scoped', async () => {
+        const fakeVitest = new FakeVitest(proc(0))
+        // A non-runnable changed test alone would SKIP a diff-scoped run; a full run ignores scope.
+        const tools = makeFakeTools({git: probe(['supabase/tests/a.test.sql', 'src/foo.test.ts']), vitest: fakeVitest})
+        const out = await testStrategy.run({...ctx(tools), full: true})
+        expect(out.kind).toBe('ran')
+        expect(at(fakeVitest.calls, 0).files).toEqual([])
+        expect((out as GateRan).evidence.detail).toBe('vitest exit=0 full-suite')
+    })
+
     it('mixed diff (sql + ts) → vitest gets only the .ts, detail names excluded count', async () => {
         const fakeVitest = new FakeVitest(proc(0))
         const tools = makeFakeTools({

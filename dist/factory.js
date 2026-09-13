@@ -9147,7 +9147,7 @@ function renderMutationRegion(lines, opts) {
   kept = replaceMarker(kept, "# factory:mutation-setup", mutationSetupBlock(opts));
   kept = applyMutationRoots(kept, opts.contract);
   if (opts.packageManager === "npm") {
-    kept = kept.map((l) => l.replace("pnpm exec stryker run", "npx stryker run"));
+    kept = npmify(kept);
   }
   return kept;
 }
@@ -9164,9 +9164,12 @@ function renderMutationNightly(template, opts) {
   lines = replaceMarker(lines, "# factory:mutation-setup", mutationSetupBlock(opts));
   lines = applyMutationRoots(lines, opts.contract);
   if (opts.packageManager === "npm") {
-    lines = lines.map((l) => l.replace("pnpm exec stryker run", "npx stryker run"));
+    lines = npmify(lines);
   }
   return lines.join("\n");
+}
+function npmify(lines) {
+  return lines.filter((l) => !l.includes("pnpm_config_verify_deps_before_run")).map((l) => l.replace("pnpm exec stryker run", "npx stryker run"));
 }
 function renderQualityGate(template, opts) {
   if (opts.contract.stack !== "npm") {
@@ -9434,12 +9437,12 @@ function skip(gate, reason) {
 
 // src/verifier/deterministic/strategies/proc-strategy.ts
 var EXCERPT_MAX_CHARS = 1e3;
-function excerpt(text) {
+function excerpt(text, keep = "head") {
   const trimmed = redactSecrets(text).trim();
   if (trimmed.length <= EXCERPT_MAX_CHARS) {
     return trimmed;
   }
-  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)`;
+  return keep === "head" ? `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)` : `(truncated) \u2026${trimmed.slice(-EXCERPT_MAX_CHARS)}`;
 }
 function procOutcome(id, label, result) {
   if (result.truncated) {
@@ -10396,12 +10399,12 @@ function readingFromCache(raw, nowEpoch2) {
   }
   const cache = parsed.data;
   const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
-  const age = nowEpoch2 - capturedAt;
-  if (age > STALE_CEILING_SECONDS) {
+  const age2 = nowEpoch2 - capturedAt;
+  if (age2 > STALE_CEILING_SECONDS) {
     return unavailable("usage-cache-too-stale");
   }
-  if (age > STALE_WARN_SECONDS) {
-    log17.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+  if (age2 > STALE_WARN_SECONDS) {
+    log17.warn(`usage-cache.json is ${age2}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -11578,7 +11581,9 @@ var AttemptSchema = external_exports.object({
   spec_digest: external_exports.string(),
   worktree: external_exports.string(),
   roles: external_exports.array(external_exports.string()),
-  issued_at: external_exports.string()
+  issued_at: external_exports.string(),
+  /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
+  redispatch: external_exports.array(external_exports.string()).optional()
 });
 var FeatureRunSchema = external_exports.object({
   version: external_exports.literal(VERSION),
@@ -12040,7 +12045,7 @@ import { randomUUID } from "node:crypto";
 import { join as join16 } from "node:path";
 
 // src/feature/store.ts
-import { readFile as readFile11, readdir as readdir3 } from "node:fs/promises";
+import { access as access3, mkdir as mkdir10, readFile as readFile11, readdir as readdir3 } from "node:fs/promises";
 import { join as join15 } from "node:path";
 var FeatureStore = class {
   constructor(dataDir) {
@@ -12105,26 +12110,96 @@ var FeatureStore = class {
     const checked = ResultSchema.parse(result);
     await atomicWriteFile(join15(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
   }
-  async result(id, attemptId) {
-    try {
-      return ResultSchema.parse(
-        JSON.parse(await readFile11(join15(this.dir(id), "results", `${IdSchema.parse(attemptId)}.json`), "utf8"))
-      );
-    } catch (error) {
-      if (isEnoent(error)) {
-        return void 0;
+  /**
+   * Staged results live outside `runs-v2/**` so the driver session may write them
+   * (engine state stays read-only to agents). The file's existence is the submission.
+   */
+  stagedPaths(id, attempt, roles = attempt.roles) {
+    const dir = join15(this.dataDir, "staged-v2", IdSchema.parse(id), IdSchema.parse(attempt.id));
+    return Object.fromEntries(roles.map((role) => [role, join15(dir, `${IdSchema.parse(role)}.json`)]));
+  }
+  async stage(id, attempt, roles) {
+    const paths = this.stagedPaths(id, attempt, roles);
+    await mkdir10(join15(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
+    return paths;
+  }
+  /** Roles whose staged file exists (parseability not checked). */
+  async stagedPresent(id, attempt) {
+    const present = [];
+    for (const [role, path3] of Object.entries(this.stagedPaths(id, attempt))) {
+      try {
+        await access3(path3);
+        present.push(role);
+      } catch (error) {
+        if (!isEnoent(error)) {
+          throw error;
+        }
       }
-      throw error;
     }
+    return present;
+  }
+  /**
+   * Read every role's staged file and merge them into one attempt result. A missing,
+   * half-written or schema-invalid file reads as "not yet"; only explicit recovery
+   * judges it. Identity fields must agree; any non-done status wins.
+   */
+  async staged(id, attempt) {
+    const parts = [];
+    const missing = [];
+    for (const [role, path3] of Object.entries(this.stagedPaths(id, attempt))) {
+      try {
+        parts.push(ResultSchema.parse(JSON.parse(await readFile11(path3, "utf8"))));
+      } catch (error) {
+        if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+          missing.push(role);
+        } else {
+          throw error;
+        }
+      }
+    }
+    const first = parts[0];
+    if (missing.length || first === void 0) {
+      return { missing };
+    }
+    if (parts.some(
+      (part) => part.attempt_id !== first.attempt_id || part.spec_digest !== first.spec_digest || part.head_sha !== first.head_sha
+    )) {
+      throw new Error("staged results disagree on attempt identity or HEAD");
+    }
+    const halted = parts.find((part) => part.status !== "done");
+    const reviews = parts.flatMap((part) => part.reviews ?? []);
+    return {
+      result: {
+        ...first,
+        ...halted ? { status: halted.status, message: halted.message } : {},
+        ...reviews.length ? { reviews } : {}
+      }
+    };
   }
 };
-function renderLedger(run5) {
+function age(from, now) {
+  const minutes = Math.max(0, Math.round((Date.parse(now) - Date.parse(from)) / 6e4));
+  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
+}
+function nextCommand(run5) {
+  if (terminal(run5)) {
+    return "none (terminal)";
+  }
+  if (run5.status === "parked") {
+    return `factory resume --run ${run5.run_id}${run5.question !== void 0 ? " --answer <text>" : ""}${run5.in_flight ? " --recover (after its agent has stopped)" : ""}`;
+  }
+  return `factory next-action --run ${run5.run_id} --driver <session>`;
+}
+function renderLedger(run5, live = {}) {
+  const attempt = run5.in_flight;
   return [
     `# Feature ${run5.run_id}`,
     "",
-    `Status: ${run5.status}. Resume: ${run5.stage}, task ${run5.task_index + 1}.`,
+    `Status: ${run5.status} (persisted lifecycle, not proof of a live worker). Resume: ${run5.stage}, task ${run5.task_index + 1}.`,
     `Branch: ${run5.branch}. Accepted HEAD: ${run5.accepted_sha}. Spec: ${run5.spec_digest}.`,
     run5.stop_reason ? `Stopped: ${run5.stop_reason.kind}: ${run5.stop_reason.message}` : "",
+    attempt ? `In flight: ${attempt.stage} [${attempt.roles.join(", ")}] issued ${attempt.issued_at}${live.now !== void 0 ? ` (${age(attempt.issued_at, live.now)} ago)` : ""}.` + (live.staged ? ` Staged results: ${live.staged.length}/${attempt.roles.length}${live.staged.length ? ` (${live.staged.join(", ")})` : ""}.` : "") + (attempt.redispatch ? ` Redispatch: ${attempt.redispatch.join(", ")}.` : "") : "",
+    `Next: ${nextCommand(run5)}`,
     "",
     "## Accepted tasks",
     "",
@@ -12201,7 +12276,7 @@ var FeatureEngine = class {
       return run5;
     });
   }
-  async advance(id, driver, rawResult) {
+  async advance(id, driver) {
     if (!driver.trim()) {
       throw new Error("next-action requires a driver session identity");
     }
@@ -12209,28 +12284,28 @@ var FeatureEngine = class {
     return this.store.withRepo(initial.repo, async () => {
       let run5 = await this.store.read(id);
       if (terminal(run5)) {
-        if (rawResult !== void 0) {
-          throw new Error("stale result for terminal run");
-        }
         return this.terminal(run5);
       }
       if (run5.status === "parked") {
         return this.parked(run5);
       }
       try {
-        if (rawResult !== void 0) {
-          const result = ResultSchema.parse(rawResult);
-          this.assertResult(run5, driver, result);
-          await this.store.recordResult(id, result);
-        }
         if (run5.in_flight) {
-          const result = await this.store.result(id, run5.in_flight.id);
-          if (!result) {
-            return this.wait(run5, `awaiting ${run5.in_flight.id}; do not spawn it twice`);
+          const staged = await this.store.staged(id, run5.in_flight);
+          if ("missing" in staged) {
+            const roles = run5.in_flight.redispatch;
+            if (roles) {
+              delete run5.in_flight.redispatch;
+              await this.store.write(run5);
+              return await this.execute(run5, { ...run5.in_flight, roles });
+            }
+            return this.wait(
+              run5,
+              `awaiting ${staged.missing.join(", ")} for ${run5.in_flight.id}; do not spawn it twice`
+            );
           }
-          this.assertResult(run5, driver, result);
           const recorded = structuredClone(run5);
-          await this.record(recorded, result);
+          await this.accept(recorded, staged.result);
           run5 = recorded;
           await this.store.write(run5);
           if (run5.status === "parked") {
@@ -12255,9 +12330,6 @@ var FeatureEngine = class {
         }
         return this.wait(run5, "checkpoint saved; advance again");
       } catch (error) {
-        if (rawResult !== void 0) {
-          throw error;
-        }
         this.park(run5, "environment", error instanceof Error ? error.message : String(error));
         await this.store.write(run5);
         return this.parked(run5);
@@ -12303,31 +12375,47 @@ var FeatureEngine = class {
         if (options.recover !== true) {
           throw new Error("attempt still leased; stop its agent, then resume --recover");
         }
-        const journaled = await this.store.result(id, run5.in_flight.id);
-        if (journaled !== void 0) {
+        const attempt = run5.in_flight;
+        let staged;
+        try {
+          staged = await this.store.staged(id, attempt);
+        } catch (error) {
+          staged = error instanceof Error ? error : new Error(String(error));
+        }
+        if (!(staged instanceof Error) && "missing" in staged) {
+          if (staged.missing.length < attempt.roles.length) {
+            attempt.redispatch = staged.missing;
+            this.audit(run5, "partial result retained; missing roles redispatched", {
+              attempt: attempt.id,
+              missing: staged.missing
+            });
+          } else {
+            this.audit(run5, "interrupted attempt retired; work retained", attempt);
+            delete run5.in_flight;
+          }
+        } else {
           const recovered = structuredClone(run5);
           recovered.status = "running";
           delete recovered.stop_reason;
           try {
-            this.assertResult(recovered, run5.in_flight.driver, journaled);
-            await this.record(recovered, journaled);
+            if (staged instanceof Error) {
+              throw staged;
+            }
+            await this.accept(recovered, staged.result);
             run5 = recovered;
-            this.audit(run5, "durable result recovered", journaled.attempt_id);
+            this.audit(run5, "durable result recovered", staged.result.attempt_id);
             if (run5.status === "parked") {
               return run5;
             }
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             this.audit(run5, "invalid durable result retired; evidence and work retained", {
-              attempt: run5.in_flight,
+              attempt,
               reason
             });
             run5.feedback = [...run5.feedback, `Previous result rejected: ${reason}`];
             delete run5.in_flight;
           }
-        } else {
-          this.audit(run5, "interrupted attempt retired; work retained", run5.in_flight);
-          delete run5.in_flight;
         }
       }
       run5.status = "running";
@@ -12346,11 +12434,14 @@ var FeatureEngine = class {
       return run5;
     });
   }
-  assertResult(run5, driver, result) {
+  /** Validate identity, then record, then journal the accepted result as evidence. */
+  async accept(run5, result) {
     const attempt = run5.in_flight;
-    if (attempt?.id !== result.attempt_id || attempt.driver !== driver || result.spec_digest !== attempt.spec_digest || attempt.spec_digest !== run5.spec_digest) {
-      throw new Error("stale, duplicate, or foreign-driver result; inspect the persisted attempt");
+    if (attempt?.id !== result.attempt_id || result.spec_digest !== attempt.spec_digest || attempt.spec_digest !== run5.spec_digest) {
+      throw new Error("stale or duplicate result; inspect the persisted attempt");
     }
+    await this.record(run5, result);
+    await this.store.recordResult(run5.run_id, result);
   }
   task(run5) {
     const task = run5.spec.tasks[Math.min(run5.task_index, run5.spec.tasks.length - 1)];
@@ -12442,7 +12533,16 @@ var FeatureEngine = class {
     };
     run5.in_flight = attempt;
     this.audit(run5, "attempt issued", attempt);
-    return { kind: "execute", run_id: run5.run_id, attempt, prompt: this.prompt(run5, attempt) };
+    return this.execute(run5, attempt);
+  }
+  async execute(run5, attempt) {
+    return {
+      kind: "execute",
+      run_id: run5.run_id,
+      attempt,
+      staged: await this.store.stage(run5.run_id, attempt, attempt.roles),
+      prompt: this.prompt(run5, attempt)
+    };
   }
   prompt(run5, attempt) {
     const task = this.task(run5);
@@ -12798,7 +12898,7 @@ var FeatureEngine = class {
 };
 
 // src/feature/runtime.ts
-import { access as access4 } from "node:fs/promises";
+import { access as access5 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 
 // src/verifier/deterministic/strategies/test.ts
@@ -12817,8 +12917,7 @@ var testStrategy = {
       );
     }
     const base = /^[a-f0-9]{40,64}$/.test(ctx.baseRef) ? ctx.baseRef : `origin/${ctx.baseRef}`;
-    const changed = await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree });
-    const scoped = diffScopedTestFiles(changed);
+    const scoped = ctx.full === true ? [] : diffScopedTestFiles(await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree }));
     const runnable = scoped.filter(isVitestRunnable);
     if (scoped.length > 0 && runnable.length === 0) {
       return skip("test", "no-vitest-runnable-tests-in-scope");
@@ -12829,7 +12928,7 @@ var testStrategy = {
     }
     const observed = result.code === 0;
     const skipped = scoped.length - runnable.length;
-    const scope = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
+    const scope = ctx.full === true ? "full-suite" : runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
     const detail = `vitest exit=${result.code ?? "null"} ${scope}` + (skipped > 0 ? `; ${skipped} non-vitest file(s) not executed` : "");
     if (observed) {
       return ran("test", true, detail);
@@ -13083,12 +13182,17 @@ var mutationStrategy = {
       throw new Error("mutation gate: stryker report truncated \u2014 refusing to parse a clipped payload");
     }
     const report = result.report;
+    if (report.report === "stale") {
+      return ran("mutation", false, `stale-report-removal-failed: ${report.error}`);
+    }
     if (report.report === "present" && report.mutationScore !== null) {
       const score = report.mutationScore;
       return scorePasses(score, target) ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`) : ran("mutation", false, `score-below-target: ${score} < ${target}`);
     }
     if (result.proc.code !== 0) {
-      return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
+      const output = excerpt(result.proc.stderr || result.proc.stdout, "tail");
+      const detail = `stryker-failed: exit=${result.proc.code ?? "null"}`;
+      return ran("mutation", false, output ? `${detail}: ${output}` : detail);
     }
     if (report.report === "absent") {
       return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
@@ -13238,6 +13342,7 @@ var GateRunner = class {
         baseRef: ctx.baseRef,
         config: ctx.config,
         tools: ctx.tools,
+        full: ctx.full,
         exemptReader: ctx.exemptReader,
         contract,
         coverageStore: ctx.coverageStore
@@ -13261,7 +13366,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { access as access3, mkdtemp, readFile as readFile12, rm as rm4, symlink as symlink2, unlink as unlink4 } from "node:fs/promises";
+import { access as access4, mkdtemp, readFile as readFile12, rm as rm4, symlink as symlink2, unlink as unlink4 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
 import path2 from "node:path";
 function toProc(r) {
@@ -13366,11 +13471,16 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
       await unlink4(reportPath);
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          proc: { code: null, stdout: "", stderr: "", truncated: false },
+          report: { report: "stale", error: message }
+        };
       }
     }
     const csv = mutate.map(escapeStrykerGlob).join(",");
-    const proc = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env));
+    const env = { pnpm_config_verify_deps_before_run: "false", ...this.env };
+    const proc = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, env));
     let raw;
     try {
       raw = await readFile12(reportPath, "utf8");
@@ -13499,7 +13609,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
 var DefaultFsProbe = class {
   async exists(relPath, opts) {
     try {
-      await access3(path2.join(opts.cwd, relPath));
+      await access4(path2.join(opts.cwd, relPath));
       return true;
     } catch {
       return false;
@@ -13744,7 +13854,7 @@ var LocalFeatureRuntime = class {
   }
   async prepare(root, worktree, branch, base) {
     try {
-      await access4(join17(worktree, ".git"));
+      await access5(join17(worktree, ".git"));
     } catch (error) {
       if (!isEnoent(error)) {
         throw error;
@@ -13802,7 +13912,8 @@ var LocalFeatureRuntime = class {
       taskId: task.task_id,
       worktree: run5.worktree,
       baseRef,
-      config: this.config
+      config: this.config,
+      full
     };
     const outputs = [];
     const testResult = await new GateRunner().run({
@@ -13812,7 +13923,7 @@ var LocalFeatureRuntime = class {
         ...tools,
         vitest: {
           run: async (files, options) => {
-            const output = await tools.vitest.run(full ? [] : files, options);
+            const output = await tools.vitest.run(files, options);
             outputs.push(output);
             return output;
           }
@@ -14104,7 +14215,7 @@ var HELP3 = `Factory v2 \u2014 sequential feature delivery
 
 factory spec resolve|gate|store --issue <n>
 factory run create --issue <n> [--no-ship] [--e2e] [--ignore-quota]
-factory next-action --run <id> --driver <session> [--results <json-file>]
+factory next-action --run <id> --driver <session>
 factory run stop --run <id>
 factory resume --run <id> [--answer <text>] [--recover]
 factory run cancel --run <id>
@@ -14112,7 +14223,9 @@ factory state --run <id> [--ledger]
 factory state --list
 factory debug create --base <ref> [--ignore-quota]
 
---recover retires an interrupted attempt after its previous agent has been stopped.
+Agent results are written verbatim to the per-role paths in the execute envelope's
+"staged"; next-action consumes them. --recover, after the previous agent has stopped,
+consumes a complete staged result, redispatches missing roles, or retires the attempt.
 Legacy runs are preserved but cannot execute. One active feature run per repository.
 `;
 function featureCommand(name) {
@@ -14124,7 +14237,7 @@ function featureCommand(name) {
           `${name} is retired for v2; inspect state --run <id> --ledger and use resume explicitly`
         );
       }
-      const allowed = name === "run" && argv[0] === "create" ? ["issue", "repo", "run-id", "no-ship", "e2e", "ignore-quota"] : name === "debug" ? ["base", "repo", "run-id", "ignore-quota"] : name === "resume" ? ["run", "answer", "recover"] : name === "next-action" || name === "next-task" ? ["run", "driver", "results"] : name === "state" ? ["run", "list", "ledger"] : ["run"];
+      const allowed = name === "run" && argv[0] === "create" ? ["issue", "repo", "run-id", "no-ship", "e2e", "ignore-quota"] : name === "debug" ? ["base", "repo", "run-id", "ignore-quota"] : name === "resume" ? ["run", "answer", "recover"] : name === "next-action" || name === "next-task" ? ["run", "driver"] : name === "state" ? ["run", "list", "ledger"] : ["run"];
       const args = parseArgs(argv, {
         booleans: ["no-ship", "e2e", "ignore-quota", "recover", "list", "ledger"],
         allowed
@@ -14246,12 +14359,7 @@ function featureCommand(name) {
       }
       const id = args.requireFlag("run");
       if (name === "next-action" || name === "next-task") {
-        const resultPath = optionalString(args.flag("results"));
-        if (args.has("results") && (resultPath === void 0 || resultPath === "")) {
-          throw new UsageError("--results requires a JSON file");
-        }
-        const raw = resultPath !== void 0 ? JSON.parse(await readFile13(resultPath, "utf8")) : void 0;
-        emitJson(await engine.advance(id, args.requireFlag("driver"), raw));
+        emitJson(await engine.advance(id, args.requireFlag("driver")));
         return EXIT.OK;
       }
       if (name === "resume") {
@@ -14274,7 +14382,8 @@ function featureCommand(name) {
       if (["state", "statusline"].includes(name)) {
         const run5 = await store.read(id);
         if (args.has("ledger")) {
-          process.stdout.write(renderLedger(run5));
+          const staged = run5.in_flight ? await store.stagedPresent(id, run5.in_flight) : void 0;
+          process.stdout.write(renderLedger(run5, { now: runtime.now(), ...staged ? { staged } : {} }));
         } else {
           emitJson(run5);
         }
@@ -14582,7 +14691,13 @@ async function renderProgress(deps, payload) {
     const repo = await resolveRepo({ cwd, gitClient });
     if (deps.featureProgress === true) {
       const run6 = (await new FeatureStore(dataDir).list()).find((run7) => run7.repo === repo && !terminal(run7));
-      return run6 === void 0 ? "" : ` ${run6.checkpoints.length}/${run6.spec.tasks.length} tasks accepted (${run6.status})`;
+      if (run6 === void 0) {
+        return "";
+      }
+      const attempt = run6.in_flight;
+      const now = new Date((deps.now ?? nowEpoch)() * 1e3).toISOString();
+      const live = attempt ? `; ${attempt.stage} issued ${age(attempt.issued_at, now)} ago, activity unverified` : "";
+      return ` ${run6.checkpoints.length}/${run6.spec.tasks.length} tasks accepted (${run6.status}${live})`;
     }
     const raw = await readFile15(join20(currentRepoLinkPath(dataDir, repo), STATE_FILE), "utf8");
     const run5 = JSON.parse(raw);
