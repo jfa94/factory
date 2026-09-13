@@ -78,4 +78,7 @@ existing history and setup PR #2 are published and merged with all required CI
 checks passing and unchanged strict protection. The user authorized `--ignore-quota`
 for both Codex-driven canaries; the first spec is in generation. See the
 [canary preparation ledger](asset-generator-canary.md) for setup findings, planned
-journeys and remaining steps. Neither external canary has run yet.
+journeys and remaining steps. Canary #3 ran to its feature-repair attempt and
+stalled for want of result submission; canary #4 has not started. On 2026-09-12
+results became engine-consumed staged files (see the canary ledger); #3 is now the
+recovery canary and #4 the uninterrupted one.

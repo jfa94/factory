@@ -147,3 +147,22 @@ fresh feature checks correctly failed mutation and dispatched repair attempt
 `f26443d8-bcb9-4e0f-8c1e-895385708af1` to the implementer. The engine audit retains
 the earlier false pass and the later failure; no state or prior evidence was
 rewritten. Delivery remains blocked on a genuine fresh gate pass.
+
+Repair commit `4745824` (worktree HEAD) sets `pnpm_config_verify_deps_before_run=false`
+in the CLI's package-command tests so pnpm no longer reinstalls inside Stryker's
+symlinked sandbox; all 57 CLI tests pass in normal and instrumented checkouts. Its
+result `result-3-10.json` was written by the implementer three hours after dispatch
+but never submitted: the Codex driver was a chain of separate sessions with nothing
+resident to call `next-action`, so state stayed `running` with attempt `f26443d8`
+in flight for days. The `--results` flag is gone: the engine now names one staged
+file per role in every execute envelope, the driver writes agent output verbatim as
+it returns, and any driver's `next-action` (or `resume --recover`) consumes it.
+Factory itself now sets the pnpm variable on its Stryker invocation and in both CI
+templates, so target repositories need no per-test workaround.
+
+Plan from 2026-09-12: issue #3 is the recovery canary under a Claude Code session
+with a fresh driver id. Its stored result is copied to the attempt's staged path,
+`resume --recover` must audit a consumed result with no new implement attempt, and
+fresh feature gates, review and acceptance must pass at `4745824` before push, PR,
+one interrupt/resume while CI runs, and an observed merge. Issue #4 is then the
+uninterrupted canary from a fresh spec. Earlier stalls do not count as uninterrupted.
