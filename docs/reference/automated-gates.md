@@ -307,9 +307,10 @@ impl-before-test ordering blocks the task.
 
 ## The mutation gate in detail
 
-The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modified
-mutable `.ts` under the contracted **mutation roots** minus tests/types/data/index,
-mirroring CI) and reads `reports/mutation/mutation.json`.
+The mutation gate runs `stryker run --mutate <diff-scope> --cleanTempDir always`
+(scope = added/modified mutable `.ts` under the contracted **mutation roots** minus tests/types/data/index,
+mirroring CI) and reads `reports/mutation/mutation.json`. The temp dir is removed even after a
+failed run so its instrumented copies never reach the next lint or coverage gate.
 
 - **Mutable-source roots are contract data** ([Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots)).
   `mutationScope` filters the diff to `.ts` files under the roots named by optional

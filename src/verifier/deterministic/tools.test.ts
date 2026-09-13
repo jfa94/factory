@@ -302,7 +302,7 @@ describe('Default command tools: local-bin resolution + test-gate coverage', () 
         })
         const strykerCall = nonNull(execMock.mock.calls.find((c) => c[0].endsWith('stryker')))
         expect(strykerCall[0]).toBe('/wt/node_modules/.bin/stryker')
-        expect(strykerCall[1]).toEqual(['run', '--mutate', 'a.ts,b.ts'])
+        expect(strykerCall[1]).toEqual(['run', '--mutate', 'a.ts,b.ts', '--cleanTempDir', 'always'])
     })
 
     it('DefaultStrykerTool escapes glob metacharacters in dynamic-route paths', async () => {
@@ -312,7 +312,13 @@ describe('Default command tools: local-bin resolution + test-gate coverage', () 
             {cwd: '/wt'}
         )
         const strykerCall = nonNull(execMock.mock.calls.find((c) => c[0].endsWith('stryker')))
-        expect(strykerCall[1]).toEqual(['run', '--mutate', 'src/app/feedback/[[]token[]]/actions.ts'])
+        expect(strykerCall[1]).toEqual([
+            'run',
+            '--mutate',
+            'src/app/feedback/[[]token[]]/actions.ts',
+            '--cleanTempDir',
+            'always',
+        ])
     })
 })
 

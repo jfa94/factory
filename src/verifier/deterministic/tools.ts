@@ -450,7 +450,11 @@ export class DefaultStrykerTool implements StrykerTool {
         // Stryker's sandbox symlinks node_modules; pnpm ≥10 would otherwise try to
         // reinstall on `pnpm run` inside it and abort. The repo's gateEnv still wins.
         const env = {pnpm_config_verify_deps_before_run: 'false', ...this.env}
-        const proc = toProc(await runTool(this.resolve, 'stryker', ['run', '--mutate', csv], opts, env))
+        const proc = toProc(
+            await runTool(this.resolve, 'stryker', ['run', '--mutate', csv, '--cleanTempDir', 'always'], opts, env)
+        )
+        // `always`: a failed run must not leave `.stryker-tmp` in the worktree, where the next
+        // lint/coverage gate would scan its instrumented copies (canary #3 feature-check lint).
         // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
         // strategy branches on proc.code; we still attempt to read a report.
         let raw: string

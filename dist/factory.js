@@ -13480,7 +13480,9 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     }
     const csv = mutate.map(escapeStrykerGlob).join(",");
     const env = { pnpm_config_verify_deps_before_run: "false", ...this.env };
-    const proc = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, env));
+    const proc = toProc(
+      await runTool(this.resolve, "stryker", ["run", "--mutate", csv, "--cleanTempDir", "always"], opts, env)
+    );
     let raw;
     try {
       raw = await readFile12(reportPath, "utf8");
