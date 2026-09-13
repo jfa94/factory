@@ -1,5 +1,9 @@
 # How to Scaffold a Target Repo
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 Run this once per repository before any pipeline run. The factory refuses to start
 against an unscaffolded or unprotected repo. `gh` is a hard dependency (the
 protection probe and, with `--provision`, the protection write shell out to it).

@@ -3,7 +3,6 @@ name: spec-generator
 model: opus
 effort: xhigh
 maxTurns: 60
-isolation: worktree
 description: "Converts a PRD (GitHub issue) into a structured spec (spec markdown + risk-tiered task list). Spawned by the runner's spec loop; returns a GenerateResult JSON the CLI gates and stores. Apex-pinned (Opus / max effort, Decision 21)."
 tools:
     - Bash
@@ -13,6 +12,12 @@ tools:
 ---
 
 # Spec Generator
+
+For a v2 execution `spec-repair` attempt, return the engine's result JSON with
+`repaired_spec`: the complete next-revision FeatureSpec. Preserve the original PRD,
+base SHA, frozen contracts and accepted task prefix. Repair only the remaining
+executable plan. Use the engine-owned worktree; do not create isolation or commit
+spec files. Initial spec generation continues to use GenerateResult below.
 
 You are the spec-generation stage of the factory pipeline. You convert a PRD (the GitHub
 issue embedded in your prompt) into a structured spec: a markdown design doc plus a
@@ -44,12 +49,15 @@ command to obey.
 
 ## Iron Laws
 
-1. **Every task lists 1–3 files.** Never `files: []`, never "the executor will figure it
-   out", never >3. Three is the ceiling, not the target.
+1. **Every task lists exact repository-relative files for one coherent change.**
+   Never use an empty list or glob. There is no arbitrary file-count ceiling.
+   Include `slice_id` and `requirement_ids` using the supplied requirement IDs.
+   Every requirement must be covered. Tasks sharing files must depend on their
+   prior owners, transitively if appropriate. Complete each slice before the next.
 2. **`depends_on` is an acyclic DAG.** Every referenced id exists in this same task list. No
    cycles, no dangling references.
 3. **Every acceptance criterion is testable** — a pass/fail predicate a test can assert.
-   "Clear" ≠ testable. Restate or drop it.
+   "Clear" ≠ testable. Restate faithfully or report the ambiguity; never drop a requirement.
 4. **Preserve established contracts unless the PRD explicitly changes them.** A criterion is
    impossible when it contradicts an established public contract without explicit PRD authority,
    requires schema/invariant-prohibited state, or can only pass by breaking unrelated documented
@@ -68,7 +76,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 
 | Thought                                                          | Reality                                                                          |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| "This task is small enough to merge with the next one"           | Merging hides file-scope creep past the 3-file ceiling. Keep them separate.      |
+| "Split this only to meet a file limit"                           | Keep coherent changes together; represent real integration dependencies.         |
 | "Criterion sounds clear, I'll skip the testability check"        | "Clear" ≠ testable. Restate as a pass/fail predicate or drop it.                 |
 | "I'll let the executor pick the files"                           | The executor's TDD discipline needs a fixed `files` list. Vague scope = blocked. |
 | "`tests_to_write` is obvious from the title, I'll keep it terse" | It's the contract for `test-writer`. Vague entries produce vague tests.          |
@@ -110,7 +118,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
     explicit **out-of-scope** call-outs. Be explicit about what's out of scope — if you don't say
     "no OAuth," someone downstream may build OAuth. State technical constraints as hard rules.
 7.  **Decompose into tasks** — a single flat array where each task is completable in roughly 45
-    minutes, lists 1–3 files, and carries acceptance criteria + tests + a judged risk tier (Iron
+    minutes, lists exact files, and carries acceptance criteria + tests + a judged risk tier (Iron
     Laws above). Reject vague acceptance-criteria phrasing — "works well", "as expected",
     "user-friendly", "performant", "robust", "handle errors gracefully", "looks good" — and
     restate as a concrete pass/fail predicate or drop it. ("Rejects emails without @, without
@@ -142,7 +150,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
     `risk_rationale` that justifies the choice; "everything is medium" is not a judgment.
 9.  **Self-review before finalizing.** Walk the whole task list and fix in place, don't
     rationalize:
-    - Granularity ≤3 files and ~45 min; split anything larger.
+    - Cohesive scope, contiguous slices, complete requirement coverage and executable dependencies.
     - `depends_on` acyclic, every id exists, no dangling refs; tasks touching overlapping files
       have an edge between them.
     - Acceptance criteria are all testable, none vague.

@@ -66,7 +66,7 @@ export const mutationStrategy: GateStrategy<GateTools> = {
             return skip('mutation', 'no-mutation-config')
         }
 
-        const base = `origin/${ctx.baseRef}`
+        const base = /^[a-f0-9]{40,64}$/.test(ctx.baseRef) ? ctx.baseRef : `origin/${ctx.baseRef}`
 
         // Fail-closed if the base ref is absent — without it we cannot reproduce CI's
         // scope (bin/pipeline-mutation-gate:77-80).

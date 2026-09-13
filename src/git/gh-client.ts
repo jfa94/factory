@@ -112,6 +112,14 @@ export interface GhClient {
     repoProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<ProtectionApiResult>
     /** PUT branch-protection via `gh api` (--provision ONLY). */
     putProtection(owner: string, repo: string, branch: string, body: ProtectionPutBody, opts?: GhOpts): Promise<void>
+    /** Add required checks without replacing review, restriction, admin or deletion policy. */
+    strengthenStatusChecks?(
+        owner: string,
+        repo: string,
+        branch: string,
+        contexts: readonly string[],
+        opts?: GhOpts
+    ): Promise<void>
     /** Detect whether native GitHub merge-queue is available for this branch. */
     mergeQueueProbe(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>
     /**
@@ -447,6 +455,32 @@ export class DefaultGhClient implements GhClient {
             strictUpToDate: rsc?.strict === true,
             hasMergeQueue: mq,
         }
+    }
+
+    async strengthenStatusChecks(
+        owner: string,
+        repo: string,
+        branch: string,
+        contexts: readonly string[],
+        opts?: GhOpts
+    ): Promise<void> {
+        const path = `repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`
+        const current = await runOrThrow('gh', this.runner, ['api', path], this.execOpts(opts))
+        const state = parseGhJson(
+            current,
+            z.object({checks: z.array(z.object({context: z.string(), app_id: z.number().nullable()}))}),
+            'required status checks'
+        )
+        const checks = [...state.checks]
+        for (const context of contexts) {
+            if (!checks.some((check) => check.context === context)) {
+                checks.push({context, app_id: -1})
+            }
+        }
+        await runOrThrow('gh', this.runner, ['api', '--method', 'PATCH', path, '--input', '-'], {
+            ...this.execOpts(opts),
+            input: JSON.stringify({strict: true, checks}),
+        })
     }
 
     async putProtection(

@@ -7,6 +7,8 @@
  * The moved names are re-exported below for existing importers.
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {join} from 'node:path'
+import {repositorySnapshot} from '../../spec/snapshot.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
@@ -63,8 +65,11 @@ function parseIssue(raw: string): number {
 function wireDeps(): SpecBuildDeps {
     const dataDir = resolveDataDir({})
     const config = loadConfig({dataDir})
+    const featureDataDir = join(dataDir, 'v2')
     return {
-        store: new SpecStore({dataDir}),
+        store: new SpecStore({dataDir: featureDataDir}),
+        featureDataDir,
+        snapshot: () => repositorySnapshot(process.cwd(), config),
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
         usage: new StatuslineUsageSignal({dataDir}),
@@ -155,14 +160,6 @@ async function run(argv: string[]): Promise<ExitCode> {
     const repo = await resolveSpecRepo(args)
     const supersede = args.flag('supersede') === true
     const ignoreQuota = args.flag('ignore-quota') === true
-
-    if (action === 'resolve' && supersede && !ignoreQuota) {
-        const parked = await weeklyParkedPause(repo, issue)
-        if (parked !== null) {
-            emitJson(parked)
-            return specExitCode(parked)
-        }
-    }
 
     const deps = wireDeps()
     const envelope =

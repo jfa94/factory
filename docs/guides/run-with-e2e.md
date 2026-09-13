@@ -1,5 +1,9 @@
 # How to Run with End-to-End Tests
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 This guide adds an autonomous Playwright end-to-end (e2e) phase to a run. The unit
 gates (vitest, TDD, coverage, mutation, SAST, type, lint) verify each task in
 isolation; they cannot catch a feature that breaks only once every task's change is

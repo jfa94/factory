@@ -24,15 +24,9 @@
                     },
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js feature-guards",
                         "timeout": 10,
-                        "statusMessage": "Checking pipeline command guards"
-                    },
-                    {
-                        "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
-                        "timeout": 5,
-                        "statusMessage": "Guarding holdout answer-key"
+                        "statusMessage": "Checking feature scope and publication ownership"
                     }
                 ]
             },
@@ -47,20 +41,9 @@
                     },
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js pipeline-guards",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js feature-guards",
                         "timeout": 10,
-                        "statusMessage": "Checking pipeline path-scope guards"
-                    }
-                ]
-            },
-            {
-                "matcher": "^(Read|Grep|Glob)$",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js holdout-guard",
-                        "timeout": 5,
-                        "statusMessage": "Guarding holdout answer-key"
+                        "statusMessage": "Checking feature scope and publication ownership"
                     }
                 ]
             }
@@ -83,21 +66,9 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js stop-gate",
+                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js feature-stop",
                         "timeout": 15,
                         "statusMessage": "Checking run state"
-                    }
-                ]
-            }
-        ],
-        "SubagentStop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js subagent-stop",
-                        "timeout": 15,
-                        "statusMessage": "Logging subagent verdict (observational)"
                     }
                 ]
             }

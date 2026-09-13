@@ -19,19 +19,11 @@ import {loadConfig} from '../config/index.js'
 import {stringifyJson} from '../shared/json.js'
 import {nonNull} from '../shared/index.js'
 import {configureCommand} from './subcommands/configure.js'
-import {debugCommand} from './subcommands/debug.js'
-import {stateCommand} from './subcommands/state.js'
 import {scaffoldCommand} from './subcommands/scaffold.js'
-import {runCommand, resumeCommand} from './subcommands/run.js'
 import {specCommand} from './subcommands/spec.js'
-import {rescueCommand} from './subcommands/rescue.js'
-import {reconcileCommand} from './subcommands/reconcile.js'
-import {scoreCommand} from './subcommands/score.js'
-import {missCommand} from './subcommands/miss.js'
-import {nextActionCommand} from './subcommands/next-action.js'
-import {nextCommand} from './subcommands/next.js'
-import {statuslineCommand} from './subcommands/statusline.js'
+import {featureCommand} from '../feature/cli.js'
 import {autonomyCommand} from './subcommands/autonomy.js'
+import {runStatusline} from './subcommands/statusline.js'
 
 /** The mutable subcommand registry. Downstream WS add entries to this object. */
 export const cliRegistry: Record<string, Subcommand> = {
@@ -46,19 +38,22 @@ export const cliRegistry: Record<string, Subcommand> = {
         },
     },
     configure: configureCommand,
-    debug: debugCommand,
-    resume: resumeCommand,
-    run: runCommand,
+    debug: featureCommand('debug'),
+    resume: featureCommand('resume'),
+    run: featureCommand('run'),
     spec: specCommand,
-    rescue: rescueCommand,
-    reconcile: reconcileCommand,
-    score: scoreCommand,
-    miss: missCommand,
-    state: stateCommand,
+    rescue: featureCommand('rescue'),
+    reconcile: featureCommand('reconcile'),
+    score: featureCommand('score'),
+    miss: featureCommand('miss'),
+    state: featureCommand('state'),
     scaffold: scaffoldCommand,
-    'next-action': nextActionCommand,
-    'next-task': nextCommand,
-    statusline: statuslineCommand,
+    'next-action': featureCommand('next-action'),
+    'next-task': featureCommand('next-task'),
+    statusline: {
+        describe: 'Capture rate limits and display feature progress',
+        run: (argv) => runStatusline(argv, {featureProgress: true}),
+    },
     autonomy: autonomyCommand,
 }
 

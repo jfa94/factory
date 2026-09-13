@@ -14,6 +14,7 @@ export default defineConfig(
         '.claude/',
         '.comprehensive-code-review/',
         '.quick-code-review/',
+        '.code-review/', // Generated review evidence and ad-hoc probes, not shipped source.
         // The scaffold shipped to TARGET repos via `factory scaffold` — a different
         // (Next.js-shaped) project, validated by the target repo's own CI, not ours.
         // It even references target-only eslint plugins (e.g. eslint-plugin-playwright)

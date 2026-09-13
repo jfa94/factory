@@ -16,6 +16,7 @@ import {stringifyJson} from '../shared/json.js'
 import {specBuildDir} from '../core/state/paths.js'
 import {at} from '../shared/index.js'
 import {makeTempDataDir} from '../cli/test-fixtures.js'
+import {extractPrdRequirements} from './gates.js'
 
 const REPO = 'owner/app'
 const ISSUE = 123
@@ -312,6 +313,62 @@ describe('resolveSpec with regenerate:true (--supersede)', () => {
 })
 
 describe('gateSpec', () => {
+    it('carries frozen contracts and requirement IDs through malformed-output revisions', async () => {
+        const v2 = {
+            ...deps(),
+            snapshot: () =>
+                Promise.resolve({
+                    base_sha: 'a'.repeat(40),
+                    contracts: {'docs/architecture/overview.md': 'Use the existing auth service'},
+                }),
+        }
+        await resolveSpec(v2, REPO, ISSUE)
+        await writeScratch('generated.json', {invalid: 'keep this prior output'})
+        const revision = await gateSpec(v2, REPO, ISSUE)
+        expect(revision.kind).toBe('revise')
+        if (revision.kind !== 'revise') {
+            throw new Error('missing revision')
+        }
+        expect(JSON.stringify(revision.spawn.context)).toContain('Use the existing auth service')
+        expect(JSON.stringify(revision.spawn.context)).toContain('keep this prior output')
+        expect(JSON.stringify(revision.spawn.context)).toContain('R1')
+    })
+
+    it('rejects uncovered v2 requirements during generation instead of at run creation', async () => {
+        const v2 = {...deps(), snapshot: () => Promise.resolve({base_sha: 'a'.repeat(40), contracts: {}})}
+        await resolveSpec(v2, REPO, ISSUE)
+        await writeScratch('generated.json', {
+            ...PASS_GENERATED,
+            tasks: [{...PASS_TASK, slice_id: 'login', requirement_ids: ['R1']}],
+        })
+        const revision = await gateSpec(v2, REPO, ISSUE)
+        expect(revision).toMatchObject({kind: 'revise'})
+        if (revision.kind !== 'revise') {
+            throw new Error('missing revision')
+        }
+        expect(revision.blockers.join(' ')).toContain('uncovered requirement')
+    })
+
+    it('refuses to store output changed after the v2 gate/review snapshot', async () => {
+        const v2 = {...deps(), snapshot: () => Promise.resolve({base_sha: 'a'.repeat(40), contracts: {}})}
+        await resolveSpec(v2, REPO, ISSUE)
+        const generated = {
+            ...PASS_GENERATED,
+            tasks: [
+                {
+                    ...PASS_TASK,
+                    slice_id: 'login',
+                    requirement_ids: extractPrdRequirements(PRD_BODY).map((_, index) => `R${index + 1}`),
+                },
+            ],
+        }
+        await writeScratch('generated.json', generated)
+        expect(await gateSpec(v2, REPO, ISSUE)).toMatchObject({kind: 'review'})
+        await writeScratch('verdict.json', PASS_VERDICT)
+        await writeScratch('generated.json', {...generated, specMd: '# Replaced after review'})
+        await expect(storeSpec(v2, REPO, ISSUE)).rejects.toThrow('changed')
+    })
+
     it('emits revise(source=gate) when a deterministic gate blocks', async () => {
         await resolveSpec(deps(), REPO, ISSUE) // writes prd.json
         await writeScratch('generated.json', FAIL_GENERATED)
@@ -347,14 +404,20 @@ describe('gateSpec', () => {
         expect(env.verdict_path.endsWith('verdict.json')).toBe(true)
     })
 
-    it('fails LOUD on a legacy/invalid generated.json (untrusted agent boundary)', async () => {
+    it('returns invalid generated output through bounded revision with its validation errors', async () => {
         await resolveSpec(deps(), REPO, ISSUE)
         // A resurrected legacy classifier value must parse-fail, never silently coerce.
         await writeScratch('generated.json', {
             ...PASS_GENERATED,
             tasks: [{...PASS_TASK, risk_tier: 'routine'}],
         })
-        await expect(gateSpec(deps(), REPO, ISSUE)).rejects.toThrow()
+        const result = await gateSpec(deps(), REPO, ISSUE)
+        expect(result.kind).toBe('revise')
+        if (result.kind !== 'revise') {
+            throw new Error('expected revision')
+        }
+        expect(result.blockers.join(' ')).toContain('risk_tier')
+        expect(result.spawn.context.prior_spec_md).toContain('routine')
     })
 })
 

@@ -163,6 +163,34 @@ describe('traceability gate — BIDIRECTIONAL, PRD = axiom', () => {
 })
 
 describe('extractPrdRequirements', () => {
+    it('retains complete wrapped explicit requirements and acceptance bullets', () => {
+        expect(
+            extractPrdRequirements(
+                [
+                    '## Requirements',
+                    'R1. Reject malformed input',
+                    'without writing files.',
+                    'R2. Return all errors',
+                    'in input order.',
+                    '## Acceptance Criteria',
+                    '- Missing files exit 2',
+                    '  with empty stdout.',
+                    '',
+                    'Unrelated background.',
+                ].join('\n')
+            )
+        ).toEqual([
+            'Reject malformed input without writing files.',
+            'Return all errors in input order.',
+            'Missing files exit 2 with empty stdout.',
+        ])
+    })
+
+    it('ignores requirement-like text and exclusion headings in fenced examples', () => {
+        expect(
+            extractPrdRequirements('```text\nR1. Fake requirement\n## Out of Scope\n```\nR2. Real requirement\n')
+        ).toEqual(['Real requirement'])
+    })
     it('pulls bullets, numbered items, and normative sentences', () => {
         const reqs = extractPrdRequirements(
             '# Heading\n- bullet one\n1. numbered item\nThe app must persist sessions.\nplain prose line\n'

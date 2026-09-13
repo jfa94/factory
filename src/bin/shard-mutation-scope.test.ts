@@ -57,6 +57,15 @@ const added = (path: string): string =>
     ].join('\n')
 
 describe('mutation scope computation', () => {
+    it.each(['EACCES', 'EIO', 'ENOENT'])('fails loudly instead of dropping unreadable source (%s)', (code) => {
+        const read = (): string => {
+            throw Object.assign(new Error(code), {code})
+        }
+        expect(() => fullScope(['src'], () => 'src/critical.ts\n', read)).toThrow('cannot read src/critical.ts')
+        expect(() => diffScope('origin/develop', ['src'], () => added('src/critical.ts'), read)).toThrow(
+            'cannot read src/critical.ts'
+        )
+    })
     it('covers empty diffs, added files, padded hunks, deletion seams, and merged ranges', () => {
         expect(parseDiffToRanges('')).toEqual([])
         expect(parseDiffToRanges(added('src/new.ts'))).toEqual(['src/new.ts'])

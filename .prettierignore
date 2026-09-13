@@ -1,5 +1,6 @@
 node_modules/
 .claude/
+.code-review/
 dist/
 # Both rendered per-repo by scaffold from .factory/gates.json (D53), and drift is
 # measured against the RENDERED bytes — tabWidth:4 would reindent every scaffolded

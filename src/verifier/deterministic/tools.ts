@@ -11,7 +11,7 @@
  * clipped payload (exec.ts ExecResult.truncated contract).
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- fs on internal derived paths (run/spec/state/repo/data dirs), never external input; runtime write-danger is covered by the TCB write-deny hook */
-import {access, mkdtemp, readFile, rm, symlink} from 'node:fs/promises'
+import {access, mkdtemp, readFile, rm, symlink, unlink} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {at, exec, pathExists, type ExecResult} from '../../shared/index.js'
@@ -430,11 +430,20 @@ export class DefaultStrykerTool implements StrykerTool {
     ) {}
 
     async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
+        const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH)
+        // A failed run may leave the preceding slice's report untouched. Only a
+        // report produced by this invocation can establish its mutation score.
+        try {
+            await unlink(reportPath)
+        } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+                throw error
+            }
+        }
         const csv = mutate.map(escapeStrykerGlob).join(',')
         const proc = toProc(await runTool(this.resolve, 'stryker', ['run', '--mutate', csv], opts, this.env))
         // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
         // strategy branches on proc.code; we still attempt to read a report.
-        const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH)
         let raw: string
         try {
             raw = await readFile(reportPath, 'utf8')

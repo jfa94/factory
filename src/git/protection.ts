@@ -161,6 +161,26 @@ export async function provisionProtection(args: ProvisionProtectionArgs): Promis
     })
 }
 
+/** V2 uses one stable profile, preserving every unrelated protection setting. */
+export async function provisionStableProtection(args: ProvisionProtectionArgs): Promise<ProtectionState> {
+    if (!args.provision) {
+        throw new Error('stable protection changes require --provision')
+    }
+    const branch = args.branch ?? FALLBACK_STAGING_BRANCH
+    const state = await probeProtection({...args, branch})
+    if (!state.enabled) {
+        return provisionProtection(args)
+    }
+    if (state.strictUpToDate && args.requiredChecks.every((check) => state.requiredStatusChecks.includes(check))) {
+        return state
+    }
+    if (!args.ghClient.strengthenStatusChecks) {
+        throw new Error('client cannot preserve existing branch policy; configure required status checks manually')
+    }
+    await args.ghClient.strengthenStatusChecks(args.owner, args.repo, branch, args.requiredChecks)
+    return probeProtection({...args, branch})
+}
+
 /** Args to {@link putBaselineProtection}. */
 export interface PutBaselineProtectionArgs {
     ghClient: GhClient

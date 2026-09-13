@@ -1,5 +1,9 @@
 # Getting Started
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 This tutorial gets you from a fresh clone to a working build of the Dark Factory
 engine, and walks the deterministic CLI through a run so you can see the Model-A
 split first-hand. By the end you will have the test suite green, both bundles

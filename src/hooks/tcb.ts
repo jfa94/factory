@@ -222,17 +222,18 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
     //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
     if (ctx.dataDir != null && ctx.dataDir.length > 0) {
-        const runsDir = canonicalizePath(resolve(ctx.dataDir, 'runs'))
-        const specsDir = canonicalizePath(resolve(ctx.dataDir, 'specs'))
+        const dataDir = ctx.dataDir
+        const runDirs = ['runs', 'runs-v2', 'locks-v2'].map((dir) => canonicalizePath(resolve(dataDir, dir)))
+        const specDirs = ['specs', 'v2/specs'].map((dir) => canonicalizePath(resolve(dataDir, dir)))
         rules.push({
             category: 'data-runs',
-            describe: '<dataDir>/runs/** (run state, holdouts, reviews — Δ Y)',
-            test: (p) => isAtOrUnder(p, runsDir),
+            describe: '<dataDir>/{runs,runs-v2,locks-v2}/** (engine state, results and locks)',
+            test: (p) => runDirs.some((dir) => isAtOrUnder(p, dir)),
         })
         rules.push({
             category: 'data-specs',
-            describe: '<dataDir>/specs/** (durable spec store)',
-            test: (p) => isAtOrUnder(p, specsDir),
+            describe: '<dataDir>/{specs,v2/specs}/** (durable spec store)',
+            test: (p) => specDirs.some((dir) => isAtOrUnder(p, dir)),
         })
         const configFile = canonicalizePath(resolve(ctx.dataDir, 'config.json'))
         rules.push({

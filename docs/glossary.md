@@ -1,5 +1,9 @@
 # Glossary
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 ```yaml
 context: root
 purpose: Autonomously turn a human-written PRD into merged, quality-assured pull requests with no human in the loop.

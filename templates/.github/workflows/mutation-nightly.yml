@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: develop
+          ref: __FACTORY_BASE_BRANCH__
       - name: Compute and shard full mutable surface
         id: scope
         run: |
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: steps.slice.outputs.slice != ''
         with:
-          ref: develop
+          ref: __FACTORY_BASE_BRANCH__
       - name: Record checked-out develop SHA
         id: source
         if: steps.slice.outputs.slice != ''

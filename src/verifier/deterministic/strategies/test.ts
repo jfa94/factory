@@ -38,7 +38,7 @@ export const testStrategy: GateStrategy<GateTools> = {
                 await ctx.tools.command.run(command, {cwd: ctx.worktree})
             )
         }
-        const base = `origin/${ctx.baseRef}`
+        const base = /^[a-f0-9]{40,64}$/.test(ctx.baseRef) ? ctx.baseRef : `origin/${ctx.baseRef}`
         const changed = await ctx.tools.git.changedFiles(base, {cwd: ctx.worktree})
         const scoped = diffScopedTestFiles(changed)
         const runnable = scoped.filter(isVitestRunnable)

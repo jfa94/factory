@@ -75,7 +75,10 @@ export const SHARD_TEMPLATE = {
 export function shardTemplateBuildOptions() {
     return {
         ...common,
-        banner: {js: '#!/usr/bin/env node'},
+        // esbuild strips the source's equivalent inline rule annotation.
+        banner: {
+            js: '#!/usr/bin/env node\n/* eslint-disable security/detect-non-literal-fs-filename -- Reads Git paths constrained to validated repository roots; preserves the source annotation. */',
+        },
         entryPoints: [resolve(repoRoot, SHARD_TEMPLATE.entry)],
         outfile: resolve(repoRoot, SHARD_TEMPLATE.out),
     }

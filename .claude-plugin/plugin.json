@@ -1,6 +1,6 @@
 {
     "name": "factory",
-    "version": "1.47.2",
+    "version": "2.0.0-rc.1",
     "description": "Autonomous coding pipeline: converts GitHub PRD issues into merged pull requests with quality-first review gates",
     "author": {"name": "Javier Flores"}
 }

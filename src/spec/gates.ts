@@ -16,6 +16,7 @@
 import type {Prd} from './gh.js'
 import type {SpecTask} from './schema.js'
 import {nonNull} from '../shared/index.js'
+import {executionOrder} from './execution.js'
 
 /** Result of a single gate. */
 export interface GateResult {
@@ -298,17 +299,36 @@ const EXCLUDED_SECTION_HEADING = /^(out[ -]of[ -]scope|non[- ]?goals?|not doing|
  * Non-Goals / …) is skipped until the next heading of equal or higher level.
  */
 export function extractPrdRequirements(body: string): string[] {
-    const lines = body.split(/\r?\n/)
     const reqs: string[] = []
-    // ponytail: heading-level skip flag, not a markdown AST.
+    let pending: string[] = []
     let skipLevel: number | null = null
-    for (const raw of lines) {
+    let fence: string | undefined
+    const flush = (): void => {
+        if (pending.length > 0) {
+            reqs.push(pending.join(' '))
+            pending = []
+        }
+    }
+    for (const raw of body.split(/\r?\n/)) {
         const line = raw.trim()
+        const fenceMarker = /^(`{3,}|~{3,})/.exec(line)?.[1]
+        if (fence !== undefined) {
+            if (fenceMarker?.startsWith(fence) === true) {
+                fence = undefined
+            }
+            continue
+        }
+        if (fenceMarker !== undefined) {
+            fence = fenceMarker
+            continue
+        }
         if (line.length === 0) {
+            flush()
             continue
         }
         const heading = /^(#{1,6})\s+(.*)$/.exec(line)
         if (heading) {
+            flush()
             const level = nonNull(heading[1]).length
             if (skipLevel !== null && level <= skipLevel) {
                 skipLevel = null
@@ -321,21 +341,21 @@ export function extractPrdRequirements(body: string): string[] {
         if (skipLevel !== null) {
             continue
         }
-        // Bullet / numbered list item.
-        const bullet = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line)
-        const bulletBody = bullet?.[1]
-        if (bulletBody != null && bulletBody.trim().length > 0) {
-            reqs.push(bulletBody.trim())
-            continue
-        }
-        // Normative sentence.
-        if (/\b(must|shall|should|need to|required to)\b/i.test(line) && !line.startsWith('#')) {
-            reqs.push(line)
+        // Preserve wrapped prose until the next item, paragraph or heading.
+        const item = /^(?:[-*+]|\d+[.)]|R\d+[.):])\s+(.*)$/i.exec(line)?.[1]
+        if (item !== undefined) {
+            flush()
+            pending.push(item.trim())
+        } else if (/\b(must|shall|should|need to|required to)\b/i.test(line)) {
+            flush()
+            pending.push(line)
+        } else if (pending.length > 0) {
+            pending.push(line)
         }
     }
+    flush()
     return reqs
 }
-
 /** Does any acceptance criterion (across all tasks) cover this requirement? */
 function requirementCovered(requirement: string, allCriteria: string[]): boolean {
     const rk = keywords(requirement)
@@ -412,5 +432,12 @@ export function traceabilityGate(prd: Prd, tasks: SpecTask[]): GateResult {
 
 /** Run all three deterministic gates conjunctively. */
 export function runSpecGates(prd: Prd, tasks: SpecTask[]): GateResult {
-    return combineGates(verticalSliceGate(tasks), testabilityGate(tasks), traceabilityGate(prd, tasks))
+    const structural: GateResult = {passed: true, blockers: []}
+    try {
+        executionOrder(tasks)
+    } catch (error) {
+        structural.passed = false
+        structural.blockers.push(error instanceof Error ? error.message : String(error))
+    }
+    return combineGates(structural, verticalSliceGate(tasks), testabilityGate(tasks), traceabilityGate(prd, tasks))
 }

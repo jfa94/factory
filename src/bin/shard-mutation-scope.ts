@@ -43,9 +43,8 @@ export function isMutablePath(path: string): boolean {
 function isQuarantined(path: string, readText: ReadText): boolean {
     try {
         return readText(path).startsWith('// Stryker disable all')
-    } catch {
-        // A path missing from the checked-out tree cannot be mutated.
-        return true
+    } catch (cause) {
+        throw new Error(`mutation scope: cannot read ${path}`, {cause})
     }
 }
 

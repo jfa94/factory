@@ -54,7 +54,7 @@ describe('review base ref plumbing (Fix 2 regression guard)', () => {
         }
     )
 
-    it('the session runner substitutes <tenv.base_ref> into the reviewer prompt, against committed HEAD', () => {
-        expect(read('skills/pipeline-runner/SKILL.md')).toContain('diff <tenv.base_ref>..HEAD')
+    it('the v2 session runner reviews the exact persisted attempt commit range', () => {
+        expect(read('skills/pipeline-runner/SKILL.md')).toContain('git diff <attempt.base_sha>..<attempt.head_sha>')
     })
 })

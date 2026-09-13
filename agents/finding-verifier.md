@@ -5,7 +5,6 @@ tools: Bash, Read, Grep, Glob
 model: sonnet
 effort: high
 maxTurns: 30
-isolation: worktree
 ---
 
 # Finding Verifier

@@ -34,10 +34,12 @@ export const SpecTaskSchema = z
         /** What the task delivers. */
         description: z.string().min(1),
         /**
-         * The files this task touches — 1..3 (the ≤3-files granularity invariant the
-         * spec reviewer also enforces). Empty or >3 is a loud parse error.
+         * Exact repository-relative files touched by a coherent task. There is
+         * no arbitrary file cap; execution validation checks paths and dependencies.
          */
-        files: z.array(z.string().min(1)).min(1).max(3),
+        files: z.array(z.string().min(1)).min(1),
+        slice_id: z.string().min(1).optional(),
+        requirement_ids: z.array(z.string().min(1)).min(1).optional(),
         /** ≥1 acceptance criterion; each must be testable (gate enforces non-vagueness). */
         acceptance_criteria: z.array(z.string().min(1)).min(1),
         /** Concrete test descriptions to write first (TDD). ≥1. */

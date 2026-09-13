@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable security/detect-non-literal-fs-filename -- Reads Git paths constrained to validated repository roots; preserves the source annotation. */
 
 // src/bin/shard-mutation-scope.ts
 import { execFileSync } from "node:child_process";
@@ -50,8 +51,8 @@ function isMutablePath(path) {
 function isQuarantined(path, readText) {
   try {
     return readText(path).startsWith("// Stryker disable all");
-  } catch {
-    return true;
+  } catch (cause) {
+    throw new Error(`mutation scope: cannot read ${path}`, { cause });
   }
 }
 function parseDiffToRanges(diffText) {

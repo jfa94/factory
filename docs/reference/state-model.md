@@ -1,4 +1,32 @@
-# State Model
+# V2 state model
+
+The engine stores each run at `$CLAUDE_PLUGIN_DATA/runs-v2/<run-id>/`:
+
+- `state.json`: frozen spec and digest, task checkpoints, repair counters, stage,
+  attempt lease, answers, audit events and delivery.
+- `results/<attempt-id>.json`: journaled agent evidence.
+- `ledger.md`: readable projection of checkpoints, answers and audit events.
+
+Repository locks live in `locks-v2/`; durable generated specs live in `v2/specs/`.
+These directories are engine-owned and protected from producer writes. V1 state
+is preserved for diagnosis.
+
+An attempt binds its driver, stage, spec digest, base SHA, HEAD, roles and worktree.
+Missing results yield wait instead of duplicate dispatch. Stale or foreign-driver
+submissions fail. Explicit recovery consumes valid journaled evidence or retires
+the stopped attempt; rejected evidence and its reason remain retained.
+
+Statuses are running, waiting, parked, awaiting-merge, ready-for-review, completed
+and cancelled. The final three are terminal. Explicit stops require resume.
+
+Final acceptance records the verified feature HEAD and spec digest. Delivery must
+match both, so recovering an interrupted base integration requires verification.
+State and results use atomic writes; repository locks serialize transitions.
+Recovery preserves Git work and never resets or rewrites history.
+
+See [architecture](../architecture/overview.md) and [CLI](cli.md).
+
+## Historical v1 state model — not executable in v2
 
 All durable run and spec state lives **outside** the target repo, under the plugin
 data dir (`$CLAUDE_PLUGIN_DATA`, resolved by `src/config`). This is a hard

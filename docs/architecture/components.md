@@ -1,5 +1,9 @@
 # Components
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 The deterministic engine is organized into modules under `src/`, each owning one
 concern. This document describes the major building blocks and how they relate.
 For the system-level picture see [overview.md](./overview.md).

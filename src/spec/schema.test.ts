@@ -52,8 +52,8 @@ describe('Δ granularity — files 1..3 invariant', () => {
     it('rejects 0 files', () => {
         expect(() => SpecTaskSchema.parse({...validTask, files: []})).toThrow()
     })
-    it('rejects >3 files', () => {
-        expect(() => SpecTaskSchema.parse({...validTask, files: ['a', 'b', 'c', 'd']})).toThrow()
+    it('accepts cohesive changes spanning more than three files', () => {
+        expect(SpecTaskSchema.parse({...validTask, files: ['a', 'b', 'c', 'd']}).files).toEqual(['a', 'b', 'c', 'd'])
     })
     it('requires ≥1 acceptance criterion and ≥1 test', () => {
         expect(() => SpecTaskSchema.parse({...validTask, acceptance_criteria: []})).toThrow()

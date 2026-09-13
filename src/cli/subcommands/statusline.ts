@@ -37,6 +37,8 @@ import {nowEpoch as defaultNowEpoch} from '../../shared/time.js'
 import {exec} from '../../shared/exec.js'
 import {createLogger} from '../../shared/logging.js'
 import type {Subcommand} from '../registry-types.js'
+import {FeatureStore} from '../../feature/store.js'
+import {terminal} from '../../feature/schema.js'
 
 const log = createLogger('cli:statusline')
 
@@ -56,6 +58,8 @@ displayed statusline text, NOT a JSON envelope.`
 
 /** Dependencies for {@link runStatusline}, all injectable for tests. */
 export interface StatuslineDeps {
+    /** Production v2 status display; legacy rendering remains available for archived diagnostics. */
+    featureProgress?: boolean
     /** Data-dir resolution options (env / explicit dataDir override). */
     dataDirOptions?: DataDirOptions
     /** Injectable clock (epoch SECONDS) for deterministic tests. */
@@ -134,6 +138,12 @@ async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<s
         const gitClient = deps.gitClient ?? new DefaultGitClient()
         const repo = await resolveRepo({cwd, gitClient}) // throws (→ "") outside a checkout
         // Read THROUGH the symlink — no readlink dance, a dangling pointer just throws.
+        if (deps.featureProgress === true) {
+            const run = (await new FeatureStore(dataDir).list()).find((run) => run.repo === repo && !terminal(run))
+            return run === undefined
+                ? ''
+                : ` ${run.checkpoints.length}/${run.spec.tasks.length} tasks accepted (${run.status})`
+        }
         const raw = await readFile(join(currentRepoLinkPath(dataDir, repo), STATE_FILE), 'utf8')
         const run = JSON.parse(raw) as {
             run_id?: unknown

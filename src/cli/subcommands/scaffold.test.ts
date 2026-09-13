@@ -73,6 +73,7 @@ async function seedNpmFixture(dir: string): Promise<void> {
                 vitest: '^2.0.0',
                 '@stryker-mutator/core': '^8.0.0',
                 '@vitest/coverage-v8': '^2.0.0',
+                '@playwright/test': '^1.0.0',
             },
         }) + '\n',
         'utf8'
@@ -95,6 +96,29 @@ afterEach(async () => {
 })
 
 describe('runScaffold', () => {
+    it('does not introduce Playwright imports when the target does not declare Playwright', async () => {
+        const path = join(root, 'package.json')
+        const pkg = JSON.parse(await readFile(path, 'utf8')) as {devDependencies: Record<string, string>}
+        delete pkg.devDependencies['@playwright/test']
+        await writeFile(path, JSON.stringify(pkg))
+        const options = {
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: {...cfg, git: {...cfg.git, baseBranch: 'main'}},
+            dataDirRules: DATA_DIR_RULES,
+            ghClient: new FakeGhClient({protection: {main: PROTECTED}}),
+            provision: false,
+        }
+        const report = await runScaffold(options)
+        expect(report.files_created).not.toContain('playwright.config.ts')
+        expect(existsSync(join(root, 'e2e/example.spec.ts'))).toBe(false)
+        const workflow = await readFile(join(root, '.github/workflows/quality-gate.yml'), 'utf8')
+        expect(workflow).toContain('branches: ["main"]')
+        expect(workflow).not.toContain("if: github.base_ref == 'develop'")
+        expect((await runScaffold(options)).files_updated).toEqual([])
+    })
     it('copies the CI template + manages .gitignore, and reports protection on develop', async () => {
         const report = await runScaffold({
             targetRoot: root,
@@ -433,7 +457,7 @@ describe('runScaffold', () => {
         expect(gh.calls).toContain(`api PUT protection ${BASE}`)
     })
 
-    describe('D74 — run-scoped develop protection (the default mode)', () => {
+    describe('v2 stable develop protection', () => {
         const scaffoldArgs = (gh: FakeGhClient, extra: Partial<Parameters<typeof runScaffold>[0]> = {}) => ({
             targetRoot: root,
             templatesDir,
@@ -446,32 +470,28 @@ describe('runScaffold', () => {
             ...extra,
         })
 
-        it('--provision writes the BASELINE profile (baseline contexts, strict off, admins bypass)', async () => {
+        it('--provision enables the complete strict profile on an unprotected branch', async () => {
             const gh = new FakeGhClient() // starts unprotected
             const report = await runScaffold(scaffoldArgs(gh, {provision: true}))
             expect(gh.protectionPuts).toEqual([
                 {
                     branch: BASE,
-                    body: {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
+                    body: {requiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'], strict: true},
                 },
             ])
             expect(report.protection.provisioned).toBe(true)
-            expect(report.protection.strict_up_to_date).toBe(false)
-            expect(report.protection.required_status_checks).toEqual(['Quality', 'Security Scan'])
+            expect(report.protection.strict_up_to_date).toBe(true)
+            expect(report.protection.required_status_checks).toEqual(['Quality', 'Mutation Testing', 'Security Scan'])
         })
 
-        it('--provision DOWNGRADES a pre-existing permanent strict profile (the one-shot migration)', async () => {
+        it('--provision preserves a sufficient existing profile without any PUT', async () => {
             const gh = new FakeGhClient({protection: {[BASE]: PROTECTED}})
             const report = await runScaffold(scaffoldArgs(gh, {provision: true}))
-            expect(gh.protectionPuts.at(-1)?.body).toEqual({
-                requiredStatusChecks: ['Quality', 'Security Scan'],
-                strict: false,
-                enforceAdmins: false,
-            })
-            expect(report.protection.strict_up_to_date).toBe(false)
+            expect(gh.protectionPuts).toEqual([])
+            expect(report.protection.strict_up_to_date).toBe(true)
         })
 
-        it('baseline-shaped protection passes the RELAXED gate without --provision', async () => {
+        it('refuses the old relaxed baseline without --provision', async () => {
             const gh = new FakeGhClient({
                 protection: {
                     [BASE]: {
@@ -482,8 +502,7 @@ describe('runScaffold', () => {
                     },
                 },
             })
-            const report = await runScaffold(scaffoldArgs(gh))
-            expect(report.protection.enabled).toBe(true)
+            await expect(runScaffold(scaffoldArgs(gh))).rejects.toThrow(/strict/i)
             expect(gh.protectionPuts).toEqual([]) // probe-only, nothing written
         })
 
@@ -493,7 +512,7 @@ describe('runScaffold', () => {
                     [BASE]: {
                         enabled: true,
                         requiredStatusChecks: ['Quality'],
-                        strictUpToDate: false,
+                        strictUpToDate: true,
                         hasMergeQueue: false,
                     },
                 },
@@ -505,12 +524,13 @@ describe('runScaffold', () => {
             await expect(runScaffold(scaffoldArgs(new FakeGhClient()))).rejects.toThrow(/protection/i)
         })
 
-        it('--provision REFUSES while a run is active for the repo (would downgrade the escalated profile)', async () => {
+        it('--provision preserves strict protection even while a feature is active', async () => {
             const gh = new FakeGhClient({protection: {[BASE]: PROTECTED}})
-            await expect(
-                runScaffold(scaffoldArgs(gh, {provision: true, hasActiveRun: () => Promise.resolve(true)}))
-            ).rejects.toThrow(/active run/)
-            expect(gh.protectionPuts).toEqual([]) // refused BEFORE the PUT
+            const report = await runScaffold(
+                scaffoldArgs(gh, {provision: true, hasActiveRun: () => Promise.resolve(true)})
+            )
+            expect(report.protection.strict_up_to_date).toBe(true)
+            expect(gh.protectionPuts).toEqual([])
         })
 
         it('permanent mode REFUSES a baseline-shaped (strict-off) protection', async () => {
@@ -602,7 +622,7 @@ describe('runScaffold', () => {
     describe('stack-adaptive CI render (Decision 53)', () => {
         const wfPath = () => join(root, '.github', 'workflows', 'quality-gate.yml')
 
-        it('renders the npm-fixture workflow with npm steps (no pnpm, no auto-merge, staging-* triggers)', async () => {
+        it('renders npm steps and the configured integration branch without auto-merge', async () => {
             await runScaffold(baseArgs())
             const wf = await readFile(wfPath(), 'utf8')
             // The fixture has no lockfile → plain npm install; no scripts beyond build.
@@ -614,9 +634,9 @@ describe('runScaffold', () => {
             expect(wf).not.toContain('next typegen')
             // eslint is not installed in the fixture → lint gate uncontracted → audit comment.
             expect(wf).toContain('# lint gate uncontracted:')
-            // Engine owns merges; per-run staging branches match the trigger glob.
+            // Engine owns merges; feature PRs target the integration branch.
             expect(wf).not.toContain('gh pr merge')
-            expect(wf).toMatch(/branches: \[["']staging-\*["'], develop\]/)
+            expect(wf).toContain('branches: ["develop"]')
             // Mutation contracted (stryker devDep) → real mutation jobs, npm-ified.
             expect(wf).toContain('npx stryker run \\')
             expect(wf.match(/node-version-file: 'package\.json'/g)).toHaveLength(2)

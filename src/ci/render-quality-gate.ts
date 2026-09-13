@@ -52,6 +52,8 @@ function ciBuiltins(run: string, pm: 'pnpm' | 'npm'): Partial<Record<GateId, str
 }
 
 export interface RenderQualityGateOpts {
+    /** Integration branch; also controls the manual full-mutation checkout. */
+    readonly baseBranch?: string
     /** The repo's resolved gate contract (`.factory/gates.json`). */
     readonly contract: GateContract
     /** Lockfile-detected package manager (pnpm-lock.yaml → pnpm, else npm). */
@@ -150,22 +152,33 @@ function contractSetupSteps(steps: readonly SetupStep[], cond?: string): readonl
     const lines: string[] = []
     for (const step of steps) {
         if (step.uses !== undefined) {
-            lines.push(...(step.name === undefined ? [] : [`- name: ${step.name}`]))
-            lines.push(step.name === undefined ? `- uses: ${step.uses}` : `  uses: ${step.uses}`)
+            lines.push(...(step.name === undefined ? [] : [`- name: ${JSON.stringify(step.name)}`]))
+            lines.push(
+                step.name === undefined
+                    ? `- uses: ${JSON.stringify(step.uses)}`
+                    : `  uses: ${JSON.stringify(step.uses)}`
+            )
             if (cond !== undefined) {
                 lines.push(`  ${cond}`)
             }
             if (step.with !== undefined) {
-                lines.push('  with:', ...Object.entries(step.with).map(([k, v]) => `      ${k}: ${v}`))
+                lines.push(
+                    '  with:',
+                    ...Object.entries(step.with).map(([k, v]) => `      ${JSON.stringify(k)}: ${JSON.stringify(v)}`)
+                )
             }
         } else {
-            const head = step.name === undefined ? undefined : `- name: ${step.name}`
+            const head = step.name === undefined ? undefined : `- name: ${JSON.stringify(step.name)}`
             if (head !== undefined) {
-                lines.push(head, ...(cond === undefined ? [] : [`  ${cond}`]), `  run: ${step.run ?? ''}`)
+                lines.push(
+                    head,
+                    ...(cond === undefined ? [] : [`  ${cond}`]),
+                    `  run: ${JSON.stringify(step.run ?? '')}`
+                )
             } else if (cond !== undefined) {
-                lines.push(`- ${cond}`, `  run: ${step.run ?? ''}`)
+                lines.push(`- ${cond}`, `  run: ${JSON.stringify(step.run ?? '')}`)
             } else {
-                lines.push(`- run: ${step.run ?? ''}`)
+                lines.push(`- run: ${JSON.stringify(step.run ?? '')}`)
             }
         }
     }
@@ -330,7 +343,7 @@ export function renderMutationNightly(template: string, opts: RenderQualityGateO
     if (!opts.contract.gates.mutation.contracted) {
         return null
     }
-    let lines = template.split('\n')
+    let lines = renderBaseBranch(template, opts.baseBranch ?? 'develop').split('\n')
     lines = replaceMarker(lines, '# factory:mutation-setup', mutationSetupBlock(opts))
     lines = applyMutationRoots(lines, opts.contract)
     if (opts.packageManager === 'npm') {
@@ -351,9 +364,13 @@ export function renderQualityGate(template: string, opts: RenderQualityGateOpts)
                 'renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)'
         )
     }
-    let lines = template.split('\n')
+    let lines = renderBaseBranch(template, opts.baseBranch ?? 'develop').split('\n')
     lines = replaceMarker(lines, '# factory:setup', setupBlock(opts))
     lines = replaceMarker(lines, '# factory:gates', gatesBlock(opts))
     lines = renderMutationRegion(lines, opts)
     return lines.join('\n')
+}
+
+function renderBaseBranch(template: string, branch: string): string {
+    return template.replaceAll('__FACTORY_BASE_BRANCH__', JSON.stringify(branch))
 }

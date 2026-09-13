@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile2;
-      function readFile2(path, options, cb) {
+      fs2.readFile = readFile3;
+      function readFile3(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path, options, cb);
@@ -601,9 +601,9 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$readdir = fs2.readdir;
-      fs2.readdir = readdir2;
+      fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir2(path, options, cb) {
+      function readdir3(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path2, options2, cb2, startTime) {
@@ -1536,12 +1536,12 @@ var require_adapter = __commonJS({
       return newFs;
     }
     function toPromise(method) {
-      return (...args) => new Promise((resolve4, reject) => {
+      return (...args) => new Promise((resolve5, reject) => {
         args.push((err, result) => {
           if (err) {
             reject(err);
           } else {
-            resolve4(result);
+            resolve5(result);
           }
         });
         method(...args);
@@ -1687,7 +1687,7 @@ import { spawn } from "node:child_process";
 var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 function exec(command, args = [], opts = {}) {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
@@ -1744,7 +1744,7 @@ function exec(command, args = [], opts = {}) {
         return;
       }
       settled = true;
-      resolve4({
+      resolve5({
         stdout: Buffer.concat(outChunks).toString("utf8"),
         stderr: Buffer.concat(errChunks).toString("utf8"),
         code,
@@ -2303,6 +2303,10 @@ function parseHookInput(raw) {
   }
   return parsed;
 }
+async function readHookInput(stream) {
+  const raw = await readStdin(stream);
+  return parseHookInput(raw);
+}
 function commandOf(input) {
   return input?.tool_input?.command ?? "";
 }
@@ -2818,8 +2822,8 @@ var ZodError = class _ZodError extends Error {
           let i = 0;
           while (i < issue.path.length) {
             const el = issue.path[i];
-            const terminal = i === issue.path.length - 1;
-            if (!terminal) {
+            const terminal2 = i === issue.path.length - 1;
+            if (!terminal2) {
               curr[el] = curr[el] || { _errors: [] };
             } else {
               curr[el] = curr[el] || { _errors: [] };
@@ -6977,17 +6981,18 @@ function buildTcbRules(ctx = {}) {
     });
   }
   if (ctx.dataDir != null && ctx.dataDir.length > 0) {
-    const runsDir = canonicalizePath(resolve3(ctx.dataDir, "runs"));
-    const specsDir = canonicalizePath(resolve3(ctx.dataDir, "specs"));
+    const dataDir = ctx.dataDir;
+    const runDirs = ["runs", "runs-v2", "locks-v2"].map((dir) => canonicalizePath(resolve3(dataDir, dir)));
+    const specDirs = ["specs", "v2/specs"].map((dir) => canonicalizePath(resolve3(dataDir, dir)));
     rules.push({
       category: "data-runs",
-      describe: "<dataDir>/runs/** (run state, holdouts, reviews \u2014 \u0394 Y)",
-      test: (p) => isAtOrUnder(p, runsDir)
+      describe: "<dataDir>/{runs,runs-v2,locks-v2}/** (engine state, results and locks)",
+      test: (p) => runDirs.some((dir) => isAtOrUnder(p, dir))
     });
     rules.push({
       category: "data-specs",
-      describe: "<dataDir>/specs/** (durable spec store)",
-      test: (p) => isAtOrUnder(p, specsDir)
+      describe: "<dataDir>/{specs,v2/specs}/** (durable spec store)",
+      test: (p) => specDirs.some((dir) => isAtOrUnder(p, dir))
     });
     const configFile = canonicalizePath(resolve3(ctx.dataDir, "config.json"));
     rules.push({
@@ -9654,8 +9659,395 @@ function runSessionStart(_argv = [], deps = {}) {
   return EXIT.OK;
 }
 
+// src/hooks/feature-guards.ts
+import { relative as relative2, resolve as resolve4, sep as sep6 } from "node:path";
+
+// src/feature/store.ts
+import { readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
+import { join as join6 } from "node:path";
+
+// src/feature/schema.ts
+import { createHash } from "node:crypto";
+
+// src/spec/schema.ts
+var SpecTaskSchema = external_exports.object({
+  /** Stable task id within the spec (charset enforced by the consumer). */
+  task_id: external_exports.string().min(1),
+  /** Short human title. */
+  title: external_exports.string().min(1),
+  /** What the task delivers. */
+  description: external_exports.string().min(1),
+  /**
+   * Exact repository-relative files touched by a coherent task. There is
+   * no arbitrary file cap; execution validation checks paths and dependencies.
+   */
+  files: external_exports.array(external_exports.string().min(1)).min(1),
+  slice_id: external_exports.string().min(1).optional(),
+  requirement_ids: external_exports.array(external_exports.string().min(1)).min(1).optional(),
+  /** ≥1 acceptance criterion; each must be testable (gate enforces non-vagueness). */
+  acceptance_criteria: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Concrete test descriptions to write first (TDD). ≥1. */
+  tests_to_write: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Task ids this task depends on (may be empty for a root task). */
+  depends_on: external_exports.array(external_exports.string().min(1)).default([]),
+  /**
+   * The SINGLE producer dial (Decision 25) — the generator's whole-PRD
+   * difficulty×stakes judgment. Imported from the frozen seam; the legacy
+   * routine/feature/security values parse-fail here.
+   */
+  risk_tier: RiskTierEnum,
+  /** Why this tier — required so the dial is a judgment, not a coin flip. */
+  risk_rationale: external_exports.string().min(1),
+  /** Per-task TDD opt-out (read from the spec, never from runtime state). */
+  tdd_exempt: external_exports.boolean().optional()
+}).strict();
+var SpecTasksSchema = external_exports.array(SpecTaskSchema).min(1);
+var SpecManifestSchema = external_exports.object({
+  spec_id: external_exports.string().min(1),
+  issue_number: external_exports.number().int().positive(),
+  slug: external_exports.string().min(1),
+  /** Repo identity, e.g. "owner/name" (sanitized to a path segment by the store). */
+  repo: external_exports.string().min(1),
+  /** ISO-8601 creation timestamp. */
+  generated_at: external_exports.string().min(1),
+  tasks: SpecTasksSchema
+}).strict();
+var PrdSchema = external_exports.object({
+  issue_number: external_exports.number(),
+  title: external_exports.string(),
+  body: external_exports.string(),
+  labels: external_exports.array(external_exports.string()),
+  body_truncated: external_exports.boolean()
+}).strict();
+
+// src/feature/schema.ts
+var VERSION = 2;
+var IdSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+var ShaSchema = external_exports.string().regex(/^[a-f0-9]{40,64}$/);
+var FeatureTaskSchema = SpecTaskSchema.extend({
+  slice_id: IdSchema,
+  requirement_ids: external_exports.array(IdSchema).min(1)
+});
+var FeatureSpecSchema = external_exports.object({
+  version: external_exports.literal(VERSION),
+  revision: external_exports.number().int().positive(),
+  base_sha: ShaSchema,
+  prd: PrdSchema,
+  spec_md: external_exports.string().min(1),
+  contracts: external_exports.record(external_exports.string()),
+  tasks: external_exports.array(FeatureTaskSchema).min(1)
+}).strict();
+function digest(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+var StageSchema = external_exports.enum([
+  "prepare",
+  "tests",
+  "implement",
+  "task-check",
+  "task-review",
+  "slice-check",
+  "slice-review",
+  "docs",
+  "e2e-author",
+  "feature-check",
+  "feature-review",
+  "acceptance",
+  "confirm",
+  "spec-repair",
+  "spec-review",
+  "deliver"
+]);
+var ClaimSchema = external_exports.object({
+  id: IdSchema,
+  reviewer: external_exports.string().min(1),
+  severity: external_exports.enum(["important", "critical"]),
+  file: external_exports.string().min(1),
+  line: external_exports.number().int().positive(),
+  quote: external_exports.string().min(10),
+  claim: external_exports.string().min(1).max(300)
+});
+var AttemptSchema = external_exports.object({
+  id: IdSchema,
+  driver: external_exports.string().min(1),
+  stage: StageSchema,
+  base_sha: ShaSchema,
+  head_sha: ShaSchema,
+  spec_digest: external_exports.string(),
+  worktree: external_exports.string(),
+  roles: external_exports.array(external_exports.string()),
+  issued_at: external_exports.string()
+});
+var FeatureRunSchema = external_exports.object({
+  version: external_exports.literal(VERSION),
+  run_id: IdSchema,
+  repo: external_exports.string().min(1),
+  root: external_exports.string(),
+  branch: external_exports.string(),
+  worktree: external_exports.string(),
+  base_branch: external_exports.string(),
+  remote: external_exports.string(),
+  ship_mode: external_exports.enum(["live", "no-ship"]),
+  debug: external_exports.boolean(),
+  e2e: external_exports.boolean(),
+  ignore_quota: external_exports.boolean(),
+  owner_session: external_exports.string().optional(),
+  spec: FeatureSpecSchema,
+  spec_digest: external_exports.string(),
+  status: external_exports.enum([
+    "running",
+    "parked",
+    "waiting",
+    "awaiting-merge",
+    "ready-for-review",
+    "completed",
+    "cancelled"
+  ]),
+  wait_since: external_exports.string().optional(),
+  stop_reason: external_exports.object({
+    kind: external_exports.enum(["operator", "quota", "ci", "environment", "producer", "spec", "context"]),
+    message: external_exports.string()
+  }).optional(),
+  stage: StageSchema,
+  task_index: external_exports.number().int().min(0),
+  accepted_sha: ShaSchema,
+  verified_feature: external_exports.object({ head_sha: ShaSchema, spec_digest: external_exports.string() }).optional(),
+  task_base_sha: ShaSchema,
+  slice_base_sha: ShaSchema,
+  attempts: external_exports.record(external_exports.number().int().min(0)),
+  in_flight: AttemptSchema.optional(),
+  checkpoints: external_exports.array(external_exports.object({ task_id: IdSchema, head_sha: ShaSchema, spec_digest: external_exports.string() })),
+  answers: external_exports.array(external_exports.object({ task_id: IdSchema, question: external_exports.string(), answer: external_exports.string(), at: external_exports.string() })),
+  question: external_exports.string().optional(),
+  feedback: external_exports.array(external_exports.string()),
+  claims: external_exports.array(ClaimSchema),
+  after_confirm: StageSchema.optional(),
+  candidate_satisfied: external_exports.boolean(),
+  repaired_spec: FeatureSpecSchema.optional(),
+  delivery: external_exports.object({
+    pr_number: external_exports.number().int().positive().optional(),
+    head_sha: ShaSchema.optional(),
+    url: external_exports.string().optional(),
+    outcome: external_exports.enum(["merged", "no-change", "review"]).optional()
+  }),
+  audit: external_exports.array(
+    external_exports.object({ at: external_exports.string(), event: external_exports.string(), stage: StageSchema, head_sha: ShaSchema, details: external_exports.unknown() })
+  )
+}).strict();
+function terminal(run) {
+  return ["completed", "ready-for-review", "cancelled"].includes(run.status);
+}
+var ResultSchema = external_exports.object({
+  attempt_id: IdSchema,
+  spec_digest: external_exports.string(),
+  head_sha: ShaSchema,
+  status: external_exports.enum(["done", "already-satisfied", "needs-context", "spec-defect", "blocked"]),
+  message: external_exports.string().optional(),
+  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional(),
+  confirmations: external_exports.array(external_exports.object({ id: IdSchema, confirmed: external_exports.boolean(), evidence: external_exports.string().min(10) })).optional(),
+  acceptance: external_exports.array(external_exports.object({ id: external_exports.string(), met: external_exports.boolean(), evidence: external_exports.string().min(10) })).optional(),
+  repaired_spec: FeatureSpecSchema.optional()
+}).strict();
+
+// src/feature/store.ts
+var FeatureStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+  }
+  dir(id) {
+    return join6(this.dataDir, "runs-v2", IdSchema.parse(id));
+  }
+  async read(id) {
+    let raw;
+    try {
+      raw = JSON.parse(await readFile2(join6(this.dir(id), "state.json"), "utf8"));
+    } catch (error) {
+      if (isEnoent(error)) {
+        throw new Error(
+          `run ${id} is missing or uses an unsupported version; start a fresh v2 run (legacy artifacts are preserved)`
+        );
+      }
+      throw error;
+    }
+    const run = FeatureRunSchema.parse(raw);
+    if (run.run_id !== id || digest(run.spec) !== run.spec_digest) {
+      throw new Error(`run ${id}: corrupt identity or spec snapshot`);
+    }
+    return run;
+  }
+  async list() {
+    let names;
+    try {
+      names = await readdir2(join6(this.dataDir, "runs-v2"));
+    } catch (error) {
+      if (isEnoent(error)) {
+        return [];
+      }
+      throw error;
+    }
+    return Promise.all(names.filter((name) => IdSchema.safeParse(name).success).map((name) => this.read(name)));
+  }
+  async write(run) {
+    const checked = FeatureRunSchema.parse(run);
+    if (digest(checked.spec) !== checked.spec_digest) {
+      throw new Error("spec snapshot digest mismatch");
+    }
+    const dir = this.dir(run.run_id);
+    await atomicWriteFile(join6(dir, "state.json"), JSON.stringify(checked, null, 2) + "\n");
+    await atomicWriteFile(join6(dir, "ledger.md"), renderLedger(checked));
+  }
+  async withRepo(repo, fn) {
+    const dir = join6(this.dataDir, "locks-v2");
+    return withFileLock(
+      {
+        dir,
+        lockfile: join6(dir, digest(repo)),
+        label: repo,
+        dirPolicy: "create",
+        tuning: DEFAULT_FILE_LOCK_TUNING
+      },
+      fn
+    );
+  }
+  async recordResult(id, result) {
+    const checked = ResultSchema.parse(result);
+    await atomicWriteFile(join6(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
+  }
+  async result(id, attemptId) {
+    try {
+      return ResultSchema.parse(
+        JSON.parse(await readFile2(join6(this.dir(id), "results", `${IdSchema.parse(attemptId)}.json`), "utf8"))
+      );
+    } catch (error) {
+      if (isEnoent(error)) {
+        return void 0;
+      }
+      throw error;
+    }
+  }
+};
+function renderLedger(run) {
+  return [
+    `# Feature ${run.run_id}`,
+    "",
+    `Status: ${run.status}. Resume: ${run.stage}, task ${run.task_index + 1}.`,
+    `Branch: ${run.branch}. Accepted HEAD: ${run.accepted_sha}. Spec: ${run.spec_digest}.`,
+    run.stop_reason ? `Stopped: ${run.stop_reason.kind}: ${run.stop_reason.message}` : "",
+    "",
+    "## Accepted tasks",
+    "",
+    ...run.checkpoints.map((row) => `- ${row.task_id}: ${row.head_sha}`),
+    "",
+    "## Answers",
+    "",
+    ...run.answers.map((row) => `- ${row.task_id}: ${row.question}
+  Answer: ${row.answer}`),
+    "",
+    "## Audit",
+    "",
+    ...run.audit.map(
+      (row) => `- ${row.at} ${row.stage}: ${row.event} (${row.head_sha})
+  ${JSON.stringify(row.details)}`
+    ),
+    ""
+  ].join("\n");
+}
+
+// src/hooks/feature-guards.ts
+function inside(root, path) {
+  const rel = relative2(canonicalizePath(root), canonicalizePath(path));
+  return rel === "" || !rel.startsWith(`..${sep6}`) && rel !== ".." && !rel.startsWith(sep6);
+}
+function decideFeatureGuard(input, runs, dataDir) {
+  if (input === null) {
+    return allow();
+  }
+  const cwd = input.cwd ?? process.cwd();
+  const paths = filePathsOf(input).map((path) => resolve4(cwd, path));
+  const session = sessionIdOf(input);
+  for (const run of runs) {
+    if (terminal(run)) {
+      continue;
+    }
+    const attempt = run.in_flight;
+    const roots = [run.worktree, ...attempt ? [attempt.worktree] : []];
+    const ownsPath = roots.some((root) => inside(root, cwd) || paths.some((path) => inside(root, path)));
+    if (!ownsPath && !(session !== void 0 && session === run.owner_session)) {
+      continue;
+    }
+    const command = commandOf(input);
+    const targets = [...paths, ...bashWriteTargets(command)];
+    for (const target of targets) {
+      const match = isTcbProtected(target, { repoRoot: run.root, dataDir }, cwd);
+      if (match?.rule.category.startsWith("data-") === true) {
+        return deny("Factory: engine state, results, locks and durable specs are read-only to agents");
+      }
+    }
+    if (isNestedShellOrHookBypass(command)) {
+      return deny("Factory: nested shell or hook bypass is forbidden");
+    }
+    if (/(^|[\s&;|(])gh\s+pr\s+(create|merge|close)\b/.test(command) || /(^|[\s&;|(])git\s+push\b/.test(command)) {
+      return deny("Factory: only the delivery engine may publish the feature");
+    }
+    if (attempt) {
+      const producer = ["tests", "implement", "docs", "e2e-author", "spec-repair"].includes(attempt.stage);
+      for (const path of paths) {
+        if (!roots.some((root) => inside(root, path))) {
+          continue;
+        }
+        if (!producer) {
+          return deny("Factory: independent review snapshots are read-only");
+        }
+        if (attempt.stage === "tests" && !isTestPath(relative2(run.worktree, path))) {
+          return deny("Factory: test-writer may edit only test paths");
+        }
+      }
+    }
+  }
+  return allow();
+}
+async function runFeatureGuard(_argv = []) {
+  let decision;
+  try {
+    const input = await readHookInput();
+    const dataDir = resolveDataDir();
+    decision = decideFeatureGuard(input, await new FeatureStore(dataDir).list(), dataDir);
+  } catch (error) {
+    decision = deny(
+      `Factory feature state cannot be checked: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  emitPermissionDecision(decision);
+  return decisionToExitCode(decision);
+}
+async function runFeatureStop(_argv = []) {
+  try {
+    const input = await readHookInput();
+    const session = sessionIdOf(input);
+    if (session === void 0) {
+      return EXIT.OK;
+    }
+    const runs = await new FeatureStore(resolveDataDir()).list();
+    for (const run of runs) {
+      if (!terminal(run) && run.owner_session === session) {
+        process.stderr.write(
+          `Factory ${run.run_id}: ${run.status}; inspect factory state --run ${run.run_id} --ledger before resuming.
+`
+        );
+      }
+    }
+    return EXIT.OK;
+  } catch (error) {
+    process.stderr.write(`Factory stop state error: ${error instanceof Error ? error.message : String(error)}
+`);
+    return EXIT.ERROR;
+  }
+}
+
 // src/hooks/main.ts
 var hookRegistry = {
+  "feature-guards": { describe: "PreToolUse: v2 producer scope and publication ownership", run: runFeatureGuard },
+  "feature-stop": { describe: "Stop: report owned v2 runs without mutating state", run: runFeatureStop },
   "branch-protection": {
     describe: "PreToolUse Bash: block destructive git ops on protected branches",
     run: (argv) => runBranchProtection(argv)

@@ -2,7 +2,7 @@ name: Quality Gate
 
 on:
   pull_request:
-    branches: ["staging-*", develop]
+    branches: [__FACTORY_BASE_BRANCH__]
 
 concurrency:
   group: quality-${{ github.head_ref }}
@@ -67,7 +67,6 @@ jobs:
     name: Mutation Scope
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.base_ref == 'develop'
     needs: quality
     outputs:
       shards: ${{ steps.scope.outputs.shards }}

@@ -1,58 +1,39 @@
-/**
- * S1/3c self-heal regression guard — `next.ts` has emitted `work.stale` since the
- * stall-TTL landed, but nothing in `skills/pipeline-runner/SKILL.md` (the runner
- * protocol) ever consumed it: no `stale` branch in the `work` case, and no
- * non-completion wake source (a silently-dead spawn produces no completion event,
- * so the runner would never re-observe `work.stale` to act on it). Both gaps are
- * fixed in the SAME markdown (the runner has no compiled surface the typechecker
- * sees), so this scans it the same way `review-base-ref.test.ts` guards its own
- * protocol fact — a grep-guard is the only thing that catches a regression here.
- */
+/** Runner instructions are executable policy; guard the v2 recovery contract. */
 import {readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
-
 import {describe, expect, it} from 'vitest'
 
 const repoRoot = resolve(fileURLToPath(import.meta.url), '../../..')
 const skill = readFileSync(resolve(repoRoot, 'skills/pipeline-runner/SKILL.md'), 'utf8')
 
-describe('runner protocol wires the S1/3c stall-TTL self-heal', () => {
-    it('the work case consumes env.stale (not just env.ready)', () => {
-        expect(skill).toContain('env.stale')
+describe('v2 runner recovery protocol', () => {
+    it('uses persisted attempt identities for dispatch and result submission', () => {
+        expect(skill).toContain('save the attempt identity before dispatch')
+        expect(skill).toContain('--driver <session> --results <file>')
     })
-
-    it('a stale task is stopped and re-driven WITHOUT --results (idempotent reset+respawn)', () => {
-        expect(skill).toContain('TaskStop each tracked agent id')
-        expect(skill).toMatch(/next-action --run <run_id> --task <task>\s+# WITHOUT --results/)
+    it('never dispatches an outstanding attempt twice', () => {
+        expect(skill).toContain('never dispatch it twice')
+        expect(skill).toContain('retry_after_seconds')
     })
-
-    it('a stale re-drive requires POSITIVE death evidence — absence of information never kills (Decision 66 addendum)', () => {
-        expect(skill).toContain('POSITIVE evidence of death')
-        expect(skill).toContain('is NOT death evidence')
-        expect(skill).toContain('false positive')
+    it('requires evidence that the previous worker stopped before recovery', () => {
+        expect(skill).toContain('first establish that it has stopped')
+        expect(skill).toContain('factory resume --run <id> --recover')
     })
-
-    // Decision 66: the HARD band — hung spawns are killed even if alive, before the
-    // advisory stale handling; the engine bounds the loop via SPAWN_REDRIVE_CAP.
-    it('the work case consumes env.hung and kills a hung spawn even if alive (no liveness check)', () => {
-        expect(skill).toContain('env.hung')
-        expect(skill).toContain('EVEN IF STILL RUNNING')
+    it('preserves interrupted work instead of resetting a task branch', () => {
+        expect(skill).toContain('retires its lease while retaining')
+        expect(skill).toContain('Do not reset')
+        expect(skill).toContain('Do not create task branches')
     })
-
-    it('a hung task is re-driven WITHOUT --results and its over-cap failure is reported', () => {
-        // Two re-drive sites (hung + stale) share the exact command shape.
-        const redrives = skill.match(/next-action --run <run_id> --task <task>\s+# WITHOUT --results/g)
-        expect(redrives?.length).toBeGreaterThanOrEqual(2)
-        expect(skill).toContain('SPAWN_REDRIVE_CAP')
+    it('rejects late results instead of reassigning their identity', () => {
+        expect(skill).toContain('do not relabel it as a new attempt')
     })
-
-    it('the runner arms a non-completion heartbeat sized to the configured TTL', () => {
-        expect(skill).toContain('CronCreate')
-        expect(skill).toContain('stallTtlMinutes')
+    it('stops on a park even when quota recovers', () => {
+        expect(skill).toContain('Explicit resume is')
+        expect(skill).toContain('required, even if quota recovers')
     })
-
-    it('compaction/resume recovery re-arms the heartbeat (session-scoped cron jobs do not survive it)', () => {
-        expect(skill).toContain('re-arm the heartbeat')
+    it('reloads the persisted ledger and retains answers on resume', () => {
+        expect(skill).toContain('factory state --run <id> --ledger')
+        expect(skill).toContain('Answers remain in the ledger')
     })
 })

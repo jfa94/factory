@@ -9,6 +9,7 @@
 import {describe, it, expect, beforeAll} from 'vitest'
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
+import {parseDocument} from 'yaml'
 import {
     renderQualityGate,
     renderMutationNightly,
@@ -71,6 +72,30 @@ const PNPM_OPTS: RenderQualityGateOpts = {
 }
 
 describe('renderQualityGate — npm stack', () => {
+    it.each(['main', 'release/canary', 'release"quoted'])(
+        'targets only configured base %s in both workflows',
+        async (baseBranch) => {
+            const opts = {...NPM_OPTS, baseBranch}
+            const quality = parseDocument(renderQualityGate(template, opts)).toJS() as {
+                on: {pull_request: {branches: string[]}}
+                jobs: Record<string, {if?: string}>
+            }
+            expect(quality.on.pull_request.branches).toEqual([baseBranch])
+            expect(quality.jobs['mutation-scope']?.if).toBeUndefined()
+            const nightly = await readFile(
+                join(resolveTemplatesDir(), '.github/workflows/mutation-nightly.yml'),
+                'utf8'
+            )
+            const full = parseDocument(renderMutationNightly(nightly, opts) ?? '').toJS() as {
+                jobs: Record<string, {steps: {uses?: string; with?: {ref?: string}}[]}>
+            }
+            const checkouts = Object.values(full.jobs)
+                .flatMap((job) => job.steps)
+                .filter((step) => step.uses?.startsWith('actions/checkout@') === true)
+            expect(checkouts).toHaveLength(2)
+            expect(checkouts.map((step) => step.with?.ref)).toEqual([baseBranch, baseBranch])
+        }
+    )
     it('renders npm setup: setup-node with npm cache + npm ci; no pnpm anywhere', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).toContain('cache: npm')
@@ -224,12 +249,12 @@ describe('renderQualityGate — contract setup_steps (Decision 73)', () => {
 
     it('renders uses-steps (with inputs) and named run-steps after the quality-job package setup', () => {
         const out = renderQualityGate(template, optsWithSteps)
-        expect(out).toContain('- uses: supabase/setup-cli@v1')
-        expect(out).toContain('version: latest')
-        expect(out).toContain('- name: Boot Supabase')
-        expect(out).toContain('run: supabase start')
+        expect(out).toContain('- uses: "supabase/setup-cli@v1"')
+        expect(out).toContain('"version": "latest"')
+        expect(out).toContain('- name: "Boot Supabase"')
+        expect(out).toContain('run: "supabase start"')
         // After the package-manager install, before the gates.
-        expect(out.indexOf('- run: npm ci')).toBeLessThan(out.indexOf('- uses: supabase/setup-cli@v1'))
+        expect(out.indexOf('- run: npm ci')).toBeLessThan(out.indexOf('- uses: "supabase/setup-cli@v1"'))
         expect(out.indexOf('supabase start')).toBeLessThan(out.indexOf('- run: npx tsc --noEmit'))
     })
 
@@ -243,6 +268,35 @@ describe('renderQualityGate — contract setup_steps (Decision 73)', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).not.toContain('supabase')
     })
+
+    it('preserves YAML-sensitive strings in every quality and mutation setup job', () => {
+        const setup_steps = [
+            {name: 'Boot: database', run: 'echo "Status: ready # now"\nsupabase start\n'},
+            {run: 'echo "hello # world"'},
+            {uses: 'example/setup@v1', with: {version: '1.20', on: 'false', 'a: b': '${{ vars.INPUT }}'}},
+        ]
+        const out = renderQualityGate(template, {...NPM_OPTS, contract: {...npmContract(), setup_steps}})
+        const document = parseDocument(out)
+        expect(document.errors).toEqual([])
+        const jobs = document.get('jobs', true)
+        const rendered = String(jobs)
+        expect(rendered).toContain('supabase start')
+        const workflow = document.toJS() as {jobs: Record<string, {steps?: unknown[]}>}
+        const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+        for (const step of setup_steps) {
+            expect(
+                steps.filter((value) => {
+                    if (typeof value !== 'object' || value === null) {
+                        return false
+                    }
+                    const row = value as Record<string, unknown>
+                    return Object.entries(step).every(
+                        ([key, expected]) => JSON.stringify(row[key]) === JSON.stringify(expected)
+                    )
+                })
+            ).toHaveLength(2)
+        }
+    })
 })
 
 describe('renderQualityGate — structure invariants', () => {
@@ -255,9 +309,9 @@ describe('renderQualityGate — structure invariants', () => {
         expect(out).not.toContain('gh pr merge')
     })
 
-    it('triggers on per-run staging branches and develop', () => {
+    it('defaults to the develop integration branch only', () => {
         const out = renderQualityGate(template, NPM_OPTS)
-        expect(out).toMatch(/branches: \[["']staging-\*["'], develop\]/)
+        expect(out).toContain('branches: ["develop"]')
     })
 
     it('leaves no factory markers behind except gate-env (downstream injection point)', () => {

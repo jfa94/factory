@@ -1,5 +1,9 @@
 # How to Configure the Factory
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 All settings live in one schema with defaults; you override them in a sparse
 overlay. Edits round-trip through the schema before they touch disk, so an invalid
 value is rejected loudly and never persisted. For every key, type, and default see

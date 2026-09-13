@@ -1,5 +1,9 @@
 # Configuration Schema
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 All configuration lives in one Zod schema, `src/config/schema.ts`, where every
 field carries a default. `ConfigSchema.parse({})` yields a complete, typed config,
 so a missing config file is equivalent to all-defaults. Inspect and edit the

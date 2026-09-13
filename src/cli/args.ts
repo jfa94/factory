@@ -29,6 +29,8 @@ export interface ParsedArgs {
 }
 
 export interface ParseOptions {
+    /** Optional closed set for command surfaces that reject retired/unknown flags. */
+    allowed?: readonly string[]
     /** Flags that take NO value (presence ⇒ `true`). `help` is always included. */
     booleans?: readonly string[]
 }
@@ -39,6 +41,9 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
     const values = new Map<string, (string | boolean)[]>()
 
     const push = (name: string, value: string | boolean): void => {
+        if (opts.allowed !== undefined && !['help', 'h', ...opts.allowed].includes(name)) {
+            throw new UsageError(`unsupported --${name}`)
+        }
         const list = values.get(name) ?? []
         list.push(value)
         values.set(name, list)

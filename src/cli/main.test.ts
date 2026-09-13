@@ -71,7 +71,7 @@ describe('cli dispatch', () => {
         })
         const code = await dispatch(['resume', '--help'])
         expect(code).toBe(EXIT.OK)
-        expect(chunks.join('')).toContain('re-check quota')
+        expect(chunks.join('')).toContain('resume --run <id> [--answer <text>] [--recover]')
     })
 
     it("'run resume' is no longer an alias — usage error at dispatch", async () => {

@@ -1,5 +1,9 @@
 # Engine vocabulary
 
+> Historical v1 reference. Its execution and recovery instructions do not apply
+> to v2. Start with [the current architecture](../architecture/overview.md) and the
+> current CLI/runner protocol linked there.
+
 The control-flow words the factory uses, and what each one actually does. This is
 the mechanism reference; for the domain glossary (Holdout, Risk Tier, the gates,
 ship/staging/develop) see [glossary.md](../glossary.md).

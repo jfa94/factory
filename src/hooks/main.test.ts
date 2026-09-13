@@ -22,6 +22,8 @@ describe('hook dispatch', () => {
         // WS9 registers the real guards; the seam stays extensible.
         expect(Object.keys(hookRegistry).sort()).toEqual([
             'branch-protection',
+            'feature-guards',
+            'feature-stop',
             'holdout-guard',
             'pipeline-guards',
             'secret-guard',

@@ -27,6 +27,7 @@ import {dirname, join, relative} from 'node:path'
 import {fileURLToPath} from 'node:url'
 
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {provisionStableProtection} from '../../git/protection.js'
 import {parseArgs, optionalString} from '../args.js'
 import {emitJson, emitHelp} from '../io.js'
 import {createLogger, nonNull} from '../../shared/index.js'
@@ -36,9 +37,7 @@ import {
     DefaultGhClient,
     probeProtection,
     requireProtectionOrRefuse,
-    provisionProtection,
     effectiveProfiles,
-    putBaselineProtection,
     resolveRepo,
     splitRepoSlug,
     type GitClient,
@@ -66,55 +65,30 @@ import {withUsageGuard, type Subcommand} from '../registry-types.js'
 
 const log = createLogger('scaffold')
 
-const HELP = `factory scaffold — prepare a repo for the factory pipeline
+const HELP = `factory scaffold — prepare a repo for Factory v2
 
 Usage:
   factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage] [--force-managed]
 
-Copies the committed CI + gate-config templates and probes branch protection on
-develop (the integration base). Default mode (git.developProtection=run-scoped, D74):
-an UNPROTECTED develop causes scaffold to REFUSE loudly; --provision writes the light
-BASELINE profile (git.developBaselineStatusChecks required for non-admins, strict off,
-admins push freely) — the strict CI profile is escalated per-run at run create and
-dropped when the run ends. Under git.developProtection=permanent the strict profile
-(strict up-to-date + git.developRequiredStatusChecks) is asserted/provisioned instead
-and never removed. Per-run staging branches are minted at run create — scaffold no
-longer touches them. The managed quality-gate.yml is rendered with the configured
-quality.gateEnv (set via 'factory configure --set quality.gateEnv.<KEY>=<value>').
+Writes the committed gate contract and CI workflows for git.baseBranch (default:
+develop). Requires stable strict branch protection with the configured required
+checks. --provision creates or strengthens protection; it never downgrades it.
+Runs do not change protection. One PRD produces one feature branch and one PR.
 
 Options:
-  --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
-                        Auto-derived from the 'origin' remote when omitted; an
-                        explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse). In
-                        run-scoped mode the PUT always writes the BASELINE profile —
-                        re-running it is also the one-shot migration off the old
-                        permanent strict profile (refused while a run is active).
-  --waive mutation      Record the mutation gate as deliberately waived in the gate
-                        contract instead of refusing when stryker is not installed
-  --waive coverage      Record the coverage gate as deliberately waived instead of
-                        refusing when no vitest coverage provider is installed
-  --force-managed       Re-adopt conflicted MANAGED files: overwrite a customized
-                        managed file with the plugin template and re-record its
-                        hash (default: a customized managed file is a
-                        files_conflict refusal with zero writes). Never
-                        authorizes DELETING a customized stale nightly —
-                        force only overwrites toward the shipped template
+  --repo <owner/name>   Defaults to origin; a mismatch refuses.
+  --provision          Create or strengthen strict protection (external write).
+  --waive mutation     Explicitly waive mutation in a new gate contract.
+  --waive coverage     Explicitly waive coverage in a new gate contract.
+  --force-managed      Re-adopt customized managed files. Never deletes a
+                       customized stale workflow.
 
-Also resolves + writes the GATE CONTRACT (.factory/gates.json, Decision 46): the
-committed per-gate applicability agreement. Refuses below the floor (test + type +
-build equivalents must be contractable). COMMIT the file — 'factory run' requires
-it tracked. The contract is seed-like: an existing valid gates.json is never
-touched — delete it and re-scaffold to pick up new resolution rules (e.g. the
-S8 coverage flip).
-
-Re-scaffold refreshes OUTDATED files fail-safe: managed files (the CI net) only
-when provably PRISTINE (bytes match the committed .factory/scaffold.lock managed
-hash, or the new render) — a customized managed file is a files_conflict refusal
-with ZERO writes unless --force-managed re-adopts it; seed configs refresh ONLY
-while pristine per the lock's seed hashes. A customized seed is project-owned and
-never overwritten; delete it and re-scaffold to re-adopt the latest baseline.`
-
+Commit .factory/gates.json, .factory/scaffold.lock and generated workflows before
+creating a run. Existing valid contracts and customized seed configs are preserved.
+Pristine managed files update automatically; customized managed files refuse before
+writes unless --force-managed is supplied. Playwright seeds require a declared
+@playwright/test dependency; scaffold does not install it.
+Build environment comes from quality.gateEnv.`
 /**
  * The `.gitignore` lines scaffold guarantees. Two invariants drive the list:
  *
@@ -600,13 +574,14 @@ function managedTransform(
     rel: string,
     contract: GateContract,
     facts: WorkflowFacts,
-    gateEnv: Config['quality']['gateEnv']
+    gateEnv: Config['quality']['gateEnv'],
+    baseBranch: string
 ): ((text: string) => string) | undefined {
     if (rel === QUALITY_GATE_REL) {
-        return (text) => injectGateEnvIntoWorkflow(renderQualityGate(text, {contract, ...facts}), gateEnv)
+        return (text) => injectGateEnvIntoWorkflow(renderQualityGate(text, {contract, ...facts, baseBranch}), gateEnv)
     }
     if (rel === MUTATION_NIGHTLY_REL) {
-        return (text) => nonNull(renderMutationNightly(text, {contract, ...facts}))
+        return (text) => nonNull(renderMutationNightly(text, {contract, ...facts, baseBranch}))
     }
     return undefined
 }
@@ -673,7 +648,13 @@ async function preflightManagedFiles(
             continue
         }
         const destText = await readFile(dest, 'utf8')
-        const transform = managedTransform(entry.rel, contract, facts, opts.config.quality.gateEnv)
+        const transform = managedTransform(
+            entry.rel,
+            contract,
+            facts,
+            opts.config.quality.gateEnv,
+            opts.config.git.baseBranch
+        )
         const text = await readFile(src, 'utf8')
         const rendered = transform ? transform(text) : text
         if (destText === rendered) {
@@ -750,6 +731,15 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     const lists: FileLists = {created: [], present: [], updated: [], removed: []}
 
     const isNodePackage = existsSync(join(opts.targetRoot, 'package.json'))
+    const pkg = isNodePackage
+        ? (JSON.parse(await readFile(join(opts.targetRoot, 'package.json'), 'utf8')) as {
+              dependencies?: Record<string, string>
+              devDependencies?: Record<string, string>
+          })
+        : undefined
+    const hasPlaywright =
+        pkg?.dependencies?.['@playwright/test'] !== undefined ||
+        pkg?.devDependencies?.['@playwright/test'] !== undefined
     // May throw (5d): a well-formed lock with an unsupported version refuses
     // before any write. A garbage V1 lock degrades + is marked dirty so the
     // first persist rewrites it valid.
@@ -827,6 +817,10 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     for (const entry of TEMPLATE_MANIFEST) {
         if (CI_NET_RELS.includes(entry.rel) || entry.rel === STRYKER_SEED_REL) {
             continue // the managed CI net + stryker seed render AFTER the contract (pass 2)
+        }
+        if (!hasPlaywright && (entry.rel === 'playwright.config.ts' || entry.rel === 'e2e/example.spec.ts')) {
+            log.info(`not seeding ${entry.rel}: @playwright/test is not declared; install it before opting into e2e`)
+            continue
         }
         if (entry.nodeOnly === true && !isNodePackage) {
             continue
@@ -907,7 +901,13 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
             if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
                 continue
             }
-            const transform = managedTransform(entry.rel, gates.contract, facts, opts.config.quality.gateEnv)
+            const transform = managedTransform(
+                entry.rel,
+                gates.contract,
+                facts,
+                opts.config.quality.gateEnv,
+                opts.config.git.baseBranch
+            )
             await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock, transform)
         }
         // Persist the CI-net hashes now, before the stale-nightly removal below can
@@ -976,63 +976,23 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
         lists.present.push(settingsRel)
     }
 
-    // 4. branch protection on develop: probe → refuse-if-missing, OR provision when opted in.
-    //    develop is a PRECONDITION — scaffold does not create it (a missing develop
-    //    makes the probe fail loud, which is acceptable).
-    //    D74 (run-scoped, default): `--provision` writes the light BASELINE profile
-    //    (developBaselineStatusChecks for non-admins, strict off, admins bypass) —
-    //    the strict run profile is escalated per-run at `run create` and dropped at
-    //    every run-terminal path. The unconditional PUT is also the one-shot
-    //    migration for repos stuck on the old permanent strict profile.
-    //    `permanent`: the pre-D74 behavior verbatim.
+    // One stable strict profile. No run-time downgrade and no full replacement
+    // of an existing branch's review/restriction/admin policy.
     const branch = opts.config.git.baseBranch
-    const runScoped = opts.config.git.developProtection === 'run-scoped'
-    // Per-repo extras (gates.json `requiredChecks` / `requireMutationAtRest`)
-    // merge into both profiles — additive-only, so risk-invariance holds.
-    const profiles = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract))
-    const required = runScoped ? profiles.baseline : profiles.run
-    let state = await probeProtection({
-        ghClient: opts.ghClient,
-        owner: opts.owner,
-        repo: opts.repo,
-        branch,
-    })
-    let provisioned = false
+    const required = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract)).run
+    let state = await probeProtection({ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch})
     if (opts.provision) {
-        if (runScoped) {
-            if (await (opts.hasActiveRun?.() ?? Promise.resolve(false))) {
-                throw new UsageError(
-                    `--provision refused: an active run exists for ${opts.owner}/${opts.repo} — writing the ` +
-                        `baseline now would downgrade the escalated protection on '${branch}' mid-run. ` +
-                        `Finish or cancel the run first.`
-                )
-            }
-            await putBaselineProtection({
-                ghClient: opts.ghClient,
-                owner: opts.owner,
-                repo: opts.repo,
-                branch,
-                contexts: required,
-            })
-            state = await probeProtection({ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch})
-        } else {
-            state = await provisionProtection({
-                ghClient: opts.ghClient,
-                owner: opts.owner,
-                repo: opts.repo,
-                branch,
-                requiredChecks: required,
-                provision: true,
-            })
-        }
-        provisioned = true
+        state = await provisionStableProtection({
+            ghClient: opts.ghClient,
+            owner: opts.owner,
+            repo: opts.repo,
+            branch,
+            requiredChecks: required,
+            provision: true,
+        })
     }
-    // Assert the gate in both paths: a post-provision re-probe must satisfy it too.
-    // Run-scoped asserts the RELAXED gate (enabled + baseline contexts, strict not
-    // required — the baseline deliberately runs strict-off); strict + full contexts
-    // are asserted per-run at escalation time instead.
-    requireProtectionOrRefuse(state, required, branch, {requireStrict: !runScoped})
-
+    requireProtectionOrRefuse(state, required, branch)
+    const provisioned = opts.provision
     return {
         repo: `${opts.owner}/${opts.repo}`,
         files_created: lists.created,

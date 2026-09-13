@@ -316,6 +316,38 @@ describe('Default command tools: local-bin resolution + test-gate coverage', () 
     })
 })
 
+describe('Stryker report freshness', () => {
+    let cwd: string
+    beforeEach(async () => {
+        execMock.mockReset()
+        cwd = await mkdtemp(join(tmpdir(), 'factory-stryker-fresh-'))
+        await mkdir(join(cwd, 'reports/mutation'), {recursive: true})
+        await writeFile(join(cwd, DefaultStrykerTool.REPORT_PATH), JSON.stringify({metrics: {mutationScore: 99}}))
+    })
+    afterEach(async () => {
+        await rm(cwd, {recursive: true})
+    })
+
+    it.each([0, 1])(
+        'does not reuse an earlier report when the next process exits %s without a report',
+        async (code) => {
+            execMock.mockResolvedValue(res('', code))
+            const result = await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
+            expect(result.proc.code).toBe(code)
+            expect(result.report).toEqual({report: 'absent'})
+        }
+    )
+
+    it('accepts a freshly produced score even when the configured threshold makes Stryker exit nonzero', async () => {
+        execMock.mockImplementation(async () => {
+            await writeFile(join(cwd, DefaultStrykerTool.REPORT_PATH), JSON.stringify({metrics: {mutationScore: 82}}))
+            return res('', 1)
+        })
+        const result = await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
+        expect(result.report).toEqual({report: 'present', mutationScore: 82})
+    })
+})
+
 describe('gate env injection (CI parity — quality.gateEnv)', () => {
     beforeEach(() => {
         execMock.mockReset()

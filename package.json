@@ -1,6 +1,6 @@
 {
     "name": "factory-plugin",
-    "version": "1.47.2",
+    "version": "2.0.0-rc.1",
     "private": true,
     "type": "module",
     "description": "Factory plugin build tooling (Node + TypeScript rewrite). NOT the scaffold shipped into target repos (see templates/package.scaffold.json).",
@@ -46,6 +46,7 @@
         "typescript": "^5.7.0",
         "typescript-eslint": "^8.49.0",
         "vitest": "^3.0.0",
+        "yaml": "^2.9.0",
         "zod": "^3.24.0"
     }
 }

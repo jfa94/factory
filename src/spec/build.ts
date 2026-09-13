@@ -38,12 +38,14 @@
  * difference is WHO drives the agent spawns and the loop.
  */
 import {join} from 'node:path'
+import {readFile} from 'node:fs/promises'
+import {z} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {stringifyJson, readJsonFile} from '../shared/json.js'
 import {specBuildDir} from '../core/state/paths.js'
 import {makeSpecId, type SpecStore} from './store.js'
 import type {GhClient, Prd} from './gh.js'
-import {runSpecGates, specifiabilityGate} from './gates.js'
+import {runSpecGates, specifiabilityGate, extractPrdRequirements} from './gates.js'
 import {decideSpecReview, parseReviewVerdict} from './review.js'
 import {
     parseGenerateResult,
@@ -60,6 +62,9 @@ import type {Config, SpecPointer} from '../types/index.js'
 import {evaluate as evaluateQuota, type UsageSignal} from '../quota/index.js'
 import {parseSpecManifest, type SpecManifest} from './schema.js'
 import {nowIso} from '../shared/time.js'
+import {digest, validateFeatureSpec} from '../feature/schema.js'
+import type {RepositorySnapshot} from './snapshot.js'
+import {specDir} from '../core/state/paths.js'
 
 /** Scratch file names threaded between the three actions. */
 const PRD_FILE = 'prd.json'
@@ -67,6 +72,29 @@ const GENERATED_FILE = 'generated.json'
 const VERDICT_FILE = 'verdict.json'
 /** Engine-owned regen counter (`{"iterations": n}`) — see {@link consumeRegenOrDefect}. */
 const ATTEMPTS_FILE = 'attempts.json'
+
+async function withRepositoryContext<C>(
+    spawn: SpecSpawnSpec<C>,
+    deps: SpecBuildDeps,
+    repo: string,
+    issue: number,
+    prd: Prd
+): Promise<SpecSpawnSpec<C>> {
+    if (!deps.snapshot) {
+        return spawn
+    }
+    const snapshot = await readJsonFile<RepositorySnapshot>(
+        join(specBuildDir(deps.scratchRoot, repo, issue), 'context.json')
+    )
+    return {
+        ...spawn,
+        context: {
+            ...spawn.context,
+            repository_snapshot: snapshot,
+            requirements: extractPrdRequirements(prd.body).map((text, index) => ({id: `R${index + 1}`, text})),
+        },
+    }
+}
 
 /** The single JSON document each `factory spec` action emits — the runner's contract. */
 export type SpecBuildEnvelope =
@@ -172,6 +200,8 @@ export type SpecBuildEnvelope =
 
 /** The deps the testable cores need (injected in tests; production-wired by the CLI). */
 export interface SpecBuildDeps {
+    readonly snapshot?: () => Promise<RepositorySnapshot>
+    readonly featureDataDir?: string
     readonly store: SpecStore
     readonly gh: GhClient
     readonly config: Config
@@ -306,7 +336,7 @@ export async function resolveSpec(
     issue: number,
     {regenerate = false, ignoreQuota = false}: {regenerate?: boolean; ignoreQuota?: boolean} = {}
 ): Promise<SpecBuildEnvelope> {
-    if (!regenerate) {
+    if (!regenerate && deps.snapshot === undefined) {
         const existing = await deps.store.resolveByIssue(repo, issue)
         if (existing) {
             return {kind: 'reuse', repo, issue, pointer: deps.store.toPointer(existing)}
@@ -316,6 +346,12 @@ export async function resolveSpec(
     const prd = await deps.gh.fetchPrd(issue, {repo})
     const {prdPath, generatedPath, attemptsPath} = scratchPaths(deps.scratchRoot, repo, issue)
     await atomicWriteFile(prdPath, stringifyJson(prd))
+    if (deps.snapshot) {
+        await atomicWriteFile(
+            join(specBuildDir(deps.scratchRoot, repo, issue), 'context.json'),
+            stringifyJson(await deps.snapshot())
+        )
+    }
 
     // S9 (Decision 47): deterministic specifiability refusal BEFORE any agent
     // spawn — an unspecifiable PRD never costs an apex generator turn.
@@ -348,7 +384,7 @@ export async function resolveSpec(
         kind: 'generate',
         repo,
         issue,
-        spawn: buildGenerateSpawn(prd),
+        spawn: await withRepositoryContext(buildGenerateSpawn(prd), deps, repo, issue, prd),
         prd_path: prdPath,
         generated_path: generatedPath,
         max_iterations: deps.config.spec.maxRegenIterations,
@@ -368,9 +404,61 @@ export async function resolveSpec(
 export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
     const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.scratchRoot, repo, issue)
     const prd = await readJsonFile<Prd>(prdPath)
-    const generated = parseGenerateResult(await readJsonFile(generatedPath))
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- engine-derived scratch path
+    const raw = await readFile(generatedPath, 'utf8')
+    let generated: GenerateResult
+    try {
+        generated = parseGenerateResult(JSON.parse(raw))
+    } catch (error) {
+        if (!(error instanceof z.ZodError || error instanceof SyntaxError)) {
+            throw error
+        }
+        const blockers = [`Invalid generated output: ${error.message}`]
+        const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'gate', blockers})
+        if (defect) {
+            return defect
+        }
+        return {
+            kind: 'revise',
+            repo,
+            issue,
+            source: 'gate',
+            reason: `Invalid generated output: ${error.message}`,
+            blockers,
+            spawn: await withRepositoryContext(
+                buildReviseSpawn(
+                    prd,
+                    {specMd: `Invalid prior JSON (repair its structure):\n${raw}`, slug: 'repair', tasks: []},
+                    blockers
+                ),
+                deps,
+                repo,
+                issue,
+                prd
+            ),
+            generated_path: generatedPath,
+        }
+    }
 
     const gates = runSpecGates(prd, generated.tasks)
+    if (deps.snapshot) {
+        try {
+            const snapshot = await readJsonFile<RepositorySnapshot>(
+                join(specBuildDir(deps.scratchRoot, repo, issue), 'context.json')
+            )
+            validateFeatureSpec({
+                version: 2,
+                revision: 1,
+                ...snapshot,
+                prd,
+                spec_md: generated.specMd,
+                tasks: generated.tasks,
+            })
+        } catch (error) {
+            gates.passed = false
+            gates.blockers.push(error instanceof Error ? error.message : String(error))
+        }
+    }
     if (!gates.passed) {
         const defect = await consumeRegenOrDefect(deps, repo, issue, {source: 'gate', blockers: gates.blockers})
         if (defect) {
@@ -384,16 +472,26 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
             reason: 'deterministic spec gates blocked the spec',
             blockers: gates.blockers,
             // review_feedback derives from these same blockers — single source, no divergence.
-            spawn: buildReviseSpawn(prd, generated, gates.blockers),
+            spawn: await withRepositoryContext(
+                buildReviseSpawn(prd, generated, gates.blockers),
+                deps,
+                repo,
+                issue,
+                prd
+            ),
             generated_path: generatedPath,
         }
     }
 
+    await atomicWriteFile(
+        join(specBuildDir(deps.scratchRoot, repo, issue), 'review-input-digest.json'),
+        stringifyJson(digest(generated))
+    )
     return {
         kind: 'review',
         repo,
         issue,
-        spawn: buildReviewSpawn(prd, generated),
+        spawn: await withRepositoryContext(buildReviewSpawn(prd, generated), deps, repo, issue, prd),
         generated_path: generatedPath,
         verdict_path: verdictPath,
     }
@@ -413,6 +511,14 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.scratchRoot, repo, issue)
     const generated = parseGenerateResult(await readJsonFile(generatedPath))
     const verdict = parseReviewVerdict(await readJsonFile(verdictPath))
+    if (deps.snapshot) {
+        const expected = await readJsonFile<string>(
+            join(specBuildDir(deps.scratchRoot, repo, issue), 'review-input-digest.json')
+        )
+        if (expected !== digest(generated)) {
+            throw new Error('spec changed after review was requested; gate and review again')
+        }
+    }
 
     const decision = decideSpecReview(verdict, {
         passReviewThreshold: deps.config.spec.passReviewThreshold,
@@ -434,7 +540,7 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
             source: 'review',
             reason: decision.reason,
             blockers,
-            spawn: buildReviseSpawn(prd, generated, blockers),
+            spawn: await withRepositoryContext(buildReviseSpawn(prd, generated, blockers), deps, repo, issue, prd),
             generated_path: generatedPath,
         }
     }
@@ -452,6 +558,23 @@ export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number
     // Idempotent no-op on the fresh path (nothing matches).
     await deps.store.deleteByIssue(repo, issue)
     const pointer = await deps.store.write(request, generated.specMd, prd)
+    if (deps.snapshot && deps.featureDataDir !== undefined) {
+        const snapshot = await readJsonFile<RepositorySnapshot>(
+            join(specBuildDir(deps.scratchRoot, repo, issue), 'context.json')
+        )
+        const feature = validateFeatureSpec({
+            version: 2,
+            revision: 1,
+            ...snapshot,
+            prd,
+            spec_md: generated.specMd,
+            tasks: generated.tasks,
+        })
+        await atomicWriteFile(
+            join(specDir(deps.featureDataDir, repo, request.spec_id), 'feature.json'),
+            stringifyJson(feature)
+        )
+    }
     return {kind: 'stored', repo, issue, pointer}
 }
 

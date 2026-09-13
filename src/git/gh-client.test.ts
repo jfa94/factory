@@ -285,6 +285,32 @@ describe('deleteRemoteBranch (worktree-safe remote-ref delete, CP2 #11)', () => 
 })
 
 describe('putProtection (the --provision PUT body)', () => {
+    it('strengthens only status checks while preserving existing app bindings', async () => {
+        const calls: {args: readonly string[]; input: string | Uint8Array | undefined}[] = []
+        const runner: GhRunner = (args, opts) => {
+            calls.push({args, input: opts?.input})
+            return Promise.resolve(result({stdout: JSON.stringify({checks: [{context: 'Team CI', app_id: 42}]})}))
+        }
+        await new DefaultGhClient(runner).strengthenStatusChecks('acme', 'widgets', 'develop', ['Team CI', 'Quality'])
+        expect(calls.map((call) => call.args)).toEqual([
+            ['api', 'repos/acme/widgets/branches/develop/protection/required_status_checks'],
+            [
+                'api',
+                '--method',
+                'PATCH',
+                'repos/acme/widgets/branches/develop/protection/required_status_checks',
+                '--input',
+                '-',
+            ],
+        ])
+        expect(JSON.parse(String(calls[1]?.input))).toEqual({
+            strict: true,
+            checks: [
+                {context: 'Team CI', app_id: 42},
+                {context: 'Quality', app_id: -1},
+            ],
+        })
+    })
     it('sends allow_deletions:true so a leftover per-run staging branch stays hand-deletable (D55)', async () => {
         let payload: string | Uint8Array | undefined
         const runner: GhRunner = (_args, opts) => {
