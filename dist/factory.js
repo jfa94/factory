@@ -12834,6 +12834,7 @@ var FeatureEngine = class {
           result.details.length ? result.details : ["checks produced no passing evidence"]
         );
       } else {
+        run5.feedback = [];
         run5.stage = run5.stage === "task-check" ? "task-review" : run5.stage === "slice-check" ? "slice-review" : "feature-review";
       }
       return;

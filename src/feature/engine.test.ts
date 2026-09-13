@@ -206,6 +206,30 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(await git(run.worktree, 'rev-list', '--count', `${run.spec.base_sha}..HEAD`)).toBe('4')
     })
 
+    it('drops repair feedback from later prompts once the repaired checks pass', async () => {
+        const f = await fixture()
+        let failing = true
+        const checks = f.runtime.checks.bind(f.runtime)
+        f.runtime.checks = (run, stage) =>
+            failing
+                ? Promise.resolve({passed: false, observed: 1, details: ['type error'], assertionFailure: false})
+                : checks(run, stage)
+        let action = await f.engine.advance('run', 'driver')
+        action = await respond(f, action) // implement → failing task-check → repair scheduled
+        expect(action.kind === 'execute' && action.prompt).toContain('type error')
+        failing = false
+        if (action.kind !== 'execute') {
+            throw new Error('repair attempt missing')
+        }
+        await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 2\n')
+        await git(action.attempt.worktree, 'add', 'value.js')
+        await git(action.attempt.worktree, 'commit', '-m', '[first] repair')
+        action = await submit(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
+        expect(action.kind === 'execute' && action.prompt).not.toContain('type error')
+        expect((await f.store.read('run')).feedback).toEqual([])
+    })
+
     it('parks at the CI deadline and gives explicit resume a fresh wait window', async () => {
         const f = await fixture('live')
         await f.engine.advance('run', 'driver')

@@ -731,6 +731,8 @@ export class FeatureEngine {
                     result.details.length ? result.details : ['checks produced no passing evidence']
                 )
             } else {
+                // The repair that carried this feedback has passed its checks; later prompts must not re-cite it.
+                run.feedback = []
                 run.stage =
                     run.stage === 'task-check'
                         ? 'task-review'
