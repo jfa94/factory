@@ -166,3 +166,60 @@ with a fresh driver id. Its stored result is copied to the attempt's staged path
 fresh feature gates, review and acceptance must pass at `4745824` before push, PR,
 one interrupt/resume while CI runs, and an observed merge. Issue #4 is then the
 uninterrupted canary from a fresh spec. Earlier stalls do not count as uninterrupted.
+
+## Recovery of issue #3 (2026-09-13)
+
+Driver `claude-code-01AB5TNiyZ6N5jFVt6aKHpC7` copied `result-3-10.json` to the
+staged path of attempt `f26443d8` and ran `resume --recover`. The audit records
+"durable result recovered"; `in_flight` cleared with no new implement attempt,
+and the stage advanced to feature-check. Fresh feature gates at `4745824` passed:
+full-suite tests, typecheck, lint, build, coverage and mutation (87.5%, scope 2).
+
+Two defects surfaced during the fresh gates and were fixed Factory-side, both
+outside the reviewed plan and flagged for approval: a failed Stryker run left
+`.stryker-tmp` in the worktree, so the next lint gate scanned its instrumented
+copies (fixed by `--cleanTempDir always`, commit `1bda7a7`); and `run.feedback`
+from the repaired mutation failure survived a passing check, so the feature-review
+prompt still cited it and drew an invalid claim (fixed by clearing feedback on
+check pass, commit `e843d64`; the persisted run keeps its stale feedback because
+state is never edited).
+
+Feature-review attempt `3316a4a9` returned three parseable results and one that
+the strict schema rejected: the systemic reviewer's claim text was 304 characters
+against the 300 limit, which the engine prompt does not state. The engine treated
+the file as not yet written and answered `wait`. `resume --recover` retained the
+partial panel and redispatched only `systemic-failure-reviewer` on the same
+attempt and snapshot, as designed. Open Factory follow-up, not built: surface
+schema-invalid staged files in the `wait` reason and state the claim limit in the
+prompt, so a driver can tell "still running" from "finished wrong".
+
+The redispatched systemic reviewer returned a 281-character claim (rejected file
+kept as `rejected-3-11-systemic-failure-reviewer.json`); the engine recorded the
+full panel and issued confirm attempt `e84895e1`. The finding verifier confirmed
+the docs claim (pnpm pins script cwd to the package root, reproduced from `docs/`)
+and refuted the stale-mutation claim and the unreachable-rethrow claim. The engine
+scheduled feature repair pass 2 (attempt `e4a772a1`) in the feature worktree.
+Driver note: the verifier wrapped its JSON in a markdown fence despite explicit
+instruction; the driver removed only the fence before staging (raw text kept as
+`result-3-14.raw.txt`). A fenced file would otherwise read as "not yet written"
+forever, the same failure shape as the oversized claim.
+
+Repair commit `274965c` corrects the docs cwd statement only; no acceptance
+criterion requires caller-cwd semantics. Fresh feature gates passed at that HEAD
+(full-suite tests, typecheck, lint, build, coverage, mutation 87.5%). The second
+feature-review panel (attempt `b30f61f8`) returned one claim from the quality
+reviewer (pre-existing O(n^2) near-duplicate scan, no size bound) and one from the
+silent-failure hunter (generic read-error message); implementation and systemic
+reviewers returned none. The verifier refuted both against the spec: R1 requires
+the exported validators to be preserved, and R3 specifies a generic stderr
+diagnostic. The engine advanced to acceptance (attempt `3694e605`).
+Driver note: the session's loaded plugin predates `agents/acceptance-evaluator.md`,
+so `factory:acceptance-evaluator` was not a dispatchable type; the evaluator ran as
+a general-purpose Opus agent instructed to read and obey that charter file.
+
+Acceptance attempt `3694e605` returned all 21 criteria met with executed evidence
+(220 focused tests, 398 full-suite, gates re-run in the snapshot; only the
+uncontracted `format:check` fails on two untouched workflow files). Its result is
+staged but not yet consumed: the next `next-action` would run live delivery (push
+`factory/3-canary-single-20260907`, open the PR, auto-merge), which requires
+explicit user authorization. The branch remains local-only at `274965c`.
