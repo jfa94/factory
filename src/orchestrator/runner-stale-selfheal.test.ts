@@ -10,23 +10,28 @@ const skill = readFileSync(resolve(repoRoot, 'skills/pipeline-runner/SKILL.md'),
 describe('v2 runner recovery protocol', () => {
     it('uses persisted attempt identities for dispatch and result submission', () => {
         expect(skill).toContain('save the attempt identity before dispatch')
-        expect(skill).toContain('--driver <session> --results <file>')
+        expect(skill).toContain('write its result JSON verbatim to `staged[<role>]`')
+        expect(skill).toContain("the file's existence is the submission")
+        expect(skill).toContain('`factory next-action --run <id> --driver <session>` (no `--results`)')
     })
     it('never dispatches an outstanding attempt twice', () => {
         expect(skill).toContain('never dispatch it twice')
         expect(skill).toContain('retry_after_seconds')
+        expect(skill).toContain('`Bash(run_in_background)`')
+        expect(skill).toContain('Re-arm after every `wait`')
     })
     it('requires evidence that the previous worker stopped before recovery', () => {
         expect(skill).toContain('first establish that it has stopped')
         expect(skill).toContain('factory resume --run <id> --recover')
     })
     it('preserves interrupted work instead of resetting a task branch', () => {
-        expect(skill).toContain('retires its lease while retaining')
+        expect(skill).toContain('retires the attempt while retaining work')
         expect(skill).toContain('Do not reset')
         expect(skill).toContain('Do not create task branches')
     })
     it('rejects late results instead of reassigning their identity', () => {
-        expect(skill).toContain('do not relabel it as a new attempt')
+        expect(skill).toContain('rewrite a result to change its attempt or HEAD')
+        expect(skill).toContain('re-issues only its missing roles on the')
     })
     it('stops on a park even when quota recovers', () => {
         expect(skill).toContain('Explicit resume is')

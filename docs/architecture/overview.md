@@ -19,13 +19,16 @@ flowchart LR
 
 `$CLAUDE_PLUGIN_DATA/runs-v2/<id>/state.json` stores the complete spec, accepted
 checkpoints, active attempt, answers, repair counters and delivery observation.
-Atomic state writes are serialized by a repository lock. Each submitted result is
-journaled separately before its transition. `ledger.md` is the human-readable audit.
+Atomic state writes are serialized by a repository lock. Agents' raw results are
+staged per role under `staged-v2/`, validated, and journaled once accepted.
+`ledger.md` is the human-readable audit.
 
 An attempt binds its driver, stage, spec digest, base SHA, HEAD SHA and worktree.
 Repeated next-action calls wait for the existing attempt. A fresh process resumes
-from disk. Explicit recovery consumes a journaled result or retires a stopped
-worker's lease, preserving work. Stale or foreign-driver results are rejected.
+from disk and may consume the staged results of an earlier driver. Explicit
+recovery consumes a complete staged result, redispatches only a partial panel's
+missing roles, or retires a stopped worker's lease, preserving work. Stale
+results are rejected.
 A parked run never resumes merely because time elapsed or quota recovered.
 
 ## Specs and integration
@@ -60,8 +63,9 @@ and consumes no implementation pass.
 
 Final acceptance persists the verified feature HEAD and spec digest. Delivery must
 match both, including after an interruption between Git integration and the state
-write. Invalid journaled results remain auditable; explicit recovery retires their
-attempt and schedules replacement evidence without discarding work.
+write. An invalid staged result parks the run with its files retained; explicit
+recovery consumes a corrected result or retires the attempt and schedules
+replacement evidence without discarding work.
 
 ## Delivery and protection
 

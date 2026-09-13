@@ -1,10 +1,23 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- validated run IDs and engine-owned data paths */
-import {readFile, readdir} from 'node:fs/promises'
+import {access, mkdir, readFile, readdir} from 'node:fs/promises'
 import {join} from 'node:path'
+import {ZodError} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING} from '../shared/file-lock.js'
 import {isEnoent} from '../shared/fs-errors.js'
-import {FeatureRunSchema, ResultSchema, IdSchema, digest, type FeatureRun, type FeatureResult} from './schema.js'
+import {
+    FeatureRunSchema,
+    ResultSchema,
+    IdSchema,
+    digest,
+    terminal,
+    type Attempt,
+    type FeatureRun,
+    type FeatureResult,
+} from './schema.js'
+
+/** Per-role staged results: `{missing}` means not every role has a parseable file yet. */
+export type Staged = {result: FeatureResult} | {missing: string[]}
 
 export class FeatureStore {
     constructor(readonly dataDir: string) {}
@@ -74,27 +87,117 @@ export class FeatureStore {
         await atomicWriteFile(join(this.dir(id), 'results', `${checked.attempt_id}.json`), JSON.stringify(checked))
     }
 
-    async result(id: string, attemptId: string): Promise<FeatureResult | undefined> {
-        try {
-            return ResultSchema.parse(
-                JSON.parse(await readFile(join(this.dir(id), 'results', `${IdSchema.parse(attemptId)}.json`), 'utf8'))
-            )
-        } catch (error) {
-            if (isEnoent(error)) {
-                return undefined
+    /**
+     * Staged results live outside `runs-v2/**` so the driver session may write them
+     * (engine state stays read-only to agents). The file's existence is the submission.
+     */
+    stagedPaths(id: string, attempt: Attempt, roles: readonly string[] = attempt.roles): Record<string, string> {
+        const dir = join(this.dataDir, 'staged-v2', IdSchema.parse(id), IdSchema.parse(attempt.id))
+        return Object.fromEntries(roles.map((role) => [role, join(dir, `${IdSchema.parse(role)}.json`)]))
+    }
+
+    async stage(id: string, attempt: Attempt, roles?: readonly string[]): Promise<Record<string, string>> {
+        const paths = this.stagedPaths(id, attempt, roles)
+        await mkdir(join(this.dataDir, 'staged-v2', id, attempt.id), {recursive: true})
+        return paths
+    }
+
+    /** Roles whose staged file exists (parseability not checked). */
+    async stagedPresent(id: string, attempt: Attempt): Promise<string[]> {
+        const present: string[] = []
+        for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
+            try {
+                await access(path)
+                present.push(role)
+            } catch (error) {
+                if (!isEnoent(error)) {
+                    throw error
+                }
             }
-            throw error
+        }
+        return present
+    }
+
+    /**
+     * Read every role's staged file and merge them into one attempt result. A missing,
+     * half-written or schema-invalid file reads as "not yet"; only explicit recovery
+     * judges it. Identity fields must agree; any non-done status wins.
+     */
+    async staged(id: string, attempt: Attempt): Promise<Staged> {
+        const parts: FeatureResult[] = []
+        const missing: string[] = []
+        for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
+            try {
+                parts.push(ResultSchema.parse(JSON.parse(await readFile(path, 'utf8'))))
+            } catch (error) {
+                if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+                    missing.push(role)
+                } else {
+                    throw error
+                }
+            }
+        }
+        const first = parts[0]
+        if (missing.length || first === undefined) {
+            return {missing}
+        }
+        if (
+            parts.some(
+                (part) =>
+                    part.attempt_id !== first.attempt_id ||
+                    part.spec_digest !== first.spec_digest ||
+                    part.head_sha !== first.head_sha
+            )
+        ) {
+            throw new Error('staged results disagree on attempt identity or HEAD')
+        }
+        const halted = parts.find((part) => part.status !== 'done')
+        const reviews = parts.flatMap((part) => part.reviews ?? [])
+        return {
+            result: {
+                ...first,
+                ...(halted ? {status: halted.status, message: halted.message} : {}),
+                ...(reviews.length ? {reviews} : {}),
+            },
         }
     }
 }
 
-export function renderLedger(run: FeatureRun): string {
+export function age(from: string, now: string): string {
+    const minutes = Math.max(0, Math.round((Date.parse(now) - Date.parse(from)) / 60_000))
+    return minutes < 60
+        ? `${minutes}m`
+        : minutes < 1440
+          ? `${Math.round(minutes / 60)}h`
+          : `${Math.round(minutes / 1440)}d`
+}
+
+export function nextCommand(run: FeatureRun): string {
+    if (terminal(run)) {
+        return 'none (terminal)'
+    }
+    if (run.status === 'parked') {
+        return `factory resume --run ${run.run_id}${run.question !== undefined ? ' --answer <text>' : ''}${run.in_flight ? ' --recover (after its agent has stopped)' : ''}`
+    }
+    return `factory next-action --run ${run.run_id} --driver <session>`
+}
+
+export function renderLedger(run: FeatureRun, live: {now?: string; staged?: string[]} = {}): string {
+    const attempt = run.in_flight
     return [
         `# Feature ${run.run_id}`,
         '',
-        `Status: ${run.status}. Resume: ${run.stage}, task ${run.task_index + 1}.`,
+        `Status: ${run.status} (persisted lifecycle, not proof of a live worker). Resume: ${run.stage}, task ${run.task_index + 1}.`,
         `Branch: ${run.branch}. Accepted HEAD: ${run.accepted_sha}. Spec: ${run.spec_digest}.`,
         run.stop_reason ? `Stopped: ${run.stop_reason.kind}: ${run.stop_reason.message}` : '',
+        attempt
+            ? `In flight: ${attempt.stage} [${attempt.roles.join(', ')}] issued ${attempt.issued_at}${live.now !== undefined ? ` (${age(attempt.issued_at, live.now)} ago)` : ''}.` +
+              (live.staged
+                  ? ` Staged results: ${live.staged.length}/${attempt.roles.length}${live.staged.length ? ` (${live.staged.join(', ')})` : ''}.`
+                  : '') +
+              (attempt.redispatch ? ` Redispatch: ${attempt.redispatch.join(', ')}.` : '')
+            : '',
+        `Next: ${nextCommand(run)}`,
         '',
         '## Accepted tasks',
         '',

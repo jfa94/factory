@@ -9,8 +9,7 @@ agents. Every next-action result is one of execute, wait, park or terminal.
 | `factory spec gate --issue <n>`                                      | Validate generated JSON, requirements and execution graph     |
 | `factory spec store --issue <n>`                                     | Adjudicate review and persist the v2 feature spec             |
 | `factory run create --issue <n>`                                     | Create a fresh sequential feature run                         |
-| `factory next-action --run <id> --driver <session>`                  | Advance or return the outstanding attempt                     |
-| `factory next-action --run <id> --driver <session> --results <file>` | Journal and validate an attempt result                        |
+| `factory next-action --run <id> --driver <session>`                  | Consume staged results, advance, or return the outstanding attempt |
 | `factory run stop --run <id>`                                        | Explicitly park without discarding work                       |
 | `factory resume --run <id> [--answer <text>] [--recover]`            | Resume; recover only after the previous agent stopped         |
 | `factory run cancel --run <id>`                                      | Cancel while retaining artifacts and Git work                 |

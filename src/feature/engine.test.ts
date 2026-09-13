@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os'
 import {afterEach, describe, expect, it} from 'vitest'
 import {exec, execOrThrow, type ExecResult} from '../shared/exec.js'
 import {at} from '../shared/assert.js'
-import {decideFeatureGuard} from '../hooks/feature-guards.js'
+import {decideFeatureGuard, decideFeatureStop} from '../hooks/feature-guards.js'
 import {decideWriteProtection} from '../hooks/write-protection.js'
 import {fileURLToPath} from 'node:url'
 import {defaultConfig} from '../config/schema.js'
@@ -124,11 +124,29 @@ function result(action: FeatureAction, extra: Partial<FeatureResult> = {}): Feat
     }
 }
 
-async function respond(
-    f: Awaited<ReturnType<typeof fixture>>,
-    action: FeatureAction,
-    noChange = false
-): Promise<FeatureAction> {
+type Fixture = Awaited<ReturnType<typeof fixture>>
+
+/** Write a merged result verbatim to the in-flight attempt's per-role staged paths. */
+async function stage(f: Fixture, response: FeatureResult): Promise<Record<string, string>> {
+    const attempt = (await f.store.read('run')).in_flight
+    if (!attempt) {
+        throw new Error('nothing in flight')
+    }
+    const paths = await f.store.stage('run', attempt)
+    for (const [role, path] of Object.entries(paths)) {
+        const part = response.reviews
+            ? {...response, reviews: response.reviews.filter((row) => row.reviewer === role)}
+            : response
+        await writeFile(path, JSON.stringify(part))
+    }
+    return paths
+}
+async function submit(f: Fixture, response: FeatureResult, driver = 'driver'): Promise<FeatureAction> {
+    await stage(f, response)
+    return new FeatureEngine(f.store, f.runtime).advance('run', driver)
+}
+
+async function respond(f: Fixture, action: FeatureAction, noChange = false): Promise<FeatureAction> {
     if (action.kind !== 'execute') {
         return action
     }
@@ -163,7 +181,7 @@ async function respond(
             evidence: 'value.test.js executes the current value behavior successfully',
         }))
     }
-    return new FeatureEngine(f.store, f.runtime).advance('run', 'driver', response)
+    return submit(f, response)
 }
 
 describe('sequential feature execution with real Git', {timeout: 30_000}, () => {
@@ -179,11 +197,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
             await writeFile(join(action.attempt.worktree, 'value.js'), `export const value = ${pass + 1}\n`)
             await git(action.attempt.worktree, 'add', 'value.js')
             await git(action.attempt.worktree, 'commit', '-m', `[first] repair attempt ${pass}`)
-            action = await f.engine.advance(
-                'run',
-                'driver',
-                result(action, {head_sha: await f.runtime.head(action.attempt.worktree)})
-            )
+            action = await submit(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
         }
         expect(action).toMatchObject({kind: 'park'})
         const run = await f.store.read('run')
@@ -400,7 +414,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         )
         await git(worktree, 'add', 'value.test.js')
         await git(worktree, 'commit', '-m', '[first] failing value assertion')
-        action = await f.engine.advance('run', 'driver', result(action, {head_sha: await f.runtime.head(worktree)}))
+        action = await submit(f, result(action, {head_sha: await f.runtime.head(worktree)}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
         action = await respond(f, action)
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
@@ -415,7 +429,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 3\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] durable producer result')
-        await f.store.recordResult('run', result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        await stage(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
         await f.engine.stop('run')
         const recovered = await new FeatureEngine(f.store, f.runtime).resume('run', {recover: true})
         expect(recovered.status).toBe('running')
@@ -428,6 +442,115 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         })
     })
 
+    it('lets a fresh driver consume a staged result without recovery and journals it', async () => {
+        const f = await fixture()
+        const action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute') {
+            throw new Error('missing attempt')
+        }
+        expect(Object.keys(action.staged)).toEqual(['implementer'])
+        await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 4\n')
+        await git(action.attempt.worktree, 'add', 'value.js')
+        await git(action.attempt.worktree, 'commit', '-m', '[first] result staged by an earlier session')
+        const head = await f.runtime.head(action.attempt.worktree)
+        expect(await submit(f, result(action, {head_sha: head}), 'new-driver')).toMatchObject({
+            kind: 'execute',
+            attempt: {stage: 'task-review', driver: 'new-driver'},
+        })
+        const run = await f.store.read('run')
+        expect(run.audit.some((row) => row.event === 'result recorded')).toBe(true)
+        expect(
+            JSON.parse(await readFile(join(f.store.dir('run'), 'results', `${action.attempt.id}.json`), 'utf8'))
+        ).toMatchObject({
+            attempt_id: action.attempt.id,
+            head_sha: head,
+        })
+    })
+
+    it('blocks the owning session once while a complete staged result awaits consumption', async () => {
+        const f = await fixture()
+        const action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute') {
+            throw new Error('missing attempt')
+        }
+        const run = await f.store.read('run')
+        run.owner_session = 'owner'
+        await f.store.write(run)
+        const runs = () => f.store.list()
+        const stop = async (input: {session_id?: string; stop_hook_active?: boolean}) =>
+            (await decideFeatureStop(input, await runs(), f.store)).action
+        expect(await stop({session_id: 'owner'})).toBe('allow')
+        await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 5\n')
+        await git(action.attempt.worktree, 'add', 'value.js')
+        await git(action.attempt.worktree, 'commit', '-m', '[first] finished but never submitted')
+        await stage(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        expect(await stop({session_id: 'other'})).toBe('allow')
+        expect(await stop({session_id: 'owner', stop_hook_active: true})).toBe('allow')
+        const blocked = await decideFeatureStop({session_id: 'owner'}, await runs(), f.store)
+        expect(blocked).toMatchObject({
+            action: 'deny',
+            reason: expect.stringContaining('factory next-action --run run') as string,
+        })
+        await f.engine.stop('run')
+        expect(await stop({session_id: 'owner'})).toBe('allow')
+        await f.engine.resume('run', {recover: true})
+        expect(await stop({session_id: 'owner'})).toBe('allow')
+    })
+
+    it('treats a half-written staged file as not yet submitted and never retires its lease', async () => {
+        const f = await fixture()
+        const action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute') {
+            throw new Error('missing attempt')
+        }
+        const path = at(Object.values(action.staged), 0)
+        await writeFile(path, '{"attempt_id": "' + action.attempt.id)
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'wait',
+            reason: expect.stringContaining('awaiting implementer') as string,
+        })
+        expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
+        await f.engine.stop('run')
+        const recovered = await f.engine.resume('run', {recover: true})
+        expect(recovered.in_flight).toBeUndefined()
+        expect(recovered.audit.at(-2)?.event).toBe('interrupted attempt retired; work retained')
+        expect(await readFile(path, 'utf8')).toContain(action.attempt.id)
+    })
+
+    it('keeps a partial review panel on the same attempt and redispatches only the missing roles', async () => {
+        const f = await fixture()
+        let action = await f.engine.advance('run', 'driver')
+        action = await respond(f, action)
+        action = await respond(f, action)
+        if (action.kind !== 'execute' || action.attempt.stage !== 'slice-review') {
+            throw new Error(`expected slice review, got ${JSON.stringify(action)}`)
+        }
+        const {attempt} = action
+        const [done, ...missing] = attempt.roles
+        const paths = await stage(f, result(action, {reviews: [{reviewer: done ?? '', claims: []}]}))
+        for (const [role, path] of Object.entries(paths)) {
+            if (role !== done) {
+                await rm(path)
+            }
+        }
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait'})
+        await f.engine.stop('run')
+        const recovered = await f.engine.resume('run', {recover: true})
+        expect(recovered.in_flight).toMatchObject({id: attempt.id, roles: attempt.roles, redispatch: missing})
+        const redispatch = await f.engine.advance('run', 'new-driver')
+        expect(redispatch).toMatchObject({kind: 'execute', attempt: {id: attempt.id, roles: missing}})
+        if (redispatch.kind !== 'execute') {
+            throw new Error('missing redispatch')
+        }
+        expect(Object.keys(redispatch.staged)).toEqual(missing)
+        expect((await f.store.read('run')).in_flight?.redispatch).toBeUndefined()
+        for (const [role, path] of Object.entries(redispatch.staged)) {
+            await writeFile(path, JSON.stringify(result(action, {reviews: [{reviewer: role, claims: []}]})))
+        }
+        expect(await f.engine.advance('run', 'new-driver')).toMatchObject({kind: 'execute'})
+        expect((await f.store.read('run')).checkpoints.map((row) => row.task_id)).toEqual(['first'])
+    }, 30_000)
+
     it('rejects invalid review evidence and explicitly recovers without losing its journal or work', async () => {
         const f = await fixture()
         let action = await f.engine.advance('run', 'driver')
@@ -435,7 +558,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         if (action.kind !== 'execute' || action.attempt.stage !== 'task-review') {
             throw new Error('missing review')
         }
-        await f.store.recordResult('run', result(action, {reviews: []}))
+        const paths = await stage(f, result(action, {reviews: []}))
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'park'})
         expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
         const head = await f.runtime.head(action.attempt.worktree)
@@ -444,7 +567,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(recovered.status).toBe('running')
         expect(recovered.stage).toBe('task-review')
         expect(recovered.audit.at(-2)?.event).toBe('invalid durable result retired; evidence and work retained')
-        expect(await f.store.result('run', action.attempt.id)).toMatchObject({reviews: []})
+        expect(JSON.parse(await readFile(at(Object.values(paths), 0), 'utf8'))).toMatchObject({reviews: []})
         expect(await f.runtime.head(action.attempt.worktree)).toBe(head)
         const next = await f.engine.advance('run', 'new-driver')
         expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
@@ -642,13 +765,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         expect(await f.engine.advance('run', 'other-driver')).toMatchObject({kind: 'wait'})
-        expect(
-            await f.engine.advance(
-                'run',
-                'driver',
-                result(action, {status: 'needs-context', message: 'Which endpoint?'})
-            )
-        ).toMatchObject({kind: 'park'})
+        expect(await submit(f, result(action, {status: 'needs-context', message: 'Which endpoint?'}))).toMatchObject({
+            kind: 'park',
+        })
         await f.engine.resume('run', {answer: 'Use the local endpoint'})
         const resumed = await f.engine.advance('run', 'driver')
         expect(resumed.kind === 'execute' && resumed.prompt).toContain('Use the local endpoint')
@@ -657,7 +776,10 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await f.engine.resume('run', {recover: true})
         const recovered = await f.engine.advance('run', 'driver')
         expect(recovered.kind === 'execute' && recovered.prompt).toContain('Use the local endpoint')
-        await expect(f.engine.advance('run', 'driver', result(resumed))).rejects.toThrow('stale')
+        expect(await submit(f, result(resumed))).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('stale') as string,
+        })
         expect((await f.store.read('run')).answers).toHaveLength(1)
     }, 30_000)
 })

@@ -94,6 +94,8 @@ export const AttemptSchema = z.object({
     worktree: z.string(),
     roles: z.array(z.string()),
     issued_at: z.string(),
+    /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
+    redispatch: z.array(z.string()).optional(),
 })
 export type Attempt = z.infer<typeof AttemptSchema>
 export const FeatureRunSchema = z
@@ -179,7 +181,7 @@ export const ResultSchema = z
 export type FeatureResult = z.infer<typeof ResultSchema>
 
 export type FeatureAction =
-    | {kind: 'execute'; run_id: string; attempt: Attempt; prompt: string}
+    | {kind: 'execute'; run_id: string; attempt: Attempt; staged: Record<string, string>; prompt: string}
     | {kind: 'wait'; run_id: string; reason: string; retry_after_seconds: number}
     | {kind: 'park'; run_id: string; reason: string}
     | {kind: 'terminal'; run_id: string; status: FeatureRun['status']; delivery: FeatureRun['delivery']}

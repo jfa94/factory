@@ -126,11 +126,11 @@ describe('v2 CLI contract', () => {
         expect(JSON.parse(output)).toMatchObject([{run_id: 'run'}])
         output = ''
         await call('next-action', '--run', 'run', '--driver', 'driver')
-        const action = JSON.parse(output) as {attempt: {id: string; spec_digest: string}}
+        const action = JSON.parse(output) as {attempt: {id: string; spec_digest: string}; staged: {implementer: string}}
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
-        const path = join(dir, 'result.json')
+        expect(action.staged.implementer).toBe(join(dataDir, 'staged-v2', 'run', action.attempt.id, 'implementer.json'))
         await writeFile(
-            path,
+            action.staged.implementer,
             JSON.stringify({
                 attempt_id: action.attempt.id,
                 spec_digest: action.attempt.spec_digest,
@@ -139,14 +139,21 @@ describe('v2 CLI contract', () => {
                 message: 'Which value?',
             })
         )
-        await call('next-action', '--run', 'run', '--driver', 'driver', '--results', path)
+        await call('next-action', '--run', 'run', '--driver', 'driver')
         await call('resume', '--run', 'run', '--answer', 'Use 5')
         await call('next-task', '--run', 'run', '--driver', 'next-driver')
         await call('run', 'stop', '--run', 'run')
-        await call('resume', '--run', 'run', '--recover')
         output = ''
         await call('state', '--run', 'run', '--ledger')
         expect(output).toContain('Use 5')
+        expect(output).toContain(
+            'In flight: implement [implementer] issued 2026-09-07T00:00:00Z (0m ago). Staged results: 0/1.'
+        )
+        expect(output).toContain('Next: factory resume --run run --recover')
+        await call('resume', '--run', 'run', '--recover')
+        output = ''
+        await call('state', '--run', 'run', '--ledger')
+        expect(output).toContain('Next: factory next-action --run run --driver <session>')
         await call('run', 'cancel', '--run', 'run')
         output = ''
         await call('state', '--run', 'run')
@@ -202,7 +209,7 @@ describe('v2 CLI contract', () => {
         expect(await call('run', 'reset')).toBe(2)
         expect(await call('run', 'create', '--issue', '0')).toBe(2)
         expect(await call('run', 'create', '--issue', '1', '--supersede')).toBe(2)
-        expect(await call('next-action', '--run', 'run', '--driver', 'driver', '--results')).toBe(2)
+        expect(await call('next-action', '--run', 'run', '--driver', 'driver', '--results', 'x.json')).toBe(2)
         expect(await call('debug', 'unsupported', '--run-id', 'run')).toBe(2)
     })
 })

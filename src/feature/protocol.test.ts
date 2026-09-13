@@ -1,4 +1,4 @@
-import {mkdtemp, rm} from 'node:fs/promises'
+import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach, describe, expect, it, vi} from 'vitest'
@@ -102,6 +102,23 @@ function result(action: FeatureAction, extra: Partial<FeatureResult> = {}): Feat
         ...extra,
     }
 }
+/** Write a merged result verbatim to the in-flight attempt's per-role staged paths. */
+async function stage(f: Awaited<ReturnType<typeof setup>>, response: FeatureResult): Promise<void> {
+    const attempt = (await f.store.read('run')).in_flight
+    if (!attempt) {
+        throw new Error('nothing in flight')
+    }
+    for (const [role, path] of Object.entries(await f.store.stage('run', attempt))) {
+        const part = response.reviews
+            ? {...response, reviews: response.reviews.filter((row) => row.reviewer === role)}
+            : response
+        await writeFile(path, JSON.stringify(part))
+    }
+}
+async function submit(f: Awaited<ReturnType<typeof setup>>, response: FeatureResult): Promise<FeatureAction> {
+    await stage(f, response)
+    return f.engine.advance('run', 'driver')
+}
 const claim = {
     id: 'claim',
     reviewer: 'quality-reviewer',
@@ -124,7 +141,6 @@ describe('feature evidence and recovery protocol', () => {
         await f.engine.resume('run', {cancel: true})
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'cancelled'})
         await expect(f.engine.resume('run')).rejects.toThrow('fresh run')
-        await expect(f.engine.advance('run', 'driver', {})).rejects.toThrow('terminal run')
     })
     it('rejects duplicate runs and a second producer for the repository', async () => {
         const f = await setup()
@@ -136,7 +152,7 @@ describe('feature evidence and recovery protocol', () => {
         const f = await setup()
         await expect(f.engine.resume('run', {answer: 'unrelated'})).rejects.toThrow('pending question')
         const action = await f.engine.advance('run', 'driver')
-        await f.engine.advance('run', 'driver', result(action, {status: 'needs-context', message: 'Which value?'}))
+        await submit(f, result(action, {status: 'needs-context', message: 'Which value?'}))
         await expect(f.engine.resume('run')).rejects.toThrow('answer required')
         await expect(f.engine.resume('run', {answer: ' '})).rejects.toThrow('nonempty')
         expect((await f.engine.resume('run', {answer: 'Use 5'})).answers).toMatchObject([{answer: 'Use 5'}])
@@ -144,23 +160,22 @@ describe('feature evidence and recovery protocol', () => {
     it.each([true, false])('independently confirms a finding before choosing repair: %s', async (confirmed) => {
         const f = await setup('task-review')
         let action = await f.engine.advance('run', 'driver')
-        action = await f.engine.advance(
-            'run',
-            'driver',
-            result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]})
-        )
+        action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
         expect(execution(action).prompt).not.toContain('prior_reviews')
-        await expect(f.engine.advance('run', 'driver', result(action, {confirmations: []}))).rejects.toThrow(
-            'confirmation is incomplete'
-        )
-        action = await f.engine.advance(
-            'run',
-            'driver',
+        expect(await submit(f, result(action, {confirmations: []}))).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('confirmation is incomplete') as string,
+        })
+        // The invalid staged file stays in place; a corrected one is consumed by explicit recovery.
+        await stage(
+            f,
             result(action, {
                 confirmations: [{id: claim.id, confirmed, evidence: 'Checked value.ts at the cited statement'}],
             })
         )
+        await f.engine.resume('run', {recover: true})
+        action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: confirmed ? 'implement' : 'slice-review'}})
         expect((await f.store.read('run')).checkpoints).toHaveLength(confirmed ? 0 : 1)
     })
@@ -174,20 +189,20 @@ describe('feature evidence and recovery protocol', () => {
             kind === 'duplicate'
                 ? [claim, claim]
                 : [{...claim, reviewer: kind === 'reviewer' ? 'other' : claim.reviewer}]
-        await expect(
-            f.engine.advance('run', 'driver', result(action, {reviews: [{reviewer: 'quality-reviewer', claims}]}))
-        ).rejects.toThrow()
+        expect(await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims}]}))).toMatchObject({
+            kind: 'park',
+        })
         expect((await f.store.read('run')).checkpoints).toEqual([])
     })
     it('requires complete acceptance and repairs unmet feature criteria', async () => {
         const f = await setup('acceptance')
         const action = await f.engine.advance('run', 'driver')
-        await expect(f.engine.advance('run', 'driver', result(action, {acceptance: []}))).rejects.toThrow(
-            'every requested criterion'
-        )
-        const repaired = await f.engine.advance(
-            'run',
-            'driver',
+        expect(await submit(f, result(action, {acceptance: []}))).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('every requested criterion') as string,
+        })
+        await stage(
+            f,
             result(action, {
                 acceptance: [
                     {id: 'R1', met: false, evidence: 'The value is wrong in value.ts'},
@@ -195,28 +210,29 @@ describe('feature evidence and recovery protocol', () => {
                 ],
             })
         )
+        await f.engine.resume('run', {recover: true})
+        const repaired = await f.engine.advance('run', 'driver')
         expect(repaired).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
-        const next = await f.engine.advance('run', 'driver', result(repaired))
+        const next = await submit(f, result(repaired))
         expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'feature-review'}})
     })
     it('revises a defective spec independently and preserves the accepted prefix', async () => {
         const f = await setup('implement')
         let action = await f.engine.advance('run', 'driver')
-        action = await f.engine.advance(
-            'run',
-            'driver',
-            result(action, {status: 'spec-defect', message: 'Fix the remaining contract'})
-        )
+        action = await submit(f, result(action, {status: 'spec-defect', message: 'Fix the remaining contract'}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair'}})
         expect(execution(action).prompt).toContain('"revision": 1')
-        await expect(f.engine.advance('run', 'driver', result(action, {repaired_spec: spec}))).rejects.toThrow(
-            'increment revision'
-        )
+        expect(await submit(f, result(action, {repaired_spec: spec}))).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('increment revision') as string,
+        })
         const revised = {...spec, revision: 2, spec_md: 'Use the corrected contract.'}
-        action = await f.engine.advance('run', 'driver', result(action, {repaired_spec: revised}))
+        await stage(f, result(action, {repaired_spec: revised}))
+        await f.engine.resume('run', {recover: true})
+        action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'spec-review'}})
         expect(execution(action).prompt).toContain('Use the corrected contract.')
-        action = await f.engine.advance('run', 'driver', result(action))
+        action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
         expect((await f.store.read('run')).spec_digest).toBe(digest(validateFeatureSpec(revised)))
     })
@@ -227,9 +243,10 @@ describe('feature evidence and recovery protocol', () => {
         await f.store.write(run)
         const action = await f.engine.advance('run', 'driver')
         const revised = {...spec, revision: 2, tasks: [{...at(spec.tasks, 0), title: 'Changed accepted task'}]}
-        await expect(f.engine.advance('run', 'driver', result(action, {repaired_spec: revised}))).rejects.toThrow(
-            'accepted task prefix'
-        )
+        expect(await submit(f, result(action, {repaired_spec: revised}))).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('accepted task prefix') as string,
+        })
     })
     it('adds database review and authors e2e only when requested', async () => {
         const f = await setup('docs')
@@ -238,9 +255,9 @@ describe('feature evidence and recovery protocol', () => {
         await f.store.write(run)
         vi.mocked(f.runtime.databaseChanged).mockResolvedValue(true)
         let action = await f.engine.advance('run', 'driver')
-        action = await f.engine.advance('run', 'driver', result(action))
+        action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {roles: ['e2e-author']}})
-        action = await f.engine.advance('run', 'driver', result(action))
+        action = await submit(f, result(action))
         expect(execution(action).attempt.roles).toContain('database-design-reviewer')
     })
     it.each(['dirty', 'removed-commit', 'wrong-head', 'snapshot'] as const)(
@@ -259,16 +276,15 @@ describe('feature evidence and recovery protocol', () => {
                     Promise.resolve(path !== execution(action).attempt.worktree)
                 )
             }
-            await expect(
-                f.engine.advance(
-                    'run',
-                    'driver',
+            expect(
+                await submit(
+                    f,
                     result(action, {
                         head_sha: kind === 'wrong-head' ? nextSha : sha,
                         reviews: [{reviewer: 'quality-reviewer', claims: []}],
                     })
                 )
-            ).rejects.toThrow()
+            ).toMatchObject({kind: 'park'})
             expect((await f.store.read('run')).in_flight?.id).toBe(execution(action).attempt.id)
         }
     )

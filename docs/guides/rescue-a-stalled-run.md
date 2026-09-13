@@ -25,8 +25,10 @@ If an attempt is still leased, first stop its worker. Then recover explicitly:
 factory resume --run <id> --recover
 ```
 
-Recovery preserves committed and uncommitted work. It consumes a valid journaled
-result or retires the interrupted attempt. Rejected evidence remains in its journal
+Recovery preserves committed and uncommitted work. It consumes a complete staged
+result, re-issues only the missing roles of a partial review panel, or retires the
+interrupted attempt. A finished agent's output can still be written verbatim to its
+staged path (shown in the ledger) before recovering. Rejected evidence stays on disk
 and the rejection reason is audited; the replacement attempt must provide valid
 evidence. The next action must still pass all checks and independent review.
 Never run two workers for the same attempt.

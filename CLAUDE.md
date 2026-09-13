@@ -9,8 +9,8 @@ Version 1 execution is retired. Existing v1 artifacts are preserved for diagnosi
 - Markdown in commands, agents and skills is executable policy. Keep it aligned
   with the CLI schemas and test its recovery and evidence requirements.
 - The deterministic engine in `src/feature/` owns transitions. The session runner
-  in `skills/pipeline-runner/SKILL.md` only dispatches persisted attempts and submits
-  raw agent results. One producer may run per repository.
+  in `skills/pipeline-runner/SKILL.md` only dispatches persisted attempts and writes
+  raw agent results to their staged paths. One producer may run per repository.
 - One feature worktree accumulates sequential tasks. The engine creates immutable
   reviewer snapshots. Never ask Agent for another native isolation worktree.
 - Keep accepted commits, answers and audit evidence. Repair forward; never reset,
@@ -25,7 +25,7 @@ Version 1 execution is retired. Existing v1 artifacts are preserved for diagnosi
   are checked against the exact attempt SHA. Invalid or absent evidence fails closed.
 - Three repair passes per task, slice, feature or spec boundary. Spec generation
   permits five revisions. Infrastructure waiting does not spend producer passes.
-- Explicit stop remains parked until resume. Recovery consumes journaled results
+- Explicit stop remains parked until resume. Recovery consumes staged results
   before retiring a stopped worker's lease; uncommitted work is preserved.
 - No-ship ends with one complete PR ready for review. Live completion requires an
   observed merge. Verified no-change completion creates no empty PR.

@@ -1,12 +1,11 @@
 import {randomUUID} from 'node:crypto'
 import {join} from 'node:path'
-import {type FeatureStore} from './store.js'
+import {type FeatureStore, type Staged} from './store.js'
 import type {FeatureRuntime} from './ports.js'
 import {
     VERSION,
     REPAIR_PASSES,
     IdSchema,
-    ResultSchema,
     digest,
     terminal,
     validateFeatureSpec,
@@ -92,7 +91,7 @@ export class FeatureEngine {
         })
     }
 
-    async advance(id: string, driver: string, rawResult?: unknown): Promise<FeatureAction> {
+    async advance(id: string, driver: string): Promise<FeatureAction> {
         if (!driver.trim()) {
             throw new Error('next-action requires a driver session identity')
         }
@@ -100,28 +99,30 @@ export class FeatureEngine {
         return this.store.withRepo(initial.repo, async () => {
             let run = await this.store.read(id)
             if (terminal(run)) {
-                if (rawResult !== undefined) {
-                    throw new Error('stale result for terminal run')
-                }
                 return this.terminal(run)
             }
             if (run.status === 'parked') {
                 return this.parked(run)
             }
             try {
-                if (rawResult !== undefined) {
-                    const result = ResultSchema.parse(rawResult)
-                    this.assertResult(run, driver, result)
-                    await this.store.recordResult(id, result)
-                }
                 if (run.in_flight) {
-                    const result = await this.store.result(id, run.in_flight.id)
-                    if (!result) {
-                        return this.wait(run, `awaiting ${run.in_flight.id}; do not spawn it twice`)
+                    // The staged file's existence is the submission: no driver hand-off is needed,
+                    // so a fresh driver consumes a previous driver's finished attempt.
+                    const staged = await this.store.staged(id, run.in_flight)
+                    if ('missing' in staged) {
+                        const roles = run.in_flight.redispatch
+                        if (roles) {
+                            delete run.in_flight.redispatch
+                            await this.store.write(run)
+                            return await this.execute(run, {...run.in_flight, roles})
+                        }
+                        return this.wait(
+                            run,
+                            `awaiting ${staged.missing.join(', ')} for ${run.in_flight.id}; do not spawn it twice`
+                        )
                     }
-                    this.assertResult(run, driver, result)
                     const recorded = structuredClone(run)
-                    await this.record(recorded, result)
+                    await this.accept(recorded, staged.result)
                     run = recorded
                     await this.store.write(run)
                     if ((run.status as string) === 'parked') {
@@ -146,9 +147,6 @@ export class FeatureEngine {
                 }
                 return this.wait(run, 'checkpoint saved; advance again')
             } catch (error) {
-                if (rawResult !== undefined) {
-                    throw error
-                }
                 this.park(run, 'environment', error instanceof Error ? error.message : String(error))
                 await this.store.write(run)
                 return this.parked(run)
@@ -199,31 +197,48 @@ export class FeatureEngine {
                 if (options.recover !== true) {
                     throw new Error('attempt still leased; stop its agent, then resume --recover')
                 }
-                const journaled = await this.store.result(id, run.in_flight.id)
-                if (journaled !== undefined) {
+                const attempt = run.in_flight
+                let staged: Staged | Error
+                try {
+                    staged = await this.store.staged(id, attempt)
+                } catch (error) {
+                    staged = error instanceof Error ? error : new Error(String(error))
+                }
+                if (!(staged instanceof Error) && 'missing' in staged) {
+                    if (staged.missing.length < attempt.roles.length) {
+                        // Same attempt, same snapshot: only the missing roles run again.
+                        attempt.redispatch = staged.missing
+                        this.audit(run, 'partial result retained; missing roles redispatched', {
+                            attempt: attempt.id,
+                            missing: staged.missing,
+                        })
+                    } else {
+                        this.audit(run, 'interrupted attempt retired; work retained', attempt)
+                        delete run.in_flight
+                    }
+                } else {
                     const recovered = structuredClone(run)
                     recovered.status = 'running'
                     delete recovered.stop_reason
                     try {
-                        this.assertResult(recovered, run.in_flight.driver, journaled)
-                        await this.record(recovered, journaled)
+                        if (staged instanceof Error) {
+                            throw staged
+                        }
+                        await this.accept(recovered, staged.result)
                         run = recovered
-                        this.audit(run, 'durable result recovered', journaled.attempt_id)
+                        this.audit(run, 'durable result recovered', staged.result.attempt_id)
                         if (run.status === 'parked') {
                             return run
                         }
                     } catch (error) {
                         const reason = error instanceof Error ? error.message : String(error)
                         this.audit(run, 'invalid durable result retired; evidence and work retained', {
-                            attempt: run.in_flight,
+                            attempt,
                             reason,
                         })
                         run.feedback = [...run.feedback, `Previous result rejected: ${reason}`]
                         delete run.in_flight
                     }
-                } else {
-                    this.audit(run, 'interrupted attempt retired; work retained', run.in_flight)
-                    delete run.in_flight
                 }
             }
             run.status = 'running'
@@ -247,16 +262,18 @@ export class FeatureEngine {
         })
     }
 
-    private assertResult(run: FeatureRun, driver: string, result: FeatureResult): void {
+    /** Validate identity, then record, then journal the accepted result as evidence. */
+    private async accept(run: FeatureRun, result: FeatureResult): Promise<void> {
         const attempt = run.in_flight
         if (
             attempt?.id !== result.attempt_id ||
-            attempt.driver !== driver ||
             result.spec_digest !== attempt.spec_digest ||
             attempt.spec_digest !== run.spec_digest
         ) {
-            throw new Error('stale, duplicate, or foreign-driver result; inspect the persisted attempt')
+            throw new Error('stale or duplicate result; inspect the persisted attempt')
         }
+        await this.record(run, result)
+        await this.store.recordResult(run.run_id, result)
     }
 
     private task(run: FeatureRun) {
@@ -368,7 +385,17 @@ export class FeatureEngine {
         }
         run.in_flight = attempt
         this.audit(run, 'attempt issued', attempt)
-        return {kind: 'execute', run_id: run.run_id, attempt, prompt: this.prompt(run, attempt)}
+        return this.execute(run, attempt)
+    }
+
+    private async execute(run: FeatureRun, attempt: Attempt): Promise<FeatureAction> {
+        return {
+            kind: 'execute',
+            run_id: run.run_id,
+            attempt,
+            staged: await this.store.stage(run.run_id, attempt, attempt.roles),
+            prompt: this.prompt(run, attempt),
+        }
     }
 
     private prompt(run: FeatureRun, attempt: Attempt): string {

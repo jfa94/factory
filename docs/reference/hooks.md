@@ -8,9 +8,12 @@ from the feature/review worktree path or owning session. Owned workers cannot wr
 engine state, result journals, locks or durable specs, or publish PRs directly.
 Independent review snapshots are read-only; test writers may edit test paths only.
 
-`SessionStart` on compaction reminds the runner to reload its protocol. `Stop` only
-reports persisted state; it never resumes, retries or completes a run. V2 does not
-wire the legacy holdout or SubagentStop gates.
+`SessionStart` on compaction reminds the runner to reload its protocol. `Stop`
+reports persisted state and blocks once, only when the owning session's in-flight
+attempt has a staged result file for every role that the engine has not consumed
+(`next-action` was never called). The block names the exact command; a re-entry
+with `stop_hook_active` always allows. It never resumes, retries or completes a
+run. V2 does not wire the legacy holdout or SubagentStop gates.
 
 Tool guards complement engine validation; they are not an operating-system sandbox
 for arbitrary programs. The engine binds evidence to exact commits and spec digests.

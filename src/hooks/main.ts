@@ -28,7 +28,10 @@ import {runFeatureGuard, runFeatureStop} from './feature-guards.js'
 /** The mutable hook registry. WS9 registers the real guards here. */
 export const hookRegistry: Record<string, Hook> = {
     'feature-guards': {describe: 'PreToolUse: v2 producer scope and publication ownership', run: runFeatureGuard},
-    'feature-stop': {describe: 'Stop: report owned v2 runs without mutating state', run: runFeatureStop},
+    'feature-stop': {
+        describe: 'Stop: report owned v2 runs; block once when a complete staged result is unconsumed',
+        run: runFeatureStop,
+    },
     'branch-protection': {
         describe: 'PreToolUse Bash: block destructive git ops on protected branches',
         run: (argv) => runBranchProtection(argv),

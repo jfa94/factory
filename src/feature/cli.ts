@@ -1,4 +1,4 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- explicit CLI result paths and validated spec/run storage paths */
+/* eslint-disable security/detect-non-literal-fs-filename -- validated spec/run storage paths */
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
@@ -23,7 +23,7 @@ const HELP = `Factory v2 — sequential feature delivery
 
 factory spec resolve|gate|store --issue <n>
 factory run create --issue <n> [--no-ship] [--e2e] [--ignore-quota]
-factory next-action --run <id> --driver <session> [--results <json-file>]
+factory next-action --run <id> --driver <session>
 factory run stop --run <id>
 factory resume --run <id> [--answer <text>] [--recover]
 factory run cancel --run <id>
@@ -31,7 +31,9 @@ factory state --run <id> [--ledger]
 factory state --list
 factory debug create --base <ref> [--ignore-quota]
 
---recover retires an interrupted attempt after its previous agent has been stopped.
+Agent results are written verbatim to the per-role paths in the execute envelope's
+"staged"; next-action consumes them. --recover, after the previous agent has stopped,
+consumes a complete staged result, redispatches missing roles, or retires the attempt.
 Legacy runs are preserved but cannot execute. One active feature run per repository.
 `
 
@@ -52,7 +54,7 @@ export function featureCommand(name: string): Subcommand {
                       : name === 'resume'
                         ? ['run', 'answer', 'recover']
                         : name === 'next-action' || name === 'next-task'
-                          ? ['run', 'driver', 'results']
+                          ? ['run', 'driver']
                           : name === 'state'
                             ? ['run', 'list', 'ledger']
                             : ['run']
@@ -187,13 +189,7 @@ export function featureCommand(name: string): Subcommand {
             }
             const id = args.requireFlag('run')
             if (name === 'next-action' || name === 'next-task') {
-                const resultPath = optionalString(args.flag('results'))
-                if (args.has('results') && (resultPath === undefined || resultPath === '')) {
-                    throw new UsageError('--results requires a JSON file')
-                }
-                const raw =
-                    resultPath !== undefined ? (JSON.parse(await readFile(resultPath, 'utf8')) as unknown) : undefined
-                emitJson(await engine.advance(id, args.requireFlag('driver'), raw))
+                emitJson(await engine.advance(id, args.requireFlag('driver')))
                 return EXIT.OK
             }
             if (name === 'resume') {
@@ -216,7 +212,8 @@ export function featureCommand(name: string): Subcommand {
             if (['state', 'statusline'].includes(name)) {
                 const run = await store.read(id)
                 if (args.has('ledger')) {
-                    process.stdout.write(renderLedger(run))
+                    const staged = run.in_flight ? await store.stagedPresent(id, run.in_flight) : undefined
+                    process.stdout.write(renderLedger(run, {now: runtime.now(), ...(staged ? {staged} : {})}))
                 } else {
                     emitJson(run)
                 }

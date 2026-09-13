@@ -14,6 +14,7 @@ import {
     readHookInput,
     sessionIdOf,
     emitPermissionDecision,
+    emitBlockDecision,
     decisionToExitCode,
     type HookInput,
     type HookDecision,
@@ -94,22 +95,52 @@ export async function runFeatureGuard(_argv: string[] = []): Promise<ExitCode> {
     return decisionToExitCode(decision)
 }
 
-/** Stop is observational. Never clear a park, complete delivery, or launch work. */
+/**
+ * Stop reports persisted state. Its one block is one-shot and filesystem-only: an owned
+ * run whose in-flight attempt has every role's staged result present is a finished
+ * attempt the session never handed to the engine. Never clear a park, complete
+ * delivery, or launch work; a `stop_hook_active` re-entry always allows.
+ */
+export async function decideFeatureStop(
+    input: HookInput | null,
+    runs: readonly FeatureRun[],
+    store: FeatureStore
+): Promise<HookDecision> {
+    const session = sessionIdOf(input)
+    if (session === undefined) {
+        return allow()
+    }
+    for (const run of runs) {
+        if (terminal(run) || run.owner_session !== session) {
+            continue
+        }
+        const attempt = run.in_flight
+        if (
+            attempt &&
+            run.status !== 'parked' &&
+            input?.stop_hook_active !== true &&
+            (await store.stagedPresent(run.run_id, attempt)).length === attempt.roles.length
+        ) {
+            return deny(
+                `Factory ${run.run_id}: attempt ${attempt.id} has a complete staged result the engine has not consumed. Run factory next-action --run ${run.run_id} --driver <session> and continue driving before stopping.`
+            )
+        }
+        process.stderr.write(
+            `Factory ${run.run_id}: ${run.status}; inspect factory state --run ${run.run_id} --ledger before resuming.\n`
+        )
+    }
+    return allow()
+}
+
 export async function runFeatureStop(_argv: string[] = []): Promise<ExitCode> {
     try {
         const input = await readHookInput()
-        const session = sessionIdOf(input)
-        if (session === undefined) {
+        if (sessionIdOf(input) === undefined) {
             return EXIT.OK
         }
-        const runs = await new FeatureStore(resolveDataDir()).list()
-        for (const run of runs) {
-            if (!terminal(run) && run.owner_session === session) {
-                process.stderr.write(
-                    `Factory ${run.run_id}: ${run.status}; inspect factory state --run ${run.run_id} --ledger before resuming.\n`
-                )
-            }
-        }
+        const store = new FeatureStore(resolveDataDir())
+        const decision = await decideFeatureStop(input, await store.list(), store)
+        emitBlockDecision(decision, (text) => process.stdout.write(text))
         return EXIT.OK
     } catch (error) {
         process.stderr.write(`Factory stop state error: ${error instanceof Error ? error.message : String(error)}\n`)

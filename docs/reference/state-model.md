@@ -4,7 +4,13 @@ The engine stores each run at `$CLAUDE_PLUGIN_DATA/runs-v2/<run-id>/`:
 
 - `state.json`: frozen spec and digest, task checkpoints, repair counters, stage,
   attempt lease, answers, audit events and delivery.
-- `results/<attempt-id>.json`: journaled agent evidence.
+- `results/<attempt-id>.json`: journal of accepted agent evidence, written after
+  validation.
+
+Raw agent output is staged outside `runs-v2/` at
+`staged-v2/<run-id>/<attempt-id>/<role>.json`, one file per role; the driver writes
+it verbatim and the engine reads it on `next-action`. A missing, half-written or
+schema-invalid file reads as "not yet".
 - `ledger.md`: readable projection of checkpoints, answers and audit events.
 
 Repository locks live in `locks-v2/`; durable generated specs live in `v2/specs/`.
@@ -12,9 +18,11 @@ These directories are engine-owned and protected from producer writes. V1 state
 is preserved for diagnosis.
 
 An attempt binds its driver, stage, spec digest, base SHA, HEAD, roles and worktree.
-Missing results yield wait instead of duplicate dispatch. Stale or foreign-driver
-submissions fail. Explicit recovery consumes valid journaled evidence or retires
-the stopped attempt; rejected evidence and its reason remain retained.
+Missing results yield wait instead of duplicate dispatch. Any driver may consume
+staged results; a stale attempt id, spec digest or HEAD is rejected. Explicit
+recovery consumes a complete staged result, re-issues only the missing roles of a
+partial review panel on the same attempt (`in_flight.redispatch`), or retires the
+stopped attempt; rejected evidence and its reason remain retained.
 
 Statuses are running, waiting, parked, awaiting-merge, ready-for-review, completed
 and cancelled. The final three are terminal. Explicit stops require resume.

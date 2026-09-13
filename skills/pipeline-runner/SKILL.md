@@ -7,8 +7,11 @@ auto-invoke: false
 # Sequential feature runner
 
 The CLI owns transitions, checks, repair budgets, delivery and recovery. The session
-calls it, dispatches the named agents, and submits their output. One PRD has one
-feature branch and one PR. Never run two producer agents for a repository.
+calls it, dispatches the named agents, and writes their output where the engine
+reads it. One PRD has one feature branch and one PR. Never run two producer agents
+for a repository. Keep driving until `terminal`, `park`, or the user interrupts:
+an agent that finished but whose output was never written for the engine is the
+stall this protocol exists to prevent.
 
 ## Generate an executable spec
 
@@ -56,13 +59,19 @@ available). Call `factory next-action --run <id> --driver <session>`.
   Review the exact committed range with `git diff <attempt.base_sha>..<attempt.head_sha>`.
   Dispatch producers sequentially. Reviewers are fresh independent agents;
   never share one reviewer's reasoning with another before all reviews finish.
-  Collect their evidence verbatim into one result, with one reviews entry per
-  requested reviewer. The driver may assemble this envelope, but may not author,
-  discard or change a finding or acceptance decision.
-  Save the JSON outside protected engine state, then call
-  `factory next-action --run <id> --driver <session> --results <file>`.
-- `wait`: respect `retry_after_seconds`. If an attempt is already issued, wait
-  for that agent; never dispatch it twice. Otherwise poll the CLI after the delay.
+  The moment an agent returns, write its result JSON verbatim to `staged[<role>]`
+  from the envelope (one file per role; the file's existence is the submission).
+  Never author, discard or change a finding or acceptance decision, and never
+  merge roles into one file. Once every role's file is written, call
+  `factory next-action --run <id> --driver <session>` (no `--results`); the
+  engine merges and validates the staged files and journals accepted evidence.
+- `wait`: if `reason` says an attempt is awaiting roles, write any finished
+  agent's output to its staged path and call again; never dispatch it twice.
+  Otherwise arm one timer sized to `retry_after_seconds` with
+  `Bash(run_in_background)`, e.g. `until [ $SECONDS -ge <n> ]; do sleep 30; done`
+  (not a bare foreground `sleep`), end the turn, and call `next-action` again
+  when its completion notification arrives. Re-arm after every `wait`. Answer a
+  user's status question briefly, then re-enter the loop; do not stop driving.
 - `park`: stop dispatching and report the persisted reason. Explicit resume is
   required, even if quota recovers.
 - `terminal`: report the exact status and delivery URL or no-change outcome.
@@ -86,9 +95,12 @@ Inspect `factory state --run <id> --ledger`. Resume with
 Answers remain in the ledger and all future producer contexts.
 
 If a dispatched agent was interrupted, first establish that it has stopped, then
-use `factory resume --run <id> --recover`. This retires its lease while retaining
-work. Start advancing with the current driver's identity. A previous attempt's
-late output is stale; do not relabel it as a new attempt.
+use `factory resume --run <id> --recover`. Recovery consumes a complete staged
+result, keeps a partial review panel and re-issues only its missing roles on the
+same attempt, or retires the attempt while retaining work. A new session may
+consume an older attempt's staged files with its own driver identity; writing a
+finished agent's output to its original attempt path is not relabeling. Never
+rewrite a result to change its attempt or HEAD.
 
 Cancel only when requested: `factory run cancel --run <id>` preserves artifacts.
 Never infer cancellation from elapsed time or an unavailable dependency.
