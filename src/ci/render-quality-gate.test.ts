@@ -402,9 +402,11 @@ describe('mutation roots substitution (A4) + renderMutationNightly (A2)', () => 
         expect(out).toContain('actions/cache/save')
     })
 
-    it('renderMutationNightly: pnpm keeps pnpm exec', () => {
+    it('renderMutationNightly: pnpm keeps pnpm exec and disables verify-deps inside the stryker sandbox', () => {
         const out = renderMutationNightly(nightly, {...PNPM_OPTS})
         expect(out).toContain('pnpm exec stryker run --mutate')
+        expect(out).toContain('pnpm_config_verify_deps_before_run: "false"')
+        expect(renderQualityGate(template, PNPM_OPTS)).toContain('pnpm_config_verify_deps_before_run: "false"')
     })
 
     it('renderMutationNightly: mutation waived → null (no nightly workflow)', () => {

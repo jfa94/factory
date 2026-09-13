@@ -26,12 +26,14 @@ const EXCERPT_MAX_CHARS = 1000
  * coverage stderr must never carry an env secret to that sink. Both callers
  * (procOutcome, coverage's measurementFailure) route through here.
  */
-export function excerpt(text: string): string {
+export function excerpt(text: string, keep: 'head' | 'tail' = 'head'): string {
     const trimmed = redactSecrets(text).trim()
     if (trimmed.length <= EXCERPT_MAX_CHARS) {
         return trimmed
     }
-    return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`
+    return keep === 'head'
+        ? `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`
+        : `(truncated) …${trimmed.slice(-EXCERPT_MAX_CHARS)}`
 }
 
 /**

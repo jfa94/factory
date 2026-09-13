@@ -75,6 +75,7 @@ jobs:
         if: steps.slice.outputs.slice != ''
         env:
           SLICE: ${{ steps.slice.outputs.slice }}
+          pnpm_config_verify_deps_before_run: "false" # Stryker's sandbox symlinks node_modules; stop pnpm reinstalling there
           INC: reports/mutation/.stryker-incremental-shard-${{ matrix.shard }}.json
           CHUNK: 8
           CAP_MIN: 330

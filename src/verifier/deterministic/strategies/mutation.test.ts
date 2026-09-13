@@ -115,6 +115,40 @@ describe('mutationStrategy (Δ O)', () => {
         expect((out as GateRan).evidence.detail).toContain('stryker-failed')
     })
 
+    it('stryker-failed carries the tail of its output and a signal kill reads exit=null', async () => {
+        const failed = strykerResult({code: 1})
+        const tools = makeFakeTools({
+            git: probe(['src/foo.ts']),
+            stryker: new FakeStryker({
+                ...failed,
+                proc: {...failed.proc, stderr: `${'x'.repeat(2000)}\nInitial test run failed: pnpm exit 1`},
+            }),
+        })
+        const detail = ((await mutationStrategy.run(ctx(tools))) as GateRan).evidence.detail
+        expect(detail).toContain('stryker-failed: exit=1: (truncated) …')
+        expect(detail).toContain('Initial test run failed: pnpm exit 1')
+        const killed = makeFakeTools({
+            git: probe(['src/foo.ts']),
+            stryker: new FakeStryker(strykerResult({code: null})),
+        })
+        const out = (await mutationStrategy.run(ctx(killed))) as GateRan
+        expect(out.evidence.observed).toBe(false)
+        expect(out.evidence.detail).toBe('stryker-failed: exit=null')
+    })
+
+    it('a stale report that could not be removed fails closed with the removal error', async () => {
+        const tools = makeFakeTools({
+            git: probe(['src/foo.ts']),
+            stryker: new FakeStryker({
+                proc: {code: null, stdout: '', stderr: '', truncated: false},
+                report: {report: 'stale', error: 'EISDIR: illegal operation on a directory'},
+            }),
+        })
+        const out = (await mutationStrategy.run(ctx(tools))) as GateRan
+        expect(out.evidence.observed).toBe(false)
+        expect(out.evidence.detail).toBe('stale-report-removal-failed: EISDIR: illegal operation on a directory')
+    })
+
     it('T4d: green but no report (non-empty scope) → no-report (fail-closed)', async () => {
         const tools = makeFakeTools({
             git: probe(['src/foo.ts']),

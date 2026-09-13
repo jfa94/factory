@@ -324,7 +324,7 @@ function renderMutationRegion(lines: string[], opts: RenderQualityGateOpts): str
     kept = replaceMarker(kept, '# factory:mutation-setup', mutationSetupBlock(opts))
     kept = applyMutationRoots(kept, opts.contract)
     if (opts.packageManager === 'npm') {
-        kept = kept.map((l) => l.replace('pnpm exec stryker run', 'npx stryker run'))
+        kept = npmify(kept)
     }
     return kept
 }
@@ -347,9 +347,16 @@ export function renderMutationNightly(template: string, opts: RenderQualityGateO
     lines = replaceMarker(lines, '# factory:mutation-setup', mutationSetupBlock(opts))
     lines = applyMutationRoots(lines, opts.contract)
     if (opts.packageManager === 'npm') {
-        lines = lines.map((l) => l.replace('pnpm exec stryker run', 'npx stryker run'))
+        lines = npmify(lines)
     }
     return lines.join('\n')
+}
+
+/** npm repos: `npx stryker`, and no pnpm-only sandbox setting. */
+function npmify(lines: string[]): string[] {
+    return lines
+        .filter((l) => !l.includes('pnpm_config_verify_deps_before_run'))
+        .map((l) => l.replace('pnpm exec stryker run', 'npx stryker run'))
 }
 
 /**

@@ -140,6 +140,8 @@ export type StrykerReport =
     | {readonly report: 'absent'}
     | {readonly report: 'unparseable'}
     | {readonly report: 'present'; readonly mutationScore: number | null}
+    /** A previous report could not be removed, so stryker was not run: no fresh score is possible. */
+    | {readonly report: 'stale'; readonly error: string}
 
 /** Outcome of a stryker run: the process result + the parsed report state. */
 export interface StrykerResult {
@@ -437,11 +439,18 @@ export class DefaultStrykerTool implements StrykerTool {
             await unlink(reportPath)
         } catch (error) {
             if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-                throw error
+                const message = error instanceof Error ? error.message : String(error)
+                return {
+                    proc: {code: null, stdout: '', stderr: '', truncated: false},
+                    report: {report: 'stale', error: message},
+                }
             }
         }
         const csv = mutate.map(escapeStrykerGlob).join(',')
-        const proc = toProc(await runTool(this.resolve, 'stryker', ['run', '--mutate', csv], opts, this.env))
+        // Stryker's sandbox symlinks node_modules; pnpm ≥10 would otherwise try to
+        // reinstall on `pnpm run` inside it and abort. The repo's gateEnv still wins.
+        const env = {pnpm_config_verify_deps_before_run: 'false', ...this.env}
+        const proc = toProc(await runTool(this.resolve, 'stryker', ['run', '--mutate', csv], opts, env))
         // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
         // strategy branches on proc.code; we still attempt to read a report.
         let raw: string

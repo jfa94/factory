@@ -34,6 +34,7 @@ import {mutationScope} from '../scope.js'
 import type {GateTools} from '../tools.js'
 import {mutationRoots} from '../gate-contract.js'
 import {STRYKER_CONFIG_BASENAMES} from '../../../shared/gate-config-names.js'
+import {excerpt} from './proc-strategy.js'
 
 /** Strict float compare: pass IFF score >= target (no rounding). */
 export function scorePasses(score: number, target: number): boolean {
@@ -85,6 +86,9 @@ export const mutationStrategy: GateStrategy<GateTools> = {
             throw new Error('mutation gate: stryker report truncated — refusing to parse a clipped payload')
         }
         const report = result.report
+        if (report.report === 'stale') {
+            return ran('mutation', false, `stale-report-removal-failed: ${report.error}`)
+        }
         // A present, derivable score is AUTHORITATIVE — compare against the factory's
         // own `mutationScoreTarget` regardless of stryker's exit code. Target repos gate
         // CI via stryker's `break: N` threshold (a non-zero exit when CI's bar isn't
@@ -98,7 +102,10 @@ export const mutationStrategy: GateStrategy<GateTools> = {
         }
         // No derivable score. A non-zero exit means stryker crashed BEFORE producing one.
         if (result.proc.code !== 0) {
-            return ran('mutation', false, `stryker-failed: exit=${result.proc.code ?? 'null'}`)
+            // Stryker prints the failing initial test run last: keep the tail.
+            const output = excerpt(result.proc.stderr || result.proc.stdout, 'tail')
+            const detail = `stryker-failed: exit=${result.proc.code ?? 'null'}`
+            return ran('mutation', false, output ? `${detail}: ${output}` : detail)
         }
         // Green exit but still no score: scope is non-empty, so an absent / unparseable /
         // score-less report is an anomaly → fail-closed (bash A2 / T4d), never a waive.

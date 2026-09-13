@@ -338,6 +338,35 @@ describe('Stryker report freshness', () => {
         }
     )
 
+    it('a signal-killed run (code null) yields no report and never a reused score', async () => {
+        execMock.mockResolvedValue(res('', null as unknown as number))
+        const result = await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
+        expect(result.proc.code).toBeNull()
+        expect(result.report).toEqual({report: 'absent'})
+    })
+
+    it('reports a stale report it cannot remove as evidence instead of throwing, without running stryker', async () => {
+        await rm(join(cwd, DefaultStrykerTool.REPORT_PATH))
+        await mkdir(join(cwd, DefaultStrykerTool.REPORT_PATH, 'nested'), {recursive: true}) // unlink → EISDIR/EPERM
+        const result = await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
+        expect(result.report).toMatchObject({
+            report: 'stale',
+            error: expect.stringContaining('mutation.json') as string,
+        })
+        expect(result.proc.code).toBeNull()
+        expect(execMock).not.toHaveBeenCalled()
+    })
+
+    it('disables pnpm verify-deps inside the stryker sandbox, letting configured gateEnv override', async () => {
+        execMock.mockResolvedValue(res(''))
+        await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
+        expect(at(execMock.mock.calls, 0)[2]).toEqual({cwd, env: {pnpm_config_verify_deps_before_run: 'false'}})
+        await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker'), {
+            pnpm_config_verify_deps_before_run: 'install',
+        }).run(['new.ts'], {cwd})
+        expect(at(execMock.mock.calls, 1)[2]).toEqual({cwd, env: {pnpm_config_verify_deps_before_run: 'install'}})
+    })
+
     it('accepts a freshly produced score even when the configured threshold makes Stryker exit nonzero', async () => {
         execMock.mockImplementation(async () => {
             await writeFile(join(cwd, DefaultStrykerTool.REPORT_PATH), JSON.stringify({metrics: {mutationScore: 82}}))
