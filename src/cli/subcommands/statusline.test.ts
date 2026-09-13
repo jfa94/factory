@@ -18,6 +18,8 @@ import {StateManager} from '../../core/state/index.js'
 import {currentRepoLinkPath, STATE_FILE} from '../../core/state/paths.js'
 import {FakeGitClient} from '../../git/index.js'
 import type {SpecPointer, TaskState} from '../../types/index.js'
+import {FeatureStore} from '../../feature/store.js'
+import {digest, validateFeatureSpec, type FeatureRun} from '../../feature/schema.js'
 
 /** A FakeGitClient whose origin resolves to `slug` (the payload-cwd repo anchor, Decision 61). */
 function git(slug: string): FakeGitClient {
@@ -392,5 +394,116 @@ describe('runStatusline (run-progress suffix, S11)', () => {
         })
         expect(code).toBe(EXIT.OK)
         expect(displayed).toBe(`${payload} 1/3 tasks completed`)
+    })
+})
+
+describe('runStatusline (v2 feature progress)', () => {
+    let dataDir: string
+    const FIXED_NOW = Date.parse('2026-09-07T03:00:00Z') / 1000
+    const REPO = 'acme/widgets'
+
+    async function display(): Promise<string> {
+        let displayed = ''
+        const code = await runStatusline([], {
+            featureProgress: true,
+            dataDirOptions: {dataDir},
+            now: () => FIXED_NOW,
+            readStdin: () => Promise.resolve(JSON.stringify({workspace: {current_dir: '/repo'}})),
+            env: {},
+            gitClient: git(REPO),
+            writeStdout: (s) => {
+                displayed += s
+            },
+        })
+        expect(code).toBe(EXIT.OK)
+        return displayed
+    }
+
+    function run(): FeatureRun {
+        const sha = 'a'.repeat(40)
+        const spec = validateFeatureSpec({
+            version: 2,
+            revision: 1,
+            base_sha: sha,
+            contracts: {},
+            prd: {issue_number: 1, title: 'Value', body: '- Return a value.', labels: [], body_truncated: false},
+            spec_md: 'Return a value.',
+            tasks: [
+                {
+                    task_id: 'value',
+                    slice_id: 'slice',
+                    requirement_ids: ['R1'],
+                    title: 'Return value',
+                    description: 'Return the requested value.',
+                    files: ['value.ts'],
+                    acceptance_criteria: ['Return a value.'],
+                    tests_to_write: ['Assert the value.'],
+                    depends_on: [],
+                    risk_tier: 'low',
+                    risk_rationale: 'Local value',
+                },
+            ],
+        })
+        return {
+            version: 2,
+            run_id: 'run',
+            repo: REPO,
+            root: '/repo',
+            branch: 'factory/1-run',
+            worktree: '/repo/.claude/worktrees/feature-run',
+            base_branch: 'develop',
+            remote: 'origin',
+            ship_mode: 'no-ship',
+            debug: false,
+            e2e: false,
+            ignore_quota: true,
+            spec,
+            spec_digest: digest(spec),
+            status: 'running',
+            stage: 'implement',
+            task_index: 0,
+            accepted_sha: sha,
+            task_base_sha: sha,
+            slice_base_sha: sha,
+            attempts: {},
+            checkpoints: [],
+            answers: [],
+            feedback: [],
+            claims: [],
+            candidate_satisfied: false,
+            delivery: {},
+            audit: [],
+        }
+    }
+
+    beforeEach(() => {
+        dataDir = mkdtempSync(join(tmpdir(), 'factory-statusline-feature-'))
+    })
+    afterEach(() => {
+        rmSync(dataDir, {recursive: true, force: true})
+    })
+
+    it('shows the lease age and that activity is unverified while an attempt is in flight', async () => {
+        const base = run()
+        await new FeatureStore(dataDir).write({
+            ...base,
+            in_flight: {
+                id: 'attempt',
+                driver: 'session',
+                stage: 'implement',
+                base_sha: base.accepted_sha,
+                head_sha: base.accepted_sha,
+                spec_digest: base.spec_digest,
+                worktree: base.worktree,
+                roles: ['implementer'],
+                issued_at: '2026-09-07T00:00:00Z',
+            },
+        })
+        expect(await display()).toBe('0/1 tasks accepted (running; implement issued 3h ago, activity unverified)')
+    })
+
+    it('shows only the lifecycle when nothing is in flight', async () => {
+        await new FeatureStore(dataDir).write({...run(), status: 'parked'})
+        expect(await display()).toBe('0/1 tasks accepted (parked)')
     })
 })

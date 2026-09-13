@@ -37,7 +37,7 @@ import {nowEpoch as defaultNowEpoch} from '../../shared/time.js'
 import {exec} from '../../shared/exec.js'
 import {createLogger} from '../../shared/logging.js'
 import type {Subcommand} from '../registry-types.js'
-import {FeatureStore} from '../../feature/store.js'
+import {FeatureStore, age} from '../../feature/store.js'
 import {terminal} from '../../feature/schema.js'
 
 const log = createLogger('cli:statusline')
@@ -140,9 +140,16 @@ async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<s
         // Read THROUGH the symlink — no readlink dance, a dangling pointer just throws.
         if (deps.featureProgress === true) {
             const run = (await new FeatureStore(dataDir).list()).find((run) => run.repo === repo && !terminal(run))
-            return run === undefined
-                ? ''
-                : ` ${run.checkpoints.length}/${run.spec.tasks.length} tasks accepted (${run.status})`
+            if (run === undefined) {
+                return ''
+            }
+            // Persisted status is a lifecycle, not proof of a live worker: show the lease age.
+            const attempt = run.in_flight
+            const now = new Date((deps.now ?? defaultNowEpoch)() * 1000).toISOString()
+            const live = attempt
+                ? `; ${attempt.stage} issued ${age(attempt.issued_at, now)} ago, activity unverified`
+                : ''
+            return ` ${run.checkpoints.length}/${run.spec.tasks.length} tasks accepted (${run.status}${live})`
         }
         const raw = await readFile(join(currentRepoLinkPath(dataDir, repo), STATE_FILE), 'utf8')
         const run = JSON.parse(raw) as {
