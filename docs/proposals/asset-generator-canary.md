@@ -265,3 +265,29 @@ emptied on 2026-09-11), so the base defaulted to `develop`. The driver wrote
 the canary's authorized integration branch; resolution then snapshotted base
 `8c398fb` (the PR #5 merge) with nine extracted requirements and issued the
 generator spawn.
+
+The spec loop took one revision. The generator hit its turn limit trying to run
+the repository gates itself and was told to finalize; its first spec passed the
+engine gate but the reviewer returned 53/60 with two blockers: byte-exact
+docs-versus-stdout criteria that prettier makes unsatisfiable, and an undefined
+success return at the batch-001/batch-002 boundary. The revision (parsed-value
+docs comparison, a `parseCopyBatch` seam) passed the gate and a fresh reviewer
+scored it 56/60 with no blockers. Spec `4-validate-copy-batches` (seven tasks,
+two slices) is stored at revision 2; run `19e4850d` was created live with
+`--ignore-quota` on branch `factory/4-19e4850d-f0b0-426b-9dc5-1f7ba42e6adb`.
+
+The first attempt exposed a new engine defect. The test-writer committed
+`batch.test.ts` importing the not-yet-existing `batch.ts` (`1ea07cb`); vitest
+loaded zero tests and `testEvidence` threw "no recognized executed-test
+evidence", which `next-action` caught and parked as `environment` even though
+the engine's tests stage already had a repair branch for a RED suite with no
+observed tests. Root cause: the evidence parser treated every zero-test outcome
+as an unverifiable pass. Fix `f77085c`: a failed process with no recognized
+tests now reads as zero evidence (producer repair), only a successful process
+without evidence still fails closed, and the tests-stage repair feedback carries
+the check details. `resume --recover` then consumed the staged result, recorded
+it, scheduled repair pass 1 of `task:batch-001` and the run returned to `tests`
+with no new environment park. The producer-side gap remains for the user to
+judge: a task that creates a new module cannot produce an assertion failure with
+a plain static import, so the test-writer's charter forces a load-tolerant test
+shape; the repair attempt (`906d5459`) is the evidence of how it copes.
