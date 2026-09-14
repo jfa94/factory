@@ -12644,7 +12644,10 @@ var FeatureEngine = class {
       case "tests": {
         const red = await this.runtime.checks(run5, "tests");
         if (head === run5.task_base_sha || red.observed === 0 || red.passed || !red.assertionFailure) {
-          this.repair(run5, "tests", ["test-writer must commit task tests that demonstrably fail"]);
+          this.repair(run5, "tests", [
+            "test-writer must commit task tests that demonstrably fail by assertion",
+            ...red.details
+          ]);
           if (run5.status !== "parked") {
             run5.stage = "tests";
           }
@@ -13783,6 +13786,9 @@ ${proc.stderr}`);
     executed = [...summary.matchAll(/(\d+)\s+(?:passed|failed)/g)].reduce((sum, match) => sum + Number(match[1]), 0);
   }
   if (!Number.isInteger(executed) || executed <= 0) {
+    if (proc.code !== 0) {
+      return { executed: 0, assertionFailure: false };
+    }
     throw new Error(
       "test command provided no recognized executed-test evidence; configure a TAP, Node, Jest JSON or Vitest reporter"
     );

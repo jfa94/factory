@@ -503,7 +503,10 @@ export class FeatureEngine {
             case 'tests': {
                 const red = await this.runtime.checks(run, 'tests')
                 if (head === run.task_base_sha || red.observed === 0 || red.passed || !red.assertionFailure) {
-                    this.repair(run, 'tests', ['test-writer must commit task tests that demonstrably fail'])
+                    this.repair(run, 'tests', [
+                        'test-writer must commit task tests that demonstrably fail by assertion',
+                        ...red.details,
+                    ])
                     if (run.status !== 'parked') {
                         run.stage = 'tests'
                     }

@@ -444,6 +444,27 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
     }, 30_000)
 
+    it('schedules a tests repair with the check details when the RED suite executed no tests', async () => {
+        const f = await fixture('no-ship', false)
+        const checks = f.runtime.checks.bind(f.runtime)
+        f.runtime.checks = async (run, stage) =>
+            stage === 'tests' && (await f.runtime.head(run.worktree)) !== run.task_base_sha
+                ? {passed: false, observed: 0, details: ['executed_tests: 0'], assertionFailure: false}
+                : checks(run, stage)
+        let action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute' || action.attempt.stage !== 'tests') {
+            throw new Error('missing test phase')
+        }
+        const worktree = action.attempt.worktree
+        await writeFile(join(worktree, 'value.test.js'), "import {value} from './missing.js'\n")
+        await git(worktree, 'add', 'value.test.js')
+        await git(worktree, 'commit', '-m', '[first] test that cannot load')
+        action = await submit(f, result(action, {head_sha: await f.runtime.head(worktree)}))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'tests'}})
+        expect(action.kind === 'execute' && action.prompt).toContain('executed_tests: 0')
+        expect((await f.store.read('run')).status).toBe('running')
+    }, 30_000)
+
     it('consumes a durable result after a crash without repeating the producer', async () => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')

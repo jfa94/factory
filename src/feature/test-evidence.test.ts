@@ -19,6 +19,15 @@ describe('test execution evidence', () => {
     it('does not call a compiler or module-loading error a meaningful red assertion', () => {
         expect(testEvidence(proc('# pass 0\n# fail 1\nSyntaxError: unexpected token', 1)).assertionFailure).toBe(false)
     })
+    it('reads a failed run that executed no tests as zero evidence, not an unverifiable pass', () => {
+        expect(testEvidence(proc('{"numPassedTests":0,"numFailedTests":0,"numFailedTestSuites":1}', 1))).toEqual({
+            executed: 0,
+            assertionFailure: false,
+        })
+        expect(
+            testEvidence(proc('Test Files 1 failed (1)\nTests no tests\nError: Failed to resolve import', 1))
+        ).toEqual({executed: 0, assertionFailure: false})
+    })
     it('recognizes colored reporter summaries without counting skipped tests', () => {
         expect(
             testEvidence(proc('\u001b[1m Tests \u001b[32m2 passed\u001b[39m | 3 skipped (5)\u001b[0m')).executed

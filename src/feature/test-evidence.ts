@@ -36,6 +36,11 @@ export function testEvidence(proc: ProcResult): {executed: number; assertionFail
         executed = [...summary.matchAll(/(\d+)\s+(?:passed|failed)/g)].reduce((sum, match) => sum + Number(match[1]), 0)
     }
     if (!Number.isInteger(executed) || executed <= 0) {
+        if (proc.code !== 0) {
+            // A failed run that reports no tests (a suite that could not load) is a producer
+            // failure to repair, not an unverifiable pass; only a "success" without evidence is.
+            return {executed: 0, assertionFailure: false}
+        }
         throw new Error(
             'test command provided no recognized executed-test evidence; configure a TAP, Node, Jest JSON or Vitest reporter'
         )
