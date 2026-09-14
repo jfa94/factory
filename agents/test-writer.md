@@ -16,8 +16,9 @@ maxTurns: 30
 For a v2 attempt, work on the supplied feature branch in `attempt.worktree`.
 Read the full visible criteria and repository contracts. Commit only behavioral
 tests with the task-ID tag; prove a real failing assertion rather than a syntax,
-import or environment failure. Preserve prior commits and tests. Report an
-unchanged satisfied task as `already-satisfied`, a contradictory spec as
+import or environment failure. Preserve prior commits and tests. Report a task
+whose behavior is already delivered as `already-satisfied` (your committed tests
+may pass; the engine then verifies independently), a contradictory spec as
 `spec-defect`, and a missing decision as `needs-context`. Return the engine's exact
 JSON result. V2 has no holdouts, separate task branches or STATUS-line result.
 

@@ -1,4 +1,4 @@
-import {mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises'
+import {appendFile, mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach, describe, expect, it} from 'vitest'
@@ -463,6 +463,47 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'tests'}})
         expect(action.kind === 'execute' && action.prompt).toContain('executed_tests: 0')
         expect((await f.store.read('run')).status).toBe('running')
+    }, 30_000)
+
+    it('accepts already-satisfied from the tests stage after a passing tests-only commit', async () => {
+        const f = await fixture('no-ship', false)
+        let action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute' || action.attempt.stage !== 'tests') {
+            throw new Error('missing test phase')
+        }
+        const worktree = action.attempt.worktree
+        await appendFile(join(worktree, 'value.test.js'), "test('value is already delivered', () => ok(value === 0))\n")
+        await git(worktree, 'add', 'value.test.js')
+        await git(worktree, 'commit', '-m', '[first] pin delivered value')
+        const head = await f.runtime.head(worktree)
+        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review', head_sha: head}})
+        action = await respond(f, action)
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'acceptance'}})
+        expect(action.kind === 'execute' && action.prompt).toContain('Acceptance IDs: first:AC1.')
+        action = await respond(f, action)
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'slice-review'}})
+        const run = await f.store.read('run')
+        expect(run.checkpoints.map((row) => row.task_id)).toEqual(['first'])
+        expect(run.candidate_satisfied).toBe(false)
+    }, 30_000)
+
+    it('still rejects already-satisfied from implement when the checkpoint moved', async () => {
+        const f = await fixture()
+        let action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute' || action.attempt.stage !== 'implement') {
+            throw new Error('missing implement phase')
+        }
+        const worktree = action.attempt.worktree
+        await writeFile(join(worktree, 'value.js'), 'export const value = 1\n')
+        await git(worktree, 'add', 'value.js')
+        await git(worktree, 'commit', '-m', '[first] moved checkpoint')
+        const head = await f.runtime.head(worktree)
+        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        expect(action).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('unchanged task checkpoint') as string,
+        })
     }, 30_000)
 
     it('consumes a durable result after a crash without repeating the producer', async () => {

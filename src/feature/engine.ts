@@ -492,7 +492,9 @@ export class FeatureEngine {
             return
         }
         if (result.status === 'already-satisfied') {
-            if (!['tests', 'implement'].includes(run.stage) || head !== run.task_base_sha) {
+            // The tests stage may commit passing tests that pin already-delivered behavior before
+            // reporting; implement must leave the task checkpoint untouched.
+            if (run.stage !== 'tests' && (run.stage !== 'implement' || head !== run.task_base_sha)) {
                 throw new Error('already-satisfied requires an unchanged task checkpoint')
             }
             run.candidate_satisfied = true

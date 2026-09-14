@@ -12633,7 +12633,7 @@ var FeatureEngine = class {
       return;
     }
     if (result.status === "already-satisfied") {
-      if (!["tests", "implement"].includes(run5.stage) || head !== run5.task_base_sha) {
+      if (run5.stage !== "tests" && (run5.stage !== "implement" || head !== run5.task_base_sha)) {
         throw new Error("already-satisfied requires an unchanged task checkpoint");
       }
       run5.candidate_satisfied = true;
