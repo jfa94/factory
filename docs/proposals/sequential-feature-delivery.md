@@ -83,5 +83,6 @@ stalled for want of result submission; canary #4 has not started. On 2026-09-12
 results became engine-consumed staged files (see the canary ledger); #3 is now the
 recovery canary and #4 the uninterrupted one. On 2026-09-13 #3 was recovered from
 a fresh Claude Code driver: the stalled result was consumed without a new implement
-attempt and fresh feature gates passed at `4745824`; feature review, acceptance and
-delivery are in progress and delivery awaits explicit authorization.
+attempt and fresh feature gates passed at `4745824`. After one docs repair, all
+21 acceptance criteria were met and, with authorization, PR #5 merged on 2026-09-14
+(`8c398fb`); the run completed with an observed merge. #4 has not started.

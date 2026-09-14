@@ -223,3 +223,29 @@ uncontracted `format:check` fails on two untouched workflow files). Its result i
 staged but not yet consumed: the next `next-action` would run live delivery (push
 `factory/3-canary-single-20260907`, open the PR, auto-merge), which requires
 explicit user authorization. The branch remains local-only at `274965c`.
+
+## Delivery of issue #3 (2026-09-14)
+
+With user authorization, `next-action` consumed the acceptance result, pushed
+`factory/3-canary-single-20260907` and opened
+https://github.com/jfa94/asset-generator/pull/5 at `274965c`, then parked the run
+with "Unexpected end of JSON input": `gh pr checks` prints no JSON before the first
+check reports, and the runtime parsed its empty stdout. Fixed Factory-side (empty
+checks output reads as pending) together with the other defects observed this run:
+staged reads look past a markdown fence or prose wrapper, the `wait` reason names
+schema-invalid staged files, and the engine prompt states the 300-character claim
+limit. The parked run was resumed after CI (Quality, Mutation Testing, Security
+Scan all passed) and `next-action` observed the squash merge: merge commit
+`8c398fb`, merged at 2026-09-14T17:19:21Z, run `completed` with `outcome: merged`.
+Exactly one feature PR exists; the feature branch is preserved on the remote.
+Current `main` protection still requires strict up-to-date Quality, Mutation
+Testing and Security Scan with admins enforced and force pushes disallowed; the
+earlier `protection-before.json` snapshot no longer exists on disk, so the
+comparison is against the values recorded above, not a byte diff.
+
+Deviations to note: the planned interrupt while CI ran did not happen as an
+explicit stop (the driver's `run stop` call omitted `--run`); the unplanned park
+and resume during CI is the only interruption evidence for this run. The
+acceptance evaluator ran as a general-purpose Opus agent reading the charter file
+because the session's installed plugin is the cached 1.45.2 build. Issue #4 is
+next as the uninterrupted canary from a fresh spec.
