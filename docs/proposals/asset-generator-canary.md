@@ -249,3 +249,19 @@ and resume during CI is the only interruption evidence for this run. The
 acceptance evaluator ran as a general-purpose Opus agent reading the charter file
 because the session's installed plugin is the cached 1.45.2 build. Issue #4 is
 next as the uninterrupted canary from a fresh spec.
+
+## Issue #4: uninterrupted canary (2026-09-14)
+
+The user confirmed `--ignore-quota` still applies under the Claude Code driver and
+authorized updating the installed plugin. The update does not help yet: the
+`jfa94` marketplace installs from GitHub `jfa94/factory` `main`, which is still
+v1 (the cached build is 1.45.2, the marketplace clone 1.47.1); v2 lives only on
+the pushed `v2/sequential-feature-delivery` branch, and an update needs a session
+restart anyway. The evaluator substitution therefore remains for this run.
+`spec resolve --issue 4` first failed with `couldn't find remote ref develop`:
+the canary data dir had no `config.json` (its spec store directory was also
+emptied on 2026-09-11), so the base defaulted to `develop`. The driver wrote
+`{"git":{"baseBranch":"main"}}` there, matching run #3's recorded base branch and
+the canary's authorized integration branch; resolution then snapshotted base
+`8c398fb` (the PR #5 merge) with nine extracted requirements and issued the
+generator spawn.
