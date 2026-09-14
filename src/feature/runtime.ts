@@ -354,7 +354,10 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         if (checkResult.truncated || ![0, 1, 8].includes(checkResult.code ?? -1)) {
             throw new Error(`cannot read required checks: ${checkResult.stderr}`)
         }
-        const checks = z.array(z.object({bucket: z.string(), name: z.string()})).parse(JSON.parse(checkResult.stdout))
+        // Right after PR creation gh reports "no checks reported" with empty stdout; that is pending, not evidence.
+        const checks = z
+            .array(z.object({bucket: z.string(), name: z.string()}))
+            .parse(checkResult.stdout.trim() ? JSON.parse(checkResult.stdout) : [])
         if (checks.some((check) => ['fail', 'cancel'].includes(check.bucket))) {
             return {kind: 'failed', number: pr.number, url: pr.url, head, reason: JSON.stringify(checks)}
         }

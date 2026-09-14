@@ -116,9 +116,11 @@ export class FeatureEngine {
                             await this.store.write(run)
                             return await this.execute(run, {...run.in_flight, roles})
                         }
+                        const rejected = Object.entries(staged.invalid).map(([role, why]) => `${role}: ${why}`)
                         return this.wait(
                             run,
-                            `awaiting ${staged.missing.join(', ')} for ${run.in_flight.id}; do not spawn it twice`
+                            `awaiting ${staged.missing.join(', ')} for ${run.in_flight.id}; do not spawn it twice` +
+                                (rejected.length ? `; staged file rejected (${rejected.join('; ')})` : '')
                         )
                     }
                     const recorded = structuredClone(run)
@@ -431,7 +433,7 @@ export class FeatureEngine {
                 ? 'Commit completed work with [task_id] tags; report the actual final HEAD. At the tests stage, establish a meaningful failing assertion before implementation. If the engine dispatched implementation directly, honor its baseline TDD exemption. Do not weaken tests.'
                 : 'Review this immutable snapshot independently; do not edit it. Return evidence for every claim or acceptance decision.',
             'Return JSON: {attempt_id, spec_digest, head_sha, status:"done"|"already-satisfied"|"needs-context"|"spec-defect"|"blocked", message?}.',
-            'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters.',
+            'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters.',
             'For confirm return confirmations:[{id,confirmed,evidence}] for every claim. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.',
             `Acceptance IDs: ${this.acceptanceIds(run).join(', ')}. Evidence must identify actual behavior, tests, and source; never infer satisfaction from ancestry or unrelated tests.`,
             'For spec-repair return repaired_spec with the next revision, unchanged PRD/base and completed tasks. For spec-review return status done only if the revised plan is feasible and preserves requirements.',

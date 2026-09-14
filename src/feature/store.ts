@@ -17,7 +17,8 @@ import {
 } from './schema.js'
 
 /** Per-role staged results: `{missing}` means not every role has a parseable file yet. */
-export type Staged = {result: FeatureResult} | {missing: string[]}
+/** `invalid` names present files that failed the schema, so a driver can tell "still running" from "finished wrong". */
+export type Staged = {result: FeatureResult} | {missing: string[]; invalid: Record<string, string>}
 
 export class FeatureStore {
     constructor(readonly dataDir: string) {}
@@ -126,12 +127,16 @@ export class FeatureStore {
     async staged(id: string, attempt: Attempt): Promise<Staged> {
         const parts: FeatureResult[] = []
         const missing: string[] = []
+        const invalid: Record<string, string> = {}
         for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
             try {
-                parts.push(ResultSchema.parse(JSON.parse(await readFile(path, 'utf8'))))
+                parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile(path, 'utf8')))))
             } catch (error) {
-                if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+                if (isEnoent(error) || error instanceof SyntaxError) {
                     missing.push(role)
+                } else if (error instanceof ZodError) {
+                    missing.push(role)
+                    invalid[role] = error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')
                 } else {
                     throw error
                 }
@@ -139,7 +144,7 @@ export class FeatureStore {
         }
         const first = parts[0]
         if (missing.length || first === undefined) {
-            return {missing}
+            return {missing, invalid}
         }
         if (
             parts.some(
@@ -214,4 +219,9 @@ export function renderLedger(run: FeatureRun, live: {now?: string; staged?: stri
         ),
         '',
     ].join('\n')
+}
+
+/** Agents wrap their JSON in a fence or prose despite instructions; the file stays verbatim, only the parse looks past the wrapper. */
+function unwrap(text: string): string {
+    return text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
 }

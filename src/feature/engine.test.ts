@@ -521,6 +521,30 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(await stop({session_id: 'owner'})).toBe('allow')
     })
 
+    it('reads a staged result through a markdown fence and names a schema-invalid one in the wait reason', async () => {
+        const f = await fixture()
+        const action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute') {
+            throw new Error('missing attempt')
+        }
+        const path = at(Object.values(action.staged), 0)
+        await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 4\n')
+        await git(action.attempt.worktree, 'add', 'value.js')
+        await git(action.attempt.worktree, 'commit', '-m', '[first] fenced result')
+        const head = await f.runtime.head(action.attempt.worktree)
+        await writeFile(path, JSON.stringify({...result(action, {head_sha: head}), status: 'finished'}))
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'wait',
+            reason: expect.stringContaining('staged file rejected (implementer: status') as string,
+        })
+        expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
+        await writeFile(path, 'Done.\n```json\n' + JSON.stringify(result(action, {head_sha: head})) + '\n```\n')
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'execute',
+            attempt: {stage: 'task-review'},
+        })
+    })
+
     it('treats a half-written staged file as not yet submitted and never retires its lease', async () => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
@@ -529,10 +553,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         }
         const path = at(Object.values(action.staged), 0)
         await writeFile(path, '{"attempt_id": "' + action.attempt.id)
-        expect(await f.engine.advance('run', 'driver')).toMatchObject({
-            kind: 'wait',
-            reason: expect.stringContaining('awaiting implementer') as string,
-        })
+        const waiting = await f.engine.advance('run', 'driver')
+        expect(waiting).toMatchObject({kind: 'wait', reason: expect.stringContaining('awaiting implementer') as string})
+        expect(waiting).not.toMatchObject({reason: expect.stringContaining('rejected') as string})
         expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
         await f.engine.stop('run')
         const recovered = await f.engine.resume('run', {recover: true})

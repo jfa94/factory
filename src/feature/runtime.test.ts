@@ -83,7 +83,7 @@ describe('feature runtime external evidence', () => {
         await expect(f.runtime.deliver(run)).rejects.toThrow(error)
         expect(f.command.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false)
     })
-    it.each(['missing', 'failed', 'pending', 'merged', 'changed', 'unavailable', 'truncated'])(
+    it.each(['missing', 'unreported', 'failed', 'pending', 'merged', 'changed', 'unavailable', 'truncated'])(
         'observes required CI and merge truth: %s',
         async (scenario) => {
             const f = setup()
@@ -104,6 +104,9 @@ describe('feature runtime external evidence', () => {
                     )
                 }
                 if (args[1] === 'checks') {
+                    if (scenario === 'unreported') {
+                        return reply('', 1)
+                    }
                     return reply(
                         JSON.stringify(
                             scenario === 'missing'

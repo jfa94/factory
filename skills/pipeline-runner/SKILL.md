@@ -61,12 +61,17 @@ available). Call `factory next-action --run <id> --driver <session>`.
   never share one reviewer's reasoning with another before all reviews finish.
   The moment an agent returns, write its result JSON verbatim to `staged[<role>]`
   from the envelope (one file per role; the file's existence is the submission).
+  A markdown fence or prose around the object is tolerated; never edit the object.
+  If a role's agent type is not offered, the installed plugin is stale: update it
+  rather than substituting another agent.
   Never author, discard or change a finding or acceptance decision, and never
   merge roles into one file. Once every role's file is written, call
   `factory next-action --run <id> --driver <session>` (no `--results`); the
   engine merges and validates the staged files and journals accepted evidence.
 - `wait`: if `reason` says an attempt is awaiting roles, write any finished
   agent's output to its staged path and call again; never dispatch it twice.
+  If it says a staged file was rejected, that role finished wrong: run
+  `factory resume --run <id> --recover` and the engine redispatches only it.
   Otherwise arm one timer sized to `retry_after_seconds` with
   `Bash(run_in_background)`, e.g. `until [ $SECONDS -ge <n> ]; do sleep 30; done`
   (not a bare foreground `sleep`), end the turn, and call `next-action` again

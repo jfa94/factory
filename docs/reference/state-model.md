@@ -10,7 +10,9 @@ The engine stores each run at `$CLAUDE_PLUGIN_DATA/runs-v2/<run-id>/`:
 Raw agent output is staged outside `runs-v2/` at
 `staged-v2/<run-id>/<attempt-id>/<role>.json`, one file per role; the driver writes
 it verbatim and the engine reads it on `next-action`. A missing, half-written or
-schema-invalid file reads as "not yet".
+schema-invalid file reads as "not yet"; the `wait` reason names schema-invalid
+files so the driver can recover and redispatch that role. A markdown fence or prose
+around the JSON object is tolerated on read.
 - `ledger.md`: readable projection of checkpoints, answers and audit events.
 
 Repository locks live in `locks-v2/`; durable generated specs live in `v2/specs/`.

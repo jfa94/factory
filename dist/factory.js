@@ -12146,12 +12146,16 @@ var FeatureStore = class {
   async staged(id, attempt) {
     const parts = [];
     const missing = [];
+    const invalid = {};
     for (const [role, path3] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push(ResultSchema.parse(JSON.parse(await readFile11(path3, "utf8"))));
+        parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile11(path3, "utf8")))));
       } catch (error) {
-        if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+        if (isEnoent(error) || error instanceof SyntaxError) {
           missing.push(role);
+        } else if (error instanceof ZodError) {
+          missing.push(role);
+          invalid[role] = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
         } else {
           throw error;
         }
@@ -12159,7 +12163,7 @@ var FeatureStore = class {
     }
     const first = parts[0];
     if (missing.length || first === void 0) {
-      return { missing };
+      return { missing, invalid };
     }
     if (parts.some(
       (part) => part.attempt_id !== first.attempt_id || part.spec_digest !== first.spec_digest || part.head_sha !== first.head_sha
@@ -12218,6 +12222,9 @@ function renderLedger(run5, live = {}) {
     ),
     ""
   ].join("\n");
+}
+function unwrap(text) {
+  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
 }
 
 // src/feature/engine.ts
@@ -12299,9 +12306,10 @@ var FeatureEngine = class {
               await this.store.write(run5);
               return await this.execute(run5, { ...run5.in_flight, roles });
             }
+            const rejected = Object.entries(staged.invalid).map(([role, why]) => `${role}: ${why}`);
             return this.wait(
               run5,
-              `awaiting ${staged.missing.join(", ")} for ${run5.in_flight.id}; do not spawn it twice`
+              `awaiting ${staged.missing.join(", ")} for ${run5.in_flight.id}; do not spawn it twice` + (rejected.length ? `; staged file rejected (${rejected.join("; ")})` : "")
             );
           }
           const recorded = structuredClone(run5);
@@ -12572,7 +12580,7 @@ var FeatureEngine = class {
       "All acceptance criteria are visible. Preserve accepted commits and repair forward. Never reset, force-push, delete remote branches, or change engine state.",
       PRODUCERS.includes(attempt.stage) ? "Commit completed work with [task_id] tags; report the actual final HEAD. At the tests stage, establish a meaningful failing assertion before implementation. If the engine dispatched implementation directly, honor its baseline TDD exemption. Do not weaken tests." : "Review this immutable snapshot independently; do not edit it. Return evidence for every claim or acceptance decision.",
       'Return JSON: {attempt_id, spec_digest, head_sha, status:"done"|"already-satisfied"|"needs-context"|"spec-defect"|"blocked", message?}.',
-      'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters.',
+      'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters.',
       "For confirm return confirmations:[{id,confirmed,evidence}] for every claim. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.",
       `Acceptance IDs: ${this.acceptanceIds(run5).join(", ")}. Evidence must identify actual behavior, tests, and source; never infer satisfaction from ancestry or unrelated tests.`,
       "For spec-repair return repaired_spec with the next revision, unchanged PRD/base and completed tasks. For spec-review return status done only if the revised plan is feasible and preserves requirements.",
@@ -14129,7 +14137,7 @@ Spec ${run5.spec_digest}.`
     if (checkResult.truncated || ![0, 1, 8].includes(checkResult.code ?? -1)) {
       throw new Error(`cannot read required checks: ${checkResult.stderr}`);
     }
-    const checks = external_exports.array(external_exports.object({ bucket: external_exports.string(), name: external_exports.string() })).parse(JSON.parse(checkResult.stdout));
+    const checks = external_exports.array(external_exports.object({ bucket: external_exports.string(), name: external_exports.string() })).parse(checkResult.stdout.trim() ? JSON.parse(checkResult.stdout) : []);
     if (checks.some((check) => ["fail", "cancel"].includes(check.bucket))) {
       return { kind: "failed", number: pr.number, url: pr.url, head, reason: JSON.stringify(checks) };
     }

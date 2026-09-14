@@ -9951,12 +9951,16 @@ var FeatureStore = class {
   async staged(id, attempt) {
     const parts = [];
     const missing = [];
+    const invalid = {};
     for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push(ResultSchema.parse(JSON.parse(await readFile2(path, "utf8"))));
+        parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile2(path, "utf8")))));
       } catch (error) {
-        if (isEnoent(error) || error instanceof SyntaxError || error instanceof ZodError) {
+        if (isEnoent(error) || error instanceof SyntaxError) {
           missing.push(role);
+        } else if (error instanceof ZodError) {
+          missing.push(role);
+          invalid[role] = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
         } else {
           throw error;
         }
@@ -9964,7 +9968,7 @@ var FeatureStore = class {
     }
     const first = parts[0];
     if (missing.length || first === void 0) {
-      return { missing };
+      return { missing, invalid };
     }
     if (parts.some(
       (part) => part.attempt_id !== first.attempt_id || part.spec_digest !== first.spec_digest || part.head_sha !== first.head_sha
@@ -10023,6 +10027,9 @@ function renderLedger(run, live = {}) {
     ),
     ""
   ].join("\n");
+}
+function unwrap(text) {
+  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
 }
 
 // src/hooks/feature-guards.ts
