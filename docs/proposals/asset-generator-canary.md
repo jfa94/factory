@@ -291,3 +291,30 @@ with no new environment park. The producer-side gap remains for the user to
 judge: a task that creates a new module cannot produce an assertion failure with
 a plain static import, so the test-writer's charter forces a load-tolerant test
 shape; the repair attempt (`906d5459`) is the evidence of how it copes.
+
+## Delivery of issue #4 (2026-09-15)
+
+Run `19e4850d` ran uninterrupted from spec revision 2 to an observed merge: seven
+tasks checkpointed, 25 commits, 73 `next-action` calls, 228 audit rows, no
+explicit stop. Fourteen repair passes were spent (`batch-001` 3, slice 1 2,
+`batch-004` 3, `batch-006` 3, `batch-007` 3); no boundary exhausted its budget
+after the second attempt, and no environment park occurred after `f77085c`. The
+tests-stage `already-satisfied` gap surfaced at `batch-004` (the test-writer had
+committed passing tests for behaviour `batch-003` already delivered) and was
+fixed as `8e61d1b`; `batch-005` then used the path with zero repair passes.
+Slice-2, docs and feature panels were clean on their first attempt and all 57
+acceptance ids were met. The call that recorded the acceptance result pushed the
+branch and opened PR #6 in the same transition; with authorization the next call
+observed twelve passing checks and squash-merged (`8d8cde7`), status `completed`,
+protection unchanged. That coupling is now documented, and `run create --local`
+(`61d695d`) parks a verified feature before any remote write until
+`resume --ship live|no-ship`.
+
+Observations kept open: the quality reviewer files one weak-assertion finding per
+round, so `batch-006`/`batch-007` spent six passes on docs-test regex rigor; the
+finding-verifier hit its turn limit twice on four-claim batches; four agent
+results needed a re-emit for missing identity fields or prose wrappers; the
+`already-satisfied` tests path skips TDD-ordering; the lint excerpt shows stderr
+deprecation noise instead of the problems tail; and an implementer refused a
+file-redirect dispatch as injection because the driver session was rooted in the
+Factory repository rather than the target.

@@ -13,7 +13,7 @@ one producer at a time, and one PR. Version 1 runs are diagnostic artifacts only
 - [x] Fix YAML serialization and mutation I/O errors with regression coverage.
 - [x] Exercise real Git and built CLI interruption/integration journeys.
 - [x] Run verification, update bundles, and synchronize major version.
-- [ ] Run authorized external uninterrupted/interrupted canaries before release.
+- [x] Run authorized external uninterrupted/interrupted canaries before release.
 
 Spec generation has five revisions. Execution and spec repair have three repair
 passes at each boundary. Infrastructure waiting consumes no implementation pass.
@@ -85,4 +85,8 @@ recovery canary and #4 the uninterrupted one. On 2026-09-13 #3 was recovered fro
 a fresh Claude Code driver: the stalled result was consumed without a new implement
 attempt and fresh feature gates passed at `4745824`. After one docs repair, all
 21 acceptance criteria were met and, with authorization, PR #5 merged on 2026-09-14
-(`8c398fb`); the run completed with an observed merge. #4 has not started.
+(`8c398fb`); the run completed with an observed merge. #4 ran uninterrupted from
+2026-09-14 to an observed merge on 2026-09-15 (PR #6, `8d8cde7`) with one engine
+fix on the way (`8e61d1b`, tests-stage `already-satisfied`). #3 deviated from the
+interrupted journey: no explicit stop during CI, only the unplanned park/resume.
+Open canary observations are listed in the canary ledger.
