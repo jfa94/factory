@@ -310,11 +310,17 @@ protection unchanged. That coupling is now documented, and `run create --local`
 (`61d695d`) parks a verified feature before any remote write until
 `resume --ship live|no-ship`.
 
-Observations kept open: the quality reviewer files one weak-assertion finding per
-round, so `batch-006`/`batch-007` spent six passes on docs-test regex rigor; the
-finding-verifier hit its turn limit twice on four-claim batches; four agent
-results needed a re-emit for missing identity fields or prose wrappers; the
-`already-satisfied` tests path skips TDD-ordering; the lint excerpt shows stderr
-deprecation noise instead of the problems tail; and an implementer refused a
-file-redirect dispatch as injection because the driver session was rooted in the
-Factory repository rather than the target.
+Observations resolved in `2.0.0-rc.2`: the quality reviewer filing one
+weak-assertion finding per round (`batch-006`/`batch-007` spent six passes on
+docs-test regex rigor) is answered by the pattern-coverage instruction in the
+engine review prompt and `review-protocol`; the finding-verifier hitting its turn
+limit on four-claim batches by confirming two claims per attempt
+(`CONFIRM_BATCH`, `confirmed_claims`); the four re-emits for missing identity
+fields or prose wrappers by the closing result contract in every engine prompt and
+by replacing the legacy output sections of every v2-dispatched agent and skill; the
+`already-satisfied` tests path skipping TDD ordering by requiring tagged
+tests-only commits (`FeatureRuntime.testsOnly`, otherwise a producer park); the
+lint excerpt showing stderr deprecation noise by merging both streams, each
+capped independently; and the implementer refusing a file-redirect dispatch by a
+cwd guard on `next-action`/`resume` plus the runner rule to paste the prompt
+verbatim from a session rooted in the target repository.

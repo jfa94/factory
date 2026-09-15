@@ -3,21 +3,21 @@
 Commands operate on an explicit run ID. The session runner, not the CLI, spawns
 agents. Every next-action result is one of execute, wait, park or terminal.
 
-| Command                                                              | Purpose                                                       |
-| -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `factory spec resolve --issue <n>`                                   | Fetch fresh PRD/base/contracts and start bounded generation   |
-| `factory spec gate --issue <n>`                                      | Validate generated JSON, requirements and execution graph     |
-| `factory spec store --issue <n>`                                     | Adjudicate review and persist the v2 feature spec             |
-| `factory run create --issue <n>`                                     | Create a fresh sequential feature run                         |
-| `factory next-action --run <id> --driver <session>`                  | Consume staged results, advance, or return the outstanding attempt |
-| `factory run stop --run <id>`                                        | Explicitly park without discarding work                       |
-| `factory resume --run <id> [--answer <text>] [--recover]`            | Resume; recover only after the previous agent stopped         |
-| `factory run cancel --run <id>`                                      | Cancel while retaining artifacts and Git work                 |
-| `factory state --run <id> [--ledger]`                                | Inspect state or its audit ledger                             |
-| `factory state --list`                                               | List v2 runs                                                  |
-| `factory debug create --base <ref>`                                  | Review/repair a clean committed diff, ending ready for review |
-| `factory scaffold [--provision]`                                     | Prepare committed gates and stable branch protection          |
-| `factory statusline`                                                 | Capture piped rate limits and display feature progress        |
+| Command                                                   | Purpose                                                            |
+| --------------------------------------------------------- | ------------------------------------------------------------------ |
+| `factory spec resolve --issue <n>`                        | Fetch fresh PRD/base/contracts and start bounded generation        |
+| `factory spec gate --issue <n>`                           | Validate generated JSON, requirements and execution graph          |
+| `factory spec store --issue <n>`                          | Adjudicate review and persist the v2 feature spec                  |
+| `factory run create --issue <n>`                          | Create a fresh sequential feature run                              |
+| `factory next-action --run <id> --driver <session>`       | Consume staged results, advance, or return the outstanding attempt |
+| `factory run stop --run <id>`                             | Explicitly park without discarding work                            |
+| `factory resume --run <id> [--answer <text>] [--recover]` | Resume; recover only after the previous agent stopped              |
+| `factory run cancel --run <id>`                           | Cancel while retaining artifacts and Git work                      |
+| `factory state --run <id> [--ledger]`                     | Inspect state or its audit ledger                                  |
+| `factory state --list`                                    | List v2 runs                                                       |
+| `factory debug create --base <ref>`                       | Review/repair a clean committed diff, ending ready for review      |
+| `factory scaffold [--provision]`                          | Prepare committed gates and stable branch protection               |
+| `factory statusline`                                      | Capture piped rate limits and display feature progress             |
 
 Creation accepts `--repo owner/name`, `--run-id`, `--no-ship` or `--local`, `--e2e`
 and `--ignore-quota`. Ship intent and quota policy persist for the run. Submitting

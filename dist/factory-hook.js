@@ -9833,6 +9833,7 @@ var FeatureRunSchema = external_exports.object({
   question: external_exports.string().optional(),
   feedback: external_exports.array(external_exports.string()),
   claims: external_exports.array(ClaimSchema),
+  confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),
   candidate_satisfied: external_exports.boolean(),
   repaired_spec: FeatureSpecSchema.optional(),

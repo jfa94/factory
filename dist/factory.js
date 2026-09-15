@@ -9452,7 +9452,7 @@ function procOutcome(id, label, result) {
   if (result.code === 0) {
     return ran(id, true, base);
   }
-  const output = excerpt(result.stderr || result.stdout);
+  const output = [excerpt(result.stdout), excerpt(result.stderr)].filter(Boolean).join("\n");
   return ran(id, false, output ? `${base}: ${output}` : base);
 }
 function procStrategy(id, label, invoke) {
@@ -11503,6 +11503,7 @@ import { readFile as readFile10 } from "node:fs/promises";
 import { createHash as createHash2 } from "node:crypto";
 var VERSION = 2;
 var REPAIR_PASSES = 3;
+var CONFIRM_BATCH = 2;
 var IdSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 var ShaSchema = external_exports.string().regex(/^[a-f0-9]{40,64}$/);
 var FeatureTaskSchema = SpecTaskSchema.extend({
@@ -11638,6 +11639,7 @@ var FeatureRunSchema = external_exports.object({
   question: external_exports.string().optional(),
   feedback: external_exports.array(external_exports.string()),
   claims: external_exports.array(ClaimSchema),
+  confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),
   candidate_satisfied: external_exports.boolean(),
   repaired_spec: FeatureSpecSchema.optional(),
@@ -12046,7 +12048,7 @@ var specCommand = {
 };
 
 // src/feature/cli.ts
-import { readFile as readFile13 } from "node:fs/promises";
+import { readFile as readFile13, realpath } from "node:fs/promises";
 import { join as join18 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -12284,6 +12286,7 @@ var FeatureEngine = class {
         answers: [],
         feedback: [],
         claims: [],
+        confirmed_claims: [],
         candidate_satisfied: false,
         delivery: {},
         audit: []
@@ -12571,7 +12574,9 @@ var FeatureEngine = class {
   }
   prompt(run5, attempt) {
     const task = this.task(run5);
-    const context = run5.stage === "confirm" ? { claims: run5.claims } : {
+    const context = run5.stage === "confirm" ? {
+      claims: run5.claims.slice(0, CONFIRM_BATCH).map(({ id, file, line, quote, claim }) => ({ id, file, line, quote, claim }))
+    } : {
       prd: run5.spec.prd,
       version: run5.spec.version,
       revision: run5.spec.revision,
@@ -12597,12 +12602,13 @@ var FeatureEngine = class {
       "All acceptance criteria are visible. Preserve accepted commits and repair forward. Never reset, force-push, delete remote branches, or change engine state.",
       PRODUCERS.includes(attempt.stage) ? "Commit completed work with [task_id] tags; report the actual final HEAD. At the tests stage, establish a meaningful failing assertion before implementation. If the engine dispatched implementation directly, honor its baseline TDD exemption. Do not weaken tests." : "Review this immutable snapshot independently; do not edit it. Return evidence for every claim or acceptance decision.",
       'Return JSON: {attempt_id, spec_digest, head_sha, status:"done"|"already-satisfied"|"needs-context"|"spec-defect"|"blocked", message?}.',
-      'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters.',
-      "For confirm return confirmations:[{id,confirmed,evidence}] for every claim. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.",
+      'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters. When a finding is one instance of a pattern, file every instance in the reviewed range in the same round; within at most 10 claims per reviewer prefer full pattern coverage over weaker unrelated findings.',
+      "For confirm return confirmations:[{id,confirmed,evidence}] for every claim in the context. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.",
       `Acceptance IDs: ${this.acceptanceIds(run5).join(", ")}. Evidence must identify actual behavior, tests, and source; never infer satisfaction from ancestry or unrelated tests.`,
       "For spec-repair return repaired_spec with the next revision, unchanged PRD/base and completed tasks. For spec-review return status done only if the revised plan is feasible and preserves requirements.",
-      `Identity: ${JSON.stringify({ attempt_id: attempt.id, spec_digest: attempt.spec_digest, head_sha: attempt.head_sha })}`,
-      JSON.stringify(context, null, 2)
+      JSON.stringify(context, null, 2),
+      "Result contract: your final reply is exactly one JSON object (a markdown fence is tolerated, no other prose). Copy attempt_id, spec_digest and head_sha verbatim from the identity line below; head_sha is the full 40-character lowercase hex SHA. status is exactly one of done, already-satisfied, needs-context, spec-defect, blocked. The stage-specific array (reviews, confirmations, acceptance or repaired_spec) is required for that stage.",
+      `Identity: ${JSON.stringify({ attempt_id: attempt.id, spec_digest: attempt.spec_digest, head_sha: attempt.head_sha })}`
     ].join("\n\n");
   }
   acceptanceIds(run5) {
@@ -12652,6 +12658,12 @@ var FeatureEngine = class {
     if (result.status === "already-satisfied") {
       if (run5.stage !== "tests" && (run5.stage !== "implement" || head !== run5.task_base_sha)) {
         throw new Error("already-satisfied requires an unchanged task checkpoint");
+      }
+      if (run5.stage === "tests" && !await this.runtime.testsOnly(run5)) {
+        const message = "already-satisfied at the tests stage requires only tagged test-only commits since the task checkpoint; an implementation commit cannot be repaired by the test-writer";
+        run5.feedback = [message];
+        this.park(run5, "producer", message);
+        return;
       }
       run5.candidate_satisfied = true;
       run5.stage = "task-check";
@@ -12713,18 +12725,24 @@ var FeatureEngine = class {
       }
       case "confirm": {
         const votes = result.confirmations ?? [];
-        if (votes.length !== run5.claims.length || new Set(votes.map((v) => v.id)).size !== votes.length || run5.claims.some((c) => !votes.some((v) => v.id === c.id))) {
+        const batch = run5.claims.slice(0, CONFIRM_BATCH);
+        if (votes.length !== batch.length || new Set(votes.map((v) => v.id)).size !== votes.length || batch.some((c) => !votes.some((v) => v.id === c.id))) {
           throw new Error("independent confirmation is incomplete");
         }
-        const blockers = run5.claims.filter(
-          (claim) => votes.find((vote) => vote.id === claim.id)?.confirmed === true
+        this.audit(run5, "findings confirmed", { claims: batch, votes });
+        run5.claims = run5.claims.slice(batch.length);
+        run5.confirmed_claims.push(
+          ...batch.filter((claim) => votes.find((vote) => vote.id === claim.id)?.confirmed === true)
         );
+        if (run5.claims.length) {
+          break;
+        }
+        const blockers = run5.confirmed_claims;
+        run5.confirmed_claims = [];
         const boundary = run5.after_confirm;
         if (boundary === void 0) {
           throw new Error("confirmation has no review boundary");
         }
-        this.audit(run5, "findings confirmed", { claims: run5.claims, votes });
-        run5.claims = [];
         delete run5.after_confirm;
         if (blockers.length) {
           this.repair(
@@ -13864,6 +13882,7 @@ function isDbPath(path3) {
 }
 
 // src/feature/runtime.ts
+var taggedTestsOnly = (commit) => commit.tagged && classifyCommit(commit.files) === "test-only";
 var PrSchema = external_exports.object({
   number: external_exports.number().int().positive(),
   url: external_exports.string(),
@@ -13939,6 +13958,11 @@ var LocalFeatureRuntime = class {
     const task = at(run5.spec.tasks, Math.min(run5.task_index, run5.spec.tasks.length - 1));
     return isTddExempt(task.task_id, run5.spec.tasks, pkg);
   }
+  async testsOnly(run5) {
+    const task = at(run5.spec.tasks, Math.min(run5.task_index, run5.spec.tasks.length - 1));
+    const commits = await defaultGateTools().git.commits(run5.task_base_sha, task.task_id, { cwd: run5.worktree });
+    return commits.every(taggedTestsOnly);
+  }
   async checks(run5, stage) {
     const task = at(run5.spec.tasks, Math.min(run5.task_index, run5.spec.tasks.length - 1));
     const full = stage === "slice-check" || stage === "feature-check";
@@ -13995,7 +14019,7 @@ var LocalFeatureRuntime = class {
     if ((stage === "tests" || stage === "task-check") && !run5.candidate_satisfied && !await this.exempt(run5)) {
       const commits = await tools.git.commits(run5.task_base_sha, task.task_id, { cwd: run5.worktree });
       if (stage === "tests") {
-        report.assertionFailure &&= commits.length > 0 && commits.every((commit) => commit.tagged && classifyCommit(commit.files) === "test-only");
+        report.assertionFailure &&= commits.length > 0 && commits.every(taggedTestsOnly);
       } else {
         const verdict = deriveTddVerdict(commits, false);
         report.passed &&= verdict.ok;
@@ -14410,6 +14434,15 @@ function featureCommand(name) {
         return EXIT.OK;
       }
       const id = args.requireFlag("run");
+      if (name === "next-action" || name === "next-task" || name === "resume") {
+        const root = await runtime.checked("git", ["rev-parse", "--show-toplevel"], process.cwd());
+        const run5 = await store.read(id);
+        if (await realpath(root) !== await realpath(run5.root)) {
+          throw new UsageError(
+            `run ${id} belongs to ${run5.root}; run ${name} from that repository (cwd is ${root})`
+          );
+        }
+      }
       if (name === "next-action" || name === "next-task") {
         emitJson(await engine.advance(id, args.requireFlag("driver")));
         return EXIT.OK;

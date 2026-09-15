@@ -89,4 +89,5 @@ attempt and fresh feature gates passed at `4745824`. After one docs repair, all
 2026-09-14 to an observed merge on 2026-09-15 (PR #6, `8d8cde7`) with one engine
 fix on the way (`8e61d1b`, tests-stage `already-satisfied`). #3 deviated from the
 interrupted journey: no explicit stop during CI, only the unplanned park/resume.
-Open canary observations are listed in the canary ledger.
+The six canary #4 observations are resolved in `2.0.0-rc.2`; the canary ledger
+names the fix per observation.
