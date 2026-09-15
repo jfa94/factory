@@ -9789,7 +9789,8 @@ var FeatureRunSchema = external_exports.object({
   worktree: external_exports.string(),
   base_branch: external_exports.string(),
   remote: external_exports.string(),
-  ship_mode: external_exports.enum(["live", "no-ship"]),
+  // local: verify fully, then park before any remote write until resume --ship authorizes delivery.
+  ship_mode: external_exports.enum(["live", "no-ship", "local"]),
   debug: external_exports.boolean(),
   e2e: external_exports.boolean(),
   ignore_quota: external_exports.boolean(),
@@ -9807,7 +9808,16 @@ var FeatureRunSchema = external_exports.object({
   ]),
   wait_since: external_exports.string().optional(),
   stop_reason: external_exports.object({
-    kind: external_exports.enum(["operator", "quota", "ci", "environment", "producer", "spec", "context"]),
+    kind: external_exports.enum([
+      "operator",
+      "quota",
+      "ci",
+      "environment",
+      "producer",
+      "spec",
+      "context",
+      "authorization"
+    ]),
     message: external_exports.string()
   }).optional(),
   stage: StageSchema,

@@ -19,8 +19,11 @@ agents. Every next-action result is one of execute, wait, park or terminal.
 | `factory scaffold [--provision]`                                     | Prepare committed gates and stable branch protection          |
 | `factory statusline`                                                 | Capture piped rate limits and display feature progress        |
 
-Creation accepts `--repo owner/name`, `--run-id`, `--no-ship`, `--e2e` and
-`--ignore-quota`. Ship intent and quota policy persist for the run. Debug accepts
+Creation accepts `--repo owner/name`, `--run-id`, `--no-ship` or `--local`, `--e2e`
+and `--ignore-quota`. Ship intent and quota policy persist for the run. Submitting
+the feature acceptance result pushes and opens the PR in the same `next-action`
+call. A `--local` run instead parks with reason `authorization` before any remote
+write; `factory resume --run <id> --ship live|no-ship` authorizes delivery. Debug accepts
 an explicit base, repository, run ID and quota override; it never auto-merges.
 
 Run creation emits the run object directly, including `run_id`. Execute envelopes

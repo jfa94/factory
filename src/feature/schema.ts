@@ -108,7 +108,8 @@ export const FeatureRunSchema = z
         worktree: z.string(),
         base_branch: z.string(),
         remote: z.string(),
-        ship_mode: z.enum(['live', 'no-ship']),
+        // local: verify fully, then park before any remote write until resume --ship authorizes delivery.
+        ship_mode: z.enum(['live', 'no-ship', 'local']),
         debug: z.boolean(),
         e2e: z.boolean(),
         ignore_quota: z.boolean(),
@@ -127,7 +128,16 @@ export const FeatureRunSchema = z
         wait_since: z.string().optional(),
         stop_reason: z
             .object({
-                kind: z.enum(['operator', 'quota', 'ci', 'environment', 'producer', 'spec', 'context']),
+                kind: z.enum([
+                    'operator',
+                    'quota',
+                    'ci',
+                    'environment',
+                    'producer',
+                    'spec',
+                    'context',
+                    'authorization',
+                ]),
                 message: z.string(),
             })
             .optional(),

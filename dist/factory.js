@@ -11594,7 +11594,8 @@ var FeatureRunSchema = external_exports.object({
   worktree: external_exports.string(),
   base_branch: external_exports.string(),
   remote: external_exports.string(),
-  ship_mode: external_exports.enum(["live", "no-ship"]),
+  // local: verify fully, then park before any remote write until resume --ship authorizes delivery.
+  ship_mode: external_exports.enum(["live", "no-ship", "local"]),
   debug: external_exports.boolean(),
   e2e: external_exports.boolean(),
   ignore_quota: external_exports.boolean(),
@@ -11612,7 +11613,16 @@ var FeatureRunSchema = external_exports.object({
   ]),
   wait_since: external_exports.string().optional(),
   stop_reason: external_exports.object({
-    kind: external_exports.enum(["operator", "quota", "ci", "environment", "producer", "spec", "context"]),
+    kind: external_exports.enum([
+      "operator",
+      "quota",
+      "ci",
+      "environment",
+      "producer",
+      "spec",
+      "context",
+      "authorization"
+    ]),
     message: external_exports.string()
   }).optional(),
   stage: StageSchema,
@@ -12364,6 +12374,13 @@ var FeatureEngine = class {
         this.audit(run5, "cancelled; branch and work preserved", {});
         return;
       }
+      if (options.ship !== void 0) {
+        if (run5.ship_mode !== "local") {
+          throw new Error("--ship only authorizes delivery for a local run");
+        }
+        run5.ship_mode = options.ship;
+        this.audit(run5, "delivery authorized", { ship_mode: options.ship });
+      }
       if (options.answer !== void 0) {
         if (run5.question === void 0 || !options.answer.trim()) {
           throw new Error("answer requires a pending question and nonempty text");
@@ -12883,6 +12900,10 @@ var FeatureEngine = class {
         run5.delivery = { outcome: "no-change", head_sha: await this.runtime.head(run5.worktree) };
         this.audit(run5, "no-change completion", run5.delivery);
         return this.terminal(run5);
+      }
+      if (run5.ship_mode === "local") {
+        this.park(run5, "authorization", "verified feature awaits delivery; resume --ship live|no-ship");
+        return this.parked(run5);
       }
       const result = await this.runtime.deliver(run5);
       run5.delivery = { pr_number: result.number, url: result.url, head_sha: result.head };
@@ -14231,10 +14252,10 @@ async function assertFeatureEnvironment(spec, repo, config, gh = new DefaultGhCl
 var HELP3 = `Factory v2 \u2014 sequential feature delivery
 
 factory spec resolve|gate|store --issue <n>
-factory run create --issue <n> [--no-ship] [--e2e] [--ignore-quota]
+factory run create --issue <n> [--no-ship | --local] [--e2e] [--ignore-quota]
 factory next-action --run <id> --driver <session>
 factory run stop --run <id>
-factory resume --run <id> [--answer <text>] [--recover]
+factory resume --run <id> [--answer <text>] [--recover] [--ship live|no-ship]
 factory run cancel --run <id>
 factory state --run <id> [--ledger]
 factory state --list
@@ -14243,8 +14264,22 @@ factory debug create --base <ref> [--ignore-quota]
 Agent results are written verbatim to the per-role paths in the execute envelope's
 "staged"; next-action consumes them. --recover, after the previous agent has stopped,
 consumes a complete staged result, redispatches missing roles, or retires the attempt.
+Submitting the feature acceptance result pushes and opens the PR in the same call;
+--local parks the verified feature before any remote write until resume --ship.
 Legacy runs are preserved but cannot execute. One active feature run per repository.
 `;
+function shipMode(args) {
+  if (args.has("no-ship") && args.has("local")) {
+    throw new UsageError("--no-ship and --local are mutually exclusive");
+  }
+  return args.has("local") ? "local" : args.has("no-ship") ? "no-ship" : "live";
+}
+function shipAuthorization(value) {
+  if (value !== "live" && value !== "no-ship") {
+    throw new UsageError("--ship must be live or no-ship");
+  }
+  return value;
+}
 function featureCommand(name) {
   return {
     describe: `Feature ${name} (v2)`,
@@ -14254,9 +14289,9 @@ function featureCommand(name) {
           `${name} is retired for v2; inspect state --run <id> --ledger and use resume explicitly`
         );
       }
-      const allowed = name === "run" && argv[0] === "create" ? ["issue", "repo", "run-id", "no-ship", "e2e", "ignore-quota"] : name === "debug" ? ["base", "repo", "run-id", "ignore-quota"] : name === "resume" ? ["run", "answer", "recover"] : name === "next-action" || name === "next-task" ? ["run", "driver"] : name === "state" ? ["run", "list", "ledger"] : ["run"];
+      const allowed = name === "run" && argv[0] === "create" ? ["issue", "repo", "run-id", "no-ship", "local", "e2e", "ignore-quota"] : name === "debug" ? ["base", "repo", "run-id", "ignore-quota"] : name === "resume" ? ["run", "answer", "recover", "ship"] : name === "next-action" || name === "next-task" ? ["run", "driver"] : name === "state" ? ["run", "list", "ledger"] : ["run"];
       const args = parseArgs(argv, {
-        booleans: ["no-ship", "e2e", "ignore-quota", "recover", "list", "ledger"],
+        booleans: ["no-ship", "local", "e2e", "ignore-quota", "recover", "list", "ledger"],
         allowed
       });
       if (name === "run" && !["create", "stop", "cancel"].includes(args.positionals[0] ?? "") && args.positionals.length > 0) {
@@ -14366,7 +14401,7 @@ function featureCommand(name) {
             spec,
             baseBranch: config.git.baseBranch,
             remote: "origin",
-            shipMode: args.has("no-ship") ? "no-ship" : "live",
+            shipMode: shipMode(args),
             e2e: args.has("e2e"),
             ignoreQuota: args.has("ignore-quota"),
             ...ownerSession !== void 0 && ownerSession !== "" ? { ownerSession } : {}
@@ -14383,6 +14418,7 @@ function featureCommand(name) {
         emitJson(
           await engine.resume(id, {
             ...args.has("answer") ? { answer: args.requireFlag("answer") } : {},
+            ...args.has("ship") ? { ship: shipAuthorization(args.requireFlag("ship")) } : {},
             recover: args.has("recover")
           })
         );

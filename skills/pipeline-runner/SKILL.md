@@ -44,7 +44,10 @@ and explicit dependencies for shared files. Coherent tasks have no three-file ca
 ## Create and advance
 
 Run `factory run create --issue <n>`, forwarding user-requested `--no-ship`,
-`--e2e` and `--ignore-quota`. Read `run_id` from the returned run object.
+`--local`, `--e2e` and `--ignore-quota`. Submitting the feature acceptance result
+pushes the branch and opens the PR in the same `next-action` call; if the user must
+authorize remote writes, obtain it before that call or create the run with `--local`,
+which parks the verified feature until `factory resume --run <id> --ship live|no-ship`. Read `run_id` from the returned run object.
 Creation refuses stale inputs and another active feature in the repository.
 Version 1 runs cannot execute; their files remain available for diagnosis.
 

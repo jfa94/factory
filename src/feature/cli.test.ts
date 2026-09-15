@@ -159,6 +159,14 @@ describe('v2 CLI contract', () => {
         await call('state', '--run', 'run')
         expect(JSON.parse(output)).toMatchObject({status: 'cancelled'})
     })
+    it('persists a local ship mode and rejects conflicting or malformed ship flags', async () => {
+        expect(await call('run', 'create', '--issue', '1', '--run-id', 'both', '--no-ship', '--local')).toBe(2)
+        expect(await call('run', 'create', '--issue', '1', '--run-id', 'local', '--local', '--ignore-quota')).toBe(0)
+        expect(await new FeatureStore(dataDir).read('local')).toMatchObject({ship_mode: 'local'})
+        expect(await call('resume', '--run', 'local', '--ship', 'merge')).toBe(2)
+        expect(await call('resume', '--run', 'local', '--ship', 'live')).toBe(0)
+        expect(await new FeatureStore(dataDir).read('local')).toMatchObject({ship_mode: 'live'})
+    })
     it('creates a debug review from a committed diff without authorizing merge', async () => {
         expect(await call('debug', 'create', '--base', 'develop', '--run-id', 'debug', '--ignore-quota')).toBe(0)
         const run = await new FeatureStore(dataDir).read('debug')

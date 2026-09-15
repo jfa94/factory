@@ -21,7 +21,7 @@ afterEach(async () => {
 })
 const git = async (cwd: string, ...args: string[]) => (await execOrThrow('git', args, {cwd})).stdout.trim()
 
-async function fixture(mode: 'live' | 'no-ship' = 'no-ship', exempt = true) {
+async function fixture(mode: 'live' | 'no-ship' | 'local' = 'no-ship', exempt = true) {
     const dir = await mkdtemp(join(tmpdir(), 'feature-v2-'))
     dirs.push(dir)
     const root = join(dir, 'repo'),
@@ -95,7 +95,12 @@ async function fixture(mode: 'live' | 'no-ship' = 'no-ship', exempt = true) {
         const head = await runtime.head(run.worktree)
         await git(run.worktree, 'push', '-u', 'origin', `HEAD:refs/heads/${run.branch}`)
         deliveries.push(head)
-        return {kind: mode === 'no-ship' ? 'review' : 'pending', number: 1, url: 'https://example.invalid/pr/1', head}
+        return {
+            kind: run.ship_mode === 'no-ship' ? 'review' : 'pending',
+            number: 1,
+            url: 'https://example.invalid/pr/1',
+            head,
+        }
     }
     const engine = new FeatureEngine(store, runtime)
     const run = await engine.create({
@@ -834,6 +839,41 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         })
         await expect(f.engine.stop('run')).rejects.toThrow('terminal run')
         expect((await f.store.read('run')).status).toBe('completed')
+    })
+
+    it('parks a verified local run before any remote write until resume --ship authorizes delivery', async () => {
+        const f = await fixture('local')
+        await f.engine.advance('run', 'driver')
+        const run = await f.store.read('run')
+        delete run.in_flight
+        await writeFile(join(run.worktree, 'value.js'), 'export const value = 5\n')
+        await git(run.worktree, 'commit', '-am', '[first] deliverable change')
+        run.stage = 'deliver'
+        run.verified_feature = {head_sha: await f.runtime.head(run.worktree), spec_digest: run.spec_digest}
+        await f.store.write(run)
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('resume --ship') as string,
+        })
+        expect((await f.store.read('run')).stop_reason?.kind).toBe('authorization')
+        expect(f.deliveries).toHaveLength(0)
+        await expect(f.engine.resume('run')).resolves.toMatchObject({status: 'running'})
+        expect((await f.engine.advance('run', 'driver')).kind).toBe('park')
+        expect(f.deliveries).toHaveLength(0)
+        await f.engine.resume('run', {ship: 'no-ship'})
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'ready-for-review'})
+        expect(f.deliveries).toHaveLength(1)
+        const delivered = await f.store.read('run')
+        expect(delivered.ship_mode).toBe('no-ship')
+        expect(delivered.audit.some((row) => row.event === 'delivery authorized')).toBe(true)
+    })
+
+    it('refuses --ship on a run that was not created local', async () => {
+        const f = await fixture('live')
+        await expect(f.engine.resume('run', {ship: 'no-ship'})).rejects.toThrow(
+            'only authorizes delivery for a local run'
+        )
+        expect((await f.store.read('run')).ship_mode).toBe('live')
     })
 
     it('integrates dependent shared-file slices on one branch and leaves one complete no-ship PR', async () => {

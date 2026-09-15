@@ -7,7 +7,7 @@ protection requires authorization. Run execution does not weaken that protection
 Start from a GitHub PRD issue:
 
 ```text
-/factory:run --issue <number> [--repo owner/name] [--no-ship] [--e2e]
+/factory:run --issue <number> [--repo owner/name] [--no-ship | --local] [--e2e]
 ```
 
 The command generates a fresh spec from the PRD and committed repository contracts.

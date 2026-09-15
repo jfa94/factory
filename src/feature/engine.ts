@@ -34,7 +34,7 @@ export class FeatureEngine {
         spec: FeatureSpec
         baseBranch: string
         remote: string
-        shipMode?: 'live' | 'no-ship'
+        shipMode?: FeatureRun['ship_mode']
         ignoreQuota?: boolean
         e2e?: boolean
         debug?: boolean
@@ -168,7 +168,7 @@ export class FeatureEngine {
 
     async resume(
         id: string,
-        options: {answer?: string; recover?: boolean; cancel?: boolean} = {}
+        options: {answer?: string; recover?: boolean; cancel?: boolean; ship?: 'live' | 'no-ship'} = {}
     ): Promise<FeatureRun> {
         return this.mutate(id, async (initial) => {
             let run = initial
@@ -179,6 +179,13 @@ export class FeatureEngine {
                 run.status = 'cancelled'
                 this.audit(run, 'cancelled; branch and work preserved', {})
                 return
+            }
+            if (options.ship !== undefined) {
+                if (run.ship_mode !== 'local') {
+                    throw new Error('--ship only authorizes delivery for a local run')
+                }
+                run.ship_mode = options.ship
+                this.audit(run, 'delivery authorized', {ship_mode: options.ship})
             }
             if (options.answer !== undefined) {
                 if (run.question === undefined || !options.answer.trim()) {
@@ -782,6 +789,11 @@ export class FeatureEngine {
                 run.delivery = {outcome: 'no-change', head_sha: await this.runtime.head(run.worktree)}
                 this.audit(run, 'no-change completion', run.delivery)
                 return this.terminal(run)
+            }
+            if (run.ship_mode === 'local') {
+                // Every gate has passed; nothing has left the machine. Delivery waits for resume --ship.
+                this.park(run, 'authorization', 'verified feature awaits delivery; resume --ship live|no-ship')
+                return this.parked(run)
             }
             const result = await this.runtime.deliver(run)
             run.delivery = {pr_number: result.number, url: result.url, head_sha: result.head}

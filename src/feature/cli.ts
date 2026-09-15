@@ -2,7 +2,7 @@
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
-import {parseArgs, optionalString, UsageError} from '../cli/args.js'
+import {parseArgs, optionalString, UsageError, type ParsedArgs} from '../cli/args.js'
 import {withUsageGuard, type Subcommand} from '../cli/registry-types.js'
 import {emitJson, emitHelp} from '../cli/io.js'
 import {EXIT} from '../shared/exit-codes.js'
@@ -22,10 +22,10 @@ import {assertFeatureEnvironment} from './preflight.js'
 const HELP = `Factory v2 — sequential feature delivery
 
 factory spec resolve|gate|store --issue <n>
-factory run create --issue <n> [--no-ship] [--e2e] [--ignore-quota]
+factory run create --issue <n> [--no-ship | --local] [--e2e] [--ignore-quota]
 factory next-action --run <id> --driver <session>
 factory run stop --run <id>
-factory resume --run <id> [--answer <text>] [--recover]
+factory resume --run <id> [--answer <text>] [--recover] [--ship live|no-ship]
 factory run cancel --run <id>
 factory state --run <id> [--ledger]
 factory state --list
@@ -34,8 +34,24 @@ factory debug create --base <ref> [--ignore-quota]
 Agent results are written verbatim to the per-role paths in the execute envelope's
 "staged"; next-action consumes them. --recover, after the previous agent has stopped,
 consumes a complete staged result, redispatches missing roles, or retires the attempt.
+Submitting the feature acceptance result pushes and opens the PR in the same call;
+--local parks the verified feature before any remote write until resume --ship.
 Legacy runs are preserved but cannot execute. One active feature run per repository.
 `
+
+function shipMode(args: ParsedArgs): 'live' | 'no-ship' | 'local' {
+    if (args.has('no-ship') && args.has('local')) {
+        throw new UsageError('--no-ship and --local are mutually exclusive')
+    }
+    return args.has('local') ? 'local' : args.has('no-ship') ? 'no-ship' : 'live'
+}
+
+function shipAuthorization(value: string): 'live' | 'no-ship' {
+    if (value !== 'live' && value !== 'no-ship') {
+        throw new UsageError('--ship must be live or no-ship')
+    }
+    return value
+}
 
 export function featureCommand(name: string): Subcommand {
     return {
@@ -48,18 +64,18 @@ export function featureCommand(name: string): Subcommand {
             }
             const allowed =
                 name === 'run' && argv[0] === 'create'
-                    ? ['issue', 'repo', 'run-id', 'no-ship', 'e2e', 'ignore-quota']
+                    ? ['issue', 'repo', 'run-id', 'no-ship', 'local', 'e2e', 'ignore-quota']
                     : name === 'debug'
                       ? ['base', 'repo', 'run-id', 'ignore-quota']
                       : name === 'resume'
-                        ? ['run', 'answer', 'recover']
+                        ? ['run', 'answer', 'recover', 'ship']
                         : name === 'next-action' || name === 'next-task'
                           ? ['run', 'driver']
                           : name === 'state'
                             ? ['run', 'list', 'ledger']
                             : ['run']
             const args = parseArgs(argv, {
-                booleans: ['no-ship', 'e2e', 'ignore-quota', 'recover', 'list', 'ledger'],
+                booleans: ['no-ship', 'local', 'e2e', 'ignore-quota', 'recover', 'list', 'ledger'],
                 allowed,
             })
             if (
@@ -179,7 +195,7 @@ export function featureCommand(name: string): Subcommand {
                         spec,
                         baseBranch: config.git.baseBranch,
                         remote: 'origin',
-                        shipMode: args.has('no-ship') ? 'no-ship' : 'live',
+                        shipMode: shipMode(args),
                         e2e: args.has('e2e'),
                         ignoreQuota: args.has('ignore-quota'),
                         ...(ownerSession !== undefined && ownerSession !== '' ? {ownerSession} : {}),
@@ -196,6 +212,7 @@ export function featureCommand(name: string): Subcommand {
                 emitJson(
                     await engine.resume(id, {
                         ...(args.has('answer') ? {answer: args.requireFlag('answer')} : {}),
+                        ...(args.has('ship') ? {ship: shipAuthorization(args.requireFlag('ship'))} : {}),
                         recover: args.has('recover'),
                     })
                 )
