@@ -493,6 +493,42 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(run.candidate_satisfied).toBe(false)
     }, 30_000)
 
+    it('parks a tests-stage already-satisfied that committed an implementation file (D1: not repairable by the test-writer)', async () => {
+        const f = await fixture('no-ship', false)
+        let action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute' || action.attempt.stage !== 'tests') {
+            throw new Error('missing test phase')
+        }
+        const worktree = action.attempt.worktree
+        await writeFile(join(worktree, 'value.js'), 'export const value = 1\n')
+        await git(worktree, 'add', 'value.js')
+        await git(worktree, 'commit', '-m', '[first] implementation smuggled into the tests stage')
+        const head = await f.runtime.head(worktree)
+        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        expect(action).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('tagged test-only commits') as string,
+        })
+        const run = await f.store.read('run')
+        expect(run.stop_reason?.kind).toBe('producer')
+        expect(run.candidate_satisfied).toBe(false)
+        expect(run.attempts['task:first'] ?? 0).toBe(0)
+    }, 30_000)
+
+    it('closes every prompt with the result contract and the identity line (obs 1, 3)', async () => {
+        const f = await fixture()
+        const action = await f.engine.advance('run', 'driver')
+        if (action.kind !== 'execute') {
+            throw new Error('missing attempt')
+        }
+        expect(action.prompt).toContain('file every instance in the reviewed range in the same round')
+        expect(action.prompt).toContain('full 40-character lowercase hex SHA')
+        const last = action.prompt.split('\n\n').at(-1) ?? ''
+        expect(last.startsWith('Identity: ')).toBe(true)
+        expect(last).toContain(action.attempt.id)
+        expect(action.prompt.indexOf('Identity: ')).toBe(action.prompt.lastIndexOf('Identity: '))
+    })
+
     it('still rejects already-satisfied from implement when the checkpoint moved', async () => {
         const f = await fixture()
         let action = await f.engine.advance('run', 'driver')

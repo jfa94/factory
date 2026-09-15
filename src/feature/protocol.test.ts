@@ -1,4 +1,4 @@
-import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach, describe, expect, it, vi} from 'vitest'
@@ -59,6 +59,7 @@ async function setup(stage?: Stage) {
         ancestor: vi.fn().mockResolvedValue(true),
         exempt: vi.fn().mockResolvedValue(true),
         checks: vi.fn().mockResolvedValue({passed: true, observed: 1, details: [], assertionFailure: false}),
+        testsOnly: vi.fn().mockResolvedValue(true),
         snapshot: vi.fn().mockResolvedValue(join(dir, 'snapshot')),
         citation: vi.fn().mockResolvedValue(true),
         databaseChanged: vi.fn().mockResolvedValue(false),
@@ -142,6 +143,16 @@ describe('feature evidence and recovery protocol', () => {
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'cancelled'})
         await expect(f.engine.resume('run')).rejects.toThrow('fresh run')
     })
+    it('reads a pre-batching state.json that has no confirmed_claims field', async () => {
+        const f = await setup()
+        const path = join(f.input.root, 'runs-v2', 'run', 'state.json')
+        const {confirmed_claims: _dropped, ...legacy} = JSON.parse(await readFile(path, 'utf8')) as Record<
+            string,
+            unknown
+        >
+        await writeFile(path, JSON.stringify(legacy))
+        expect((await f.store.read('run')).confirmed_claims).toEqual([])
+    })
     it('rejects duplicate runs and a second producer for the repository', async () => {
         const f = await setup()
         await expect(f.engine.create(f.input)).rejects.toThrow('already exists')
@@ -178,6 +189,67 @@ describe('feature evidence and recovery protocol', () => {
         action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: confirmed ? 'implement' : 'slice-review'}})
         expect((await f.store.read('run')).checkpoints).toHaveLength(confirmed ? 0 : 1)
+    })
+    it('confirms claims in batches of two and repairs from the accumulated blockers', async () => {
+        const f = await setup('task-review')
+        const ids = (action: FeatureAction) =>
+            (JSON.parse(execution(action).prompt.split('\n\n').at(-3) ?? '') as {claims: {id: string}[]}).claims
+        let action = await f.engine.advance('run', 'driver')
+        const claims = ['one', 'two', 'three'].map((id) => ({...claim, id}))
+        action = await submit(
+            f,
+            result(action, {
+                reviews: [{reviewer: 'quality-reviewer', claims}],
+            })
+        )
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
+        expect(ids(action)).toEqual([
+            {id: 'one', file: 'value.ts', line: 1, quote: claim.quote, claim: claim.claim},
+            {id: 'two', file: 'value.ts', line: 1, quote: claim.quote, claim: claim.claim},
+        ])
+        // Votes for the wrong subset park; recovery with the right ids proceeds.
+        await stage(
+            f,
+            result(action, {
+                confirmations: [
+                    {id: 'one', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: 'three', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                ],
+            })
+        )
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('confirmation is incomplete') as string,
+        })
+        await stage(
+            f,
+            result(action, {
+                confirmations: [
+                    {id: 'one', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: 'two', confirmed: false, evidence: 'The cited statement is unreachable'},
+                ],
+            })
+        )
+        await f.engine.resume('run', {recover: true})
+        action = await f.engine.advance('run', 'driver')
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
+        expect(ids(action).map((row) => row.id)).toEqual(['three'])
+        expect((await f.store.read('run')).confirmed_claims.map((row) => row.id)).toEqual(['one'])
+        expect(f.runtime.snapshot.mock.calls).toHaveLength(3)
+        action = await submit(
+            f,
+            result(action, {
+                confirmations: [{id: 'three', confirmed: true, evidence: 'Checked value.ts at the cited statement'}],
+            })
+        )
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
+        const {prompt} = execution(action)
+        expect(prompt).toContain('value.ts:1: Returns the wrong value')
+        const run = await f.store.read('run')
+        expect(run.feedback).toHaveLength(2)
+        expect(run.confirmed_claims).toEqual([])
+        expect(run.claims).toEqual([])
+        expect(run.audit.filter((row) => row.event === 'findings confirmed')).toHaveLength(2)
     })
     it.each(['citation', 'reviewer', 'duplicate'] as const)('rejects invalid review evidence: %s', async (kind) => {
         const f = await setup('task-review')

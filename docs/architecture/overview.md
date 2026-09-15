@@ -53,6 +53,13 @@ Executed-test counts are required; unsupported reporters stop with a clear error
 Tasks receive tests/type/lint and quality review. Slice and feature boundaries
 run broader integrated gates and the review panel, adding database review when
 the diff requires it. Citations are checked before independent confirmation.
+Confirmation runs in batches of two claims per finding-verifier attempt; confirmed
+blockers accumulate in state until the last batch decides repair or pass. A
+tests-stage `already-satisfied` is accepted only when every commit since the task
+checkpoint is a tagged test-only commit (none is fine); otherwise the run parks as
+a producer failure, because the test-writer cannot undo an implementation commit.
+The ordering check is then skipped because there is no implementation commit to
+order.
 Acceptance evaluation is independent, covers every requested ID, and sees all
 criteria. Producer claims and unrelated green tests cannot establish acceptance.
 

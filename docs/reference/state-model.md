@@ -13,6 +13,7 @@ it verbatim and the engine reads it on `next-action`. A missing, half-written or
 schema-invalid file reads as "not yet"; the `wait` reason names schema-invalid
 files so the driver can recover and redispatch that role. A markdown fence or prose
 around the JSON object is tolerated on read.
+
 - `ledger.md`: readable projection of checkpoints, answers and audit events.
 
 Repository locks live in `locks-v2/`; durable generated specs live in `v2/specs/`.
@@ -24,7 +25,10 @@ Missing results yield wait instead of duplicate dispatch. Any driver may consume
 staged results; a stale attempt id, spec digest or HEAD is rejected. Explicit
 recovery consumes a complete staged result, re-issues only the missing roles of a
 partial review panel on the same attempt (`in_flight.redispatch`), or retires the
-stopped attempt; rejected evidence and its reason remain retained.
+stopped attempt; rejected evidence and its reason remain retained. Review claims
+wait in `claims`; each finding-verifier attempt confirms the first two, and the
+confirmed ones accumulate in `confirmed_claims` until the last batch decides
+repair or pass.
 
 Statuses are running, waiting, parked, awaiting-merge, ready-for-review, completed
 and cancelled. The final three are terminal. Explicit stops require resume.

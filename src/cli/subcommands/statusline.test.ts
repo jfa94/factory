@@ -470,6 +470,7 @@ describe('runStatusline (v2 feature progress)', () => {
             answers: [],
             feedback: [],
             claims: [],
+            confirmed_claims: [],
             candidate_satisfied: false,
             delivery: {},
             audit: [],

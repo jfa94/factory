@@ -7,7 +7,7 @@ import {exec, type ExecResult} from '../shared/exec.js'
 import {isEnoent} from '../shared/fs-errors.js'
 import type {Config} from '../config/schema.js'
 import {GateRunner} from '../verifier/deterministic/gate-runner.js'
-import {defaultGateTools, type ProcResult} from '../verifier/deterministic/tools.js'
+import {defaultGateTools, type CommitInfo, type ProcResult} from '../verifier/deterministic/tools.js'
 import {testEvidence} from './test-evidence.js'
 import {deriveTddVerdict, classifyCommit} from '../verifier/deterministic/tdd-classify.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
@@ -20,6 +20,7 @@ import {provisionWorktree} from '../git/provision.js'
 import type {FeatureRuntime, CheckResult, DeliveryResult} from './ports.js'
 import type {FeatureRun, Stage, Claim, FeatureSpec} from './schema.js'
 
+const taggedTestsOnly = (commit: CommitInfo): boolean => commit.tagged && classifyCommit(commit.files) === 'test-only'
 export type Command = (command: string, args: readonly string[], cwd: string) => Promise<ExecResult>
 const PrSchema = z.object({
     number: z.number().int().positive(),
@@ -106,6 +107,12 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         return isTddExempt(task.task_id, run.spec.tasks, pkg)
     }
 
+    async testsOnly(run: FeatureRun): Promise<boolean> {
+        const task = at(run.spec.tasks, Math.min(run.task_index, run.spec.tasks.length - 1))
+        const commits = await defaultGateTools().git.commits(run.task_base_sha, task.task_id, {cwd: run.worktree})
+        return commits.every(taggedTestsOnly)
+    }
+
     async checks(run: FeatureRun, stage: Stage): Promise<CheckResult> {
         const task = at(run.spec.tasks, Math.min(run.task_index, run.spec.tasks.length - 1))
         const full = stage === 'slice-check' || stage === 'feature-check'
@@ -167,9 +174,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         if ((stage === 'tests' || stage === 'task-check') && !run.candidate_satisfied && !(await this.exempt(run))) {
             const commits = await tools.git.commits(run.task_base_sha, task.task_id, {cwd: run.worktree})
             if (stage === 'tests') {
-                report.assertionFailure &&=
-                    commits.length > 0 &&
-                    commits.every((commit) => commit.tagged && classifyCommit(commit.files) === 'test-only')
+                report.assertionFailure &&= commits.length > 0 && commits.every(taggedTestsOnly)
             } else {
                 const verdict = deriveTddVerdict(commits, false)
                 report.passed &&= verdict.ok

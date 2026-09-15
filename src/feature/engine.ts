@@ -5,6 +5,7 @@ import type {FeatureRuntime} from './ports.js'
 import {
     VERSION,
     REPAIR_PASSES,
+    CONFIRM_BATCH,
     IdSchema,
     digest,
     terminal,
@@ -81,6 +82,7 @@ export class FeatureEngine {
                 answers: [],
                 feedback: [],
                 claims: [],
+                confirmed_claims: [],
                 candidate_satisfied: false,
                 delivery: {},
                 audit: [],
@@ -411,7 +413,11 @@ export class FeatureEngine {
         const task = this.task(run)
         const context =
             run.stage === 'confirm'
-                ? {claims: run.claims}
+                ? {
+                      claims: run.claims
+                          .slice(0, CONFIRM_BATCH)
+                          .map(({id, file, line, quote, claim}) => ({id, file, line, quote, claim})),
+                  }
                 : {
                       prd: run.spec.prd,
                       version: run.spec.version,
@@ -440,12 +446,13 @@ export class FeatureEngine {
                 ? 'Commit completed work with [task_id] tags; report the actual final HEAD. At the tests stage, establish a meaningful failing assertion before implementation. If the engine dispatched implementation directly, honor its baseline TDD exemption. Do not weaken tests.'
                 : 'Review this immutable snapshot independently; do not edit it. Return evidence for every claim or acceptance decision.',
             'Return JSON: {attempt_id, spec_digest, head_sha, status:"done"|"already-satisfied"|"needs-context"|"spec-defect"|"blocked", message?}.',
-            'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters.',
-            'For confirm return confirmations:[{id,confirmed,evidence}] for every claim. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.',
+            'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters. When a finding is one instance of a pattern, file every instance in the reviewed range in the same round; within at most 10 claims per reviewer prefer full pattern coverage over weaker unrelated findings.',
+            'For confirm return confirmations:[{id,confirmed,evidence}] for every claim in the context. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.',
             `Acceptance IDs: ${this.acceptanceIds(run).join(', ')}. Evidence must identify actual behavior, tests, and source; never infer satisfaction from ancestry or unrelated tests.`,
             'For spec-repair return repaired_spec with the next revision, unchanged PRD/base and completed tasks. For spec-review return status done only if the revised plan is feasible and preserves requirements.',
-            `Identity: ${JSON.stringify({attempt_id: attempt.id, spec_digest: attempt.spec_digest, head_sha: attempt.head_sha})}`,
             JSON.stringify(context, null, 2),
+            'Result contract: your final reply is exactly one JSON object (a markdown fence is tolerated, no other prose). Copy attempt_id, spec_digest and head_sha verbatim from the identity line below; head_sha is the full 40-character lowercase hex SHA. status is exactly one of done, already-satisfied, needs-context, spec-defect, blocked. The stage-specific array (reviews, confirmations, acceptance or repaired_spec) is required for that stage.',
+            `Identity: ${JSON.stringify({attempt_id: attempt.id, spec_digest: attempt.spec_digest, head_sha: attempt.head_sha})}`,
         ].join('\n\n')
     }
 
@@ -503,6 +510,15 @@ export class FeatureEngine {
             // reporting; implement must leave the task checkpoint untouched.
             if (run.stage !== 'tests' && (run.stage !== 'implement' || head !== run.task_base_sha)) {
                 throw new Error('already-satisfied requires an unchanged task checkpoint')
+            }
+            if (run.stage === 'tests' && !(await this.runtime.testsOnly(run))) {
+                // A test-writer cannot undo an implementation commit by adding commits (a revert
+                // classifies as impl too), so a repair pass would only burn budget: park now.
+                const message =
+                    'already-satisfied at the tests stage requires only tagged test-only commits since the task checkpoint; an implementation commit cannot be repaired by the test-writer'
+                run.feedback = [message]
+                this.park(run, 'producer', message)
+                return
             }
             run.candidate_satisfied = true
             run.stage = 'task-check'
@@ -576,22 +592,28 @@ export class FeatureEngine {
             }
             case 'confirm': {
                 const votes = result.confirmations ?? []
+                const batch = run.claims.slice(0, CONFIRM_BATCH)
                 if (
-                    votes.length !== run.claims.length ||
+                    votes.length !== batch.length ||
                     new Set(votes.map((v) => v.id)).size !== votes.length ||
-                    run.claims.some((c) => !votes.some((v) => v.id === c.id))
+                    batch.some((c) => !votes.some((v) => v.id === c.id))
                 ) {
                     throw new Error('independent confirmation is incomplete')
                 }
-                const blockers = run.claims.filter(
-                    (claim) => votes.find((vote) => vote.id === claim.id)?.confirmed === true
+                this.audit(run, 'findings confirmed', {claims: batch, votes})
+                run.claims = run.claims.slice(batch.length)
+                run.confirmed_claims.push(
+                    ...batch.filter((claim) => votes.find((vote) => vote.id === claim.id)?.confirmed === true)
                 )
+                if (run.claims.length) {
+                    break // next attempt confirms the following batch on a fresh snapshot
+                }
+                const blockers = run.confirmed_claims
+                run.confirmed_claims = []
                 const boundary = run.after_confirm
                 if (boundary === undefined) {
                     throw new Error('confirmation has no review boundary')
                 }
-                this.audit(run, 'findings confirmed', {claims: run.claims, votes})
-                run.claims = []
                 delete run.after_confirm
                 if (blockers.length) {
                     this.repair(

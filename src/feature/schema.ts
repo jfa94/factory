@@ -6,6 +6,8 @@ import {extractPrdRequirements} from '../spec/gates.js'
 
 export const VERSION = 2
 export const REPAIR_PASSES = 3
+/** Claims handed to one finding-verifier attempt; the rest wait for the next attempt. */
+export const CONFIRM_BATCH = 2
 export const IdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
 export const ShaSchema = z.string().regex(/^[a-f0-9]{40,64}$/)
 export const FeatureTaskSchema = SpecTaskSchema.extend({
@@ -154,6 +156,7 @@ export const FeatureRunSchema = z
         question: z.string().optional(),
         feedback: z.array(z.string()),
         claims: z.array(ClaimSchema),
+        confirmed_claims: z.array(ClaimSchema).default([]),
         after_confirm: StageSchema.optional(),
         candidate_satisfied: z.boolean(),
         repaired_spec: FeatureSpecSchema.optional(),

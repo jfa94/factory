@@ -22,6 +22,8 @@ export interface FeatureRuntime {
     ancestor(worktree: string, ancestor: string, head: string): Promise<boolean>
     exempt(run: FeatureRun): Promise<boolean>
     checks(run: FeatureRun, stage: Stage): Promise<CheckResult>
+    /** Every commit since the task checkpoint is a tagged tests-only commit (none is fine). */
+    testsOnly(run: FeatureRun): Promise<boolean>
     snapshot(run: FeatureRun, id: string, head: string): Promise<string>
     citation(worktree: string, claim: Claim): Promise<boolean>
     databaseChanged(run: FeatureRun, base: string): Promise<boolean>
