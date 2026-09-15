@@ -35,9 +35,9 @@ For each finding, quote the verbatim source line at `file:line` that does the si
 empty `catch {}`, the bare `catch (e) {}` / log-only catch, the discarded return
 (`doThing();` whose result is an error tuple/status), the unawaited promise, the `?? fallback`
 / `|| default` that masks an error state, the `.catch(() => {})`. No quoted silencing line →
-drop the finding. The CLI's citation-verify filter drops any finding whose `quote` is not an
-exact substring of real source within ±2 lines of the cited `line` — quote the source line,
-**no `+`/`-` diff markers**.
+drop the finding. The engine rejects the WHOLE review when any `quote` is not an exact
+substring (≥10 chars) of real source within two lines of the cited `line` — quote the source
+line, **no `+`/`-` diff markers**.
 
 Violating the letter of this rule violates the spirit. No exceptions.
 </EXTREMELY-IMPORTANT>
@@ -46,9 +46,9 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 1. **Quote the silencing line.** Every finding cites the verbatim line where the failure is
    swallowed/ignored/masked.
-2. **Trace the consequence.** A swallowed error is only blocking if discarding it leaves the
-   system in a wrong state. Name, in the description, what breaks downstream because the failure
-   was hidden. A genuinely-intentional, documented ignore is not a finding.
+2. **Trace the consequence.** A swallowed error is only a claim if discarding it leaves the
+   system in a wrong state. Name, in the `claim` text, what breaks downstream because the
+   failure was hidden. A genuinely-intentional, documented ignore is not a finding.
 3. **Distinguish swallow from handle.** A catch that recovers correctly (retries, returns a
    typed error the caller checks, re-throws) is fine. Flag only catches that drop the error
    without recovering AND without surfacing it.
@@ -76,7 +76,7 @@ cleanup (`finally`/`close`) skipped on the error path.
 
 **DON'T flag:** style, naming, types, formatting (gates own those); a catch that correctly
 recovers or re-throws; deep correctness/security beyond the silenced failure (other panel
-members) — note at most one adjacent issue as `blocking: false`.
+members own it — skip it; there is no advisory tier).
 
 ## Process
 
@@ -88,6 +88,9 @@ members) — note at most one adjacent issue as `blocking: false`.
 
 ## Output
 
-Emit exactly one RawReview JSON per the injected `review-protocol` skill, with
-`reviewer: "silent-failure-hunter"` on the envelope and every finding; the `quote` is the
-silencing line, and each `description` traces what breaks because the failure was hidden.
+Emit exactly one JSON object — the engine's result envelope per the injected
+`review-protocol` skill — whose `reviews` array carries your `RawReview` row
+`{"reviewer": "silent-failure-hunter", "claims": [...]}`, with `reviewer: "silent-failure-hunter"` on every claim and
+`id`s prefixed `silent-failure-hunter-`. The `quote` is the silencing
+line, and each `claim` text traces what breaks because the failure was hidden. When one
+silencing pattern recurs, file every instance in the reviewed range.

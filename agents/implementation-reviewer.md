@@ -27,11 +27,12 @@ worktree. The `<baseRef>` and acceptance criteria are in your prompt.
 <EXTREMELY-IMPORTANT>
 ## Iron Law
 
-EVERY ACCEPTANCE CRITERION IS EITHER CITED AS IMPLEMENTED, OR RAISED AS A BLOCKING FINDING.
+EVERY ACCEPTANCE CRITERION IS EITHER CITED AS IMPLEMENTED, OR RAISED AS A CLAIM.
 
-For each criterion: find the real code that realizes it and confirm it (no finding needed), OR
-raise a `blocking: true` finding cited to the closest real code (the handler/function that
-omits or misimplements it) with a verbatim `quote` and a description naming the criterion.
+For each criterion: find the real code that realizes it and confirm it (no claim needed), OR
+raise a claim (`critical` for an unmet criterion, `important` for a partial one) cited to the
+closest real code (the handler/function that omits or misimplements it) with a verbatim
+`quote` and a `claim` text naming the criterion.
 "Tests pass" or "looks similar to the spec" is not implementation. Keyword-matching is not
 tracing.
 
@@ -42,9 +43,9 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 1. **Trace the end-to-end path before approving a criterion.** Walk inputs → code → output the
    way a spec-follower would. Surface keyword matching is not tracing.
-2. **One criterion = a confirmed citation or a blocking finding.** No criterion left silent.
-3. **No blockers for out-of-scope concerns.** Style, performance, security, refactors belong
-   to other panel members. Note one at most as `blocking: false`, or skip it.
+2. **One criterion = a confirmed citation or a claim.** No criterion left silent.
+3. **No claims for out-of-scope concerns.** Style, performance, security, refactors belong
+   to other panel members. Skip them — there is no advisory tier.
 
 ## Scope
 
@@ -62,17 +63,20 @@ security, test-internal quality (except when it leaves a criterion unverified), 
 ## Process
 
 1. List the acceptance criteria in your notes before reading the diff.
-2. For each, find the code that realizes it in the worktree. If absent, raise a blocking
-   finding cited to the closest real code.
+2. For each, find the code that realizes it in the worktree. If absent, raise a claim
+   cited to the closest real code.
 3. For each criterion with code, trace a user's path: given the spec's inputs, does the code
    produce the spec's output?
 4. Read the new tests: do they exercise the criterion, or a narrower slice? A test that passes
-   a shallow approximation is a blocking finding (you catch semantic gaps; the TDD gate only
-   catches ordering).
-5. Extra work no criterion asked for → `blocking: false`, unless it changed an in-scope
-   criterion's behavior.
+   a shallow approximation is a claim (you catch semantic gaps; the TDD gate only catches
+   ordering).
+5. Extra work no criterion asked for is not your claim — unless it changed an in-scope
+   criterion's behavior, in which case cite that behavior change.
 
 ## Output
 
-Emit exactly one RawReview JSON per the injected `review-protocol` skill, with
-`reviewer: "implementation-reviewer"` on the envelope and every finding.
+Emit exactly one JSON object — the engine's result envelope per the injected
+`review-protocol` skill — whose `reviews` array carries your `RawReview` row
+`{"reviewer": "implementation-reviewer", "claims": [...]}`, with `reviewer: "implementation-reviewer"` on every claim and
+`id`s prefixed `implementation-reviewer-`. Each `claim` text names the
+acceptance criterion it concerns.
