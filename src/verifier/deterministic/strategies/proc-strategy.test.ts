@@ -39,6 +39,28 @@ describe('procOutcome', () => {
         expect(detail).toContain('TS2322')
     })
 
+    it('merges stdout problems and stderr noise, stdout first (obs 5: eslint prints problems to stdout)', () => {
+        const out = procOutcome(
+            'lint',
+            'eslint',
+            proc(1, 'src/a.ts\n  1:1  error  no-unused-vars', 'DeprecationWarning: punycode')
+        )
+        const detail = (out as GateRan).evidence.detail ?? ''
+        expect(detail.indexOf('no-unused-vars')).toBeGreaterThan(-1)
+        expect(detail.indexOf('no-unused-vars')).toBeLessThan(detail.indexOf('DeprecationWarning'))
+    })
+
+    it('a stderr error survives a stdout that exceeds the excerpt cap (streams capped independently)', () => {
+        const out = procOutcome('build', 'npm run build', proc(1, 'progress '.repeat(300), 'error TS2322: fatal'))
+        const detail = (out as GateRan).evidence.detail ?? ''
+        expect(detail).toContain('progress')
+        expect(detail).toContain('TS2322: fatal')
+    })
+
+    it('both streams empty → bare exit detail', () => {
+        expect((procOutcome('lint', 'eslint', proc(2, '  ', '\n')) as GateRan).evidence.detail).toBe('eslint exit=2')
+    })
+
     it('truncates an oversized excerpt (never blow up the prompt/state)', () => {
         const huge = 'x'.repeat(5000)
         const out = procOutcome('lint', 'eslint', proc(1, '', huge))

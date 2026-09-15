@@ -71,8 +71,8 @@ export const testStrategy: GateStrategy<GateTools> = {
             return ran('test', true, detail)
         }
         // vitest's default reporter writes the failing-assertion summary to STDOUT (stderr
-        // carries Node warnings/uncaught errors) — stdout-first, the mirror of proc-strategy's
-        // stderr-first for tsc/eslint. Without this the fix-forward channel (composeFixFindings
+        // carries Node warnings/uncaught errors) — stdout-first, stderr only as a fallback
+        // (proc-strategy merges both streams for tsc/eslint/build). Without this the fix-forward channel (composeFixFindings
         // → fixInstructions) has nothing but the bare exit code to hand the next producer rung.
         const output = excerpt(result.stdout || result.stderr)
         return ran('test', false, output ? `${detail}: ${output}` : detail)

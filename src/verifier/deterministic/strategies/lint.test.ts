@@ -59,6 +59,15 @@ describe('lintStrategy run path (applicable: binary + config present)', () => {
         expect((out as GateRan).evidence.observed).toBe(false)
     })
 
+    it('a failing eslint run carries the stdout problem text even with stderr noise', async () => {
+        const tools = makeFakeTools({
+            fs: eslintSetUp(),
+            eslint: new FakeEslint(proc(1, 'src/a.ts\n  1:1  error  no-unused-vars', 'DeprecationWarning: punycode')),
+        })
+        const out = await lintStrategy.run(ctx(tools))
+        expect((out as GateRan).evidence.detail).toContain('no-unused-vars')
+    })
+
     it('runs eslint in the worktree cwd', async () => {
         const eslint = new FakeEslint(proc(0))
         const tools = makeFakeTools({fs: eslintSetUp(), eslint})

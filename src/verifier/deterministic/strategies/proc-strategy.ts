@@ -39,9 +39,10 @@ export function excerpt(text: string, keep: 'head' | 'tail' = 'head'): string {
 /**
  * Map a finished process result to a {@link GateOutcome}: fail LOUD on truncation
  * (never judge a clipped run), else observed = `exit 0` with a `<label> exit=<code>`
- * detail. On a FAILING run, the detail also carries a capped stderr (falling back to
- * stdout) excerpt — this is the only place the concrete lint/tsc/build error text is
- * available; without it here, fix-forward (prompt-context.ts's confirmedBlockers →
+ * detail. On a FAILING run, the detail also carries a capped excerpt of each stream
+ * (stdout first, then stderr; each capped independently so a verbose stdout cannot
+ * starve a stderr error) — this is the only place the concrete lint/tsc/build error
+ * text is available; without it here, fix-forward (prompt-context.ts's confirmedBlockers →
  * fixInstructions) has nothing but the bare exit code to hand the next producer rung.
  * A passing run's detail is unchanged (nothing to fix). Exported so a gate with a
  * pre-run applicability check (e.g. lint) reuses the exact same mapping for its run path.
@@ -54,7 +55,7 @@ export function procOutcome(id: GateId, label: string, result: ProcResult): Gate
     if (result.code === 0) {
         return ran(id, true, base)
     }
-    const output = excerpt(result.stderr || result.stdout)
+    const output = [excerpt(result.stdout), excerpt(result.stderr)].filter(Boolean).join('\n')
     return ran(id, false, output ? `${base}: ${output}` : base)
 }
 
