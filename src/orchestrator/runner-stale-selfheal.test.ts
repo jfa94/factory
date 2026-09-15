@@ -37,6 +37,13 @@ describe('v2 runner recovery protocol', () => {
         expect(skill).toContain('Explicit resume is')
         expect(skill).toContain('required, even if quota recovers')
     })
+    it('pastes the engine prompt verbatim instead of pointing agents at a file', () => {
+        expect(skill).toContain('verbatim into the Agent prompt')
+        expect(skill).toContain('point the agent at a file to read')
+    })
+    it('requires the runner session to be rooted in the target repository', () => {
+        expect(skill).toContain('rooted in the target repository')
+    })
     it('reloads the persisted ledger and retains answers on resume', () => {
         expect(skill).toContain('factory state --run <id> --ledger')
         expect(skill).toContain('Answers remain in the ledger')

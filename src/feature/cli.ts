@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- validated spec/run storage paths */
-import {readFile} from 'node:fs/promises'
+import {readFile, realpath} from 'node:fs/promises'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
 import {parseArgs, optionalString, UsageError, type ParsedArgs} from '../cli/args.js'
@@ -204,6 +204,17 @@ export function featureCommand(name: string): Subcommand {
                 return EXIT.OK
             }
             const id = args.requireFlag('run')
+            if (name === 'next-action' || name === 'next-task' || name === 'resume') {
+                // Dispatched agents inherit the session cwd, so the driver must sit in the
+                // repository the run was created from.
+                const root = await runtime.checked('git', ['rev-parse', '--show-toplevel'], process.cwd())
+                const run = await store.read(id)
+                if ((await realpath(root)) !== (await realpath(run.root))) {
+                    throw new UsageError(
+                        `run ${id} belongs to ${run.root}; run ${name} from that repository (cwd is ${root})`
+                    )
+                }
+            }
             if (name === 'next-action' || name === 'next-task') {
                 emitJson(await engine.advance(id, args.requireFlag('driver')))
                 return EXIT.OK

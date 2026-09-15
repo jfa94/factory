@@ -15,6 +15,9 @@ The bounded generation loop checks requirement coverage, dependency order, share
 file ownership and contiguous slices. It allows five revisions. A failed spec
 must be corrected before a feature run starts.
 
+Run from a session whose cwd is the target repository: the run binds to that
+repository and dispatched agents inherit the session cwd.
+
 One repository has at most one active run. One run uses one feature branch and
 worktree, executes tasks sequentially and opens one PR. Independent reviewers use
 detached snapshots. Task checks cover tests, types and lint; slice and feature

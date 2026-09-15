@@ -5,7 +5,8 @@ argument-hint: '--run <id> [--answer <text>] [--recover] [--ship live|no-ship]'
 
 # /factory:resume
 
-Load `skills/pipeline-runner/SKILL.md`. Require an explicit run ID and inspect
+Load `skills/pipeline-runner/SKILL.md`. Run from a session whose cwd is the
+target repository. Require an explicit run ID and inspect
 `factory state --run <id> --ledger`. Call `factory resume --run <id>`, forwarding
 `--answer` for a pending context question. Answers remain in the audit ledger.
 

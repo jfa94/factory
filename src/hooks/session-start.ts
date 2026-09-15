@@ -14,7 +14,7 @@
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 import {emitSessionStartContext} from './hook-io.js'
 
-// ponytail: canonical source is skills/pipeline-runner/SKILL.md:14-24; this is a
+// ponytail: canonical source is skills/pipeline-runner/SKILL.md (its opening runner charter); this is a
 // hardcoded digest so a mid-compaction session never loses the pointer even before
 // the skill reloads. Keep in sync by hand if the runner's Iron Laws change.
 export const FACTORY_HARNESS_REMINDER = `<FACTORY_HARNESS_REMINDER>

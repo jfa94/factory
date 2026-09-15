@@ -15,6 +15,10 @@ stall this protocol exists to prevent.
 
 ## Generate an executable spec
 
+The runner session must be rooted in the target repository: its cwd is inside
+the repository `factory run create` was run from, because dispatched agents
+inherit the session cwd. `next-action` and `resume` refuse a different repository.
+
 Before generation, run `factory scaffold` for the target repository and resolve
 its reported local setup requirements. Commit the gate contract to the base branch
 through the repository's authorized workflow. Provision remote protection only
@@ -57,6 +61,9 @@ available). Call `factory next-action --run <id> --driver <session>`.
 - `execute`: save the attempt identity before dispatch. Work only at
   `attempt.worktree`, on the supplied base and HEAD. Spawn exactly the roles
   in `attempt.roles`, each with the full engine prompt and its role instructions.
+  Paste the envelope's `prompt` string verbatim into the Agent prompt; never
+  point the agent at a file to read instead. Prefix one line stating the agent
+  is dispatched by the pipeline runner for that repository.
   **Do not request native worktree isolation:** the engine already owns the
   producer worktree and immutable review snapshot. Do not create task branches.
   Review the exact committed range with `git diff <attempt.base_sha>..<attempt.head_sha>`.

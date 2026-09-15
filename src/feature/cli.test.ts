@@ -109,6 +109,15 @@ afterEach(async () => {
 const call = (name: string, ...args: string[]) => featureCommand(name).run(args)
 
 describe('v2 CLI contract', () => {
+    it('refuses next-action and resume from a session rooted in another repository', async () => {
+        expect(await call('run', 'create', '--issue', '1', '--run-id', 'run', '--no-ship')).toBe(0)
+        fake.root = join(dir, 'elsewhere')
+        await mkdir(fake.root)
+        expect(await call('next-action', '--run', 'run', '--driver', 'driver')).toBe(2)
+        expect(errors).toContain('belongs to')
+        expect(await call('resume', '--run', 'run', '--recover')).toBe(2)
+    })
+
     it('creates a fresh run with persisted flags, lists it, dispatches, stops and recovers', async () => {
         expect(
             await call('run', 'create', '--issue', '1', '--run-id', 'run', '--no-ship', '--e2e', '--ignore-quota')
