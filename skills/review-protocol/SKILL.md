@@ -130,10 +130,12 @@ Field rules:
 
 - **`status`**: `done` when you completed the review (with or without claims). `blocked`
   (with a `message`) only if you could not inspect the snapshot at all — never guess a
-  review. `needs-context` only for a concrete undocumented intent choice where two plausible
-  readings decide whether the code meets the spec or is a defect; the `message` states the
-  question and both readings. Never use it for ordinary uncertainty. `spec-defect` with a
-  `message` when the spec itself contradicts the repository contracts.
+  review; the engine re-issues you, and a third `blocked` parks the run. `needs-context`
+  only for a concrete undocumented intent choice where two plausible readings decide
+  whether the code meets the spec or is a defect; the `message` states the question and
+  both readings, and the engine routes it to spec repair, which makes the spec decide.
+  Never use it for ordinary uncertainty. `spec-defect` with a `message` when the spec
+  itself contradicts the repository contracts.
 - **`file` + `line`**: REQUIRED on every claim. `line` is a positive integer in the file at the
   reviewed HEAD.
 - **`quote`**: REQUIRED, ≥10 chars, an exact substring of the cited source within two lines

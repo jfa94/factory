@@ -55,8 +55,8 @@ const log = createLogger('autonomy')
 
 const HELP = `factory autonomy <ensure|status|preflight> — manage / inspect autonomous mode
 
-The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
-is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
+The pipeline is meant to run unattended in an autonomous session
+(FACTORY_AUTONOMOUS_MODE=1); outside one, permission prompts can stall a run.
 
 ensure     Builds the autonomous settings in memory from templates/settings.autonomous.json
            (placeholders substituted, env baked, statusLine wired to \`factory statusline\`
@@ -68,7 +68,7 @@ ensure     Builds the autonomous settings in memory from templates/settings.auto
 status     Reports whether THIS session is autonomous (FACTORY_AUTONOMOUS_MODE=1).
            Exits 0 when autonomous, 1 when not (never throws).
 
-preflight  The run-entry check (what \`/factory:run\` calls). Two states: the session
+preflight  An optional pre-run check. Two states: the session
            is autonomous → proceed (exit 0); it is not → print the inline-settings
            relaunch command and halt (exit 1). A directly-exported
            FACTORY_AUTONOMOUS_MODE=1 (CI / raw env) satisfies the gate with no
@@ -367,7 +367,7 @@ export function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promise<Exi
         write('autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)\n')
     } else {
         write(
-            `autonomous: NO — the pipeline will refuse to start or resume a run.\n` +
+            `autonomous: NO — permission prompts may stall an unattended run.\n` +
                 `Run \`factory autonomy ensure\` and relaunch with the printed command.\n`
         )
     }

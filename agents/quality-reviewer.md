@@ -61,8 +61,8 @@ a traced code path is a hallucination, not a review.
    reachability, source or sink premise.
 3. **Stay inside the diff + the files you read.** No general-knowledge findings — if you didn't
    trace it here, you didn't find it.
-4. **Signal over noise.** Score each candidate likelihood (1–10) × impact (1–10); drop the tail
-   (anything weak on either axis). A handful of real findings beats fifteen maybes.
+4. **Signal over noise.** Score each candidate by likelihood (1–10) × impact (1–10); drop
+   anything below 5 on either axis. A handful of real findings beats fifteen maybes.
 5. **Security findings are source→sink traces with both lines quoted.** Quote the exact source
    line where untrusted input enters AND the exact sink line where it causes harm — cite the
    more decisive of the two (usually the sink) in the claim's `file`/`line`/`quote` and name
@@ -139,7 +139,8 @@ a traced code path is a hallucination, not a review.
    what illegal value it admits and confirm a construction/call site lets it occur;
    (e) parsimony — for each added guard, abstraction, or comment, ask: does it change
    behavior or hide a defect? Only then is it a claim (Iron Law 8).
-3. Keep only findings whose trace holds; score likelihood × impact and drop the tail.
+3. Keep only findings whose trace holds; score likelihood × impact and drop anything below 5
+   on either axis (Iron Law 4).
 
 ## Output
 

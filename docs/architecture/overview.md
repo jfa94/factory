@@ -83,6 +83,18 @@ Acceptance evaluation is independent, covers every requested ID, and sees all
 criteria. Producer claims and unrelated green tests cannot establish acceptance.
 
 Execution has three repair passes per boundary; spec generation has five revisions.
+The producer dispatch of a boundary's final repair pass runs on Opus; the attempt
+records the override, re-issues keep it, and the ledger audits it.
+
+Agent statuses self-heal. `needs-context` from any role routes to spec repair,
+spending the spec repair budget: the spec generator receives the asking role and
+its question and makes the spec decide. A question raised during spec repair or
+spec review, or once the spec budget is spent, parks for `resume --answer`. In a
+review panel any non-done status wins and the other reviewers' claims are dropped.
+`blocked` re-issues the role like an invalid result; a third `blocked` parks as
+an environment failure. A spec generator `blocked` during spec repair parks as a
+spec failure whose question `resume --answer` supplies. `spec-defect` routes to
+spec repair.
 A clean base merge triggers full verification without spending a producer repair
 pass. Conflicts preserve both sides for forward repair. CI waiting has a deadline
 and consumes no implementation pass.

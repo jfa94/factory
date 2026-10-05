@@ -121,10 +121,10 @@ inputs → same rejection, no escape. src/producer/retry.ts:42 "for (let i = 0; 
 - A latent stuck state behind a guard that currently holds, or an `over-pinned-contract` with
   limited blast radius, is NOT a claim — there is no advisory tier. Drop it.
 
-**Prefer ≤3 claims** (the protocol's 10 is the ceiling, not the target). Multi-citation
-systemic findings carry higher blast radius and more false-discovery risk per slot. Drop the
-tail by scenario concreteness × blast radius. A single well-grounded `critical` claim is
-worth more than three speculative ones.
+The protocol's claim limit and pattern-coverage rule govern how many claims you file.
+Multi-citation systemic findings carry more false-discovery risk per claim: rank by scenario
+concreteness × blast radius, and drop any claim you cannot ground in a concrete scenario. A
+single well-grounded `critical` claim is worth more than three speculative ones.
 
 ## Honesty
 

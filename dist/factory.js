@@ -1621,9 +1621,7 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2,
-  /** Conflict: an active run already exists and no resolution flag was passed. */
-  CONFLICT: 3
+  USAGE: 2
 };
 
 // src/config/load.ts
@@ -6160,23 +6158,12 @@ var GitSchema = external_exports.object({
    */
   baseBranch: external_exports.string().min(1).optional(),
   /**
-   * Required status-check contexts of develop's protection profile, asserted
-   * by scaffold and run preflight and provisioned with `--provision`.
+   * Required status-check contexts of the resolved base branch's protection
+   * profile, asserted by scaffold and run preflight and provisioned with `--provision`.
    * Defaults to the three contexts the rendered quality-gate workflow
    * always reports (Decision 53) — the rollup PR cannot merge red.
    */
   developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
-  /**
-   * Required status-check contexts of develop's BASELINE profile (run-scoped
-   * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
-   * is active. Admins bypass (baseline sets `enforce_admins: false`).
-   * DERIVED default: `developRequiredStatusChecks` minus `'Mutation Testing'`
-   * (the GitSchema transform below) — the baseline drops exactly the mutation
-   * gate, so a custom context added to the run profile (e.g. a repo's pgTAP
-   * check) stays required at rest with no double-bookkeeping. An explicitly
-   * set value (including `[]`) overrides the derivation.
-   */
-  developBaselineStatusChecks: external_exports.array(external_exports.string()).optional(),
   /**
    * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
    * before giving up with `ci-timeout`. Sized above the slowest expected
@@ -6184,10 +6171,7 @@ var GitSchema = external_exports.object({
    * run recoverably (`factory resume` re-enters the poll).
    */
   rollupCiWaitMinutes: external_exports.number().int().positive().default(30)
-}).transform((git) => ({
-  ...git,
-  developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
-})).default({});
+}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
@@ -6542,7 +6526,7 @@ Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
   factory configure --set quality.mutationScoreTarget=85
   factory configure --set git.baseBranch=develop
-  factory configure --set git.autoProvision=true`;
+  factory configure --set git.rollupCiWaitMinutes=45`;
 async function run(argv) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
@@ -6586,233 +6570,10 @@ import { homedir as homedir2 } from "node:os";
 import { dirname as dirname5, join as join8, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// src/verifier/deterministic/gate-contract.ts
-import { readFile as readFile2 } from "node:fs/promises";
-import { join as join3 } from "node:path";
-
-// src/shared/command-allowlist.ts
-var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
-function runnerName(argv) {
-  const bin = argv[0] ?? "";
-  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-}
-function validateCommand(command, isAllowedRunner) {
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
-  for (const t of tokens) {
-    if (!SAFE_TOKEN.test(t)) {
-      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
-    }
-  }
-  if (tokens[0] === void 0) {
-    return { ok: false, reason: "unsafe_command", detail: "empty command" };
-  }
-  if (!isAllowedRunner(tokens)) {
-    return {
-      ok: false,
-      reason: "unallowed_runner",
-      detail: `runner '${runnerName(tokens)}' not allowlisted`
-    };
-  }
-  return { ok: true, argv: tokens };
-}
-
-// src/verifier/deterministic/gate-id.ts
-var GATE_IDS = [
-  "test",
-  "tdd",
-  "coverage",
-  "mutation",
-  "sast",
-  "type",
-  "lint",
-  "build"
-];
-
-// src/verifier/deterministic/gate-contract.ts
-var log4 = createLogger("gate-contract");
-var GATE_CONTRACT_REL = ".factory/gates.json";
-var MUTATION_CHECK_CONTEXT = "Mutation Testing";
-var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
-function isAllowedGateRunner(argv) {
-  const runner = runnerName(argv);
-  const a1 = argv[1];
-  switch (runner) {
-    case "deno":
-      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
-    case "go":
-      return a1 === "test";
-    case "cargo":
-      return a1 === "test" || a1 === "check" || a1 === "build";
-    case "npm":
-    case "pnpm":
-    case "yarn":
-      return a1 === "run" && argv[2] !== void 0;
-    case "vitest":
-    case "tsc":
-    case "eslint":
-    case "jest":
-    case "mocha":
-    case "pytest":
-      return true;
-    default:
-      return false;
-  }
-}
-function validateGateCommand(command) {
-  return validateCommand(command, isAllowedGateRunner);
-}
-var MUTATION_DEFAULT_ROOTS = ["src"];
-var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
-var RootsSchema = external_exports.array(
-  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
-    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
-  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
-    message: "mutation root must not contain '.' or '..' segments"
-  })
-).nonempty("mutation roots must name at least one directory");
-var ContractedSchema = external_exports.object({
-  contracted: external_exports.literal(true),
-  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-  command: external_exports.string().optional(),
-  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
-  roots: RootsSchema.optional()
-}).strict();
-var UncontractedSchema = external_exports.object({
-  contracted: external_exports.literal(false),
-  /** Why this gate is waived — required; the committed audit trail. */
-  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
-}).strict();
-var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
-var SetupStepSchema = external_exports.object({
-  name: external_exports.string().min(1).optional(),
-  uses: external_exports.string().min(1).optional(),
-  with: external_exports.record(external_exports.string()).optional(),
-  run: external_exports.string().min(1).optional()
-}).strict().superRefine((step, issues) => {
-  if (step.uses === void 0 === (step.run === void 0)) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "setup step requires exactly one of 'uses' or 'run'"
-    });
-  }
-  if (step.with !== void 0 && step.uses === void 0) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "'with' is only allowed on a 'uses' step"
-    });
-  }
-});
-var GateContractSchema = external_exports.object({
-  version: external_exports.literal(1),
-  stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
-  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
-  setup_steps: external_exports.array(SetupStepSchema).optional(),
-  /**
-   * Extra required CI contexts for this repo's develop branch, merged into
-   * BOTH protection profiles (run + baseline) — additive-only per-repo
-   * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
-   * rejected here — it has its own switch below.
-   */
-  requiredChecks: external_exports.array(external_exports.string().min(1, "requiredChecks entries must be non-empty")).refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
-    message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles \u2014 use requireMutationAtRest instead`
-  }).optional(),
-  /**
-   * Keep `'Mutation Testing'` required on develop's BASELINE profile too
-   * (at rest, between runs) instead of the default run-profile-only.
-   */
-  requireMutationAtRest: external_exports.boolean().optional()
-}).strict().superRefine((contract2, issues) => {
-  for (const id of GATE_IDS) {
-    const entry = contract2.gates[id];
-    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "roots"],
-        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
-      });
-    }
-    if (!entry.contracted || entry.command === void 0) {
-      continue;
-    }
-    if (!COMMAND_GATES.includes(id)) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
-      });
-      continue;
-    }
-    const v = validateGateCommand(entry.command);
-    if (!v.ok) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `${v.reason}: ${v.detail}`
-      });
-    }
-  }
-});
-async function loadGateContract(rootAbs) {
-  let raw;
-  try {
-    raw = await readFile2(join3(rootAbs, GATE_CONTRACT_REL), "utf8");
-  } catch (err) {
-    if (isEnoent(err)) {
-      return { state: "absent" };
-    }
-    return { state: "invalid", error: `unreadable: ${err.message}` };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    return { state: "invalid", error: `not JSON: ${err.message}` };
-  }
-  const result = GateContractSchema.safeParse(parsed);
-  if (!result.success) {
-    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-    return { state: "invalid", error: issues };
-  }
-  return { state: "ok", contract: result.data };
-}
-var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
-function classifySkip(reason) {
-  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
-}
-function mutationRoots(contract2) {
-  const entry = contract2?.gates.mutation;
-  if (entry !== void 0 && entry.contracted && entry.roots !== void 0) {
-    return entry.roots;
-  }
-  return MUTATION_DEFAULT_ROOTS;
-}
-function requiredCheckExtras(contract2) {
-  return {
-    requiredChecks: contract2?.requiredChecks ?? [],
-    requireMutationAtRest: contract2?.requireMutationAtRest ?? false
-  };
-}
-function contractCommand(contract2, id) {
-  const entry = contract2?.gates[id];
-  if (entry === void 0 || !entry.contracted || entry.command === void 0) {
-    return void 0;
-  }
-  const v = validateGateCommand(entry.command);
-  if (!v.ok) {
-    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
-  }
-  return v.argv;
-}
-
 // src/git/protection.ts
-var log5 = createLogger("git");
+var log4 = createLogger("git");
 function effectiveProfiles(git, extras) {
-  const union = (...lists) => [...new Set(lists.flat())];
-  const run5 = union(git.developRequiredStatusChecks, extras.requiredChecks);
-  const atRest = extras.requireMutationAtRest && run5.includes(MUTATION_CHECK_CONTEXT) ? [MUTATION_CHECK_CONTEXT] : [];
-  return { run: run5, baseline: union(git.developBaselineStatusChecks, extras.requiredChecks, atRest) };
+  return { run: [.../* @__PURE__ */ new Set([...git.developRequiredStatusChecks, ...extras.requiredChecks])] };
 }
 var ProtectionMissingError = class extends Error {
   branch;
@@ -6839,12 +6600,12 @@ async function probeProtection(args) {
     hasMergeQueue: result.hasMergeQueue
   };
 }
-function requireProtectionOrRefuse(state, requiredChecks, branch, opts = {}) {
+function requireProtectionOrRefuse(state, requiredChecks, branch) {
   const reasons = [];
   if (!state.enabled) {
     reasons.push("no branch protection is configured");
   }
-  if (!state.strictUpToDate && (opts.requireStrict ?? true)) {
+  if (!state.strictUpToDate) {
     reasons.push("required_status_checks.strict (branches up-to-date) is OFF");
   }
   for (const check of requiredChecks) {
@@ -6862,7 +6623,7 @@ async function provisionProtection(args) {
   if (!args.provision) {
     throw new Error("provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection");
   }
-  log5.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  log4.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
     requiredStatusChecks: [...args.requiredChecks],
     strict: true
@@ -7030,7 +6791,7 @@ async function deriveRepo(gitClient, remote, cwd) {
 }
 
 // src/git/gh-client.ts
-var log6 = createLogger("gh");
+var log5 = createLogger("gh");
 var GhProtectionSchema = external_exports.object({
   required_status_checks: external_exports.object({ strict: external_exports.boolean().optional(), contexts: external_exports.array(external_exports.string()).optional() }).nullish()
 });
@@ -7080,7 +6841,7 @@ var DefaultGhClient = class {
       mq = await this.mergeQueueProbe(owner, repo, branch, opts);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      log6.warn(`merge-queue probe failed during protection read (${detail}) \u2014 assuming no queue`);
+      log5.warn(`merge-queue probe failed during protection read (${detail}) \u2014 assuming no queue`);
     }
     return {
       enabled: true,
@@ -7124,7 +6885,7 @@ var DefaultGhClient = class {
       // own teardown always deletes protection first), so keep leftovers deletable.
       allow_deletions: true
     });
-    log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
+    log5.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
     await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path3, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
@@ -7149,7 +6910,7 @@ var DefaultGhClient = class {
 
 // src/git/provision.ts
 import path from "node:path";
-var log7 = createLogger("provision");
+var log6 = createLogger("provision");
 var LOCKFILE_INSTALL = [
   ["pnpm-lock.yaml", "pnpm install --frozen-lockfile"],
   ["yarn.lock", "yarn install --frozen-lockfile"],
@@ -7176,10 +6937,10 @@ async function provisionWorktree(args) {
   const run5 = args.run ?? defaultRun;
   const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
   if (command === null) {
-    log7.debug(`no setupCommand and no lockfile in ${args.path} \u2014 skipping worktree provisioning`);
+    log6.debug(`no setupCommand and no lockfile in ${args.path} \u2014 skipping worktree provisioning`);
     return;
   }
-  log7.info(`provisioning worktree: ${command} (cwd=${args.path})`);
+  log6.info(`provisioning worktree: ${command} (cwd=${args.path})`);
   const res = await run5(command, args.path);
   if (res.code !== 0) {
     const detail = res.stderr.trim();
@@ -7231,6 +6992,221 @@ function injectGateEnvIntoWorkflow(text, gateEnv) {
   const block = [`${indent}env:`, ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(nonNull(gateEnv[k]))}`)];
   lines.splice(idx, 1, ...block);
   return lines.join("\n");
+}
+
+// src/verifier/deterministic/gate-contract.ts
+import { readFile as readFile2 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+
+// src/shared/command-allowlist.ts
+var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+function runnerName(argv) {
+  const bin = argv[0] ?? "";
+  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+}
+function validateCommand(command, isAllowedRunner) {
+  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (!SAFE_TOKEN.test(t)) {
+      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
+    }
+  }
+  if (tokens[0] === void 0) {
+    return { ok: false, reason: "unsafe_command", detail: "empty command" };
+  }
+  if (!isAllowedRunner(tokens)) {
+    return {
+      ok: false,
+      reason: "unallowed_runner",
+      detail: `runner '${runnerName(tokens)}' not allowlisted`
+    };
+  }
+  return { ok: true, argv: tokens };
+}
+
+// src/verifier/deterministic/gate-id.ts
+var GATE_IDS = [
+  "test",
+  "tdd",
+  "coverage",
+  "mutation",
+  "sast",
+  "type",
+  "lint",
+  "build"
+];
+
+// src/verifier/deterministic/gate-contract.ts
+var log7 = createLogger("gate-contract");
+var GATE_CONTRACT_REL = ".factory/gates.json";
+var MUTATION_CHECK_CONTEXT = "Mutation Testing";
+var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
+var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
+function isAllowedGateRunner(argv) {
+  const runner = runnerName(argv);
+  const a1 = argv[1];
+  switch (runner) {
+    case "deno":
+      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
+    case "go":
+      return a1 === "test";
+    case "cargo":
+      return a1 === "test" || a1 === "check" || a1 === "build";
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return a1 === "run" && argv[2] !== void 0;
+    case "vitest":
+    case "tsc":
+    case "eslint":
+    case "jest":
+    case "mocha":
+    case "pytest":
+      return true;
+    default:
+      return false;
+  }
+}
+function validateGateCommand(command) {
+  return validateCommand(command, isAllowedGateRunner);
+}
+var MUTATION_DEFAULT_ROOTS = ["src"];
+var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+var RootsSchema = external_exports.array(
+  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
+    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
+  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
+    message: "mutation root must not contain '.' or '..' segments"
+  })
+).nonempty("mutation roots must name at least one directory");
+var ContractedSchema = external_exports.object({
+  contracted: external_exports.literal(true),
+  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
+  command: external_exports.string().optional(),
+  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
+  roots: RootsSchema.optional()
+}).strict();
+var UncontractedSchema = external_exports.object({
+  contracted: external_exports.literal(false),
+  /** Why this gate is waived — required; the committed audit trail. */
+  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
+}).strict();
+var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
+var SetupStepSchema = external_exports.object({
+  name: external_exports.string().min(1).optional(),
+  uses: external_exports.string().min(1).optional(),
+  with: external_exports.record(external_exports.string()).optional(),
+  run: external_exports.string().min(1).optional()
+}).strict().superRefine((step, issues) => {
+  if (step.uses === void 0 === (step.run === void 0)) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "setup step requires exactly one of 'uses' or 'run'"
+    });
+  }
+  if (step.with !== void 0 && step.uses === void 0) {
+    issues.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "'with' is only allowed on a 'uses' step"
+    });
+  }
+});
+var GateContractSchema = external_exports.object({
+  version: external_exports.literal(1),
+  stack: external_exports.enum(GATE_CONTRACT_STACKS),
+  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
+  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
+  setup_steps: external_exports.array(SetupStepSchema).optional(),
+  /**
+   * Extra required CI contexts for this repo's base branch, merged into the
+   * protection profile — additive-only per-repo required checks (e.g.
+   * outsidey's `pgTAP`). `'Mutation Testing'` is rejected: config owns it.
+   */
+  requiredChecks: external_exports.array(external_exports.string().min(1, "requiredChecks entries must be non-empty")).refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
+    message: `'${MUTATION_CHECK_CONTEXT}' is managed by config git.developRequiredStatusChecks`
+  }).optional(),
+  /** Retired with the at-rest baseline profile; accepted so committed contracts still load, and ignored. */
+  requireMutationAtRest: external_exports.boolean().optional()
+}).strict().superRefine((contract2, issues) => {
+  for (const id of GATE_IDS) {
+    const entry = contract2.gates[id];
+    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "roots"],
+        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
+      });
+    }
+    if (!entry.contracted || entry.command === void 0) {
+      continue;
+    }
+    if (!COMMAND_GATES.includes(id)) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
+      });
+      continue;
+    }
+    const v = validateGateCommand(entry.command);
+    if (!v.ok) {
+      issues.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["gates", id, "command"],
+        message: `${v.reason}: ${v.detail}`
+      });
+    }
+  }
+});
+async function loadGateContract(rootAbs) {
+  let raw;
+  try {
+    raw = await readFile2(join3(rootAbs, GATE_CONTRACT_REL), "utf8");
+  } catch (err) {
+    if (isEnoent(err)) {
+      return { state: "absent" };
+    }
+    return { state: "invalid", error: `unreadable: ${err.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { state: "invalid", error: `not JSON: ${err.message}` };
+  }
+  const result = GateContractSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    return { state: "invalid", error: issues };
+  }
+  return { state: "ok", contract: result.data };
+}
+var SCOPE_SKIP_REASONS = /* @__PURE__ */ new Set(["no-vitest-runnable-tests-in-scope", "no-mutable-changes"]);
+function classifySkip(reason) {
+  return SCOPE_SKIP_REASONS.has(reason) ? "scope" : "tooling";
+}
+function mutationRoots(contract2) {
+  const entry = contract2?.gates.mutation;
+  if (entry !== void 0 && entry.contracted && entry.roots !== void 0) {
+    return entry.roots;
+  }
+  return MUTATION_DEFAULT_ROOTS;
+}
+function requiredCheckExtras(contract2) {
+  return {
+    requiredChecks: contract2?.requiredChecks ?? []
+  };
+}
+function contractCommand(contract2, id) {
+  const entry = contract2?.gates[id];
+  if (entry === void 0 || !entry.contracted || entry.command === void 0) {
+    return void 0;
+  }
+  const v = validateGateCommand(entry.command);
+  if (!v.ok) {
+    throw new Error(`gate contract: gate '${id}' command invalid (${v.reason}: ${v.detail})`);
+  }
+  return v.argv;
 }
 
 // src/ci/render-quality-gate.ts
@@ -7462,7 +7438,7 @@ function renderMutationNightly(template, opts) {
   if (!opts.contract.gates.mutation.contracted) {
     return null;
   }
-  let lines = renderBaseBranch(template, opts.baseBranch ?? "develop").split("\n");
+  let lines = renderBaseBranch(template, opts.baseBranch).split("\n");
   lines = replaceMarker(lines, "# factory:mutation-setup", mutationSetupBlock(opts));
   lines = applyMutationRoots(lines, opts.contract);
   if (opts.packageManager === "npm") {
@@ -7479,7 +7455,7 @@ function renderQualityGate(template, opts) {
       `renderQualityGate: stack '${opts.contract.stack}' is not supported \u2014 the CI quality gate renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)`
     );
   }
-  let lines = renderBaseBranch(template, opts.baseBranch ?? "develop").split("\n");
+  let lines = renderBaseBranch(template, opts.baseBranch).split("\n");
   lines = replaceMarker(lines, "# factory:setup", setupBlock(opts));
   lines = replaceMarker(lines, "# factory:gates", gatesBlock(opts));
   lines = renderMutationRegion(lines, opts);
@@ -7569,13 +7545,9 @@ var SpecTaskSchema = external_exports.object({
   tests_to_write: external_exports.array(external_exports.string().min(1)).min(1),
   /** Task ids this task depends on (may be empty for a root task). */
   depends_on: external_exports.array(external_exports.string().min(1)).default([]),
-  /**
-   * The SINGLE producer dial (Decision 25) — the generator's whole-PRD
-   * difficulty×stakes judgment. Imported from the frozen seam; the legacy
-   * routine/feature/security values parse-fail here.
-   */
+  /** Difficulty × stakes; legacy routine/feature/security values parse-fail. */
   risk_tier: RiskTierEnum,
-  /** Why this tier — required so the dial is a judgment, not a coin flip. */
+  /** Why this tier — required so the tier is a judgment, not a coin flip. */
   risk_rationale: external_exports.string().min(1),
   /** Per-task TDD opt-out (read from the spec, never from runtime state). */
   tdd_exempt: external_exports.boolean().optional()
@@ -8123,7 +8095,9 @@ var AttemptSchema = external_exports.object({
   roles: external_exports.array(external_exports.string()),
   issued_at: external_exports.string(),
   /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
-  redispatch: external_exports.array(external_exports.string()).optional()
+  redispatch: external_exports.array(external_exports.string()).optional(),
+  /** Per-role model override; set on a final repair pass and kept across re-issue and redispatch. */
+  models: external_exports.record(external_exports.literal("opus")).optional()
 });
 var FeatureRunSchema = external_exports.object({
   version: external_exports.literal(VERSION),
@@ -8179,6 +8153,8 @@ var FeatureRunSchema = external_exports.object({
   feedback: external_exports.array(external_exports.string()),
   /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
   rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
+  /** The scheduled repair is the scope's final pass; its producer dispatch escalates to Opus. */
+  final_pass: external_exports.literal(true).optional(),
   /** Consecutive transient infrastructure failures. */
   transient_failures: external_exports.number().int().positive().optional(),
   /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
@@ -8224,7 +8200,9 @@ var AgentResultSchema = external_exports.object({
 });
 var ResultSchema = external_exports.object({
   ...ResultFields,
-  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional()
+  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional(),
+  /** The role whose non-done status won the merge; bound from its staged path. */
+  halted_role: external_exports.string().optional()
 });
 
 // src/feature/store.ts
@@ -8416,11 +8394,11 @@ var FeatureStore = class {
     for (const [, { claims: _claims, ...part }] of parts) {
       Object.assign(merged, part, { status: merged.status });
     }
-    const halted = parts.find(([, part]) => part.status !== "done")?.[1];
+    const halted = parts.find(([, part]) => part.status !== "done");
     return {
       result: {
         ...merged,
-        ...halted ? { status: halted.status, message: halted.message } : {},
+        ...halted ? { status: halted[1].status, message: halted[1].message, halted_role: halted[0] } : {},
         ...reviews.length ? { reviews } : {}
       }
     };
@@ -9104,8 +9082,8 @@ var TEMPLATE_MANIFEST = [
   // (scaffold never installs packages) and the config's webServer.command is a TODO
   // the project fills in. testDir here MUST match the engine's fixed E2E_TEST_DIR ("e2e") —
   // and must STAY "./e2e" in any template edit: pristine auto-refresh propagates
-  // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
-  // refuses an --e2e run whose config declares any other testDir.
+  // template changes into already-scaffolded repos, and the TCB's e2e write rule
+  // covers only the literal `e2e/` directory.
   { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
   {
     rel: "e2e/example.spec.ts",
@@ -9573,7 +9551,7 @@ async function hasActiveFeatureRun(dataDir, repo) {
   return (await new FeatureStore(dataDir).list()).some((run5) => run5.repo === repo && !terminal(run5));
 }
 var scaffoldCommand = {
-  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
+  describe: "Prepare a repo (templates + base-branch protection) for the pipeline",
   run: withUsageGuard("scaffold", run2)
 };
 
@@ -10725,7 +10703,7 @@ var rereviewSection = (run5, attempt) => section(
 Prior claims:
 ${priorClaims(run5)}`
 );
-var STATUS = "`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question for the operator in `message`), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (environment failure; explain in `message`).";
+var STATUS = "`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question in `message`; the spec generator resolves it by making the spec decide), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (the environment truly prevents the work; explain in `message`; the engine re-issues you before it parks).";
 var json = (value) => fence(JSON.stringify(value, null, 2), "json");
 function contract(role, run5) {
   const intro = "Your final reply is exactly one JSON object (a markdown fence is tolerated, no other prose). " + STATUS;
@@ -10745,7 +10723,7 @@ ${json({ status: "done", confirmations: [{ id: "<claim id>", confirmed: false, e
 ${json({ status: "done", acceptance: [{ id: acceptanceIds(run5)[0] ?? "R1", met: true, evidence: "test and source that prove it" }] })}`;
   }
   if (role === "spec-generator") {
-    return `${intro} Return the complete repaired task list. The engine keeps the PRD, base and contracts and increments the revision. If you cannot repair the spec, return status \`blocked\` with a message.
+    return `${intro} Return the complete repaired task list. The engine keeps the PRD, base and contracts and increments the revision. Resolve each question in the feedback by making the spec decide: update \`specMd\`, criteria or unaccepted task descriptions; never change accepted tasks. Return status \`blocked\` with the question only when the PRD, the repository and a reasonable engineering default cannot answer it.
 
 ${json({ status: "done", repaired_spec: { specMd: "<full spec markdown>", slug: "<slug>", tasks: ["<every task, accepted ones unchanged>"] } })}`;
   }
@@ -10901,6 +10879,7 @@ ${list(run5.rejections[role])}`
 var PANEL = ["quality-reviewer", "implementation-reviewer", "silent-failure-hunter", "systemic-failure-reviewer"];
 var PRODUCERS = ["tests", "implement", "docs", "e2e-author", "spec-repair"];
 var REISSUES = 2;
+var BLOCKED = "agent reported blocked:";
 var TRANSIENT_LIMIT = 5;
 var FeatureEngine = class {
   constructor(store, runtime) {
@@ -11063,7 +11042,7 @@ var FeatureEngine = class {
     if (exhausted !== void 0) {
       this.park(
         run5,
-        "producer",
+        error.message.startsWith(BLOCKED) ? "environment" : "producer",
         `${exhausted}: result rejected ${REISSUES + 1} times: ${rejections[exhausted]?.join("; ")}`
       );
       await this.store.write(run5);
@@ -11285,6 +11264,11 @@ var FeatureEngine = class {
       return;
     }
     run5.attempts[scope] = used + 1;
+    if (used + 1 === REPAIR_PASSES) {
+      run5.final_pass = true;
+    } else {
+      delete run5.final_pass;
+    }
     run5.after_confirm = boundary;
     run5.stage = scope === "spec" ? "spec-repair" : "implement";
     this.audit(run5, "repair scheduled", { scope, pass: used + 1, feedback });
@@ -11347,8 +11331,14 @@ var FeatureEngine = class {
       roles,
       issued_at: this.runtime.now()
     };
+    if (producer && run5.final_pass) {
+      attempt.models = { [roles[0] ?? ""]: "opus" };
+    }
     run5.in_flight = attempt;
     this.audit(run5, "attempt issued", attempt);
+    if (attempt.models) {
+      this.audit(run5, "model escalated", { role: roles[0], model: "opus", reason: "final repair pass" });
+    }
     return this.execute(run5, attempt);
   }
   async execute(run5, attempt) {
@@ -11361,7 +11351,14 @@ var FeatureEngine = class {
         `Read your brief at ${path3} and follow it; your final reply is the JSON result it specifies.`
       ].join("\n");
     }
-    return { kind: "execute", run_id: run5.run_id, attempt, staged, prompts };
+    return {
+      kind: "execute",
+      run_id: run5.run_id,
+      attempt,
+      staged,
+      prompts,
+      ...attempt.models ? { models: attempt.models } : {}
+    };
   }
   async record(run5, result) {
     const attempt = run5.in_flight;
@@ -11387,11 +11384,27 @@ var FeatureEngine = class {
         true
       );
     }
+    const role = result.halted_role ?? attempt.roles[0] ?? "";
+    const specStage = attempt.stage === "spec-repair" || attempt.stage === "spec-review";
+    if (result.status === "blocked" && attempt.stage !== "spec-repair") {
+      throw new ResultRejected(
+        [role],
+        `${BLOCKED} ${result.message ?? "no reason given"}; retry, and return blocked again only if the environment truly prevents the work`
+      );
+    }
     delete run5.in_flight;
+    if (producer) {
+      delete run5.final_pass;
+    }
     this.audit(run5, "result recorded", result);
     if (result.status === "needs-context") {
-      run5.question = result.message ?? "Provide missing implementation context";
-      this.park(run5, "context", run5.question);
+      const question = result.message ?? "Provide missing implementation context";
+      if (specStage || (run5.attempts.spec ?? 0) >= REPAIR_PASSES) {
+        run5.question = question;
+        this.park(run5, "context", question);
+      } else {
+        this.repair(run5, "spec-repair", [`${role} needs context: ${question}`]);
+      }
       return;
     }
     if (result.status === "spec-defect") {
@@ -11399,7 +11412,8 @@ var FeatureEngine = class {
       return;
     }
     if (result.status === "blocked") {
-      this.park(run5, "environment", result.message ?? "agent reported a blocked environment");
+      run5.question = result.message ?? "spec repair is blocked";
+      this.park(run5, "spec", run5.question);
       return;
     }
     if (result.status === "already-satisfied") {
@@ -11447,7 +11461,7 @@ var FeatureEngine = class {
       case "slice-review":
       case "feature-review": {
         const reviews = result.reviews;
-        const absent = attempt.roles.filter((role) => reviews?.some((row) => row.reviewer === role) !== true);
+        const absent = attempt.roles.filter((role2) => reviews?.some((row) => row.reviewer === role2) !== true);
         if (absent.length) {
           throw new ResultRejected(
             absent,
@@ -11586,8 +11600,12 @@ var FeatureEngine = class {
         run5.spec = run5.repaired_spec;
         run5.spec_digest = digest(run5.spec);
         delete run5.repaired_spec;
+        run5.task_base_sha = run5.checkpoints.length <= run5.task_index ? run5.accepted_sha : head;
         run5.task_index = run5.checkpoints.length;
-        run5.task_base_sha = head;
+        run5.claims = [];
+        run5.confirmed_claims = [];
+        run5.candidate_satisfied = false;
+        delete run5.rereview;
         run5.stage = run5.task_index >= run5.spec.tasks.length ? "docs" : "tests";
         break;
       case "prepare":
@@ -12802,14 +12820,18 @@ var LocalFeatureRuntime = class {
   }
   async testsOnly(run5) {
     const task = at(run5.spec.tasks, Math.min(run5.task_index, run5.spec.tasks.length - 1));
-    const commits = await defaultGateTools().git.commits(run5.task_base_sha, task.task_id, { cwd: run5.worktree });
+    const commits = await defaultGateTools(this.config.quality.gateEnv).git.commits(
+      run5.task_base_sha,
+      task.task_id,
+      { cwd: run5.worktree }
+    );
     return commits.every(taggedTestsOnly);
   }
   async checks(run5, stage) {
     const task = at(run5.spec.tasks, Math.min(run5.task_index, run5.spec.tasks.length - 1));
     const full = stage === "slice-check" || stage === "feature-check";
     const gates = stage === "tests" ? ["test"] : full ? ["test", "type", "lint", "build", "coverage", "mutation", "sast"] : ["test", "type", "lint"];
-    const tools = defaultGateTools();
+    const tools = defaultGateTools(this.config.quality.gateEnv);
     const baseRef = stage === "slice-check" ? run5.slice_base_sha : stage === "feature-check" ? await this.featureBase(run5) : run5.task_base_sha;
     const context = {
       runId: run5.run_id,
@@ -13389,8 +13411,8 @@ function isAutonomous(env = process.env) {
 var log15 = createLogger("autonomy");
 var HELP4 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
-The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
-is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
+The pipeline is meant to run unattended in an autonomous session
+(FACTORY_AUTONOMOUS_MODE=1); outside one, permission prompts can stall a run.
 
 ensure     Builds the autonomous settings in memory from templates/settings.autonomous.json
            (placeholders substituted, env baked, statusLine wired to \`factory statusline\`
@@ -13402,7 +13424,7 @@ ensure     Builds the autonomous settings in memory from templates/settings.auto
 status     Reports whether THIS session is autonomous (FACTORY_AUTONOMOUS_MODE=1).
            Exits 0 when autonomous, 1 when not (never throws).
 
-preflight  The run-entry check (what \`/factory:run\` calls). Two states: the session
+preflight  An optional pre-run check. Two states: the session
            is autonomous \u2192 proceed (exit 0); it is not \u2192 print the inline-settings
            relaunch command and halt (exit 1). A directly-exported
            FACTORY_AUTONOMOUS_MODE=1 (CI / raw env) satisfies the gate with no
@@ -13545,7 +13567,7 @@ function runAutonomyStatus(opts = {}) {
     write("autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)\n");
   } else {
     write(
-      `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
+      `autonomous: NO \u2014 permission prompts may stall an unattended run.
 Run \`factory autonomy ensure\` and relaunch with the printed command.
 `
     );

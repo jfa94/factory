@@ -1021,7 +1021,10 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         expect(await f.engine.advance('run', 'other-driver')).toMatchObject({kind: 'wait'})
-        expect(await submit(f, result(action, {status: 'needs-context', message: 'Which endpoint?'}))).toMatchObject({
+        // User decision 3: self-heal. A producer question goes to spec repair; only its question parks.
+        const repair = await submit(f, result(action, {status: 'needs-context', message: 'Which endpoint?'}))
+        expect(repair).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair'}})
+        expect(await submit(f, result(repair, {status: 'needs-context', message: 'Which endpoint?'}))).toMatchObject({
             kind: 'park',
         })
         await f.engine.resume('run', {answer: 'Use the local endpoint'})
@@ -1038,7 +1041,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(at(Object.values(resumed.staged), 0), JSON.stringify(result(resumed)))
         expect(await f.engine.advance('run', 'driver')).toMatchObject({
             kind: 'wait',
-            reason: expect.stringContaining('awaiting implementer') as string,
+            reason: expect.stringContaining('awaiting spec-generator') as string,
         })
         expect((await f.store.read('run')).answers).toHaveLength(1)
     }, 30_000)

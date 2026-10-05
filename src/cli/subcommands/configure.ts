@@ -38,7 +38,7 @@ Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
   factory configure --set quality.mutationScoreTarget=85
   factory configure --set git.baseBranch=develop
-  factory configure --set git.autoProvision=true`
+  factory configure --set git.rollupCiWaitMinutes=45`
 
 async function run(argv: string[]): Promise<ExitCode> {
     const args = parseArgs(argv)

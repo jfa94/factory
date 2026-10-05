@@ -313,8 +313,8 @@ const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
     // (scaffold never installs packages) and the config's webServer.command is a TODO
     // the project fills in. testDir here MUST match the engine's fixed E2E_TEST_DIR ("e2e") —
     // and must STAY "./e2e" in any template edit: pristine auto-refresh propagates
-    // template changes into already-scaffolded repos, and S4 assertE2ePrereqs
-    // refuses an --e2e run whose config declares any other testDir.
+    // template changes into already-scaffolded repos, and the TCB's e2e write rule
+    // covers only the literal `e2e/` directory.
     {rel: 'playwright.config.ts', policy: 'seed', nodeOnly: true},
     {
         rel: 'e2e/example.spec.ts',
@@ -1086,6 +1086,6 @@ export async function hasActiveFeatureRun(dataDir: string, repo: string): Promis
 }
 
 export const scaffoldCommand: Subcommand = {
-    describe: 'Prepare a repo (templates + develop branch protection) for the pipeline',
+    describe: 'Prepare a repo (templates + base-branch protection) for the pipeline',
     run: withUsageGuard('scaffold', run),
 }

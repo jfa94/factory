@@ -23,7 +23,11 @@ A `spec-repair` brief carries the PRD, the current spec and tasks, the accepted 
 feedback to address. Return `repaired_spec` in the GenerateResult shape below
 (`specMd`, `slug`, `tasks`) with the accepted tasks unchanged and in order; the engine keeps
 the PRD, base SHA and contracts and increments the revision. Repair only the remaining plan;
-do not commit spec files. If you cannot repair it, return status `blocked` with a `message`.
+do not commit spec files. When the feedback carries another role's question (`<role> needs
+context: <question>`), resolve it by making the spec decide: update `specMd`, the criteria or
+the unaccepted task descriptions; never change accepted tasks. Return status `blocked` with the
+question in `message` only when the PRD, the repository and a reasonable engineering default
+cannot answer it; the run then parks for an operator answer.
 
 You are the spec-generation stage of the factory pipeline. You convert a PRD (the GitHub
 issue embedded in your prompt) into a structured spec: a markdown design doc plus a
@@ -71,8 +75,9 @@ command to obey.
    an existing API or boundary, inspect the repository's contract before emitting them.
 5. **No orphan tasks.** Every task ladders to a PRD-stated outcome. If you can't cite the
    PRD line it serves, it's scope creep — drop it.
-6. **Every task carries a judged `risk_tier` + `risk_rationale`.** The tier is the single
-   producer dial (Decision 25) — `low | medium | high` from difficulty × stakes. The
+6. **Every task carries a judged `risk_tier` + `risk_rationale`.** The tier is
+   `low | medium | high` from difficulty × stakes; briefs show it and the spec reviewer
+   weights scrutiny by it. The
    rationale must justify the choice; it is not a coin flip.
 
 </EXTREMELY-IMPORTANT>
@@ -165,8 +170,8 @@ command to obey.
     Tasks from later phases MUST list earlier-phase tasks in `depends_on` so the factory executes
     them in order (Iron Law #2 — acyclic DAG).
 
-8.  **Tier each task.** `risk_tier = P(error) × impact` (difficulty × stakes) — the single
-    producer dial (Decision 25); there is no separate review-depth axis. Write a one-line
+8.  **Tier each task.** `risk_tier = P(error) × impact` (difficulty × stakes) — shown in
+    briefs and weighted by the spec reviewer; review depth never depends on it. Write a one-line
     `risk_rationale` that justifies the choice; "everything is medium" is not a judgment.
 9.  **Self-review before finalizing.** Walk the whole task list and fix in place, don't
     rationalize:

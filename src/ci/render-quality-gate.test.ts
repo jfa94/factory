@@ -48,6 +48,7 @@ function npmContract(overrides: Partial<GateContract['gates']> = {}): GateContra
 }
 
 const NPM_OPTS: RenderQualityGateOpts = {
+    baseBranch: 'develop',
     contract: npmContract(),
     packageManager: 'npm',
     hasLockfile: true,
@@ -57,6 +58,7 @@ const NPM_OPTS: RenderQualityGateOpts = {
 }
 
 const PNPM_OPTS: RenderQualityGateOpts = {
+    baseBranch: 'develop',
     contract: npmContract(),
     packageManager: 'pnpm',
     hasLockfile: true,

@@ -24,6 +24,7 @@ const PANEL = ['quality-reviewer', 'implementation-reviewer', 'silent-failure-hu
 const PRODUCERS: readonly Stage[] = ['tests', 'implement', 'docs', 'e2e-author', 'spec-repair']
 /** Rejections a role may receive before the next one parks the run. */
 const REISSUES = 2
+const BLOCKED = 'agent reported blocked:'
 const TRANSIENT_LIMIT = 5
 
 export class FeatureEngine {
@@ -208,7 +209,7 @@ export class FeatureEngine {
         if (exhausted !== undefined) {
             this.park(
                 run,
-                'producer',
+                error.message.startsWith(BLOCKED) ? 'environment' : 'producer',
                 `${exhausted}: result rejected ${REISSUES + 1} times: ${rejections[exhausted]?.join('; ')}`
             )
             await this.store.write(run)
@@ -454,6 +455,11 @@ export class FeatureEngine {
             return
         }
         run.attempts[scope] = used + 1
+        if (used + 1 === REPAIR_PASSES) {
+            run.final_pass = true
+        } else {
+            delete run.final_pass
+        }
         run.after_confirm = boundary
         run.stage = scope === 'spec' ? 'spec-repair' : 'implement'
         this.audit(run, 'repair scheduled', {scope, pass: used + 1, feedback})
@@ -533,8 +539,14 @@ export class FeatureEngine {
             roles,
             issued_at: this.runtime.now(),
         }
+        if (producer && run.final_pass) {
+            attempt.models = {[roles[0] ?? '']: 'opus'}
+        }
         run.in_flight = attempt
         this.audit(run, 'attempt issued', attempt)
+        if (attempt.models) {
+            this.audit(run, 'model escalated', {role: roles[0], model: 'opus', reason: 'final repair pass'})
+        }
         return this.execute(run, attempt)
     }
 
@@ -548,7 +560,14 @@ export class FeatureEngine {
                 `Read your brief at ${path} and follow it; your final reply is the JSON result it specifies.`,
             ].join('\n')
         }
-        return {kind: 'execute', run_id: run.run_id, attempt, staged, prompts}
+        return {
+            kind: 'execute',
+            run_id: run.run_id,
+            attempt,
+            staged,
+            prompts,
+            ...(attempt.models ? {models: attempt.models} : {}),
+        }
     }
 
     private async record(run: FeatureRun, result: FeatureResult): Promise<void> {
@@ -579,11 +598,28 @@ export class FeatureEngine {
                 true
             )
         }
+        const role = result.halted_role ?? attempt.roles[0] ?? ''
+        const specStage = attempt.stage === 'spec-repair' || attempt.stage === 'spec-review'
+        if (result.status === 'blocked' && attempt.stage !== 'spec-repair') {
+            throw new ResultRejected(
+                [role],
+                `${BLOCKED} ${result.message ?? 'no reason given'}; retry, and return blocked again only if the environment truly prevents the work`
+            )
+        }
         delete run.in_flight
+        if (producer) {
+            delete run.final_pass
+        }
         this.audit(run, 'result recorded', result)
+        // A panel halt routes by the halting role; the other reviewers' claims are discarded.
         if (result.status === 'needs-context') {
-            run.question = result.message ?? 'Provide missing implementation context'
-            this.park(run, 'context', run.question)
+            const question = result.message ?? 'Provide missing implementation context'
+            if (specStage || (run.attempts.spec ?? 0) >= REPAIR_PASSES) {
+                run.question = question
+                this.park(run, 'context', question)
+            } else {
+                this.repair(run, 'spec-repair', [`${role} needs context: ${question}`])
+            }
             return
         }
         if (result.status === 'spec-defect') {
@@ -591,7 +627,9 @@ export class FeatureEngine {
             return
         }
         if (result.status === 'blocked') {
-            this.park(run, 'environment', result.message ?? 'agent reported a blocked environment')
+            // ponytail: the question slot lets `resume --answer` hand the spec generator its missing fact.
+            run.question = result.message ?? 'spec repair is blocked'
+            this.park(run, 'spec', run.question)
             return
         }
         if (result.status === 'already-satisfied') {
@@ -801,8 +839,14 @@ export class FeatureEngine {
                 run.spec = run.repaired_spec
                 run.spec_digest = digest(run.spec)
                 delete run.repaired_spec
+                // A task halted mid-way keeps its commits; its restart ranges from the last accepted
+                // checkpoint so the halted RED tests are repaired forward, not run as a failing baseline.
+                run.task_base_sha = run.checkpoints.length <= run.task_index ? run.accepted_sha : head
                 run.task_index = run.checkpoints.length
-                run.task_base_sha = head
+                run.claims = []
+                run.confirmed_claims = []
+                run.candidate_satisfied = false
+                delete run.rereview
                 run.stage = run.task_index >= run.spec.tasks.length ? 'docs' : 'tests'
                 break
             case 'prepare':

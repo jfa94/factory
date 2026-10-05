@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {isAutonomous, NotAutonomousError, requireAutonomousMode} from './mode.js'
+import {isAutonomous} from './mode.js'
 
 describe('isAutonomous', () => {
     it("is true only when FACTORY_AUTONOMOUS_MODE is exactly '1'", () => {
@@ -16,32 +16,5 @@ describe('isAutonomous', () => {
         expect(isAutonomous({FACTORY_AUTONOMOUS_MODE: '0'})).toBe(false)
         expect(isAutonomous({FACTORY_AUTONOMOUS_MODE: ''})).toBe(false)
         expect(isAutonomous({FACTORY_AUTONOMOUS_MODE: ' 1'})).toBe(false)
-    })
-})
-
-describe('requireAutonomousMode', () => {
-    it('returns void without throwing when autonomous', () => {
-        expect(() => {
-            requireAutonomousMode({FACTORY_AUTONOMOUS_MODE: '1'})
-        }).not.toThrow()
-    })
-
-    it('throws NotAutonomousError when not autonomous', () => {
-        expect(() => {
-            requireAutonomousMode({})
-        }).toThrow(NotAutonomousError)
-    })
-
-    it('names the actionable recovery path in the halt message', () => {
-        let caught: unknown
-        try {
-            requireAutonomousMode({})
-        } catch (err) {
-            caught = err
-        }
-        expect(caught).toBeInstanceOf(NotAutonomousError)
-        const message = (caught as Error).message
-        expect(message).toContain('factory autonomy ensure')
-        expect(message).toContain('factory autonomy status')
     })
 })

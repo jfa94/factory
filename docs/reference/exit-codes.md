@@ -5,12 +5,11 @@ exit-code enum (`src/shared/exit-codes.ts`). The thin entry points
 (`src/bin/factory.ts`, `src/bin/factory-hook.ts`) are the only places
 `process.exit` is called.
 
-| Code | Name       | Meaning                                                                                                                         |
-| ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | `OK`       | Success, including every `next-action` result (execute, wait, park, terminal).                                                  |
-| `1`  | `ERROR`    | An uncaught error, or a command-specific failure listed below.                                                                  |
-| `2`  | `USAGE`    | Unknown subcommand, unknown or bad flag, missing required argument, retired command, or a run driven from the wrong repository. |
-| `3`  | `CONFLICT` | Defined in the enum; no v2 command returns it.                                                                                  |
+| Code | Name    | Meaning                                                                                                                         |
+| ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | `OK`    | Success, including every `next-action` result (execute, wait, park, terminal).                                                  |
+| `1`  | `ERROR` | An uncaught error, or a command-specific failure listed below.                                                                  |
+| `2`  | `USAGE` | Unknown subcommand, unknown or bad flag, missing required argument, retired command, or a run driven from the wrong repository. |
 
 ## Command-specific `ERROR` results
 

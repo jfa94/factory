@@ -175,13 +175,90 @@ describe('feature evidence and recovery protocol', () => {
         await expect(f.engine.advance('run', ' ')).rejects.toThrow('driver session')
     })
     it('requires an answer for pending context and refuses unrelated or empty answers', async () => {
-        const f = await setup()
+        // User decision 3: self-heal. Only a spec-loop question parks for an answer.
+        const f = await setup('spec-repair')
         await expect(f.engine.resume('run', {answer: 'unrelated'})).rejects.toThrow('pending question')
         const action = await f.engine.advance('run', 'driver')
         await submit(f, result(action, {status: 'needs-context', message: 'Which value?'}))
         await expect(f.engine.resume('run')).rejects.toThrow('answer required')
         await expect(f.engine.resume('run', {answer: ' '})).rejects.toThrow('nonempty')
         expect((await f.engine.resume('run', {answer: 'Use 5'})).answers).toMatchObject([{answer: 'Use 5'}])
+    })
+    it('routes a producer question to spec repair with the asking role in the spec brief', async () => {
+        const f = await setup('implement')
+        const action = await f.engine.advance('run', 'driver')
+        const next = await submit(f, result(action, {status: 'needs-context', message: 'Which value?'}))
+        expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair', roles: ['spec-generator']}})
+        expect(await readBrief(next)).toContain('implementer needs context: Which value?')
+        const run = await f.store.read('run')
+        expect(run.attempts.spec).toBe(1)
+        expect(run.question).toBeUndefined()
+    })
+    it('routes a panel reviewer question to spec repair and drops the panel claims', async () => {
+        const f = await setup('slice-review')
+        const action = execution(await f.engine.advance('run', 'driver'))
+        for (const [role, path] of Object.entries(action.staged)) {
+            const part =
+                role === 'silent-failure-hunter'
+                    ? {status: 'needs-context', message: 'Is a retry intended?'}
+                    : {status: 'done', claims: [{...claim, reviewer: undefined, id: undefined}]}
+            await writeFile(path, JSON.stringify(part))
+        }
+        const next = await f.engine.advance('run', 'driver')
+        expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair'}})
+        expect(await readBrief(next)).toContain('silent-failure-hunter needs context: Is a retry intended?')
+        expect((await f.store.read('run')).claims).toEqual([])
+    })
+    it('parks a spec-review question for an operator answer', async () => {
+        const f = await setup('spec-review')
+        const action = await f.engine.advance('run', 'driver')
+        expect(await submit(f, result(action, {status: 'needs-context', message: 'Which tenant?'}))).toMatchObject({
+            kind: 'park',
+        })
+        const run = await f.store.read('run')
+        expect(run.stop_reason?.kind).toBe('context')
+        expect(run.question).toBe('Which tenant?')
+    })
+    it('re-issues a blocked role twice, then parks as an environment failure', async () => {
+        const f = await setup('implement')
+        const first = execution(await f.engine.advance('run', 'driver'))
+        let action: FeatureAction = first
+        for (let n = 0; n < 2; n++) {
+            action = await submit(f, result(action, {status: 'blocked', message: 'no runner'}))
+            expect(action).toMatchObject({kind: 'execute', attempt: {id: first.attempt.id, roles: ['implementer']}})
+            expect(await readBrief(action)).toContain('agent reported blocked: no runner; retry')
+        }
+        expect(await submit(f, result(action, {status: 'blocked', message: 'no runner'}))).toMatchObject({kind: 'park'})
+        expect((await f.store.read('run')).stop_reason?.kind).toBe('environment')
+    })
+    it('parks a blocked spec repair with its question pending', async () => {
+        const f = await setup('spec-repair')
+        const action = await f.engine.advance('run', 'driver')
+        await submit(f, result(action, {status: 'blocked', message: 'Which tenant owns billing?'}))
+        const run = await f.store.read('run')
+        expect(run.stop_reason?.kind).toBe('spec')
+        expect(run.question).toBe('Which tenant owns billing?')
+    })
+    it('dispatches only the final repair pass on Opus and keeps it across a re-issue', async () => {
+        const f = await setup('implement')
+        vi.mocked(f.runtime.checks).mockResolvedValue({passed: false, observed: 1, details: ['value test fails']})
+        let action = await f.engine.advance('run', 'driver')
+        const models: unknown[] = []
+        for (let n = 0; n < 3; n++) {
+            models.push(execution(action).models)
+            action = await submit(f, result(action))
+        }
+        expect(models).toEqual([undefined, undefined, undefined])
+        expect(execution(action)).toMatchObject({
+            models: {implementer: 'opus'},
+            attempt: {models: {implementer: 'opus'}},
+        })
+        expect((await f.store.read('run')).audit.filter((row) => row.event === 'model escalated')).toHaveLength(1)
+        vi.mocked(f.runtime.clean).mockResolvedValueOnce(false)
+        const reissued = await submit(f, result(action))
+        expect(reissued).toMatchObject({kind: 'execute', models: {implementer: 'opus'}})
+        expect(await submit(f, result(reissued))).toMatchObject({kind: 'park'})
+        expect((await f.store.read('run')).final_pass).toBeUndefined()
     })
     it.each([true, false])('independently confirms a finding before choosing repair: %s', async (confirmed) => {
         const f = await setup('task-review')
@@ -419,6 +496,22 @@ describe('feature evidence and recovery protocol', () => {
         const run = await f.store.read('run')
         expect(run.spec).toEqual(validateFeatureSpec(revised))
         expect(run.spec_digest).toBe(digest(validateFeatureSpec(revised)))
+    })
+    it('restarts a task halted mid-way from its last accepted checkpoint, skipping the baseline', async () => {
+        const f = await setup('implement')
+        vi.mocked(f.runtime.exempt).mockResolvedValue(false)
+        vi.mocked(f.runtime.head).mockResolvedValue(nextSha) // the halted task's RED tests are committed
+        let action = await f.engine.advance('run', 'driver')
+        action = await submit(f, result(action, {status: 'needs-context', message: 'Which value?'}))
+        const repair = {specMd: 'Return 5.', slug: 'values', tasks: spec.tasks}
+        action = await submit(f, result(action, {repaired_spec: repair}))
+        vi.mocked(f.runtime.checks).mockClear()
+        action = await submit(f, result(action))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'tests', roles: ['test-writer']}})
+        expect(f.runtime.checks).not.toHaveBeenCalled()
+        const run = await f.store.read('run')
+        expect(run.task_base_sha).toBe(sha)
+        expect(run.claims).toEqual([])
     })
     it('refuses a spec repair that changes accepted work', async () => {
         const f = await setup('spec-repair')

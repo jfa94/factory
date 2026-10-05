@@ -104,6 +104,7 @@ describe('FeatureStore staged results', () => {
             result: {
                 status: 'needs-context',
                 message: 'Which reading?',
+                halted_role: 'silent-failure-hunter',
                 reviews: [{reviewer: 'quality-reviewer', claims: []}],
             },
         })

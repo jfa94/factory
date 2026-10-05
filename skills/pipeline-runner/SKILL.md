@@ -64,6 +64,8 @@ slice and feature checks run longer, and a killed call makes no progress.
 - `execute`: spawn exactly the roles in `attempt.roles`, one Agent per role, with
   `prompts[<role>]` pasted verbatim as the Agent prompt. Each prompt names the
   role's brief file; the brief holds the task, scope and result contract.
+  When `models[<role>]` is present (a final repair pass), pass it as the Agent
+  `model` parameter; otherwise omit `model`.
   **Do not request native worktree isolation:** the engine already owns the
   producer worktree and immutable review snapshot. Do not create task branches.
   Dispatch producers sequentially. Reviewers are fresh independent agents;
@@ -79,7 +81,8 @@ slice and feature checks run longer, and a killed call makes no progress.
   file to its role, validates it and journals accepted evidence. When a result
   is unusable, the engine moves it aside and returns `execute` again for that
   role with the reason in its brief; dispatch it like any other `execute`. A
-  role is re-issued at most twice before the run parks.
+  role is re-issued at most twice before the run parks. A `blocked` status is
+  re-issued the same way; `needs-context` routes to spec repair, not to you.
 - `wait`: if `reason` says an attempt is awaiting roles, write any finished
   agent's output to its staged path and call again; never dispatch it twice.
   A `retry_after_seconds` of 0 means call again now. Otherwise arm one timer

@@ -4,7 +4,7 @@
  * The `factory spec <verb>` CLI dispatch over these (usage edges, repo
  * auto-derive, exit-code mapping) lives in src/cli/subcommands/spec.test.ts.
  */
-import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import {rm, mkdir, mkdtemp, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -367,6 +367,26 @@ describe('gateSpec', () => {
         await writeScratch('verdict.json', PASS_VERDICT)
         await writeScratch('generated.json', {...generated, specMd: '# Replaced after review'})
         await expect(storeSpec(v2, REPO, ISSUE)).rejects.toThrow('changed')
+    })
+
+    it('resolves the repository snapshot (and so the base branch) once per spec build', async () => {
+        const snapshot = vi.fn(() => Promise.resolve({base_sha: 'a'.repeat(40), contracts: {}}))
+        const v2 = {...deps(), snapshot}
+        await resolveSpec(v2, REPO, ISSUE)
+        await writeScratch('generated.json', {
+            ...PASS_GENERATED,
+            tasks: [
+                {
+                    ...PASS_TASK,
+                    slice_id: 'login',
+                    requirement_ids: extractPrdRequirements(PRD_BODY).map((_, index) => `R${index + 1}`),
+                },
+            ],
+        })
+        expect(await gateSpec(v2, REPO, ISSUE)).toMatchObject({kind: 'review'})
+        await writeScratch('verdict.json', PASS_VERDICT)
+        expect(await storeSpec(v2, REPO, ISSUE)).toMatchObject({kind: 'stored'})
+        expect(snapshot).toHaveBeenCalledOnce()
     })
 
     it('gates and stores a fenced generator reply and a fenced verdict with an identical digest', async () => {

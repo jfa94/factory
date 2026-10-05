@@ -1621,9 +1621,7 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2,
-  /** Conflict: an active run already exists and no resolution flag was passed. */
-  CONFLICT: 3
+  USAGE: 2
 };
 
 // src/shared/logging.ts
@@ -6541,23 +6539,12 @@ var GitSchema = external_exports.object({
    */
   baseBranch: external_exports.string().min(1).optional(),
   /**
-   * Required status-check contexts of develop's protection profile, asserted
-   * by scaffold and run preflight and provisioned with `--provision`.
+   * Required status-check contexts of the resolved base branch's protection
+   * profile, asserted by scaffold and run preflight and provisioned with `--provision`.
    * Defaults to the three contexts the rendered quality-gate workflow
    * always reports (Decision 53) — the rollup PR cannot merge red.
    */
   developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
-  /**
-   * Required status-check contexts of develop's BASELINE profile (run-scoped
-   * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
-   * is active. Admins bypass (baseline sets `enforce_admins: false`).
-   * DERIVED default: `developRequiredStatusChecks` minus `'Mutation Testing'`
-   * (the GitSchema transform below) — the baseline drops exactly the mutation
-   * gate, so a custom context added to the run profile (e.g. a repo's pgTAP
-   * check) stays required at rest with no double-bookkeeping. An explicitly
-   * set value (including `[]`) overrides the derivation.
-   */
-  developBaselineStatusChecks: external_exports.array(external_exports.string()).optional(),
   /**
    * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
    * before giving up with `ci-timeout`. Sized above the slowest expected
@@ -6565,10 +6552,7 @@ var GitSchema = external_exports.object({
    * run recoverably (`factory resume` re-enters the poll).
    */
   rollupCiWaitMinutes: external_exports.number().int().positive().default(30)
-}).transform((git) => ({
-  ...git,
-  developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
-})).default({});
+}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
@@ -7188,13 +7172,9 @@ var SpecTaskSchema = external_exports.object({
   tests_to_write: external_exports.array(external_exports.string().min(1)).min(1),
   /** Task ids this task depends on (may be empty for a root task). */
   depends_on: external_exports.array(external_exports.string().min(1)).default([]),
-  /**
-   * The SINGLE producer dial (Decision 25) — the generator's whole-PRD
-   * difficulty×stakes judgment. Imported from the frozen seam; the legacy
-   * routine/feature/security values parse-fail here.
-   */
+  /** Difficulty × stakes; legacy routine/feature/security values parse-fail. */
   risk_tier: RiskTierEnum,
-  /** Why this tier — required so the dial is a judgment, not a coin flip. */
+  /** Why this tier — required so the tier is a judgment, not a coin flip. */
   risk_rationale: external_exports.string().min(1),
   /** Per-task TDD opt-out (read from the spec, never from runtime state). */
   tdd_exempt: external_exports.boolean().optional()
@@ -7283,7 +7263,9 @@ var AttemptSchema = external_exports.object({
   roles: external_exports.array(external_exports.string()),
   issued_at: external_exports.string(),
   /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
-  redispatch: external_exports.array(external_exports.string()).optional()
+  redispatch: external_exports.array(external_exports.string()).optional(),
+  /** Per-role model override; set on a final repair pass and kept across re-issue and redispatch. */
+  models: external_exports.record(external_exports.literal("opus")).optional()
 });
 var FeatureRunSchema = external_exports.object({
   version: external_exports.literal(VERSION),
@@ -7339,6 +7321,8 @@ var FeatureRunSchema = external_exports.object({
   feedback: external_exports.array(external_exports.string()),
   /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
   rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
+  /** The scheduled repair is the scope's final pass; its producer dispatch escalates to Opus. */
+  final_pass: external_exports.literal(true).optional(),
   /** Consecutive transient infrastructure failures. */
   transient_failures: external_exports.number().int().positive().optional(),
   /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
@@ -7384,7 +7368,9 @@ var AgentResultSchema = external_exports.object({
 });
 var ResultSchema = external_exports.object({
   ...ResultFields,
-  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional()
+  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional(),
+  /** The role whose non-done status won the merge; bound from its staged path. */
+  halted_role: external_exports.string().optional()
 });
 
 // src/feature/store.ts
@@ -7576,11 +7562,11 @@ var FeatureStore = class {
     for (const [, { claims: _claims, ...part }] of parts) {
       Object.assign(merged, part, { status: merged.status });
     }
-    const halted = parts.find(([, part]) => part.status !== "done")?.[1];
+    const halted = parts.find(([, part]) => part.status !== "done");
     return {
       result: {
         ...merged,
-        ...halted ? { status: halted.status, message: halted.message } : {},
+        ...halted ? { status: halted[1].status, message: halted[1].message, halted_role: halted[0] } : {},
         ...reviews.length ? { reviews } : {}
       }
     };

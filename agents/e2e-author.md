@@ -114,12 +114,13 @@ block is fine). The engine reads your commits from the worktree.
 - `done` — every spec is committed with a `[<task_id>]` tag (use the primary task each
   journey covers), self-validated, tree clean.
 - `needs-context` — a decision only a human can make (which environment, which credentials,
-  which behavior is intended); put the question in `message`. The run parks.
+  which behavior is intended); put the question in `message`. The engine routes it to spec
+  repair, which makes the spec decide.
 - `spec-defect` — the PRD/spec describes a journey the implemented feature cannot expose as
   specified; state the contradiction in `message`.
 - `blocked` — missing tooling (Playwright, browsers) or an app that will not boot. Say what
-  broke in `message`; the run parks for a human. Use this only when truly stuck, not for a
-  single tricky journey. Also `blocked` when you reviewed every task and judged NONE
+  broke in `message`; the engine re-issues you, and a third `blocked` parks the run. Use
+  this only when truly stuck, not for a single tricky journey. Also `blocked` when you reviewed every task and judged NONE
   UI-facing: commit nothing, with exactly the message "--e2e requested but the feature has no user-facing surface; rerun without --e2e".
 
 Uncommitted changes with `done` or a rewritten accepted commit is rejected by the engine as a

@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 # MANAGED by the factory from .factory/gates.json. This explicitly dispatched,
-# off-critical-path workflow tracks the full mutable surface on `develop`.
+# off-critical-path workflow tracks the full mutable surface on the base branch.
 # Each stable-hash shard restores its newest completed incremental snapshot,
 # processes files sequentially in chunks, and publishes partial progress under
 # a unique checked-out-SHA/run key. Pull-request mutation remains cold and hunk

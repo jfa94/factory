@@ -189,4 +189,17 @@ describe('v2 agent result contract', () => {
         expect(text).toContain('feasible and preserves the requirements')
         expect(text).toContain('ReviewVerdict')
     })
+
+    it('reviewers carry the ported dotfiles rules and no soft per-agent cap', () => {
+        const flat = (rel: string): string => read(rel).replace(/\s+/g, ' ')
+        const spec = flat('agents/spec-reviewer.md')
+        expect(spec).toContain('a blanket tier across all tasks is NOT a judgment')
+        expect(spec).toContain("unless the spec's Out of Scope explicitly justifies it")
+        const hunter = flat('agents/silent-failure-hunter.md')
+        expect(hunter).toContain('Mock/fake implementations belong only in tests')
+        expect(hunter).toContain('Catch blocks must be specific')
+        expect(hunter).toContain('CLAUDE.md')
+        expect(flat('agents/quality-reviewer.md')).toContain('drop anything below 5 on either axis')
+        expect(flat('agents/systemic-failure-reviewer.md')).not.toContain('Prefer ≤3 claims')
+    })
 })

@@ -192,7 +192,7 @@ and `with` **only** alongside `uses`. Hand edits to the managed `quality-gate.ym
 reverted as drift — declare the step in the contract instead. See
 [Scaffold a repo § setup_steps](../guides/scaffold-a-repo.md) for the how-to.
 
-### Per-repo required checks (`requiredChecks`, `requireMutationAtRest`)
+### Per-repo required checks (`requiredChecks`)
 
 Factory config is **global-only**, so a per-repo branch-protection requirement lives
 in the committed contract instead. Optional top-level fields in `.factory/gates.json`
@@ -203,8 +203,8 @@ contexts, never remove a config-required one.
 - **`requiredChecks?: string[]`**: extra required CI contexts merged into the
   required list (`git.developRequiredStatusChecks`). Example: `["pgTAP"]`.
   `"Mutation Testing"` is **rejected** here because the config owns it.
-- **`requireMutationAtRest?: boolean`**: affects only the baseline profile.
-  v2 reads only the run profile, so this field currently has no effect.
+- **`requireMutationAtRest?: boolean`**: retired with the at-rest baseline profile.
+  Committed contracts carrying it still load; the field is ignored.
 
 The resulting list is used in two places, both against the resolved base branch:
 `factory scaffold` strengthens protection to it, and `run create` / `debug create`

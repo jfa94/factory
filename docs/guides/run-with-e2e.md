@@ -48,11 +48,15 @@ pass at the feature check. This guide assumes you already know how to
 If the agent reports `spec-defect` (the spec describes a journey the feature cannot
 expose), the engine takes a spec-repair pass; no action is needed.
 
-The `e2e-author` parks the run instead of committing specs when:
+A `needs-context` question from the `e2e-author` (environment, credentials,
+intended behaviour) goes to spec repair, which makes the spec decide. Only a
+question the spec generator cannot answer parks for
+`factory resume --run <id> --answer "..."`.
 
-- it needs a human decision (environment, credentials, intended behaviour):
-  status `needs-context`. Answer with `factory resume --run <id> --answer "..."`;
-- Playwright or the app cannot be made to run: status `blocked`. Fix the
+The `e2e-author` parks the run instead of committing specs when it reports
+`blocked` three times in a row (the engine re-issues it twice first):
+
+- Playwright or the app cannot be made to run. Fix the
   environment, then `factory resume --run <id>`;
 - no task is user-facing: status `blocked` with the message "--e2e requested but
   the feature has no user-facing surface; rerun without --e2e". Start a new run

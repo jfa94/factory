@@ -223,10 +223,10 @@ engine reads your commits from the worktree.
 - `done` — documentation written and committed (or correctly a no-op), tree clean. A
   skipped section is still `done`; list it in `message`.
 - `needs-context` — a question must be answered before documentation can proceed; put it in
-  `message`. The run parks until a human answers.
+  `message`. The engine routes it to spec repair, which makes the spec decide.
 - `spec-defect` — the spec or PRD contradicts the shipped code in a way you cannot document
   truthfully; state the contradiction in `message`.
 - `blocked` — could not complete (e.g. could not read the codebase or write to `/docs`);
-  say what broke in `message`.
+  say what broke in `message`. The engine re-issues you; a third `blocked` parks the run.
 
 Uncommitted changes with `done` are rejected by the engine. Return the JSON and nothing else.

@@ -177,21 +177,17 @@ export const GateContractSchema = z
         /** CI env-boot steps rendered into the managed workflow (Decision 73). */
         setup_steps: z.array(SetupStepSchema).optional(),
         /**
-         * Extra required CI contexts for this repo's develop branch, merged into
-         * BOTH protection profiles (run + baseline) — additive-only per-repo
-         * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
-         * rejected here — it has its own switch below.
+         * Extra required CI contexts for this repo's base branch, merged into the
+         * protection profile — additive-only per-repo required checks (e.g.
+         * outsidey's `pgTAP`). `'Mutation Testing'` is rejected: config owns it.
          */
         requiredChecks: z
             .array(z.string().min(1, 'requiredChecks entries must be non-empty'))
             .refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
-                message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles — use requireMutationAtRest instead`,
+                message: `'${MUTATION_CHECK_CONTEXT}' is managed by config git.developRequiredStatusChecks`,
             })
             .optional(),
-        /**
-         * Keep `'Mutation Testing'` required on develop's BASELINE profile too
-         * (at rest, between runs) instead of the default run-profile-only.
-         */
+        /** Retired with the at-rest baseline profile; accepted so committed contracts still load, and ignored. */
         requireMutationAtRest: z.boolean().optional(),
     })
     .strict()
@@ -361,13 +357,11 @@ export function mutationRoots(contract: GateContract | undefined): readonly stri
 /** The contract's per-repo branch-protection extras (defaults: none). */
 export interface RequiredCheckExtras {
     readonly requiredChecks: readonly string[]
-    readonly requireMutationAtRest: boolean
 }
 
 export function requiredCheckExtras(contract: GateContract | undefined): RequiredCheckExtras {
     return {
         requiredChecks: contract?.requiredChecks ?? [],
-        requireMutationAtRest: contract?.requireMutationAtRest ?? false,
     }
 }
 

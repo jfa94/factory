@@ -9,40 +9,28 @@
  * hope). Provisioning is OPT-IN (--provision); default OFF.
  */
 import {createLogger} from '../shared/index.js'
-import {MUTATION_CHECK_CONTEXT, type RequiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
+import type {RequiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
 import type {GhClient} from './gh-client.js'
 import type {ProtectionApiResult} from './gh-client.js'
 
 const log = createLogger('git')
 
-/** The two develop profiles a protection PUT can write (D74). */
+/** The protection profile a PUT writes for the base branch. */
 export interface EffectiveProfiles {
-    /** Strict run profile — required while a factory run is live. */
+    /** Strict run profile: the required contexts. */
     readonly run: string[]
-    /** Light baseline profile — required at rest, between runs. */
-    readonly baseline: string[]
 }
 
 /**
- * The develop profiles ACTUALLY written to GitHub: global config ∪ the repo's
- * contracted extras (`.factory/gates.json`). ADDITIVE-ONLY — a contract can add
- * required contexts (`requiredChecks`) or keep mutation required at rest
- * (`requireMutationAtRest`); it can never remove a config-required context.
+ * The profile ACTUALLY written to GitHub: global config ∪ the repo's contracted
+ * `requiredChecks` (`.factory/gates.json`). ADDITIVE-ONLY — a contract can add
+ * required contexts; it can never remove a config-required context.
  */
 export function effectiveProfiles(
-    git: {
-        readonly developRequiredStatusChecks: readonly string[]
-        readonly developBaselineStatusChecks: readonly string[]
-    },
+    git: {readonly developRequiredStatusChecks: readonly string[]},
     extras: RequiredCheckExtras
 ): EffectiveProfiles {
-    const union = (...lists: readonly (readonly string[])[]) => [...new Set(lists.flat())]
-    const run = union(git.developRequiredStatusChecks, extras.requiredChecks)
-    // requireMutationAtRest only adds mutation to the baseline when the run
-    // profile actually requires it — a config that dropped the context entirely
-    // must not have the contract resurrect it at rest only.
-    const atRest = extras.requireMutationAtRest && run.includes(MUTATION_CHECK_CONTEXT) ? [MUTATION_CHECK_CONTEXT] : []
-    return {run, baseline: union(git.developBaselineStatusChecks, extras.requiredChecks, atRest)}
+    return {run: [...new Set([...git.developRequiredStatusChecks, ...extras.requiredChecks])]}
 }
 
 /** Typed protection state the gate reasons over. */
@@ -93,15 +81,11 @@ export async function probeProtection(args: ProbeProtectionArgs): Promise<Protec
  * Verify-and-REFUSE gate. Throws {@link ProtectionMissingError} when protection
  * is missing, strict-up-to-date is off (the serial-writer's backbone — Δ L), or
  * any `requiredChecks` context is not enforced. Returns the state on success.
- * `opts.requireStrict: false` skips the strict check — develop's BASELINE
- * profile (D74) deliberately runs strict-off, so the run-scoped scaffold gate
- * asserts only enablement + the baseline contexts.
  */
 export function requireProtectionOrRefuse(
     state: ProtectionState,
     requiredChecks: readonly string[],
-    branch: string,
-    opts: {requireStrict?: boolean} = {}
+    branch: string
 ): ProtectionState {
     const reasons: string[] = []
     if (!state.enabled) {
@@ -110,7 +94,7 @@ export function requireProtectionOrRefuse(
     // strict-up-to-date is the GitHub-backed half of required-branches-up-to-date
     // (Δ L). Without it the serial writer cannot trust that a "merge now" lands on
     // top of the latest staging.
-    if (!state.strictUpToDate && (opts.requireStrict ?? true)) {
+    if (!state.strictUpToDate) {
         reasons.push('required_status_checks.strict (branches up-to-date) is OFF')
     }
     for (const check of requiredChecks) {
@@ -177,31 +161,4 @@ export async function provisionStableProtection(args: ProvisionProtectionArgs): 
     }
     await args.ghClient.strengthenStatusChecks(args.owner, args.repo, branch, args.requiredChecks)
     return probeProtection({...args, branch})
-}
-
-/** Args to {@link putBaselineProtection}. */
-export interface PutBaselineProtectionArgs {
-    ghClient: GhClient
-    owner: string
-    repo: string
-    branch: string
-    /** Baseline contexts (config `git.developBaselineStatusChecks`). */
-    contexts: readonly string[]
-}
-
-/**
- * Write develop's light BASELINE profile (D74): `contexts` required for
- * non-admins, strict OFF, `enforce_admins` OFF (repo admins push freely).
- * Idempotent full-replace PUT — deliberately NOT `deleteProtection`: develop
- * must never be left wholly unprotected. Used by the run-scoped scaffold
- * (`--provision`) and every run-terminal de-escalation (finalize / supersede /
- * cancel `--cleanup`).
- */
-export async function putBaselineProtection(args: PutBaselineProtectionArgs): Promise<void> {
-    log.info(`writing baseline branch protection for ${args.owner}/${args.repo}@${args.branch}`)
-    await args.ghClient.putProtection(args.owner, args.repo, args.branch, {
-        requiredStatusChecks: [...args.contexts],
-        strict: false,
-        enforceAdmins: false,
-    })
 }

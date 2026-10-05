@@ -99,6 +99,8 @@ export const AttemptSchema = z.object({
     issued_at: z.string(),
     /** Roles whose staged result was missing at explicit recovery; the next execute re-issues only these. */
     redispatch: z.array(z.string()).optional(),
+    /** Per-role model override; set on a final repair pass and kept across re-issue and redispatch. */
+    models: z.record(z.literal('opus')).optional(),
 })
 export type Attempt = z.infer<typeof AttemptSchema>
 export const FeatureRunSchema = z
@@ -158,6 +160,8 @@ export const FeatureRunSchema = z
         feedback: z.array(z.string()),
         /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
         rejections: z.record(z.array(z.string())).optional(),
+        /** The scheduled repair is the scope's final pass; its producer dispatch escalates to Opus. */
+        final_pass: z.literal(true).optional(),
         /** Consecutive transient infrastructure failures. */
         transient_failures: z.number().int().positive().optional(),
         /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
@@ -212,6 +216,8 @@ export type AgentResult = z.infer<typeof AgentResultSchema>
 export const ResultSchema = z.object({
     ...ResultFields,
     reviews: z.array(z.object({reviewer: z.string(), claims: z.array(ClaimSchema)})).optional(),
+    /** The role whose non-done status won the merge; bound from its staged path. */
+    halted_role: z.string().optional(),
 })
 export type FeatureResult = z.infer<typeof ResultSchema>
 
@@ -222,6 +228,8 @@ export type FeatureAction =
           attempt: Attempt
           staged: Record<string, string>
           prompts: Record<string, string>
+          /** Agent tool `model` per role, when the engine escalates one. */
+          models?: Record<string, 'opus'>
       }
     | {kind: 'wait'; run_id: string; reason: string; retry_after_seconds: number}
     | {kind: 'park'; run_id: string; reason: string}

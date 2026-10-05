@@ -352,38 +352,37 @@ describe('mutation roots (A4 — the src/ assumption as data)', () => {
     })
 })
 
-describe('requiredChecks / requireMutationAtRest (per-repo protection extras)', () => {
-    it('accepts requiredChecks + requireMutationAtRest', () => {
+describe('requiredChecks (per-repo protection extras)', () => {
+    it('accepts requiredChecks and still loads the retired requireMutationAtRest key', () => {
         const raw = {...validContract(), requiredChecks: ['pgTAP', 'CI'], requireMutationAtRest: true}
         const parsed = GateContractSchema.parse(raw)
         expect(parsed.requiredChecks).toEqual(['pgTAP', 'CI'])
-        expect(parsed.requireMutationAtRest).toBe(true)
+        expect(requiredCheckExtras(parsed)).toEqual({requiredChecks: ['pgTAP', 'CI']})
     })
 
     it('rejects an empty-string check', () => {
         expect(GateContractSchema.safeParse({...validContract(), requiredChecks: ['']}).success).toBe(false)
     })
 
-    it(`rejects '${MUTATION_CHECK_CONTEXT}' inside requiredChecks (it has its own switch)`, () => {
+    it(`rejects '${MUTATION_CHECK_CONTEXT}' inside requiredChecks (config owns it)`, () => {
         const parsed = GateContractSchema.safeParse({...validContract(), requiredChecks: [MUTATION_CHECK_CONTEXT]})
         expect(parsed.success).toBe(false)
-        expect(JSON.stringify(!parsed.success && parsed.error.issues)).toContain('requireMutationAtRest')
+        expect(JSON.stringify(!parsed.success && parsed.error.issues)).toContain('developRequiredStatusChecks')
     })
 
     it('requiredCheckExtras defaults: no contract → none', () => {
-        expect(requiredCheckExtras(undefined)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+        expect(requiredCheckExtras(undefined)).toEqual({requiredChecks: []})
         expect(requiredCheckExtras(GateContractSchema.parse(validContract()))).toEqual({
             requiredChecks: [],
-            requireMutationAtRest: false,
         })
     })
 
     it('loadRequiredCheckExtras: absent and invalid both degrade to no extras (never throws)', async () => {
         const root = await mkdtemp(join(tmpdir(), 'gate-contract-'))
-        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: []})
         await mkdir(join(root, '.factory'), {recursive: true})
         await writeFile(join(root, GATE_CONTRACT_REL), '{not json', 'utf8')
-        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: [], requireMutationAtRest: false})
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: []})
     })
 
     it('loadRequiredCheckExtras reads a committed contract', async () => {
@@ -391,6 +390,6 @@ describe('requiredChecks / requireMutationAtRest (per-repo protection extras)', 
         await mkdir(join(root, '.factory'), {recursive: true})
         const raw = {...validContract(), requiredChecks: ['pgTAP'], requireMutationAtRest: true}
         await writeFile(join(root, GATE_CONTRACT_REL), JSON.stringify(raw), 'utf8')
-        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: ['pgTAP'], requireMutationAtRest: true})
+        expect(await loadRequiredCheckExtras(root)).toEqual({requiredChecks: ['pgTAP']})
     })
 })

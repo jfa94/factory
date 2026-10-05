@@ -18,10 +18,7 @@
  * dial (WS5/WS8) and is intentionally not ported here.
  *
  * Every field uses `.default(...)`, so `ConfigSchema.parse({})` yields a fully
- * populated, typed config with no missing keys. One exception in kind, not in
- * contract: cross-field DERIVED defaults (e.g. `git.developBaselineStatusChecks`)
- * live in a sub-schema `.transform` here instead of `.default(...)` — parse
- * output is still fully populated.
+ * populated, typed config with no missing keys.
  */
 import {z} from 'zod'
 import {at} from '../shared/index.js'
@@ -156,23 +153,12 @@ export const GitSchema = z
          */
         baseBranch: z.string().min(1).optional(),
         /**
-         * Required status-check contexts of develop's protection profile, asserted
-         * by scaffold and run preflight and provisioned with `--provision`.
+         * Required status-check contexts of the resolved base branch's protection
+         * profile, asserted by scaffold and run preflight and provisioned with `--provision`.
          * Defaults to the three contexts the rendered quality-gate workflow
          * always reports (Decision 53) — the rollup PR cannot merge red.
          */
         developRequiredStatusChecks: z.array(z.string()).default(['Quality', 'Mutation Testing', 'Security Scan']),
-        /**
-         * Required status-check contexts of develop's BASELINE profile (run-scoped
-         * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
-         * is active. Admins bypass (baseline sets `enforce_admins: false`).
-         * DERIVED default: `developRequiredStatusChecks` minus `'Mutation Testing'`
-         * (the GitSchema transform below) — the baseline drops exactly the mutation
-         * gate, so a custom context added to the run profile (e.g. a repo's pgTAP
-         * check) stays required at rest with no double-bookkeeping. An explicitly
-         * set value (including `[]`) overrides the derivation.
-         */
-        developBaselineStatusChecks: z.array(z.string()).optional(),
         /**
          * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
          * before giving up with `ci-timeout`. Sized above the slowest expected
@@ -181,15 +167,6 @@ export const GitSchema = z
          */
         rollupCiWaitMinutes: z.number().int().positive().default(30),
     })
-    // Derived default (still "all defaults live in this file"): baseline = run
-    // profile minus 'Mutation Testing' — the literal is the aggregator job name
-    // pinned by the quality-gate template (src/ci/render-quality-gate.ts
-    // waivedMutationBlock keeps the context universal across factory repos).
-    .transform((git) => ({
-        ...git,
-        developBaselineStatusChecks:
-            git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== 'Mutation Testing'),
-    }))
     .default({})
 
 /**

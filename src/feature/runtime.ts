@@ -122,7 +122,11 @@ export class LocalFeatureRuntime implements FeatureRuntime {
 
     async testsOnly(run: FeatureRun): Promise<boolean> {
         const task = at(run.spec.tasks, Math.min(run.task_index, run.spec.tasks.length - 1))
-        const commits = await defaultGateTools().git.commits(run.task_base_sha, task.task_id, {cwd: run.worktree})
+        const commits = await defaultGateTools(this.config.quality.gateEnv).git.commits(
+            run.task_base_sha,
+            task.task_id,
+            {cwd: run.worktree}
+        )
         return commits.every(taggedTestsOnly)
     }
 
@@ -135,7 +139,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 : full
                   ? ['test', 'type', 'lint', 'build', 'coverage', 'mutation', 'sast']
                   : ['test', 'type', 'lint']
-        const tools = defaultGateTools()
+        const tools = defaultGateTools(this.config.quality.gateEnv)
         const baseRef =
             stage === 'slice-check'
                 ? run.slice_base_sha

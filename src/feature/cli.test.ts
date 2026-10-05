@@ -168,6 +168,15 @@ describe('v2 CLI contract', () => {
                 message: 'Which value?',
             })
         )
+        // User decision 3: self-heal. The implementer's question routes to spec repair; its question parks.
+        output = ''
+        await call('next-action', '--run', 'run', '--driver', 'driver')
+        const repair = JSON.parse(output) as {attempt: {stage: string}; staged: {'spec-generator': string}}
+        expect(repair.attempt.stage).toBe('spec-repair')
+        await writeFile(
+            repair.staged['spec-generator'],
+            JSON.stringify({status: 'needs-context', message: 'Which value?'})
+        )
         await call('next-action', '--run', 'run', '--driver', 'driver')
         await call('resume', '--run', 'run', '--answer', 'Use 5')
         await call('next-task', '--run', 'run', '--driver', 'next-driver')
@@ -176,7 +185,7 @@ describe('v2 CLI contract', () => {
         await call('state', '--run', 'run', '--ledger')
         expect(output).toContain('Use 5')
         expect(output).toContain(
-            'In flight: implement [implementer] issued 2026-09-07T00:00:00Z (0m ago). Staged results: 0/1.'
+            'In flight: spec-repair [spec-generator] issued 2026-09-07T00:00:00Z (0m ago). Staged results: 0/1.'
         )
         expect(output).toContain('Next: factory resume --run run --recover')
         await call('resume', '--run', 'run', '--recover')

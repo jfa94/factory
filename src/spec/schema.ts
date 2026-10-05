@@ -1,24 +1,13 @@
 /**
- * WS5 — Zod schemas for the DURABLE on-disk spec artifact.
- *
- * This is NOT the runtime `TaskState` (the frozen WS1 seam): `TaskState` carries
- * only the producer dial (`risk_tier`) and live status. The DURABLE spec task,
- * by contrast, carries the spec-time payload — acceptance criteria, files, tests,
- * dependencies, and the judged risk tier + rationale — that lives in the spec
- * store's `tasks.json` and is reused across runs (Δ X).
- *
- * Decision 25 — the SINGLE producer dial. `risk_tier` is the frozen
- * `RiskTierEnum` (low | medium | high). The legacy
- * routine/feature/security classifier and the separate review-depth axis are
- * DELETED: this schema rejects those legacy values and any `review_*` field.
- *
- * Loud-fail: `parseSpecTasks` / `parseSpecManifest` throw a ZodError on a missing
- * field, an out-of-enum risk tier, or a legacy axis — never silently coerce.
+ * Zod schemas for the durable on-disk spec artifact: acceptance criteria, files,
+ * tests, dependencies and the judged risk tier + rationale. `risk_tier` is context
+ * for briefs and spec review; it selects no model, gate or reviewer. Legacy
+ * review-depth fields are rejected. Parsing throws on any invalid field.
  */
 import {z} from 'zod'
 import type {Prd} from './gh.js'
 
-/** The single producer dial (Decision 25). */
+/** Judged difficulty × stakes of a task. */
 export const RiskTierEnum = z.enum(['low', 'medium', 'high'])
 export type RiskTier = z.infer<typeof RiskTierEnum>
 
@@ -60,13 +49,9 @@ export const SpecTaskSchema = z
         tests_to_write: z.array(z.string().min(1)).min(1),
         /** Task ids this task depends on (may be empty for a root task). */
         depends_on: z.array(z.string().min(1)).default([]),
-        /**
-         * The SINGLE producer dial (Decision 25) — the generator's whole-PRD
-         * difficulty×stakes judgment. Imported from the frozen seam; the legacy
-         * routine/feature/security values parse-fail here.
-         */
+        /** Difficulty × stakes; legacy routine/feature/security values parse-fail. */
         risk_tier: RiskTierEnum,
-        /** Why this tier — required so the dial is a judgment, not a coin flip. */
+        /** Why this tier — required so the tier is a judgment, not a coin flip. */
         risk_rationale: z.string().min(1),
         /** Per-task TDD opt-out (read from the spec, never from runtime state). */
         tdd_exempt: z.boolean().optional(),

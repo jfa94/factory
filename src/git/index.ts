@@ -29,7 +29,6 @@ export {
     probeProtection,
     requireProtectionOrRefuse,
     provisionProtection,
-    putBaselineProtection,
     effectiveProfiles,
     ProtectionMissingError,
 } from './protection.js'

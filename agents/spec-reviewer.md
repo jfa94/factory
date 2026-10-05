@@ -79,6 +79,10 @@ offending dimension at or below 5 (the floor):
    tasks precede the change tasks (`dependencies`); every `high`-tier task names its rollback
    (`granularity`); a final cleanup task removes the old path, flags or adapters
    (`alignment`).
+9. **Judged risk or BLOCK.** `risk_tier` ∈ {low, medium, high} with a `risk_rationale` that
+   justifies it (a blanket tier across all tasks is NOT a judgment). A rationale that does not
+   explain that task's difficulty × stakes, or that contradicts its tier → BLOCK the
+   `granularity` dimension.
 
 </EXTREMELY-IMPORTANT>
 
@@ -92,8 +96,9 @@ Score each dimension an integer **1–10**. A dimension at **≤5 auto-fails the
 
 1. **Read everything** — `prd_body`, `spec_md`, and every task in `tasks`. Note the
    dependency structure at a glance.
-2. **`granularity`** — exact paths, scope cohesion (one concern per task), and
-   complexity (a task spanning DB + API + UI is likely too big unless each part is trivial).
+2. **`granularity`** — exact paths, scope cohesion (one concern per task),
+   complexity (a task spanning DB + API + UI is likely too big unless each part is trivial),
+   and judged risk (each `risk_rationale` justifies that task's `risk_tier`, Iron Law 9).
 3. **`dependencies`** — build the DAG; run a topological sort; detect cycles and dangling
    refs; flag missing edges (overlapping `files` with no dependency) and ordering smells
    (foundational tasks must precede dependents).
@@ -105,7 +110,8 @@ Score each dimension an integer **1–10**. A dimension at **≤5 auto-fails the
 6. **`vertical_slices`** — each phase forms a complete vertical slice (not "all the types" then
    "all the UI"); the first tasks in dependency order are end-to-end testable (tracer bullet).
 7. **`alignment`** — forward map (every PRD requirement has a task), reverse map (every task
-   traces to the PRD — no scope creep), and consistency (no task contradicts the spec or an
+   traces to the PRD — a task you cannot tie to a requirement is scope creep and is BLOCKING,
+   unless the spec's Out of Scope explicitly justifies it), and consistency (no task contradicts the spec or an
    established contract unless the PRD explicitly authorizes that contract change).
 
 ## Output contract — generation review (REQUIRED)

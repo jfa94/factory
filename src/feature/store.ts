@@ -226,11 +226,11 @@ export class FeatureStore {
         for (const [, {claims: _claims, ...part}] of parts) {
             Object.assign(merged, part, {status: merged.status})
         }
-        const halted = parts.find(([, part]) => part.status !== 'done')?.[1]
+        const halted = parts.find(([, part]) => part.status !== 'done')
         return {
             result: {
                 ...merged,
-                ...(halted ? {status: halted.status, message: halted.message} : {}),
+                ...(halted ? {status: halted[1].status, message: halted[1].message, halted_role: halted[0]} : {}),
                 ...(reviews.length ? {reviews} : {}),
             },
         }

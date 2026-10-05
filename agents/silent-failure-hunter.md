@@ -59,6 +59,13 @@ line, **no `+`/`-` diff markers**.
    without recovering AND without surfacing it. A new failure path with zero telemetry (no
    log or metric at all, or a retry loop with no exhaustion signal) is silent even when the
    code "handles" it; the same traced-consequence bar applies.
+4. **Mock/fake implementations belong only in tests.** Production code falling back to mocks
+   indicates architectural problems. A fallback to a mock, stub, or fake implementation outside
+   of test code masks failure as success: quote the fallback line and name the real failure it
+   hides.
+5. **Catch blocks must be specific.** Broad exception catching hides unrelated errors and makes
+   debugging impossible. Ask: could this catch block accidentally suppress unrelated errors?
+   File it only when it can, and name in the `claim` the unrelated error class it swallows.
 
 ## Red Flags — STOP and re-read this prompt
 
@@ -77,23 +84,28 @@ the caller then proceeds as if nothing failed; ignored return values that encode
 (error tuples `[err, val]`, boolean status, `Result`/`Either`, HTTP status, `null`/`undefined`
 sentinels); unawaited promises and `.catch(() => {})` / `.catch(noop)`; `try` whose
 error-branch substitutes a fabricated default (`?? 0`, `|| []`, `catch { return null }`) that
-the caller treats as a real value; broad `catch (e)` that masks programmer errors alongside
-expected ones; swallowed errors inside loops/batch ops that hide partial failure; resource
+the caller treats as a real value; a fallback to a mock, stub, or fake implementation outside
+of test code; broad `catch (e)` that masks programmer errors alongside expected ones; swallowed errors inside loops/batch ops that hide partial failure; resource
 cleanup (`finally`/`close`) skipped on the error path; observability gaps — a new error branch
 that emits no log or metric at all, or a retry loop with no exhaustion signal. A failure
 nobody can see in production is a silent failure even if the code "handles" it.
 
-**DON'T flag:** style, naming, types, formatting (gates own those); a catch that correctly
-recovers or re-throws; deep correctness/security beyond the silenced failure (other panel
+**DON'T flag:** style, naming, types, formatting (gates own those); log wording, log context
+or user-message quality on an error that is already surfaced (there is no minor tier); a catch
+that correctly recovers or re-throws; deep correctness/security beyond the silenced failure (other panel
 members own it — skip it; there is no advisory tier).
 
 ## Process
 
-1. Run the review-range command from your brief for scope; `Read` each changed file.
+1. Run the review-range command from your brief for scope; `Read` each changed file. Read the
+   target repository's `CLAUDE.md` for its error-handling requirements.
 2. Enumerate every `catch`, every call whose return type carries failure, every promise, every
-   `??`/`||`/`finally` in the changed lines.
+   `??`/`||`/`finally`, and every mock/stub/fake fallback in the changed lines.
 3. For each, ask: if this fails, is the failure surfaced or recovered — or silently dropped? If
    dropped, trace the wrong state it leaves and quote the silencing line.
+4. Validate against project standards: ensure compliance with the project's error handling
+   requirements from `CLAUDE.md`. A breach is a claim only when it silences a failure with a
+   traced consequence (Iron Law 2); cite the `CLAUDE.md` rule in the `claim` text.
 
 ## Output
 

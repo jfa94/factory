@@ -53,7 +53,7 @@ function ciBuiltins(run: string, pm: 'pnpm' | 'npm'): Partial<Record<GateId, str
 
 export interface RenderQualityGateOpts {
     /** Integration branch; also controls the manual full-mutation checkout. */
-    readonly baseBranch?: string
+    readonly baseBranch: string
     /** The repo's resolved gate contract (`.factory/gates.json`). */
     readonly contract: GateContract
     /** Lockfile-detected package manager (pnpm-lock.yaml → pnpm, else npm). */
@@ -343,7 +343,7 @@ export function renderMutationNightly(template: string, opts: RenderQualityGateO
     if (!opts.contract.gates.mutation.contracted) {
         return null
     }
-    let lines = renderBaseBranch(template, opts.baseBranch ?? 'develop').split('\n')
+    let lines = renderBaseBranch(template, opts.baseBranch).split('\n')
     lines = replaceMarker(lines, '# factory:mutation-setup', mutationSetupBlock(opts))
     lines = applyMutationRoots(lines, opts.contract)
     if (opts.packageManager === 'npm') {
@@ -371,7 +371,7 @@ export function renderQualityGate(template: string, opts: RenderQualityGateOpts)
                 'renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)'
         )
     }
-    let lines = renderBaseBranch(template, opts.baseBranch ?? 'develop').split('\n')
+    let lines = renderBaseBranch(template, opts.baseBranch).split('\n')
     lines = replaceMarker(lines, '# factory:setup', setupBlock(opts))
     lines = replaceMarker(lines, '# factory:gates', gatesBlock(opts))
     lines = renderMutationRegion(lines, opts)

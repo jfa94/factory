@@ -124,7 +124,7 @@ const rereviewSection = (run: FeatureRun, attempt: Attempt): string =>
     )
 
 const STATUS =
-    '`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question for the operator in `message`), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (environment failure; explain in `message`).'
+    '`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question in `message`; the spec generator resolves it by making the spec decide), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (the environment truly prevents the work; explain in `message`; the engine re-issues you before it parks).'
 const json = (value: unknown): string => fence(JSON.stringify(value, null, 2), 'json')
 
 function contract(role: string, run: FeatureRun): string {
@@ -140,7 +140,7 @@ function contract(role: string, run: FeatureRun): string {
         return `${intro} Return exactly one row per id in the list above, no others. Evidence names actual behavior, tests and source; never infer satisfaction from ancestry or unrelated tests.\n\n${json({status: 'done', acceptance: [{id: acceptanceIds(run)[0] ?? 'R1', met: true, evidence: 'test and source that prove it'}]})}`
     }
     if (role === 'spec-generator') {
-        return `${intro} Return the complete repaired task list. The engine keeps the PRD, base and contracts and increments the revision. If you cannot repair the spec, return status \`blocked\` with a message.\n\n${json({status: 'done', repaired_spec: {specMd: '<full spec markdown>', slug: '<slug>', tasks: ['<every task, accepted ones unchanged>']}})}`
+        return `${intro} Return the complete repaired task list. The engine keeps the PRD, base and contracts and increments the revision. Resolve each question in the feedback by making the spec decide: update \`specMd\`, criteria or unaccepted task descriptions; never change accepted tasks. Return status \`blocked\` with the question only when the PRD, the repository and a reasonable engineering default cannot answer it.\n\n${json({status: 'done', repaired_spec: {specMd: '<full spec markdown>', slug: '<slug>', tasks: ['<every task, accepted ones unchanged>']}})}`
     }
     if (role === 'spec-reviewer') {
         return `${intro} Return \`done\` only if the proposed spec is feasible and preserves the requirements; otherwise \`spec-defect\` with the blockers in \`message\`.\n\n${json({status: 'done', message: 'optional'})}`

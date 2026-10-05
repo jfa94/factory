@@ -4,7 +4,6 @@ import {
     effectiveProfiles,
     probeProtection,
     provisionProtection,
-    putBaselineProtection,
     requireProtectionOrRefuse,
 } from './protection.js'
 import {FakeGhClient} from './fakes.js'
@@ -69,84 +68,23 @@ describe('#2 / Δ A — branch-protection refuse-to-run gate', () => {
         expect(after.strictUpToDate).toBe(true)
         expect(() => requireProtectionOrRefuse(after, ['ci'], 'staging')).not.toThrow()
     })
-
-    describe('D74 — develop baseline profile', () => {
-        it('putBaselineProtection writes ONE PUT: baseline contexts, strict OFF, enforce_admins OFF', async () => {
-            const gh = new FakeGhClient()
-            await putBaselineProtection({
-                ghClient: gh,
-                owner: 'o',
-                repo: 'r',
-                branch: 'develop',
-                contexts: ['Quality', 'Security Scan'],
-            })
-            expect(gh.protectionPuts).toEqual([
-                {
-                    branch: 'develop',
-                    body: {requiredStatusChecks: ['Quality', 'Security Scan'], strict: false, enforceAdmins: false},
-                },
-            ])
-            const state = await probeProtection({ghClient: gh, owner: 'o', repo: 'r', branch: 'develop'})
-            expect(state).toMatchObject({
-                enabled: true,
-                strictUpToDate: false,
-                requiredStatusChecks: ['Quality', 'Security Scan'],
-            })
-        })
-
-        it('requireProtectionOrRefuse with requireStrict:false passes a strict-off state but still rejects missing contexts', () => {
-            const baseline = {...FULL, strictUpToDate: false, requiredStatusChecks: ['Quality', 'Security Scan']}
-            expect(() =>
-                requireProtectionOrRefuse(baseline, ['Quality', 'Security Scan'], 'develop', {requireStrict: false})
-            ).not.toThrow()
-            expect(() =>
-                requireProtectionOrRefuse(baseline, ['Quality', 'Mutation Testing'], 'develop', {requireStrict: false})
-            ).toThrow(/Mutation Testing/)
-            // Enablement is still mandatory.
-            expect(() =>
-                requireProtectionOrRefuse({...baseline, enabled: false}, [], 'develop', {requireStrict: false})
-            ).toThrow(ProtectionMissingError)
-        })
-    })
 })
 
 describe('effectiveProfiles — per-repo required-check extras (gates.json)', () => {
-    const git = {
-        developRequiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan'],
-        developBaselineStatusChecks: ['Quality', 'Security Scan'],
-    }
-    const none = {requiredChecks: [], requireMutationAtRest: false}
+    const git = {developRequiredStatusChecks: ['Quality', 'Mutation Testing', 'Security Scan']}
 
-    it('no extras → the configured profiles verbatim', () => {
-        expect(effectiveProfiles(git, none)).toEqual({
+    it('no extras → the configured profile verbatim', () => {
+        expect(effectiveProfiles(git, {requiredChecks: []})).toEqual({
             run: ['Quality', 'Mutation Testing', 'Security Scan'],
-            baseline: ['Quality', 'Security Scan'],
         })
     })
 
-    it('requiredChecks merge into BOTH profiles (deduped)', () => {
-        const p = effectiveProfiles(git, {...none, requiredChecks: ['pgTAP', 'Quality']})
-        expect(p.run).toEqual(['Quality', 'Mutation Testing', 'Security Scan', 'pgTAP'])
-        expect(p.baseline).toEqual(['Quality', 'Security Scan', 'pgTAP'])
-    })
-
-    it('requireMutationAtRest adds Mutation Testing to the baseline', () => {
-        const p = effectiveProfiles(git, {...none, requireMutationAtRest: true})
-        expect(p.baseline).toContain('Mutation Testing')
-        expect(p.run).toEqual(['Quality', 'Mutation Testing', 'Security Scan'])
-    })
-
-    it('requireMutationAtRest is a no-op when the run profile dropped the context', () => {
-        const noMutation = {
-            developRequiredStatusChecks: ['Quality'],
-            developBaselineStatusChecks: ['Quality'],
-        }
-        expect(effectiveProfiles(noMutation, {...none, requireMutationAtRest: true}).baseline).toEqual(['Quality'])
-    })
-
-    it('an explicit baseline override still gains the extras (additive-only)', () => {
-        const explicit = {...git, developBaselineStatusChecks: ['Quality']}
-        const p = effectiveProfiles(explicit, {requiredChecks: ['CI'], requireMutationAtRest: true})
-        expect(p.baseline).toEqual(['Quality', 'CI', 'Mutation Testing'])
+    it('requiredChecks merge into the profile (deduped)', () => {
+        expect(effectiveProfiles(git, {requiredChecks: ['pgTAP', 'Quality']}).run).toEqual([
+            'Quality',
+            'Mutation Testing',
+            'Security Scan',
+            'pgTAP',
+        ])
     })
 })

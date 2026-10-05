@@ -14,7 +14,7 @@ const validTask = {
     risk_rationale: 'touches payment path, moderate stakes',
 }
 
-describe('D25 single producer dial — SpecTaskSchema', () => {
+describe('risk tier — SpecTaskSchema', () => {
     it('D25: accepts a task carrying a risk_tier in {low,medium,high} + non-empty rationale', () => {
         const tasks = parseSpecTasks([validTask])
         expect(at(tasks, 0).risk_tier).toBe('medium')

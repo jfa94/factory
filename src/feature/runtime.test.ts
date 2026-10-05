@@ -2,11 +2,17 @@ import {describe, expect, it, vi} from 'vitest'
 import {defaultConfig} from '../config/schema.js'
 import type {ExecResult} from '../shared/exec.js'
 import {provisionWorktree} from '../git/provision.js'
+import {defaultGateTools} from '../verifier/deterministic/tools.js'
+import type * as Tools from '../verifier/deterministic/tools.js'
 import {TransientFailure} from './ports.js'
 import {LocalFeatureRuntime} from './runtime.js'
 import {FeatureRunSchema} from './schema.js'
 
 vi.mock('../git/provision.js', () => ({provisionWorktree: vi.fn()}))
+vi.mock('../verifier/deterministic/tools.js', async (importOriginal) => {
+    const real = await importOriginal<typeof Tools>()
+    return {...real, defaultGateTools: vi.fn(real.defaultGateTools)}
+})
 
 const sha = 'a'.repeat(40)
 const run = FeatureRunSchema.parse({
@@ -313,5 +319,16 @@ describe('feature runtime external evidence', () => {
         const f = setup()
         await expect(f.runtime.validateRepair(run, {...run.spec, tasks: []})).rejects.toThrow()
         await expect(f.runtime.validateRepair(run, run.spec)).resolves.toBeUndefined()
+    })
+    it('runs gate tools with the configured gate environment', async () => {
+        const config = defaultConfig()
+        config.quality.gateEnv = {DATABASE_URL: 'postgres://gate'}
+        const runtime = new LocalFeatureRuntime(config, setup().usage, setup().command)
+        const commits = vi.fn().mockResolvedValue([])
+        vi.mocked(defaultGateTools).mockReturnValueOnce({git: {commits}} as unknown as ReturnType<
+            typeof defaultGateTools
+        >)
+        await expect(runtime.testsOnly(run)).resolves.toBe(true)
+        expect(defaultGateTools).toHaveBeenCalledWith({DATABASE_URL: 'postgres://gate'})
     })
 })

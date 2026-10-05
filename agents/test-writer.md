@@ -185,14 +185,14 @@ block is fine). The engine reads your commits from the worktree.
   Cite in `message` the commit(s) and tests that carry the behavior; the engine then verifies
   independently. Only claim this on real, citable evidence.
 - `needs-context` — a genuine QUESTION you cannot resolve from the repo, spec, contracts,
-  operator answers or prior-run evidence. Put the question in `message`; the run parks until a human
-  answers and the answer is injected into your next attempt. Exhaust repo/spec evidence FIRST
+  operator answers or prior-run evidence. Put the question in `message`; the engine routes it to
+  spec repair, the spec decides, and the task is re-dispatched against the repaired spec. Exhaust repo/spec evidence FIRST
   — never use this for a transient or environmental stop.
 - `spec-defect` — the task is untestable as specified: contradictory or non-falsifiable
   criteria, or criteria that contradict the repository contracts. Put the concrete
   contradiction in `message`; the engine routes it to bounded spec repair.
 - `blocked` — the environment prevents work (no runner, missing tooling, unbootable
-  worktree). Say what broke in `message`; the run parks for a human. Never guess `done`.
+  worktree). Say what broke in `message`; the engine re-issues you, and a third `blocked` parks the run. Never guess `done`.
 
 Uncommitted changes with `done` or `already-satisfied` reject the whole result: it is
 re-issued to you with the reason at most twice, then the run parks. A rewritten accepted

@@ -40,10 +40,11 @@ of another version cannot be read; `state --list` skips it with a warning.
 | `attempts`                                        | Repair passes spent per scope (`task:<id>`, `slice:<id>`, `feature`, `spec`).             |
 | `in_flight`                                       | The outstanding attempt (below).                                                          |
 | `checkpoints`                                     | Accepted tasks with their HEAD.                                                           |
-| `question`, `answers`                             | Pending `needs-context` question and recorded answers.                                    |
+| `question`, `answers`                             | Pending spec-loop question and recorded answers.                                          |
 | `feedback`                                        | Repair feedback carried into the next producer brief.                                     |
 | `rejections`                                      | Per-role rejection reasons since the last accepted result.                                |
 | `transient_failures`                              | Consecutive transient infrastructure failures.                                            |
+| `final_pass`                                      | The scheduled repair is its scope's last pass; its producer runs on Opus.                 |
 | `rereview`                                        | `{boundary, base, claims}` for a repair's scoped re-review.                               |
 | `claims`, `confirmed_claims`, `after_confirm`     | Review claims awaiting confirmation, confirmed blockers, and the boundary they return to. |
 | `candidate_satisfied`                             | The current task was reported already satisfied and is being verified.                    |
@@ -75,7 +76,8 @@ of another version cannot be read; `state --list` skips it with a warning.
 ## Attempts
 
 An attempt (`in_flight`) records `id`, `driver`, `stage`, `base_sha`, `head_sha`,
-`spec_digest`, `worktree`, `roles`, `issued_at` and optional `redispatch`.
+`spec_digest`, `worktree`, `roles`, `issued_at`, and optional `redispatch` and
+`models` (a per-role Agent model override, set on a final repair pass).
 Producer stages use the feature worktree. Review stages use a detached snapshot at
 `.claude/worktrees/review-<run>-<attempt>`, removed after the attempt is accepted
 or retired; a failed removal is audited and does not block the run.
