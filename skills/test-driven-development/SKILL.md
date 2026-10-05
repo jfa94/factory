@@ -11,8 +11,6 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
 
-**Violating the letter of the rules is violating the spirit of the rules.**
-
 ## When to Use
 
 **Always:**
@@ -358,12 +356,12 @@ Can't check all boxes? You skipped TDD. Start over.
 
 ## When Stuck
 
-| Problem                | Solution                                                                                                                   |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Don't know how to test | Write wished-for API. Write assertion first. Ask the user, or emit STATUS: NEEDS_CONTEXT if running in an autonomous task. |
-| Test too complicated   | Design too complicated. Simplify interface.                                                                                |
-| Must mock everything   | Code too coupled. Use dependency injection.                                                                                |
-| Test setup huge        | Extract helpers. Still complex? Simplify design.                                                                           |
+| Problem                | Solution                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Don't know how to test | Write wished-for API. Write assertion first. Ask the user, or return status `needs-context` if running in an autonomous task. |
+| Test too complicated   | Design too complicated. Simplify interface.                                                                                   |
+| Must mock everything   | Code too coupled. Use dependency injection.                                                                                   |
+| Test setup huge        | Extract helpers. Still complex? Simplify design.                                                                              |
 
 ## Debugging Integration
 

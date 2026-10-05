@@ -1,5 +1,19 @@
 /** Test-only fixture: a minimal valid one-task v2 run (never imported by production code). */
-import {digest, validateFeatureSpec, type FeatureRun} from './schema.js'
+import {readFile} from 'node:fs/promises'
+import {digest, validateFeatureSpec, type FeatureAction, type FeatureRun} from './schema.js'
+
+/** Read the brief a role's two-line execute prompt names (the first role when none is given). */
+export async function readBrief(action: FeatureAction, role?: string): Promise<string> {
+    if (action.kind !== 'execute') {
+        throw new Error(`expected execute, got ${JSON.stringify(action)}`)
+    }
+    const prompt = role === undefined ? Object.values(action.prompts)[0] : action.prompts[role]
+    const path = /Read your brief at (.+) and follow it;/.exec(prompt ?? '')?.[1]
+    if (path === undefined) {
+        throw new Error(`prompt names no brief: ${prompt}`)
+    }
+    return readFile(path, 'utf8')
+}
 
 export function featureRunFixture(overrides: Partial<FeatureRun> = {}): FeatureRun {
     const sha = 'a'.repeat(40)

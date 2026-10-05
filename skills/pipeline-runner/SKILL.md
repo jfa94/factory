@@ -56,46 +56,44 @@ Creation refuses stale inputs and another active feature in the repository.
 Version 1 runs cannot execute; their files remain available for diagnosis.
 
 Choose one stable driver identity for this session (the actual session ID when
-available). Call `factory next-action --run <id> --driver <session>`.
+available). Run `factory next-action --run <id> --driver <session>` and
+`factory resume ...` with `Bash(run_in_background)`, end the turn, and continue
+when the completion notification arrives. Foreground Bash stops at 10 minutes, the
+slice and feature checks run longer, and a killed call makes no progress.
 
-- `execute`: save the attempt identity before dispatch. Work only at
-  `attempt.worktree`, on the supplied base and HEAD. Spawn exactly the roles
-  in `attempt.roles`, each with the full engine prompt and its role instructions.
-  Paste the envelope's `prompt` string verbatim into the Agent prompt; never
-  point the agent at a file to read instead. Prefix one line stating the agent
-  is dispatched by the pipeline runner for that repository.
+- `execute`: spawn exactly the roles in `attempt.roles`, one Agent per role, with
+  `prompts[<role>]` pasted verbatim as the Agent prompt. Each prompt names the
+  role's brief file; the brief holds the task, scope and result contract.
   **Do not request native worktree isolation:** the engine already owns the
   producer worktree and immutable review snapshot. Do not create task branches.
-  Review the exact committed range with `git diff <attempt.base_sha>..<attempt.head_sha>`.
   Dispatch producers sequentially. Reviewers are fresh independent agents;
   never share one reviewer's reasoning with another before all reviews finish.
-  The moment an agent returns, write its result JSON verbatim to `staged[<role>]`
-  from the envelope (one file per role; the file's existence is the submission).
+  The moment an agent returns, write its reply verbatim to `staged[<role>]`
+  (one file per role; the file's existence is the submission).
   A markdown fence or prose around the object is tolerated; never edit the object.
   If a role's agent type is not offered, the installed plugin is stale: update it
   rather than substituting another agent.
   Never author, discard or change a finding or acceptance decision, and never
   merge roles into one file. Once every role's file is written, call
-  `factory next-action --run <id> --driver <session>` (no `--results`); the
-  engine merges and validates the staged files and journals accepted evidence.
+  `factory next-action --run <id> --driver <session>`; the engine binds each
+  file to its role, validates it and journals accepted evidence.
 - `wait`: if `reason` says an attempt is awaiting roles, write any finished
   agent's output to its staged path and call again; never dispatch it twice.
   If it says a staged file was rejected, that role finished wrong: run
   `factory resume --run <id> --recover` and the engine redispatches only it.
-  Otherwise arm one timer sized to `retry_after_seconds` with
-  `Bash(run_in_background)`, e.g. `until [ $SECONDS -ge <n> ]; do sleep 30; done`
-  (not a bare foreground `sleep`), end the turn, and call `next-action` again
-  when its completion notification arrives. Re-arm after every `wait`. Answer a
-  user's status question briefly, then re-enter the loop; do not stop driving.
+  A `retry_after_seconds` of 0 means call again now. Otherwise arm one timer
+  sized to it with `Bash(run_in_background)`, e.g.
+  `until [ $SECONDS -ge <n> ]; do sleep 30; done` (not a bare foreground
+  `sleep`), end the turn, and call `next-action` again when its completion
+  notification arrives. Re-arm after every `wait`. Answer a user's status
+  question briefly, then re-enter the loop; do not stop driving.
 - `park`: stop dispatching and report the persisted reason. Explicit resume is
   required, even if quota recovers.
 - `terminal`: report the exact status and delivery URL or no-change outcome.
   `ready-for-review` is a complete feature PR awaiting human review.
   `completed` requires a confirmed merge or verified no-change outcome.
 
-Every execution result uses the identity and JSON schema in the engine prompt.
-Those instructions govern v2 results even when a role's older standalone examples
-show another schema. Never translate an absent result into a passing review.
+Never translate an absent result into a passing review.
 `already-satisfied` is a claim requiring engine checks and independent evaluation.
 A failed command, missing evidence, or unavailable environment cannot count as a pass.
 
@@ -107,7 +105,7 @@ delete branches, change protection, or edit engine state.
 
 Inspect `factory state --run <id> --ledger`. Resume with
 `factory resume --run <id>`, supplying `--answer <text>` for a pending question.
-Answers remain in the ledger and all future producer contexts.
+Answers remain in the ledger and every later brief.
 
 If a dispatched agent was interrupted, first establish that it has stopped, then
 use `factory resume --run <id> --recover`. Recovery consumes a complete staged
@@ -115,7 +113,7 @@ result, keeps a partial review panel and re-issues only its missing roles on the
 same attempt, or retires the attempt while retaining work. A new session may
 consume an older attempt's staged files with its own driver identity; writing a
 finished agent's output to its original attempt path is not relabeling. Never
-rewrite a result to change its attempt or HEAD.
+move a result to another attempt's path.
 
 Cancel only when requested: `factory run cancel --run <id>` preserves artifacts.
 Never infer cancellation from elapsed time or an unavailable dependency.

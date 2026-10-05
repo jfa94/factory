@@ -3,6 +3,7 @@ import {z} from 'zod'
 import {PrdSchema, SpecTaskSchema} from '../spec/schema.js'
 import {executionOrder} from '../spec/execution.js'
 import {extractPrdRequirements} from '../spec/gates.js'
+import {GenerateResultSchema} from '../spec/agents.js'
 
 export const VERSION = 2
 export const REPAIR_PASSES = 3
@@ -176,25 +177,34 @@ export function terminal(run: FeatureRun): boolean {
     return ['completed', 'ready-for-review', 'cancelled'].includes(run.status)
 }
 
-export const ResultSchema = z
-    .object({
-        attempt_id: IdSchema,
-        spec_digest: z.string(),
-        head_sha: ShaSchema,
-        status: z.enum(['done', 'already-satisfied', 'needs-context', 'spec-defect', 'blocked']),
-        message: z.string().optional(),
-        reviews: z.array(z.object({reviewer: z.string(), claims: z.array(ClaimSchema)})).optional(),
-        confirmations: z
-            .array(z.object({id: IdSchema, confirmed: z.boolean(), evidence: z.string().min(10)}))
-            .optional(),
-        acceptance: z.array(z.object({id: z.string(), met: z.boolean(), evidence: z.string().min(10)})).optional(),
-        repaired_spec: FeatureSpecSchema.optional(),
-    })
-    .strict()
+const ResultFields = {
+    status: z.enum(['done', 'already-satisfied', 'needs-context', 'spec-defect', 'blocked']),
+    message: z.string().optional(),
+    confirmations: z.array(z.object({id: IdSchema, confirmed: z.boolean(), evidence: z.string().min(10)})).optional(),
+    acceptance: z.array(z.object({id: z.string(), met: z.boolean(), evidence: z.string().min(10)})).optional(),
+    repaired_spec: GenerateResultSchema.optional(),
+}
+/** What one agent writes. Identity comes from the staged path; unknown keys are stripped. */
+export const AgentResultSchema = z.object({
+    ...ResultFields,
+    claims: z.array(ClaimSchema.omit({id: true, reviewer: true})).optional(),
+})
+export type AgentResult = z.infer<typeof AgentResultSchema>
+/** The merged attempt result with engine-bound reviewer identity. */
+export const ResultSchema = z.object({
+    ...ResultFields,
+    reviews: z.array(z.object({reviewer: z.string(), claims: z.array(ClaimSchema)})).optional(),
+})
 export type FeatureResult = z.infer<typeof ResultSchema>
 
 export type FeatureAction =
-    | {kind: 'execute'; run_id: string; attempt: Attempt; staged: Record<string, string>; prompt: string}
+    | {
+          kind: 'execute'
+          run_id: string
+          attempt: Attempt
+          staged: Record<string, string>
+          prompts: Record<string, string>
+      }
     | {kind: 'wait'; run_id: string; reason: string; retry_after_seconds: number}
     | {kind: 'park'; run_id: string; reason: string}
     | {kind: 'terminal'; run_id: string; status: FeatureRun['status']; delivery: FeatureRun['delivery']}

@@ -41,3 +41,67 @@ describe('FeatureStore integrity checks', () => {
         await expect(store.read('run')).rejects.toThrow(SyntaxError)
     })
 })
+
+describe('FeatureStore staged results', () => {
+    const sha = 'a'.repeat(40)
+    const attempt = {
+        id: 'attempt',
+        driver: 'driver',
+        stage: 'slice-review' as const,
+        base_sha: sha,
+        head_sha: sha,
+        spec_digest: 'digest',
+        worktree: '/snapshot',
+        roles: ['quality-reviewer', 'silent-failure-hunter'],
+        issued_at: '2026-10-05T00:00:00Z',
+    }
+    const claim = {severity: 'important', file: 'value.ts', line: 3, quote: 'return wrongValue', claim: 'Wrong value'}
+
+    it('binds reviewer identity and claim ids from the staged path', async () => {
+        const store = new FeatureStore(dataDir)
+        const paths = await store.stage('run', attempt)
+        await writeFile(paths['quality-reviewer'] ?? '', JSON.stringify({status: 'done', claims: [claim, claim]}))
+        await writeFile(paths['silent-failure-hunter'] ?? '', JSON.stringify({status: 'done', claims: []}))
+        expect(await store.staged('run', attempt)).toEqual({
+            result: {
+                status: 'done',
+                reviews: [
+                    {
+                        reviewer: 'quality-reviewer',
+                        claims: [
+                            {id: 'quality-reviewer.1', reviewer: 'quality-reviewer', ...claim},
+                            {id: 'quality-reviewer.2', reviewer: 'quality-reviewer', ...claim},
+                        ],
+                    },
+                    {reviewer: 'silent-failure-hunter', claims: []},
+                ],
+            },
+        })
+    })
+
+    it('strips legacy identity fields and lets a halted status win', async () => {
+        const store = new FeatureStore(dataDir)
+        const paths = await store.stage('run', attempt)
+        const legacy = {attempt_id: 'other', spec_digest: 'x', head_sha: 'b'.repeat(40), reviewer: 'spoofed'}
+        await writeFile(paths['quality-reviewer'] ?? '', JSON.stringify({...legacy, status: 'done', claims: []}))
+        await writeFile(
+            paths['silent-failure-hunter'] ?? '',
+            JSON.stringify({...legacy, status: 'needs-context', message: 'Which reading?'})
+        )
+        expect(await store.staged('run', attempt)).toEqual({
+            result: {
+                status: 'needs-context',
+                message: 'Which reading?',
+                reviews: [{reviewer: 'quality-reviewer', claims: []}],
+            },
+        })
+    })
+
+    it('writes briefs beside results without counting them as submissions', async () => {
+        const store = new FeatureStore(dataDir)
+        const path = await store.writeBrief('run', attempt, 'quality-reviewer', '# brief')
+        expect(path).toBe(join(dataDir, 'staged-v2', 'run', 'attempt', 'quality-reviewer.brief.md'))
+        expect(await store.stagedPresent('run', attempt)).toEqual([])
+        expect(await store.staged('run', attempt)).toEqual({missing: attempt.roles, invalid: {}})
+    })
+})

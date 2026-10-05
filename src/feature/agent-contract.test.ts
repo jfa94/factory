@@ -1,10 +1,9 @@
 /**
- * Agent and skill markdown is executable policy: it must describe the v2 result envelope
- * (`ResultSchema`/`ClaimSchema` in ./schema.ts and the engine prompt) and nothing from the
- * retired v1 contracts. Canary #4 observation 3: agents emitted non-conforming JSON because
- * markdown carried contradictory legacy contracts alongside the v2 one.
+ * Agent and skill markdown is executable policy: dispatched agents read a brief and return the
+ * identity-free result (`AgentResultSchema` in ./schema.ts); nothing from retired contracts.
+ * Canary #4 observation 3: contradictory legacy contracts produced non-conforming JSON.
  */
-import {readFileSync} from 'node:fs'
+import {readFileSync, readdirSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {describe, expect, it} from 'vitest'
@@ -26,6 +25,35 @@ const SURFACES = [
     'agents/systemic-failure-reviewer.md',
     'agents/database-design-reviewer.md',
     'agents/spec-reviewer.md',
+    'agents/acceptance-evaluator.md',
+]
+
+const DISPATCHED = [
+    'test-writer',
+    'implementer',
+    'scribe',
+    'e2e-author',
+    'spec-generator',
+    'spec-reviewer',
+    'finding-verifier',
+    'acceptance-evaluator',
+    'quality-reviewer',
+    'implementation-reviewer',
+    'silent-failure-hunter',
+    'systemic-failure-reviewer',
+    'database-design-reviewer',
+]
+
+const BANNED = [
+    'STATUS:',
+    'attempt_id',
+    'head_sha',
+    'spec_digest',
+    'manifest',
+    '--results',
+    'origin/staging',
+    '3-file',
+    'prior_reviews',
 ]
 
 const LEGACY = [
@@ -56,35 +84,47 @@ describe('v2 agent result contract', () => {
         }
     })
 
-    it('every surface names the v2 envelope identity fields', () => {
-        // Panel reviewers inherit the envelope from the injected review-protocol skill.
-        const owners = [
-            'skills/review-protocol/SKILL.md',
-            'agents/finding-verifier.md',
-            'agents/implementer.md',
-            'agents/test-writer.md',
-            'agents/scribe.md',
-            'agents/e2e-author.md',
-            'agents/spec-reviewer.md',
-        ]
-        for (const rel of owners) {
-            const text = read(rel)
-            expect(text, rel).toContain('attempt_id')
-            expect(text, rel).toContain('spec_digest')
-            expect(text, rel).toContain('head_sha')
+    it('every dispatchable role has an agent with a Factory dispatch section', () => {
+        for (const role of DISPATCHED) {
+            expect(read(`agents/${role}.md`), role).toContain('## Factory dispatch')
         }
     })
 
-    it('review-protocol defines the reviews rows, the pattern-coverage rule and whole-review rejection', () => {
+    it('dispatched agents and runner skills carry no identity or retired vocabulary', () => {
+        const surfaces = [
+            ...DISPATCHED.map((role) => `agents/${role}.md`),
+            'skills/pipeline-runner/SKILL.md',
+            'skills/review-protocol/SKILL.md',
+        ]
+        for (const rel of surfaces) {
+            for (const token of BANNED) {
+                expect(read(rel), `${rel} still mentions ${token}`).not.toContain(token)
+            }
+        }
+    })
+
+    it('no agent or skill carries the letter-versus-spirit slogan', () => {
+        const files = readdirSync(resolve(repoRoot, 'agents'))
+            .map((name) => `agents/${name}`)
+            .concat(
+                readdirSync(resolve(repoRoot, 'skills'), {recursive: true, encoding: 'utf8'})
+                    .filter((name) => name.endsWith('.md'))
+                    .map((name) => `skills/${name}`)
+            )
+        for (const rel of files) {
+            const text = read(rel).toLowerCase()
+            expect(text, rel).not.toContain('violates the spirit')
+            expect(text, rel).not.toContain('violating the letter')
+        }
+    })
+
+    it('review-protocol defines the claims result, the pattern-coverage rule and whole-review rejection', () => {
         const skill = read('skills/review-protocol/SKILL.md').replace(/\s+/g, ' ')
-        expect(skill).toContain('"reviews": [')
-        expect(skill).toContain('reviews:[')
         expect(skill).toContain('"severity": "important | critical"')
         expect(skill).toContain(PATTERN_SENTENCE)
         expect(skill).toContain('rejects the WHOLE review')
-        expect(skill).toContain('prior_reviews')
         expect(skill).toContain('RawReview')
-        expect(skill).toContain('git -C <taskWorktree> diff <baseRef>..HEAD')
+        expect(skill).toContain('Refuted claims')
     })
 
     it('finding-verifier returns confirmations for a batch and blocks instead of emitting nothing', () => {
@@ -96,11 +136,10 @@ describe('v2 agent result contract', () => {
         expect(text).toContain('`status: "blocked"`')
     })
 
-    it('producers document already-satisfied and the real final HEAD', () => {
+    it('producers document already-satisfied and the escalation statuses', () => {
         for (const rel of ['agents/implementer.md', 'agents/test-writer.md']) {
             const text = read(rel)
             expect(text, rel).toContain('already-satisfied')
-            expect(text, rel).toContain('git rev-parse HEAD')
             expect(text, rel).toContain('needs-context')
             expect(text, rel).toContain('spec-defect')
         }
@@ -108,7 +147,7 @@ describe('v2 agent result contract', () => {
         expect(read('agents/implementer.md')).toContain('task checkpoint')
     })
 
-    it('every panel reviewer names its RawReview row inside the envelope', () => {
+    it('every panel reviewer returns claims per the review-protocol skill', () => {
         for (const role of [
             'quality-reviewer',
             'implementation-reviewer',
@@ -117,8 +156,8 @@ describe('v2 agent result contract', () => {
             'database-design-reviewer',
         ]) {
             const text = read(`agents/${role}.md`)
-            expect(text, role).toContain(`"reviewer": "${role}"`)
             expect(text, role).toContain('claims')
+            expect(text, role).toContain('review-protocol')
         }
     })
 

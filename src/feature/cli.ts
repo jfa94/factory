@@ -31,8 +31,9 @@ factory state --run <id> [--ledger]
 factory state --list
 factory debug create --base <ref> [--ignore-quota]
 
-Agent results are written verbatim to the per-role paths in the execute envelope's
-"staged"; next-action consumes them. --recover, after the previous agent has stopped,
+Each execute envelope carries "prompts" (one two-line prompt per role, naming the role's
+brief) and "staged" (per-role result paths); write each agent's reply verbatim to its
+staged path and next-action consumes them. --recover, after the previous agent has stopped,
 consumes a complete staged result, redispatches missing roles, or retires the attempt.
 Submitting the feature acceptance result pushes and opens the PR in the same call;
 --local parks the verified feature before any remote write until resume --ship.

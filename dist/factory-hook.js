@@ -7222,6 +7222,13 @@ var PrdSchema = external_exports.object({
   body_truncated: external_exports.boolean()
 }).strict();
 
+// src/spec/agents.ts
+var GenerateResultSchema = external_exports.object({
+  specMd: external_exports.string().min(1),
+  slug: external_exports.string().min(1),
+  tasks: SpecTasksSchema
+}).strict();
+
 // src/feature/schema.ts
 var VERSION = 2;
 var IdSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -7352,17 +7359,21 @@ var FeatureRunSchema = external_exports.object({
 function terminal(run) {
   return ["completed", "ready-for-review", "cancelled"].includes(run.status);
 }
-var ResultSchema = external_exports.object({
-  attempt_id: IdSchema,
-  spec_digest: external_exports.string(),
-  head_sha: ShaSchema,
+var ResultFields = {
   status: external_exports.enum(["done", "already-satisfied", "needs-context", "spec-defect", "blocked"]),
   message: external_exports.string().optional(),
-  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional(),
   confirmations: external_exports.array(external_exports.object({ id: IdSchema, confirmed: external_exports.boolean(), evidence: external_exports.string().min(10) })).optional(),
   acceptance: external_exports.array(external_exports.object({ id: external_exports.string(), met: external_exports.boolean(), evidence: external_exports.string().min(10) })).optional(),
-  repaired_spec: FeatureSpecSchema.optional()
-}).strict();
+  repaired_spec: GenerateResultSchema.optional()
+};
+var AgentResultSchema = external_exports.object({
+  ...ResultFields,
+  claims: external_exports.array(ClaimSchema.omit({ id: true, reviewer: true })).optional()
+});
+var ResultSchema = external_exports.object({
+  ...ResultFields,
+  reviews: external_exports.array(external_exports.object({ reviewer: external_exports.string(), claims: external_exports.array(ClaimSchema) })).optional()
+});
 
 // src/feature/store.ts
 var FeatureStore = class {
@@ -7424,9 +7435,27 @@ var FeatureStore = class {
       fn
     );
   }
-  async recordResult(id, result) {
+  async recordResult(id, attemptId, result) {
     const checked = ResultSchema.parse(result);
-    await atomicWriteFile(join3(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
+    await atomicWriteFile(
+      join3(this.dir(id), "results", `${IdSchema.parse(attemptId)}.json`),
+      JSON.stringify(checked)
+    );
+  }
+  /** The brief each role reads; it sits beside the result file but never counts as one. */
+  briefPath(id, attempt, role) {
+    return join3(
+      this.dataDir,
+      "staged-v2",
+      IdSchema.parse(id),
+      IdSchema.parse(attempt.id),
+      `${IdSchema.parse(role)}.brief.md`
+    );
+  }
+  async writeBrief(id, attempt, role, body) {
+    const path = this.briefPath(id, attempt, role);
+    await atomicWriteFile(path, body);
+    return path;
   }
   /**
    * Staged results live outside `runs-v2/**` so the driver session may write them
@@ -7459,7 +7488,7 @@ var FeatureStore = class {
   /**
    * Read every role's staged file and merge them into one attempt result. A missing,
    * half-written or schema-invalid file reads as "not yet"; only explicit recovery
-   * judges it. Identity fields must agree; any non-done status wins.
+   * judges it. Reviewer identity is bound from the path; any non-done status wins.
    */
   async staged(id, attempt) {
     const parts = [];
@@ -7467,7 +7496,7 @@ var FeatureStore = class {
     const invalid = {};
     for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile(path, "utf8")))));
+        parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, "utf8"))))]);
       } catch (error) {
         if (isEnoent(error) || error instanceof SyntaxError) {
           missing.push(role);
@@ -7479,20 +7508,25 @@ var FeatureStore = class {
         }
       }
     }
-    const first = parts[0];
-    if (missing.length || first === void 0) {
+    if (missing.length || parts.length === 0) {
       return { missing, invalid };
     }
-    if (parts.some(
-      (part) => part.attempt_id !== first.attempt_id || part.spec_digest !== first.spec_digest || part.head_sha !== first.head_sha
-    )) {
-      throw new Error("staged results disagree on attempt identity or HEAD");
+    const reviews = parts.flatMap(
+      ([role, part]) => part.claims ? [
+        {
+          reviewer: role,
+          claims: part.claims.map((claim, n) => ({ id: `${role}.${n + 1}`, reviewer: role, ...claim }))
+        }
+      ] : []
+    );
+    const merged = { status: "done" };
+    for (const [, { claims: _claims, ...part }] of parts) {
+      Object.assign(merged, part, { status: merged.status });
     }
-    const halted = parts.find((part) => part.status !== "done");
-    const reviews = parts.flatMap((part) => part.reviews ?? []);
+    const halted = parts.find(([, part]) => part.status !== "done")?.[1];
     return {
       result: {
-        ...first,
+        ...merged,
         ...halted ? { status: halted.status, message: halted.message } : {},
         ...reviews.length ? { reviews } : {}
       }

@@ -1,5 +1,5 @@
 import {appendFile, mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises'
-import {join} from 'node:path'
+import {dirname, isAbsolute, join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach, describe, expect, it} from 'vitest'
 import {exec, execOrThrow, type ExecResult} from '../shared/exec.js'
@@ -12,6 +12,7 @@ import {FeatureStore} from './store.js'
 import {FeatureEngine} from './engine.js'
 import {LocalFeatureRuntime} from './runtime.js'
 import {validateFeatureSpec, type FeatureAction, type FeatureResult} from './schema.js'
+import {readBrief} from './test-fixtures.js'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -120,18 +121,12 @@ function result(action: FeatureAction, extra: Partial<FeatureResult> = {}): Feat
     if (action.kind !== 'execute') {
         throw new Error(`expected execute, got ${JSON.stringify(action)}`)
     }
-    return {
-        attempt_id: action.attempt.id,
-        spec_digest: action.attempt.spec_digest,
-        head_sha: action.attempt.head_sha,
-        status: 'done',
-        ...extra,
-    }
+    return {status: 'done', ...extra}
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>
 
-/** Write a merged result verbatim to the in-flight attempt's per-role staged paths. */
+/** Write each role's agent-shaped part (its own claims, no identity) to the in-flight staged paths. */
 async function stage(f: Fixture, response: FeatureResult): Promise<Record<string, string>> {
     const attempt = (await f.store.read('run')).in_flight
     if (!attempt) {
@@ -139,9 +134,8 @@ async function stage(f: Fixture, response: FeatureResult): Promise<Record<string
     }
     const paths = await f.store.stage('run', attempt)
     for (const [role, path] of Object.entries(paths)) {
-        const part = response.reviews
-            ? {...response, reviews: response.reviews.filter((row) => row.reviewer === role)}
-            : response
+        const {reviews, ...rest} = response
+        const part = reviews ? {...rest, claims: reviews.find((row) => row.reviewer === role)?.claims} : rest
         await writeFile(path, JSON.stringify(part))
     }
     return paths
@@ -171,7 +165,6 @@ async function respond(f: Fixture, action: FeatureAction, noChange = false): Pro
                 '-m',
                 `[${at(run.spec.tasks, run.task_index).task_id}] value ${value}`
             )
-            response.head_sha = await f.runtime.head(attempt.worktree)
         }
     } else if (attempt.stage.endsWith('review')) {
         response.reviews = attempt.roles.map((reviewer) => ({reviewer, claims: []}))
@@ -202,7 +195,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
             await writeFile(join(action.attempt.worktree, 'value.js'), `export const value = ${pass + 1}\n`)
             await git(action.attempt.worktree, 'add', 'value.js')
             await git(action.attempt.worktree, 'commit', '-m', `[first] repair attempt ${pass}`)
-            action = await submit(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+            action = await submit(f, result(action))
         }
         expect(action).toMatchObject({kind: 'park'})
         const run = await f.store.read('run')
@@ -221,7 +214,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
                 : checks(run, stage)
         let action = await f.engine.advance('run', 'driver')
         action = await respond(f, action) // implement → failing task-check → repair scheduled
-        expect(action.kind === 'execute' && action.prompt).toContain('type error')
+        expect(await readBrief(action)).toContain('type error')
         failing = false
         if (action.kind !== 'execute') {
             throw new Error('repair attempt missing')
@@ -229,9 +222,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 2\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] repair')
-        action = await submit(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
-        expect(action.kind === 'execute' && action.prompt).not.toContain('type error')
+        expect(await readBrief(action)).not.toContain('type error')
         expect((await f.store.read('run')).feedback).toEqual([])
     })
 
@@ -443,7 +436,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         )
         await git(worktree, 'add', 'value.test.js')
         await git(worktree, 'commit', '-m', '[first] failing value assertion')
-        action = await submit(f, result(action, {head_sha: await f.runtime.head(worktree)}))
+        action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
         action = await respond(f, action)
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
@@ -464,9 +457,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(worktree, 'value.test.js'), "import {value} from './missing.js'\n")
         await git(worktree, 'add', 'value.test.js')
         await git(worktree, 'commit', '-m', '[first] test that cannot load')
-        action = await submit(f, result(action, {head_sha: await f.runtime.head(worktree)}))
+        action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'tests'}})
-        expect(action.kind === 'execute' && action.prompt).toContain('executed_tests: 0')
+        expect(await readBrief(action)).toContain('executed_tests: 0')
         expect((await f.store.read('run')).status).toBe('running')
     }, 30_000)
 
@@ -481,11 +474,11 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await git(worktree, 'add', 'value.test.js')
         await git(worktree, 'commit', '-m', '[first] pin delivered value')
         const head = await f.runtime.head(worktree)
-        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        action = await submit(f, result(action, {status: 'already-satisfied'}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review', head_sha: head}})
         action = await respond(f, action)
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'acceptance'}})
-        expect(action.kind === 'execute' && action.prompt).toContain('Acceptance IDs: first:AC1.')
+        expect(await readBrief(action)).toContain('## Ids to evaluate (exactly these)\n\nfirst:AC1\n')
         action = await respond(f, action)
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'slice-review'}})
         const run = await f.store.read('run')
@@ -503,8 +496,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(worktree, 'value.js'), 'export const value = 1\n')
         await git(worktree, 'add', 'value.js')
         await git(worktree, 'commit', '-m', '[first] implementation smuggled into the tests stage')
-        const head = await f.runtime.head(worktree)
-        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        action = await submit(f, result(action, {status: 'already-satisfied'}))
         expect(action).toMatchObject({
             kind: 'park',
             reason: expect.stringContaining('tagged test-only commits') as string,
@@ -515,18 +507,21 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(run.attempts['task:first'] ?? 0).toBe(0)
     }, 30_000)
 
-    it('closes every prompt with the result contract and the identity line (obs 1, 3)', async () => {
+    it('hands each role a two-line prompt naming its absolute brief beside the staged result', async () => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         if (action.kind !== 'execute') {
             throw new Error('missing attempt')
         }
-        expect(action.prompt).toContain('file every instance in the reviewed range in the same round')
-        expect(action.prompt).toContain('full 40-character lowercase hex SHA')
-        const last = action.prompt.split('\n\n').at(-1) ?? ''
-        expect(last.startsWith('Identity: ')).toBe(true)
-        expect(last).toContain(action.attempt.id)
-        expect(action.prompt.indexOf('Identity: ')).toBe(action.prompt.lastIndexOf('Identity: '))
+        const lines = (action.prompts.implementer ?? '').split('\n')
+        expect(lines).toHaveLength(2)
+        expect(lines[0]).toBe('Factory pipeline-runner dispatch for example/app, as role implementer.')
+        const brief = join(dirname(action.staged.implementer ?? ''), 'implementer.brief.md')
+        expect(isAbsolute(brief)).toBe(true)
+        expect(lines[1]).toBe(
+            `Read your brief at ${brief} and follow it; your final reply is the JSON result it specifies.`
+        )
+        expect(await readFile(brief, 'utf8')).toContain('- Role: implementer')
     })
 
     it('still rejects already-satisfied from implement when the checkpoint moved', async () => {
@@ -539,8 +534,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(worktree, 'value.js'), 'export const value = 1\n')
         await git(worktree, 'add', 'value.js')
         await git(worktree, 'commit', '-m', '[first] moved checkpoint')
-        const head = await f.runtime.head(worktree)
-        action = await submit(f, result(action, {status: 'already-satisfied', head_sha: head}))
+        action = await submit(f, result(action, {status: 'already-satisfied'}))
         expect(action).toMatchObject({
             kind: 'park',
             reason: expect.stringContaining('unchanged task checkpoint') as string,
@@ -556,7 +550,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 3\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] durable producer result')
-        await stage(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        await stage(f, result(action))
         await f.engine.stop('run')
         const recovered = await new FeatureEngine(f.store, f.runtime).resume('run', {recover: true})
         expect(recovered.status).toBe('running')
@@ -579,8 +573,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 4\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] result staged by an earlier session')
-        const head = await f.runtime.head(action.attempt.worktree)
-        expect(await submit(f, result(action, {head_sha: head}), 'new-driver')).toMatchObject({
+        expect(await submit(f, result(action), 'new-driver')).toMatchObject({
             kind: 'execute',
             attempt: {stage: 'task-review', driver: 'new-driver'},
         })
@@ -588,10 +581,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(run.audit.some((row) => row.event === 'result recorded')).toBe(true)
         expect(
             JSON.parse(await readFile(join(f.store.dir('run'), 'results', `${action.attempt.id}.json`), 'utf8'))
-        ).toMatchObject({
-            attempt_id: action.attempt.id,
-            head_sha: head,
-        })
+        ).toEqual({status: 'done'})
     })
 
     it('blocks the owning session once while a complete staged result awaits consumption', async () => {
@@ -606,11 +596,13 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         const runs = () => f.store.list()
         const stop = async (input: {session_id?: string; stop_hook_active?: boolean}) =>
             (await decideFeatureStop(input, await runs(), f.store)).action
+        // The brief beside the staged path is not a result.
+        expect(await readBrief(action)).toContain('- Role: implementer')
         expect(await stop({session_id: 'owner'})).toBe('allow')
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 5\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] finished but never submitted')
-        await stage(f, result(action, {head_sha: await f.runtime.head(action.attempt.worktree)}))
+        await stage(f, result(action))
         expect(await stop({session_id: 'other'})).toBe('allow')
         expect(await stop({session_id: 'owner', stop_hook_active: true})).toBe('allow')
         const blocked = await decideFeatureStop({session_id: 'owner'}, await runs(), f.store)
@@ -634,14 +626,13 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(action.attempt.worktree, 'value.js'), 'export const value = 4\n')
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] fenced result')
-        const head = await f.runtime.head(action.attempt.worktree)
-        await writeFile(path, JSON.stringify({...result(action, {head_sha: head}), status: 'finished'}))
+        await writeFile(path, JSON.stringify({...result(action), status: 'finished'}))
         expect(await f.engine.advance('run', 'driver')).toMatchObject({
             kind: 'wait',
             reason: expect.stringContaining('staged file rejected (implementer: status') as string,
         })
         expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
-        await writeFile(path, 'Done.\n```json\n' + JSON.stringify(result(action, {head_sha: head})) + '\n```\n')
+        await writeFile(path, 'Done.\n```json\n' + JSON.stringify(result(action)) + '\n```\n')
         expect(await f.engine.advance('run', 'driver')).toMatchObject({
             kind: 'execute',
             attempt: {stage: 'task-review'},
@@ -685,6 +676,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         }
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait'})
         await f.engine.stop('run')
+        for (const role of missing) {
+            await writeFile(f.store.briefPath('run', attempt, role), 'stale brief')
+        }
         const recovered = await f.engine.resume('run', {recover: true})
         expect(recovered.in_flight).toMatchObject({id: attempt.id, roles: attempt.roles, redispatch: missing})
         const redispatch = await f.engine.advance('run', 'new-driver')
@@ -693,9 +687,13 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
             throw new Error('missing redispatch')
         }
         expect(Object.keys(redispatch.staged)).toEqual(missing)
+        expect(Object.keys(redispatch.prompts)).toEqual(missing)
+        for (const role of missing) {
+            expect(await readBrief(redispatch, role)).toContain(`- Role: ${role}`)
+        }
         expect((await f.store.read('run')).in_flight?.redispatch).toBeUndefined()
-        for (const [role, path] of Object.entries(redispatch.staged)) {
-            await writeFile(path, JSON.stringify(result(action, {reviews: [{reviewer: role, claims: []}]})))
+        for (const path of Object.values(redispatch.staged)) {
+            await writeFile(path, JSON.stringify({status: 'done', claims: []}))
         }
         expect(await f.engine.advance('run', 'new-driver')).toMatchObject({kind: 'execute'})
         expect((await f.store.read('run')).checkpoints.map((row) => row.task_id)).toEqual(['first'])
@@ -717,7 +715,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(recovered.status).toBe('running')
         expect(recovered.stage).toBe('task-review')
         expect(recovered.audit.at(-2)?.event).toBe('invalid durable result retired; evidence and work retained')
-        expect(JSON.parse(await readFile(at(Object.values(paths), 0), 'utf8'))).toMatchObject({reviews: []})
+        expect(JSON.parse(await readFile(at(Object.values(paths), 0), 'utf8'))).toEqual({status: 'done'})
         expect(await f.runtime.head(action.attempt.worktree)).toBe(head)
         const next = await f.engine.advance('run', 'new-driver')
         expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
@@ -946,7 +944,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(f.deliveries).toEqual([])
     }, 30_000)
 
-    it('retains answers, prevents duplicate spawns, and rejects stale results after recovery', async () => {
+    it('retains answers, prevents duplicate spawns, and ignores a result staged for a retired attempt', async () => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         expect(await f.engine.advance('run', 'other-driver')).toMatchObject({kind: 'wait'})
@@ -955,15 +953,19 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         })
         await f.engine.resume('run', {answer: 'Use the local endpoint'})
         const resumed = await f.engine.advance('run', 'driver')
-        expect(resumed.kind === 'execute' && resumed.prompt).toContain('Use the local endpoint')
+        expect(await readBrief(resumed)).toContain('Use the local endpoint')
         await f.engine.stop('run')
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'park'})
         await f.engine.resume('run', {recover: true})
         const recovered = await f.engine.advance('run', 'driver')
-        expect(recovered.kind === 'execute' && recovered.prompt).toContain('Use the local endpoint')
-        expect(await submit(f, result(resumed))).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('stale') as string,
+        expect(await readBrief(recovered)).toContain('Use the local endpoint')
+        if (resumed.kind !== 'execute') {
+            throw new Error('missing resumed attempt')
+        }
+        await writeFile(at(Object.values(resumed.staged), 0), JSON.stringify(result(resumed)))
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'wait',
+            reason: expect.stringContaining('awaiting implementer') as string,
         })
         expect((await f.store.read('run')).answers).toHaveLength(1)
     }, 30_000)

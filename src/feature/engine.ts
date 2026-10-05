@@ -17,7 +17,8 @@ import {
     type Stage,
     type Attempt,
 } from './schema.js'
-import {extractPrdRequirements} from '../spec/gates.js'
+import {parseGenerateResult} from '../spec/agents.js'
+import {acceptanceIds, currentTask, renderBrief} from './brief.js'
 
 const PANEL = ['quality-reviewer', 'implementation-reviewer', 'silent-failure-hunter', 'systemic-failure-reviewer']
 const PRODUCERS: readonly Stage[] = ['tests', 'implement', 'docs', 'e2e-author', 'spec-repair']
@@ -237,7 +238,7 @@ export class FeatureEngine {
                         }
                         await this.accept(recovered, staged.result)
                         run = recovered
-                        this.audit(run, 'durable result recovered', staged.result.attempt_id)
+                        this.audit(run, 'durable result recovered', attempt.id)
                         if (run.status === 'parked') {
                             return run
                         }
@@ -273,26 +274,18 @@ export class FeatureEngine {
         })
     }
 
-    /** Validate identity, then record, then journal the accepted result as evidence. */
+    /** Identity is the staged path; check the attempt still matches the spec, record, then journal. */
     private async accept(run: FeatureRun, result: FeatureResult): Promise<void> {
         const attempt = run.in_flight
-        if (
-            attempt?.id !== result.attempt_id ||
-            result.spec_digest !== attempt.spec_digest ||
-            attempt.spec_digest !== run.spec_digest
-        ) {
+        if (attempt?.spec_digest !== run.spec_digest) {
             throw new Error('stale or duplicate result; inspect the persisted attempt')
         }
         await this.record(run, result)
-        await this.store.recordResult(run.run_id, result)
+        await this.store.recordResult(run.run_id, attempt.id, result)
     }
 
     private task(run: FeatureRun) {
-        const task = run.spec.tasks[Math.min(run.task_index, run.spec.tasks.length - 1)]
-        if (!task) {
-            throw new Error('missing current task')
-        }
-        return task
+        return currentTask(run)
     }
 
     private audit(run: FeatureRun, event: string, details: unknown): void {
@@ -400,72 +393,16 @@ export class FeatureEngine {
     }
 
     private async execute(run: FeatureRun, attempt: Attempt): Promise<FeatureAction> {
-        return {
-            kind: 'execute',
-            run_id: run.run_id,
-            attempt,
-            staged: await this.store.stage(run.run_id, attempt, attempt.roles),
-            prompt: this.prompt(run, attempt),
+        const staged = await this.store.stage(run.run_id, attempt, attempt.roles)
+        const prompts: Record<string, string> = {}
+        for (const role of attempt.roles) {
+            const path = await this.store.writeBrief(run.run_id, attempt, role, renderBrief(run, attempt, role))
+            prompts[role] = [
+                `Factory pipeline-runner dispatch for ${run.repo}, as role ${role}.`,
+                `Read your brief at ${path} and follow it; your final reply is the JSON result it specifies.`,
+            ].join('\n')
         }
-    }
-
-    private prompt(run: FeatureRun, attempt: Attempt): string {
-        const task = this.task(run)
-        const context =
-            run.stage === 'confirm'
-                ? {
-                      claims: run.claims
-                          .slice(0, CONFIRM_BATCH)
-                          .map(({id, file, line, quote, claim}) => ({id, file, line, quote, claim})),
-                  }
-                : {
-                      prd: run.spec.prd,
-                      version: run.spec.version,
-                      revision: run.spec.revision,
-                      base_sha: run.spec.base_sha,
-                      spec_md: run.spec.spec_md,
-                      contracts: run.spec.contracts,
-                      tasks: run.spec.tasks,
-                      current_task: task,
-                      requirements: extractPrdRequirements(run.spec.prd.body).map((text, index) => ({
-                          id: `R${index + 1}`,
-                          text,
-                      })),
-                      checkpoints: run.checkpoints,
-                      answers: run.answers,
-                      feedback: run.feedback,
-                      prior_reviews: run.audit.filter(
-                          (row) => row.event === 'review recorded' || row.event === 'findings confirmed'
-                      ),
-                      repaired_spec: run.repaired_spec,
-                  }
-        return [
-            `Factory v2 ${attempt.stage}. Work in ${attempt.worktree}. Base ${attempt.base_sha}; HEAD ${attempt.head_sha}.`,
-            'All acceptance criteria are visible. Preserve accepted commits and repair forward. Never reset, force-push, delete remote branches, or change engine state.',
-            PRODUCERS.includes(attempt.stage)
-                ? 'Commit completed work with [task_id] tags; report the actual final HEAD. At the tests stage, establish a meaningful failing assertion before implementation. If the engine dispatched implementation directly, honor its baseline TDD exemption. Do not weaken tests.'
-                : 'Review this immutable snapshot independently; do not edit it. Return evidence for every claim or acceptance decision.',
-            'Return JSON: {attempt_id, spec_digest, head_sha, status:"done"|"already-satisfied"|"needs-context"|"spec-defect"|"blocked", message?}.',
-            'For review also return reviews:[{reviewer,claims:[{id,reviewer,severity:"important"|"critical",file,line,quote,claim}]}], one row per requested reviewer; quote at least 10 exact source characters; claim at most 300 characters. When a finding is one instance of a pattern, file every instance in the reviewed range in the same round; within at most 10 claims per reviewer prefer full pattern coverage over weaker unrelated findings.',
-            'For confirm return confirmations:[{id,confirmed,evidence}] for every claim in the context. For acceptance return acceptance:[{id,met,evidence}] for every requested criterion.',
-            `Acceptance IDs: ${this.acceptanceIds(run).join(', ')}. Evidence must identify actual behavior, tests, and source; never infer satisfaction from ancestry or unrelated tests.`,
-            'For spec-repair return repaired_spec with the next revision, unchanged PRD/base and completed tasks. For spec-review return status done only if the revised plan is feasible and preserves requirements.',
-            JSON.stringify(context, null, 2),
-            'Result contract: your final reply is exactly one JSON object (a markdown fence is tolerated, no other prose). Copy attempt_id, spec_digest and head_sha verbatim from the identity line below; head_sha is the full 40-character lowercase hex SHA. status is exactly one of done, already-satisfied, needs-context, spec-defect, blocked. The stage-specific array (reviews, confirmations, acceptance or repaired_spec) is required for that stage.',
-            `Identity: ${JSON.stringify({attempt_id: attempt.id, spec_digest: attempt.spec_digest, head_sha: attempt.head_sha})}`,
-        ].join('\n\n')
-    }
-
-    private acceptanceIds(run: FeatureRun): string[] {
-        if (run.candidate_satisfied) {
-            return this.task(run).acceptance_criteria.map((_, index) => `${this.task(run).task_id}:AC${index + 1}`)
-        }
-        return [
-            ...extractPrdRequirements(run.spec.prd.body).map((_, index) => `R${index + 1}`),
-            ...run.spec.tasks.flatMap((task) =>
-                task.acceptance_criteria.map((_, index) => `${task.task_id}:AC${index + 1}`)
-            ),
-        ]
+        return {kind: 'execute', run_id: run.run_id, attempt, staged, prompts}
     }
 
     private async record(run: FeatureRun, result: FeatureResult): Promise<void> {
@@ -474,7 +411,7 @@ export class FeatureEngine {
             throw new Error('result has no active attempt')
         }
         const head = await this.runtime.head(run.worktree)
-        if (result.head_sha !== head || (!PRODUCERS.includes(attempt.stage) && head !== attempt.head_sha)) {
+        if (!PRODUCERS.includes(attempt.stage) && head !== attempt.head_sha) {
             throw new Error('result HEAD differs from the reviewed/produced tree')
         }
         if (!(await this.runtime.ancestor(run.worktree, run.accepted_sha, head))) {
@@ -559,24 +496,15 @@ export class FeatureEngine {
             case 'slice-review':
             case 'feature-review': {
                 const reviews = result.reviews
-                if (
-                    reviews?.length !== attempt.roles.length ||
-                    new Set(reviews.map((r) => r.reviewer)).size !== reviews.length ||
-                    attempt.roles.some((role) => !reviews.some((r) => r.reviewer === role))
-                ) {
+                // The store binds one row per role from the staged path; a role without claims is absent.
+                if (reviews?.length !== attempt.roles.length) {
                     throw new Error('missing or duplicate independent reviewer results')
                 }
                 run.claims = []
                 for (const review of reviews) {
                     for (const claim of review.claims) {
-                        if (
-                            claim.reviewer !== review.reviewer ||
-                            !(await this.runtime.citation(attempt.worktree, claim))
-                        ) {
+                        if (!(await this.runtime.citation(attempt.worktree, claim))) {
                             throw new Error(`invalid citation for ${claim.id}`)
-                        }
-                        if (run.claims.some((row) => row.id === claim.id)) {
-                            throw new Error('duplicate finding id')
                         }
                         run.claims.push(claim)
                     }
@@ -628,7 +556,7 @@ export class FeatureEngine {
             }
             case 'acceptance': {
                 const rows = result.acceptance ?? []
-                const expected = this.acceptanceIds(run)
+                const expected = acceptanceIds(run)
                 if (
                     rows.length !== expected.length ||
                     new Set(rows.map((row) => row.id)).size !== rows.length ||
@@ -655,15 +583,16 @@ export class FeatureEngine {
                 break
             }
             case 'spec-repair': {
-                const spec = validateFeatureSpec(result.repaired_spec)
-                if (
-                    spec.revision !== run.spec.revision + 1 ||
-                    digest(spec.prd) !== digest(run.spec.prd) ||
-                    digest(spec.contracts) !== digest(run.spec.contracts) ||
-                    spec.base_sha !== run.spec.base_sha
-                ) {
-                    throw new Error('spec repair must preserve PRD/base and increment revision')
-                }
+                const repair = parseGenerateResult(result.repaired_spec)
+                const spec = validateFeatureSpec({
+                    version: VERSION,
+                    revision: run.spec.revision + 1,
+                    base_sha: run.spec.base_sha,
+                    prd: run.spec.prd,
+                    contracts: run.spec.contracts,
+                    spec_md: repair.specMd,
+                    tasks: repair.tasks,
+                })
                 for (const [index, checkpoint] of run.checkpoints.entries()) {
                     if (
                         spec.tasks[index]?.task_id !== checkpoint.task_id ||

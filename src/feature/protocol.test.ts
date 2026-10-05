@@ -14,6 +14,7 @@ import {
 } from './schema.js'
 import type {FeatureRuntime} from './ports.js'
 import {at} from '../shared/assert.js'
+import {readBrief} from './test-fixtures.js'
 
 const dirs: string[] = []
 const sha = 'a'.repeat(40)
@@ -93,35 +94,29 @@ function execution(action: FeatureAction) {
     }
     return action
 }
-function result(action: FeatureAction, extra: Partial<FeatureResult> = {}): FeatureResult {
-    const {attempt} = execution(action)
-    return {
-        attempt_id: attempt.id,
-        spec_digest: attempt.spec_digest,
-        head_sha: attempt.head_sha,
-        status: 'done',
-        ...extra,
-    }
+type Response = Omit<FeatureResult, 'repaired_spec'> & {repaired_spec?: unknown}
+function result(action: FeatureAction, extra: Partial<Response> = {}): Response {
+    execution(action)
+    return {status: 'done', ...extra}
 }
-/** Write a merged result verbatim to the in-flight attempt's per-role staged paths. */
-async function stage(f: Awaited<ReturnType<typeof setup>>, response: FeatureResult): Promise<void> {
+/** Write each role's agent-shaped part (its own claims, no identity) to the in-flight staged paths. */
+async function stage(f: Awaited<ReturnType<typeof setup>>, response: Response): Promise<void> {
     const attempt = (await f.store.read('run')).in_flight
     if (!attempt) {
         throw new Error('nothing in flight')
     }
     for (const [role, path] of Object.entries(await f.store.stage('run', attempt))) {
-        const part = response.reviews
-            ? {...response, reviews: response.reviews.filter((row) => row.reviewer === role)}
-            : response
+        const {reviews, ...rest} = response
+        const part = reviews ? {...rest, claims: reviews.find((row) => row.reviewer === role)?.claims} : rest
         await writeFile(path, JSON.stringify(part))
     }
 }
-async function submit(f: Awaited<ReturnType<typeof setup>>, response: FeatureResult): Promise<FeatureAction> {
+async function submit(f: Awaited<ReturnType<typeof setup>>, response: Response): Promise<FeatureAction> {
     await stage(f, response)
     return f.engine.advance('run', 'driver')
 }
 const claim = {
-    id: 'claim',
+    id: 'quality-reviewer.1',
     reviewer: 'quality-reviewer',
     severity: 'important' as const,
     file: 'value.ts',
@@ -173,7 +168,7 @@ describe('feature evidence and recovery protocol', () => {
         let action = await f.engine.advance('run', 'driver')
         action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
-        expect(execution(action).prompt).not.toContain('prior_reviews')
+        expect(await readBrief(action)).not.toContain('Refuted claims')
         expect(await submit(f, result(action, {confirmations: []}))).toMatchObject({
             kind: 'park',
             reason: expect.stringContaining('confirmation is incomplete') as string,
@@ -192,10 +187,11 @@ describe('feature evidence and recovery protocol', () => {
     })
     it('confirms claims in batches of two and repairs from the accumulated blockers', async () => {
         const f = await setup('task-review')
-        const ids = (action: FeatureAction) =>
-            (JSON.parse(execution(action).prompt.split('\n\n').at(-3) ?? '') as {claims: {id: string}[]}).claims
+        const ids = async (action: FeatureAction) =>
+            [...(await readBrief(action)).matchAll(/^### (\S+)$/gm)].map((match) => match[1])
         let action = await f.engine.advance('run', 'driver')
-        const claims = ['one', 'two', 'three'].map((id) => ({...claim, id}))
+        const [one, two, three] = ['quality-reviewer.1', 'quality-reviewer.2', 'quality-reviewer.3'] as const
+        const claims = [one, two, three].map((id) => ({...claim, id}))
         action = await submit(
             f,
             result(action, {
@@ -203,17 +199,17 @@ describe('feature evidence and recovery protocol', () => {
             })
         )
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
-        expect(ids(action)).toEqual([
-            {id: 'one', file: 'value.ts', line: 1, quote: claim.quote, claim: claim.claim},
-            {id: 'two', file: 'value.ts', line: 1, quote: claim.quote, claim: claim.claim},
-        ])
+        expect(await ids(action)).toEqual([one, two])
+        expect(await readBrief(action)).toContain(
+            `- File: value.ts:1\n- Quote: \`\`\`\n${claim.quote}\n\`\`\`\n- Claim: ${claim.claim}`
+        )
         // Votes for the wrong subset park; recovery with the right ids proceeds.
         await stage(
             f,
             result(action, {
                 confirmations: [
-                    {id: 'one', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
-                    {id: 'three', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: one, confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: three, confirmed: true, evidence: 'Checked value.ts at the cited statement'},
                 ],
             })
         )
@@ -225,44 +221,47 @@ describe('feature evidence and recovery protocol', () => {
             f,
             result(action, {
                 confirmations: [
-                    {id: 'one', confirmed: true, evidence: 'Checked value.ts at the cited statement'},
-                    {id: 'two', confirmed: false, evidence: 'The cited statement is unreachable'},
+                    {id: one, confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: two, confirmed: false, evidence: 'The cited statement is unreachable'},
                 ],
             })
         )
         await f.engine.resume('run', {recover: true})
         action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
-        expect(ids(action).map((row) => row.id)).toEqual(['three'])
-        expect((await f.store.read('run')).confirmed_claims.map((row) => row.id)).toEqual(['one'])
+        expect(await ids(action)).toEqual([three])
+        expect(await readBrief(action)).not.toContain('Refuted claims')
+        expect((await f.store.read('run')).confirmed_claims.map((row) => row.id)).toEqual([one])
         expect(f.runtime.snapshot.mock.calls).toHaveLength(3)
         action = await submit(
             f,
             result(action, {
-                confirmations: [{id: 'three', confirmed: true, evidence: 'Checked value.ts at the cited statement'}],
+                confirmations: [{id: three, confirmed: true, evidence: 'Checked value.ts at the cited statement'}],
             })
         )
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
-        const {prompt} = execution(action)
-        expect(prompt).toContain('value.ts:1: Returns the wrong value')
+        expect(await readBrief(action)).toContain('value.ts:1: Returns the wrong value')
         const run = await f.store.read('run')
         expect(run.feedback).toHaveLength(2)
         expect(run.confirmed_claims).toEqual([])
         expect(run.claims).toEqual([])
         expect(run.audit.filter((row) => row.event === 'findings confirmed')).toHaveLength(2)
     })
-    it.each(['citation', 'reviewer', 'duplicate'] as const)('rejects invalid review evidence: %s', async (kind) => {
+    it.each(['citation', 'missing-claims'] as const)('rejects invalid review evidence: %s', async (kind) => {
         const f = await setup('task-review')
         if (kind === 'citation') {
             vi.mocked(f.runtime.citation).mockResolvedValue(false)
         }
         const action = await f.engine.advance('run', 'driver')
-        const claims =
-            kind === 'duplicate'
-                ? [claim, claim]
-                : [{...claim, reviewer: kind === 'reviewer' ? 'other' : claim.reviewer}]
-        expect(await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims}]}))).toMatchObject({
+        const response =
+            kind === 'citation'
+                ? result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]})
+                : result(action)
+        expect(await submit(f, response)).toMatchObject({
             kind: 'park',
+            reason: expect.stringContaining(
+                kind === 'citation' ? 'invalid citation' : 'missing or duplicate'
+            ) as string,
         })
         expect((await f.store.read('run')).checkpoints).toEqual([])
     })
@@ -293,20 +292,23 @@ describe('feature evidence and recovery protocol', () => {
         let action = await f.engine.advance('run', 'driver')
         action = await submit(f, result(action, {status: 'spec-defect', message: 'Fix the remaining contract'}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair'}})
-        expect(execution(action).prompt).toContain('"revision": 1')
+        expect(await readBrief(action)).toContain('## Feedback to address\n\n- Fix the remaining contract')
+        // A full FeatureSpec is not the repair contract: the staged file is rejected, never consumed.
         expect(await submit(f, result(action, {repaired_spec: spec}))).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('increment revision') as string,
+            kind: 'wait',
+            reason: expect.stringContaining('staged file rejected (spec-generator: repaired_spec') as string,
         })
-        const revised = {...spec, revision: 2, spec_md: 'Use the corrected contract.'}
-        await stage(f, result(action, {repaired_spec: revised}))
-        await f.engine.resume('run', {recover: true})
+        const repair = {specMd: 'Use the corrected contract.', slug: 'values', tasks: spec.tasks}
+        await stage(f, result(action, {repaired_spec: repair}))
         action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'spec-review'}})
-        expect(execution(action).prompt).toContain('Use the corrected contract.')
+        expect(await readBrief(action)).toContain('Use the corrected contract.')
         action = await submit(f, result(action))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
-        expect((await f.store.read('run')).spec_digest).toBe(digest(validateFeatureSpec(revised)))
+        const revised = {...spec, revision: 2, spec_md: 'Use the corrected contract.'}
+        const run = await f.store.read('run')
+        expect(run.spec).toEqual(validateFeatureSpec(revised))
+        expect(run.spec_digest).toBe(digest(validateFeatureSpec(revised)))
     })
     it('refuses a spec repair that changes accepted work', async () => {
         const f = await setup('spec-repair')
@@ -314,7 +316,11 @@ describe('feature evidence and recovery protocol', () => {
         run.checkpoints = [{task_id: 'value', head_sha: sha, spec_digest: run.spec_digest}]
         await f.store.write(run)
         const action = await f.engine.advance('run', 'driver')
-        const revised = {...spec, revision: 2, tasks: [{...at(spec.tasks, 0), title: 'Changed accepted task'}]}
+        const revised = {
+            specMd: spec.spec_md,
+            slug: 'values',
+            tasks: [{...at(spec.tasks, 0), title: 'Changed accepted task'}],
+        }
         expect(await submit(f, result(action, {repaired_spec: revised}))).toMatchObject({
             kind: 'park',
             reason: expect.stringContaining('accepted task prefix') as string,
@@ -343,6 +349,9 @@ describe('feature evidence and recovery protocol', () => {
             if (kind === 'removed-commit') {
                 vi.mocked(f.runtime.ancestor).mockResolvedValue(false)
             }
+            if (kind === 'wrong-head') {
+                vi.mocked(f.runtime.head).mockResolvedValue(nextSha)
+            }
             if (kind === 'snapshot') {
                 vi.mocked(f.runtime.clean).mockImplementation((path: string) =>
                     Promise.resolve(path !== execution(action).attempt.worktree)
@@ -352,7 +361,6 @@ describe('feature evidence and recovery protocol', () => {
                 await submit(
                     f,
                     result(action, {
-                        head_sha: kind === 'wrong-head' ? nextSha : sha,
                         reviews: [{reviewer: 'quality-reviewer', claims: []}],
                     })
                 )
@@ -381,5 +389,71 @@ describe('feature evidence and recovery protocol', () => {
         vi.mocked(f.runtime.reconcileBase).mockResolvedValue('conflict')
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
         expect((await f.store.read('run')).feedback[0]).toContain('active merge conflict')
+    })
+    it.each([
+        ['tests', 'test-writer', '"status"'],
+        ['implement', 'implementer', '## Current task'],
+        ['task-review', 'quality-reviewer', '"claims"'],
+        ['slice-review', 'database-design-reviewer', '"claims"'],
+        ['feature-review', 'systemic-failure-reviewer', '"claims"'],
+        ['confirm', 'finding-verifier', '"confirmations"'],
+        ['acceptance', 'acceptance-evaluator', '"acceptance"'],
+        ['spec-repair', 'spec-generator', '"repaired_spec"'],
+        ['spec-review', 'spec-reviewer', '## Proposed spec'],
+        ['docs', 'scribe', '## Feature range'],
+        ['e2e-author', 'e2e-author', '## PRD'],
+    ] as const)('writes one identity-free brief per role at %s', async (stage, role, marker) => {
+        const f = await setup(stage)
+        vi.mocked(f.runtime.databaseChanged).mockResolvedValue(true)
+        vi.mocked(f.runtime.exempt).mockResolvedValue(false)
+        const run = await f.store.read('run')
+        run.claims = [claim]
+        run.after_confirm = 'task-review'
+        run.repaired_spec = {...spec, revision: 2}
+        await f.store.write(run)
+        const action = execution(await f.engine.advance('run', 'driver'))
+        expect(action.attempt.stage).toBe(stage)
+        expect(Object.keys(action.prompts)).toEqual(action.attempt.roles)
+        expect(action.attempt.roles).toContain(role)
+        for (const each of action.attempt.roles) {
+            const brief = await readBrief(action, each)
+            expect(brief).toContain(`- Role: ${each}\n- Stage: ${stage}\n- Worktree: ${action.attempt.worktree}`)
+            expect(brief).toContain('## Result contract')
+            for (const banned of ['Identity', 'attempt_id', 'spec_digest', 'head_sha', action.attempt.id]) {
+                expect(brief).not.toContain(banned)
+            }
+        }
+        const brief = await readBrief(action, role)
+        expect(brief).toContain(marker)
+        const reviewRange = `git -C ${action.attempt.worktree} diff ${action.attempt.base_sha}..${action.attempt.head_sha}`
+        if (['tests', 'implement', 'spec-repair', 'spec-review', 'e2e-author', 'confirm'].includes(stage)) {
+            expect(brief).not.toContain(reviewRange)
+        } else {
+            expect(brief).toContain(reviewRange)
+        }
+    })
+    it('lists only refuted claims, with their evidence, in the next reviewer brief', async () => {
+        const f = await setup('task-review')
+        let action = await f.engine.advance('run', 'driver')
+        const refuted = {...claim, id: 'quality-reviewer.2', claim: 'Drops the error path'}
+        action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim, refuted]}]}))
+        expect(await readBrief(action)).not.toContain('Refuted claims')
+        action = await submit(
+            f,
+            result(action, {
+                confirmations: [
+                    {id: claim.id, confirmed: true, evidence: 'Checked value.ts at the cited statement'},
+                    {id: refuted.id, confirmed: false, evidence: 'The error path is handled by the caller'},
+                ],
+            })
+        )
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
+        action = await submit(f, result(action))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
+        const brief = await readBrief(action)
+        expect(brief).toContain(
+            '## Refuted claims\n\nIndependent verifiers refuted these earlier claims. Re-file one only with new evidence, and state that evidence in the `claim`.\n\n- value.ts:1: Drops the error path — refuted: The error path is handled by the caller'
+        )
+        expect(brief).not.toContain('Returns the wrong value')
     })
 })

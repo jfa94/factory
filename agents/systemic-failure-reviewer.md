@@ -22,8 +22,14 @@ is wrong. Your scope is the _absence_ of a cross-flow recovery/convergence path,
 violations, invariant-restoration gaps, and cross-stage contract chains. You own what no
 single-site reviewer can see.
 
-Inspect the change with `git -C <taskWorktree> diff <baseRef>..HEAD`, then `Read` each changed file
-in full — systemic bugs only become visible once you hold the full flow in context.
+## Factory dispatch
+
+A prompt that names a brief file comes from the Factory pipeline runner. Read that brief
+first: it is your task, scope and result contract. Your final reply is only the JSON result
+it specifies.
+
+Review exactly the range your brief gives — never compute your own diff range or
+changed-file list — then `Read` each file it changes in full — systemic bugs only become visible once you hold the full flow in context.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
@@ -46,8 +52,6 @@ For each finding:
 You do NOT get to relax citation because your bug spans sites. You owe MORE quotes, not fewer.
 
 A finding with fewer than 2 verified citations is not a finding. DROP IT.
-
-Violating the letter of this rule violates the spirit. No exceptions.
 </EXTREMELY-IMPORTANT>
 
 ## Failure-mode taxonomy (closed — anything outside this → drop, it belongs to another reviewer)
@@ -70,7 +74,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 Does the scope contain **stateful / iterative / multi-stage / cross-stage-contract** surface? Signals: state machines, retry/reset/recovery logic, multi-agent or multi-step pipelines, test-executor pairs, idempotency-sensitive writes, reconciliation loops, saga/compensation patterns.
 
-If the scope is **entirely** leaf functions, pure transformations, or UI rendering with no stateful coordination: return the envelope with `status: "done"`, your row as `{"reviewer": "systemic-failure-reviewer", "claims": []}`, and `"message": "no systemic surface in scope"`. Do NOT manufacture systemic findings from leaf code.
+If the scope is **entirely** leaf functions, pure transformations, or UI rendering with no stateful coordination: return `{"status": "done", "claims": [], "message": "no systemic surface in scope"}`. Do NOT manufacture systemic findings from leaf code.
 
 ## Red Flags — STOP and re-read this prompt
 
@@ -95,15 +99,12 @@ For each stateful surface in scope:
 4. **State-machine enumeration** — enumerate reachable states and their transitions. Seek absorbing states: _"Is there a state this code can enter from which no progress action is enabled?"_ → `stuck-state` candidate.
 5. **Recovery idempotency** — for every reset/retry/compensation: _"Given the same input that caused the failure, does it produce the same failure? Does it have a non-idempotent side effect unsafe under repetition?"_ → `unsafe-recovery` candidate.
 6. **Cite each candidate** — for each candidate, collect ≥2 verbatim quotes tracing the chain: trigger site, stuck/wrong-state site, and the missing repair site (or evidence of its absence). If you cannot collect ≥2 citations, drop the candidate.
-7. **Verify citations** — `Read` each cited file at the claimed line. Confirm the verbatim quote matches (±2 lines, collapsed whitespace). If any citation fails to verify, drop the whole finding.
+7. **Verify citations** — `Read` each cited file at the claimed line. Confirm the quote is an exact substring of lines `line-2..line+2`, with no whitespace collapsing. If any citation fails to verify, drop the whole finding.
 
 ## Output — deltas from the injected `review-protocol` skill
 
-Emit exactly one JSON object — the engine's result envelope per the protocol — whose
-`reviews` array carries your `RawReview` row
-`{"reviewer": "systemic-failure-reviewer", "claims": [...]}`, with
-`reviewer: "systemic-failure-reviewer"` on every claim and `id`s prefixed
-`systemic-failure-reviewer-`, plus these role-specific deltas:
+Emit exactly one JSON object per the protocol: `status` plus your `claims` array. The engine
+binds the claims to your role and assigns their ids. Role-specific deltas:
 
 - The **primary citation** fills `quote`/`file`/`line`; every **`claim` text** leads with
   `[failure_mode: <name>]`, then the one-sentence `scenario`, then any 2nd+ citations quoted

@@ -6,6 +6,7 @@ import {atomicWriteFile} from '../shared/atomic-write.js'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING} from '../shared/file-lock.js'
 import {isEnoent} from '../shared/fs-errors.js'
 import {
+    AgentResultSchema,
     FeatureRunSchema,
     ResultSchema,
     IdSchema,
@@ -13,6 +14,7 @@ import {
     terminal,
     type Attempt,
     type FeatureRun,
+    type AgentResult,
     type FeatureResult,
 } from './schema.js'
 
@@ -83,9 +85,29 @@ export class FeatureStore {
         )
     }
 
-    async recordResult(id: string, result: FeatureResult): Promise<void> {
+    async recordResult(id: string, attemptId: string, result: FeatureResult): Promise<void> {
         const checked = ResultSchema.parse(result)
-        await atomicWriteFile(join(this.dir(id), 'results', `${checked.attempt_id}.json`), JSON.stringify(checked))
+        await atomicWriteFile(
+            join(this.dir(id), 'results', `${IdSchema.parse(attemptId)}.json`),
+            JSON.stringify(checked)
+        )
+    }
+
+    /** The brief each role reads; it sits beside the result file but never counts as one. */
+    briefPath(id: string, attempt: Attempt, role: string): string {
+        return join(
+            this.dataDir,
+            'staged-v2',
+            IdSchema.parse(id),
+            IdSchema.parse(attempt.id),
+            `${IdSchema.parse(role)}.brief.md`
+        )
+    }
+
+    async writeBrief(id: string, attempt: Attempt, role: string, body: string): Promise<string> {
+        const path = this.briefPath(id, attempt, role)
+        await atomicWriteFile(path, body)
+        return path
     }
 
     /**
@@ -122,15 +144,15 @@ export class FeatureStore {
     /**
      * Read every role's staged file and merge them into one attempt result. A missing,
      * half-written or schema-invalid file reads as "not yet"; only explicit recovery
-     * judges it. Identity fields must agree; any non-done status wins.
+     * judges it. Reviewer identity is bound from the path; any non-done status wins.
      */
     async staged(id: string, attempt: Attempt): Promise<Staged> {
-        const parts: FeatureResult[] = []
+        const parts: [string, AgentResult][] = []
         const missing: string[] = []
         const invalid: Record<string, string> = {}
         for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
             try {
-                parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile(path, 'utf8')))))
+                parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, 'utf8'))))])
             } catch (error) {
                 if (isEnoent(error) || error instanceof SyntaxError) {
                     missing.push(role)
@@ -142,25 +164,27 @@ export class FeatureStore {
                 }
             }
         }
-        const first = parts[0]
-        if (missing.length || first === undefined) {
+        if (missing.length || parts.length === 0) {
             return {missing, invalid}
         }
-        if (
-            parts.some(
-                (part) =>
-                    part.attempt_id !== first.attempt_id ||
-                    part.spec_digest !== first.spec_digest ||
-                    part.head_sha !== first.head_sha
-            )
-        ) {
-            throw new Error('staged results disagree on attempt identity or HEAD')
+        const reviews = parts.flatMap(([role, part]) =>
+            part.claims
+                ? [
+                      {
+                          reviewer: role,
+                          claims: part.claims.map((claim, n) => ({id: `${role}.${n + 1}`, reviewer: role, ...claim})),
+                      },
+                  ]
+                : []
+        )
+        const merged: FeatureResult = {status: 'done'}
+        for (const [, {claims: _claims, ...part}] of parts) {
+            Object.assign(merged, part, {status: merged.status})
         }
-        const halted = parts.find((part) => part.status !== 'done')
-        const reviews = parts.flatMap((part) => part.reviews ?? [])
+        const halted = parts.find(([, part]) => part.status !== 'done')?.[1]
         return {
             result: {
-                ...first,
+                ...merged,
                 ...(halted ? {status: halted.status, message: halted.message} : {}),
                 ...(reviews.length ? {reviews} : {}),
             },
