@@ -84,12 +84,12 @@ usage error. When `CLAUDE_CODE_SESSION_ID` (or `CLAUDE_SESSION_ID`) is set, the
 session becomes the run's owner. It returns exactly one action; every action
 also carries `run_id`:
 
-| `kind`     | Fields                                   | Meaning                                                                  |
-| ---------- | ---------------------------------------- | ------------------------------------------------------------------------ |
-| `execute`  | `run_id`, `attempt`, `staged`, `prompts` | Dispatch one agent per role.                                             |
-| `wait`     | `reason`, `retry_after_seconds`          | Call again after the delay (quota, CI, transient failure, live attempt). |
-| `park`     | `reason`                                 | Stop; a human resumes with `factory resume`.                             |
-| `terminal` | `status`, `delivery`                     | `completed`, `ready-for-review` or `cancelled`.                          |
+| `kind`     | Fields                                                      | Meaning                                                                  |
+| ---------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `execute`  | `run_id`, `attempt`, `staged`, `prompts`, optional `models` | Dispatch one agent per role.                                             |
+| `wait`     | `reason`, `retry_after_seconds`                             | Call again after the delay (quota, CI, transient failure, live attempt). |
+| `park`     | `reason`                                                    | Stop; a human resumes with `factory resume`.                             |
+| `terminal` | `status`, `delivery`                                        | `completed`, `ready-for-review` or `cancelled`.                          |
 
 In an `execute` action, `prompts[role]` is a two-line prompt naming the role's
 brief file (`<dataDir>/staged-v2/<run>/<attempt>/<role>.brief.md`), and
@@ -98,17 +98,21 @@ next call consumes every staged file. A result that fails validation is renamed 
 `<role>.rejected-<n>.json` and the role is re-issued with the reason. A role is
 re-issued at most twice before the run parks; see [state-model.md](./state-model.md#result-validation).
 
+`models[role]`, when present, is the Agent `model` to dispatch that role on
+(`opus`). It is set only for the producer of a scope's final repair pass and
+mirrors `attempt.models`; when absent, the runner omits `model`.
+
 Submitting the accepted acceptance result pushes and opens the PR in the same call.
 
 ## `resume`
 
 Must run from the run's repository, like `next-action`.
 
-| Flag                   | Effect                                                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `--answer <text>`      | Answer the parked question (`needs-context`).                                                                              |
-| `--recover`            | After the previous agent stopped: consume a complete staged result, redispatch missing panel roles, or retire the attempt. |
-| `--ship live\|no-ship` | Authorize delivery of a `--local` run parked for `authorization`.                                                          |
+| Flag                   | Effect                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `--answer <text>`      | Answer the pending question (a `context` park, or a `spec` park from a blocked spec repair). Required while one is pending. |
+| `--recover`            | After the previous agent stopped: consume a complete staged result, redispatch missing panel roles, or retire the attempt.  |
+| `--ship live\|no-ship` | Authorize delivery of a `--local` run parked for `authorization`.                                                           |
 
 A parked run never resumes on its own; elapsed time and recovered quota do not
 unpark it.

@@ -62,7 +62,7 @@ Quality-gate thresholds.
 | `securityAllowFailures`          | boolean               | `false` | Treat security findings as non-blocking.                                                                                                                                                                                                                                                                                                                                                                 |
 | `securityRedactFindings`         | boolean               | `true`  | Redact secrets from the scanner output recorded in gate evidence.                                                                                                                                                                                                                                                                                                                                        |
 | `setupCommand`                   | string (optional)     | —       | Provisioning command run in each new feature worktree and review snapshot before any gate. When unset, a lockfile is auto-detected (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `yarn.lock` → `yarn install --frozen-lockfile`, `package-lock.json`/`npm-shrinkwrap.json` → `npm ci`); no lockfile is a no-op. A failure is treated as transient: retried, then the run parks as `environment`. |
-| `gateEnv`                        | record<string,string> | `{}`    | Name→value env vars rendered into the managed `quality-gate.yml`. **Placeholders only — not a secret store.** See [the gate-env note](#gateenv--ci-parity-placeholders).                                                                                                                                                                                                                                 |
+| `gateEnv`                        | record<string,string> | `{}`    | Name→value env vars rendered into the managed `quality-gate.yml` and merged into local gate commands. **Placeholders only — not a secret store.** See [the gate-env note](#gateenv--ci-parity-placeholders).                                                                                                                                                                                             |
 
 ### `gateEnv` — CI-parity placeholders
 
@@ -87,9 +87,9 @@ the `# factory:gate-env` marker following the rendered build step with an `env:`
 block built from the resolved map. Re-run `factory scaffold` after editing the map.
 An empty map leaves the marker untouched, and a re-scaffold is byte-identical.
 
-The gate tools can merge the map over `process.env` (`defaultGateTools(gateEnv)`),
-but the v2 feature runtime constructs them without it, so local gate commands do
-not receive these values.
+**Local gates.** The v2 feature runtime merges the map over `process.env` for every
+local gate command (`defaultGateTools(gateEnv)`), so local and CI builds see the
+same placeholders.
 
 This is **CI parity, not secrets**: these placeholders sit in the sparse config overlay in
 plaintext and in the committed workflow. Never put a real credential here.
@@ -153,7 +153,7 @@ Keys retired with v1 execution are ignored silently when an existing overlay sti
 carries them: `quality.holdoutPercent`, `quality.holdoutPassRate`,
 `quota.producerModels`, the `review`, `codex` and `e2e` blocks,
 `git.stagingRequiredStatusChecks`, `git.provision`, `git.branchPrefix`,
-`git.developProtection`, `maxConsecutiveFailures`, `maxParallelTasks`,
+`git.developProtection`, `git.developBaselineStatusChecks`, `maxConsecutiveFailures`, `maxParallelTasks`,
 `stallTtlMinutes` and `hungSpawnMinutes`.
 
 Remove the warned keys from your overlay:

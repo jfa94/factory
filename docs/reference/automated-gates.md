@@ -124,9 +124,8 @@ store**. Populate it with `factory configure --set quality.gateEnv.<KEY>=<value>
 so the repo's GitHub CI builds with those values (for example `NEXT_PUBLIC_*` names a
 static prerender needs).
 
-The gate tools accept the map (`defaultGateTools(gateEnv)`), but the v2 feature
-runtime constructs them without it, so local gate commands run with the session's
-`process.env` only. See
+The v2 feature runtime also merges the map over `process.env` for every local gate
+command and the TDD commit inspection (`defaultGateTools(gateEnv)`). See
 [configuration.md](./configuration.md#gateenv--ci-parity-placeholders).
 
 ## Which gates CI mirrors (the render partition, S2)

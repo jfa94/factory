@@ -31,8 +31,7 @@
  * ({@link renderPosixCommand}); the settings JSON is exactly one argv element.
  *
  * The real security boundary stays the path-resolving hook dispatcher
- * (branch-protection, secret-guard, pipeline-guards, holdout-guard,
- * write-protection); `permissions.deny` is deliberately short — accident
+ * (write-protection, branch-protection, secret-guard, feature-guards); `permissions.deny` is deliberately short — accident
  * prevention for a non-adversarial agent, not a containment boundary (Decision 65).
  */
 import {existsSync} from 'node:fs'
@@ -271,7 +270,7 @@ export function renderPosixCommand(spec: RelaunchSpec): string {
 export function buildRelaunchSpec(settings: Record<string, unknown>): RelaunchSpec {
     return {
         executable: 'claude',
-        argv: ['--worktree', '--settings', JSON.stringify(settings)],
+        argv: ['--settings', JSON.stringify(settings)],
     }
 }
 

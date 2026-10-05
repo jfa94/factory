@@ -240,14 +240,14 @@ describe('renderPosixCommand', () => {
 })
 
 describe('buildRelaunchSpec', () => {
-    it('is claude --worktree --settings <json> with the settings as exactly ONE argv element', () => {
+    it('is claude --settings <json> with the settings as exactly ONE argv element', () => {
         const settings = {env: {FACTORY_AUTONOMOUS_MODE: '1'}, permissions: {allow: ['Bash(*)']}}
         const spec = buildRelaunchSpec(settings)
         expect(spec.executable).toBe('claude')
-        expect(spec.argv).toHaveLength(3)
-        expect(spec.argv[0]).toBe('--worktree')
-        expect(spec.argv[1]).toBe('--settings')
-        expect(JSON.parse(at([...spec.argv], 2))).toEqual(settings)
+        // No native session worktree: the engine owns the feature worktree.
+        expect(spec.argv).toHaveLength(2)
+        expect(spec.argv[0]).toBe('--settings')
+        expect(JSON.parse(at([...spec.argv], 1))).toEqual(settings)
         // No permission-mode flag of any kind (spike gate: inline-settings fallback branch).
         expect(spec.argv.join(' ')).not.toContain('--permission-mode')
     })
@@ -273,7 +273,7 @@ describe('runAutonomyEnsure', () => {
 
     /** The settings JSON carried as the one --settings argv element. */
     const settingsOf = (spec: RelaunchSpec): Record<string, unknown> =>
-        JSON.parse(at([...spec.argv], 2)) as Record<string, unknown>
+        JSON.parse(at([...spec.argv], 1)) as Record<string, unknown>
 
     it('builds the settings in memory, writes NOTHING to disk, and prints the inline relaunch command', async () => {
         const result = await runAutonomyEnsure({
@@ -317,7 +317,7 @@ describe('runAutonomyEnsure', () => {
         const roundTripped = JSON.parse(stdout) as string[]
         // node consumes its own `--` end-of-options marker: what's left is the spec argv
         expect(roundTripped).toEqual([...result.spec.argv])
-        expect(JSON.parse(at(roundTripped, 2))).toEqual(settingsOf(result.spec))
+        expect(JSON.parse(at(roundTripped, 1))).toEqual(settingsOf(result.spec))
     })
 
     it("reads the user's settings.json when present and chains its statusLine", async () => {
@@ -477,7 +477,7 @@ describe('runAutonomyPreflight', () => {
         expect(code).toBe(EXIT.ERROR)
         const printed = out.join('')
         expect(printed).toContain('HALT:')
-        expect(printed).toContain(`'claude' '--worktree' '--settings'`)
+        expect(printed).toContain(`'claude' '--settings'`)
         // Still nothing on disk — the relaunch is inline.
         expect(await readdir(dataDir)).toEqual([])
     })
@@ -494,7 +494,7 @@ describe('runAutonomyPreflight', () => {
         })
         expect(result.state).toBe('relaunch')
         if (result.state === 'relaunch') {
-            const settings = JSON.parse(at([...result.spec.argv], 2)) as {env: Record<string, string>}
+            const settings = JSON.parse(at([...result.spec.argv], 1)) as {env: Record<string, string>}
             expect(settings.env.FACTORY_ORIGINAL_STATUSLINE).toBe(`${HOME}/mine.sh`)
         }
     })

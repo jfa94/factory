@@ -113,6 +113,27 @@ role is re-issued on the same attempt with the reason. The third rejection of a
 role parks the run as `producer`. Rejections do not spend repair passes and are
 cleared when a result is accepted or the run is resumed.
 
+A `blocked` status outside `spec-repair` is treated as a rejection with the reason
+`agent reported blocked: <message>`; when it exhausts the role's re-issues the run
+parks as `environment` instead of `producer`.
+
+### Status routing
+
+When a review panel merges, the first non-`done` role's status and message become
+the attempt's result (`halted_role` names that role) and the other reviewers'
+claims are dropped.
+
+| Status          | Stage                                                    | Effect                                                                              |
+| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `needs-context` | any except `spec-repair`/`spec-review`                   | Spec repair with feedback `<role> needs context: <question>`; spends a `spec` pass. |
+| `needs-context` | `spec-repair`, `spec-review`, or `spec` passes all spent | Sets `question`; parks as `context`.                                                |
+| `blocked`       | any except `spec-repair`                                 | Re-issued as a rejection (above).                                                   |
+| `blocked`       | `spec-repair`                                            | Sets `question` to the message; parks as `spec`.                                    |
+| `spec-defect`   | any                                                      | Spec repair.                                                                        |
+
+While `question` is set, `resume` requires `--answer`; the answer is appended to
+`answers` and the question is cleared.
+
 If a review snapshot was modified, the attempt is retired and a fresh one with a
 new snapshot is issued.
 
@@ -122,6 +143,16 @@ Each repair scope has three passes (`REPAIR_PASSES`); spec repair is bounded the
 same way and spec generation by `spec.maxRegenIterations`. After a confirmed
 review finding, `rereview` limits the next review at that boundary to
 `base..HEAD` plus the prior claims; repeated repairs keep the first base.
+
+Scheduling a scope's third pass sets `final_pass`; the producer attempt issued for
+it carries `models: {<producer role>: "opus"}` and audits `model escalated`. The
+flag clears when that producer's result is recorded.
+
+An accepted spec revision resumes at the first unaccepted task with `claims`,
+`confirmed_claims`, `rereview` and `candidate_satisfied` cleared. When the current
+task had not been accepted, `task_base_sha` returns to the last accepted
+checkpoint (`accepted_sha`), so commits made before the repair are judged with the
+restarted task instead of forming its baseline.
 
 Transient failures (git fetch and push, `gh` PR and check calls, worktree
 provisioning) set `status: waiting` with an `environment` stop reason and return a

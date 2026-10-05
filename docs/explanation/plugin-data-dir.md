@@ -21,7 +21,7 @@ side:
 1. **Primary pin — the inline autonomous settings.** In autonomous mode (the
    sanctioned run path), `factory autonomy ensure` bakes
    `env.CLAUDE_PLUGIN_DATA = <canonical dir>` into the settings JSON the session
-   relaunches with (`claude --worktree --settings '<json>'`,
+   relaunches with (`claude --settings '<json>'`,
    `src/cli/subcommands/autonomy.ts`), so the var is correct from process start
    and no redirect fires. Caveat (2026-08-17 spike, Claude Code 2.1.233): a
    sibling plugin's own `env` export can still shadow a `--settings` env value

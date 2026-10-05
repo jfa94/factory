@@ -858,6 +858,8 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 **Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground runner session** that definitively carries the env. Downstream verbs (`next-task`/`next-action`/`finalize`) operate only on an already-autonomous run and stay ungated, so the workflow runner's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
 
+**v2 amendment (2026-10-05, Scribe).** `requireAutonomousMode()` and `NotAutonomousError` were removed; v2 `run create` and `resume` do not check autonomous mode. `isAutonomous` remains the single predicate, read by the hooks and `factory autonomy`. `factory autonomy preflight` is an optional pre-run check: outside an autonomous session, permission prompts can stall an unattended run.
+
 **Trade-off:** A hand-typed `factory next-action --run X` in a non-autonomous shell against a pre-existing run is not caught (never something `/factory:run` does). Closeable later by stamping autonomy on the run record (no env dependency) if ever needed.
 
 **Relationship:** Operationalises the autonomy _condition_ of Decisions 19/20 as a runtime precondition; complements Decision 13 (how a session becomes autonomous) with the enforcement of _requiring_ it.
@@ -3151,6 +3153,14 @@ human's screen. The circuit breaker needed no change (its equality filter on
 Uses the Decision 66 redrive budget for the one re-ask; hands recovery to the
 Decision 22/60 rescue machinery via the new `--answer` channel.
 
+**v2 amendment (2026-10-05, Scribe).** In v2 a `needs-context` question from any
+role is first routed to spec repair, spending a spec repair pass: the spec
+generator receives the asking role and its question and resolves it by making the
+spec decide. The run parks as `context` for `resume --answer` only when the
+question arises in the spec loop itself or the spec repair budget is spent.
+`blocked` is re-issued to its role up to twice before parking as `environment`.
+See [state-model.md § Status routing](../reference/state-model.md#status-routing).
+
 ---
 
 ## Decision 70 — ALREADY_SATISFIED Verdict + the Durable Per-Spec Shipped Ledger
@@ -3411,6 +3421,13 @@ de-escalation paths (finalize / supersede / `cancel --cleanup`) must not fail on
 contract. All six protection PUT sites merge the extras: scaffold provisioning, run-start
 escalate + supersede, resume re-escalate + `cancel --cleanup`, and finalize de-escalate (the
 last gains an optional `targetRoot` dep wired from `CliDeps`).
+
+**v2 amendment (2026-10-05, Scribe).** The at-rest baseline profile is retired:
+`git.developBaselineStatusChecks` was removed from the config schema and
+`putBaselineProtection` from the code. The base branch has a single strict profile,
+`git.developRequiredStatusChecks` plus the contract's `requiredChecks`.
+`requireMutationAtRest` still parses in committed contracts and is ignored. See
+[automated-gates.md](../reference/automated-gates.md#per-repo-required-checks-requiredchecks).
 
 ---
 

@@ -13529,7 +13529,7 @@ function renderPosixCommand(spec) {
 function buildRelaunchSpec(settings) {
   return {
     executable: "claude",
-    argv: ["--worktree", "--settings", JSON.stringify(settings)]
+    argv: ["--settings", JSON.stringify(settings)]
   };
 }
 async function runAutonomyEnsure(opts = {}) {

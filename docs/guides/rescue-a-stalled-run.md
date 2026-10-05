@@ -10,7 +10,9 @@ Some failures do not need you. A transient git, `gh` or worktree provisioning
 failure leaves the run `waiting` and is retried every 60 seconds; only the fifth
 consecutive failure parks it as `environment`. An invalid agent result is
 re-issued to that role with the reason, at most twice; a third rejection parks the
-run as `producer`. See [result validation](../reference/state-model.md#result-validation).
+run as `producer`. An agent reporting `blocked` is re-issued the same way; a third
+`blocked` parks the run as `environment`. A `needs-context` question is first sent
+to spec repair. See [result validation](../reference/state-model.md#result-validation).
 
 For an explicit stop or a resolved environment/CI problem:
 
@@ -18,8 +20,9 @@ For an explicit stop or a resolved environment/CI problem:
 factory resume --run <id>
 ```
 
-For a context question, supply a nonempty answer. Answers remain in future prompts
-and the audit ledger:
+For a pending question (a `context` park, or a `spec` park where spec repair was
+blocked), supply a nonempty answer; `resume` refuses without one. Answers remain in
+future prompts and the audit ledger:
 
 ```sh
 factory resume --run <id> --answer "The requested behavior is ..."
