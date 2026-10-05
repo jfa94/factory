@@ -13118,12 +13118,23 @@ Spec ${run5.spec_digest}.`
         reason: "required checks are missing or pending"
       };
     }
-    await this.checked(
+    const merge = await this.command(
       "gh",
       ["pr", "merge", String(pr.number), "--repo", run5.repo, "--squash", "--match-head-commit", head],
-      run5.worktree,
-      true
+      run5.worktree
     );
+    if (merge.code !== 0 && merge.stderr.includes("base branch policy prohibits the merge")) {
+      return {
+        kind: "pending",
+        number: pr.number,
+        url: pr.url,
+        head,
+        reason: "base branch policy blocks the merge"
+      };
+    }
+    if (merge.code !== 0 || merge.truncated) {
+      throw new TransientFailure(`gh pr failed: ${merge.stderr || merge.stdout}`);
+    }
     const updated = (await list2())[0];
     if (updated?.headRefOid !== head) {
       throw new Error("PR changed during merge request");

@@ -462,13 +462,25 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 reason: 'required checks are missing or pending',
             }
         }
-        // Required checks are verified above, so merge directly: `--auto` fails where a repo disables auto-merge.
-        await this.checked(
+        // Merge directly: `--auto` fails where a repo disables auto-merge. `checks --required` omits
+        // required checks that have not reported yet, so a policy refusal is still pending (CI deadline bounds it).
+        const merge = await this.command(
             'gh',
             ['pr', 'merge', String(pr.number), '--repo', run.repo, '--squash', '--match-head-commit', head],
-            run.worktree,
-            true
+            run.worktree
         )
+        if (merge.code !== 0 && merge.stderr.includes('base branch policy prohibits the merge')) {
+            return {
+                kind: 'pending',
+                number: pr.number,
+                url: pr.url,
+                head,
+                reason: 'base branch policy blocks the merge',
+            }
+        }
+        if (merge.code !== 0 || merge.truncated) {
+            throw new TransientFailure(`gh pr failed: ${merge.stderr || merge.stdout}`)
+        }
         const updated = (await list())[0]
         if (updated?.headRefOid !== head) {
             throw new Error('PR changed during merge request')

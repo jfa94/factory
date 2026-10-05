@@ -93,69 +93,78 @@ describe('feature runtime external evidence', () => {
         await expect(f.runtime.deliver(run)).rejects.toThrow(error)
         expect(f.command.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false)
     })
-    it.each(['missing', 'unreported', 'failed', 'pending', 'merged', 'changed', 'unavailable', 'truncated'])(
-        'observes required CI and merge truth: %s',
-        async (scenario) => {
-            const f = setup()
-            let mergeRequested = false
-            f.command.mockImplementation((name, args) => {
-                if (name === 'git') {
-                    return reply(args[0] === 'rev-parse' ? sha : '')
-                }
-                if (args[1] === 'list') {
-                    return reply(
-                        JSON.stringify([
-                            {
-                                ...pr,
-                                state: mergeRequested && scenario === 'merged' ? 'MERGED' : 'OPEN',
-                                headRefOid: mergeRequested && scenario === 'changed' ? 'b'.repeat(40) : sha,
-                            },
-                        ])
-                    )
-                }
-                if (args[1] === 'checks') {
-                    if (scenario === 'unreported') {
-                        return reply('', 1)
-                    }
-                    return reply(
-                        JSON.stringify(
-                            scenario === 'missing'
-                                ? []
-                                : [
-                                      {
-                                          name: 'Quality',
-                                          bucket:
-                                              scenario === 'failed'
-                                                  ? 'fail'
-                                                  : scenario === 'pending'
-                                                    ? 'pending'
-                                                    : 'pass',
-                                      },
-                                  ]
-                        ),
-                        scenario === 'unavailable' ? 2 : 0,
-                        scenario === 'truncated'
-                    )
-                }
-                if (args[1] === 'merge') {
-                    // Repos may disable auto-merge; required checks are already verified above.
-                    expect(args).not.toContain('--auto')
-                    expect(args).toEqual(expect.arrayContaining(['--squash', '--match-head-commit', sha]))
-                    mergeRequested = true
-                    return reply()
-                }
-                throw new Error('unexpected command')
-            })
-            if (['changed', 'unavailable', 'truncated'].includes(scenario)) {
-                await expect(f.runtime.deliver(run)).rejects.toThrow()
-            } else {
-                expect(await f.runtime.deliver(run)).toMatchObject({
-                    kind: scenario === 'merged' ? 'merged' : scenario === 'failed' ? 'failed' : 'pending',
-                })
+    it.each([
+        'missing',
+        'unreported',
+        'failed',
+        'pending',
+        'merged',
+        'changed',
+        'unavailable',
+        'truncated',
+        'policy-blocked',
+    ])('observes required CI and merge truth: %s', async (scenario) => {
+        const f = setup()
+        let mergeRequested = false
+        f.command.mockImplementation((name, args) => {
+            if (name === 'git') {
+                return reply(args[0] === 'rev-parse' ? sha : '')
             }
-            expect(mergeRequested).toBe(['merged', 'changed'].includes(scenario))
+            if (args[1] === 'list') {
+                return reply(
+                    JSON.stringify([
+                        {
+                            ...pr,
+                            state: mergeRequested && scenario === 'merged' ? 'MERGED' : 'OPEN',
+                            headRefOid: mergeRequested && scenario === 'changed' ? 'b'.repeat(40) : sha,
+                        },
+                    ])
+                )
+            }
+            if (args[1] === 'checks') {
+                if (scenario === 'unreported') {
+                    return reply('', 1)
+                }
+                return reply(
+                    JSON.stringify(
+                        scenario === 'missing'
+                            ? []
+                            : [
+                                  {
+                                      name: 'Quality',
+                                      bucket:
+                                          scenario === 'failed' ? 'fail' : scenario === 'pending' ? 'pending' : 'pass',
+                                  },
+                              ]
+                    ),
+                    scenario === 'unavailable' ? 2 : 0,
+                    scenario === 'truncated'
+                )
+            }
+            if (args[1] === 'merge') {
+                // Repos may disable auto-merge; required checks are already verified above.
+                expect(args).not.toContain('--auto')
+                expect(args).toEqual(expect.arrayContaining(['--squash', '--match-head-commit', sha]))
+                mergeRequested = true
+                // A required check that has not reported yet is absent from `checks --required`.
+                return scenario === 'policy-blocked'
+                    ? Promise.resolve({
+                          ...response('', 1),
+                          stderr: 'X Pull request jfa94/asset-generator#9 is not mergeable: the base branch policy prohibits the merge.\n',
+                      })
+                    : reply()
+            }
+            throw new Error('unexpected command')
+        })
+        if (['changed', 'unavailable', 'truncated'].includes(scenario)) {
+            await expect(f.runtime.deliver(run)).rejects.toThrow()
+        } else {
+            expect(await f.runtime.deliver(run)).toMatchObject({
+                kind: scenario === 'merged' ? 'merged' : scenario === 'failed' ? 'failed' : 'pending',
+            })
         }
-    )
+        expect(mergeRequested).toBe(['merged', 'changed', 'policy-blocked'].includes(scenario))
+    })
     it('recognizes an already merged reviewed PR without pushing again', async () => {
         const f = setup()
         f.command.mockImplementation((name) => reply(name === 'gh' ? JSON.stringify([{...pr, state: 'MERGED'}]) : sha))
