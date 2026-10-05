@@ -51,19 +51,19 @@ describe('factory configure', () => {
         const code = await configureCommand.run([])
         expect(code).toBe(EXIT.OK)
         const cfg = out()
-        expect(cfg).toHaveProperty('quality.holdoutPercent')
+        expect(cfg).toHaveProperty('quality.mutationScoreTarget')
         expect(cfg).toHaveProperty('quota.hourlyThresholds')
         expect(existsSync(join(dataDir, 'config.json'))).toBe(false) // read-only path wrote nothing
     })
 
     it('--set persists a SPARSE overlay (only the edited key) and echoes the resolved config', async () => {
-        const code = await configureCommand.run(['--set', 'quality.holdoutPercent=25'])
+        const code = await configureCommand.run(['--set', 'quality.mutationScoreTarget=25'])
         expect(code).toBe(EXIT.OK)
-        expect(out().quality.holdoutPercent).toBe(25)
+        expect(out().quality.mutationScoreTarget).toBe(25)
 
         // On-disk overlay is sparse: it contains ONLY the edited path, not all defaults.
         const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
-        expect(overlay).toEqual({quality: {holdoutPercent: 25}})
+        expect(overlay).toEqual({quality: {mutationScoreTarget: 25}})
     })
 
     it('--set developRequiredStatusChecks shifts the DERIVED baseline without persisting it (D74)', async () => {
@@ -114,29 +114,29 @@ describe('factory configure', () => {
     })
 
     it('--get prints a single resolved value', async () => {
-        await configureCommand.run(['--set', 'maxConsecutiveFailures=7'])
+        await configureCommand.run(['--set', 'git.rollupCiWaitMinutes=7'])
         stdout.length = 0
-        const code = await configureCommand.run(['--get', 'maxConsecutiveFailures'])
+        const code = await configureCommand.run(['--get', 'git.rollupCiWaitMinutes'])
         expect(code).toBe(EXIT.OK)
         expect(JSON.parse(stdout.join(''))).toBe(7)
     })
 
     it('--unset reverts a key to its default and prunes the empty parent', async () => {
-        await configureCommand.run(['--set', 'quality.holdoutPercent=25'])
-        const defaultPct = (await import('../../config/index.js')).defaultConfig().quality.holdoutPercent
+        await configureCommand.run(['--set', 'quality.mutationScoreTarget=25'])
+        const defaultPct = (await import('../../config/index.js')).defaultConfig().quality.mutationScoreTarget
 
         stdout.length = 0
-        const code = await configureCommand.run(['--unset', 'quality.holdoutPercent'])
+        const code = await configureCommand.run(['--unset', 'quality.mutationScoreTarget'])
         expect(code).toBe(EXIT.OK)
-        expect(out().quality.holdoutPercent).toBe(defaultPct)
+        expect(out().quality.mutationScoreTarget).toBe(defaultPct)
         // The now-empty `quality` overlay object is pruned.
         const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
         expect(overlay).toEqual({})
     })
 
     it('rejects an out-of-schema value LOUDLY without persisting it', async () => {
-        // holdoutPercent must be 0..100; 999 is a schema violation → throw (not USAGE).
-        await expect(configureCommand.run(['--set', 'quality.holdoutPercent=999'])).rejects.toThrow()
+        // mutationScoreTarget must be 0..100; 999 is a schema violation → throw (not USAGE).
+        await expect(configureCommand.run(['--set', 'quality.mutationScoreTarget=999'])).rejects.toThrow()
         // Nothing persisted.
         expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
     })
@@ -144,13 +144,13 @@ describe('factory configure', () => {
     it('multiple --set tokens apply in one atomic write', async () => {
         const code = await configureCommand.run([
             '--set',
-            'quality.holdoutPercent=30',
+            'quality.mutationScoreTarget=30',
             '--set',
-            'maxConsecutiveFailures=5',
+            'git.rollupCiWaitMinutes=5',
         ])
         expect(code).toBe(EXIT.OK)
         const overlay = JSON.parse(await readFile(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
-        expect(overlay).toEqual({quality: {holdoutPercent: 30}, maxConsecutiveFailures: 5})
+        expect(overlay).toEqual({quality: {mutationScoreTarget: 30}, git: {rollupCiWaitMinutes: 5}})
     })
 
     it('--get combined with --set is a USAGE error', async () => {
@@ -164,7 +164,9 @@ describe('factory configure', () => {
     })
 
     it('--get rejects traversing into a non-object leaf', async () => {
-        await expect(configureCommand.run(['--get', 'quality.holdoutPercent.foo'])).rejects.toThrow(/not an object/)
+        await expect(configureCommand.run(['--get', 'quality.mutationScoreTarget.foo'])).rejects.toThrow(
+            /not an object/
+        )
     })
 
     it("--set rejects a malformed token with no '='", async () => {

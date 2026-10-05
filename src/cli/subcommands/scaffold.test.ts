@@ -13,19 +13,26 @@ import {dirname, join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 
-import {runScaffold, resolveTemplatesDir, scaffoldCommand, resolveScaffoldRepo, removeStaleNightly} from './scaffold.js'
+import {
+    runScaffold,
+    resolveTemplatesDir,
+    scaffoldCommand,
+    resolveScaffoldRepo,
+    removeStaleNightly,
+    hasActiveFeatureRun,
+} from './scaffold.js'
 import {sha256Hex} from './scaffold-lock.js'
 import {parseArgs} from '../args.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {defaultConfig} from '../../config/index.js'
 import {buildTargetDataDirRules} from './target-settings.js'
-import {FakeGitClient, FakeGhClient} from '../../git/index.js'
+import {FakeGitClient, FakeGhClient} from '../../git/fakes.js'
+import {FeatureStore} from '../../feature/store.js'
+import {featureRunFixture} from '../../feature/test-fixtures.js'
 import type {ProtectionApiResult} from '../../git/index.js'
 
 const cfg = defaultConfig()
 const BASE = cfg.git.baseBranch // "develop"
-/** cfg pinned to the pre-D74 permanent strict profile. */
-const PERMANENT_CFG = {...cfg, git: {...cfg.git, developProtection: 'permanent' as const}}
 const execFileAsync = promisify(execFile)
 
 /** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
@@ -439,24 +446,6 @@ describe('runScaffold', () => {
         ).rejects.toThrow(/refuses to start|protection/i)
     })
 
-    it('--provision (permanent mode) writes the strict profile then passes the gate', async () => {
-        const gh = new FakeGhClient() // starts unprotected
-        const report = await runScaffold({
-            targetRoot: root,
-            templatesDir,
-            owner: 'acme',
-            repo: 'widgets',
-            config: PERMANENT_CFG,
-            dataDirRules: DATA_DIR_RULES,
-            ghClient: gh,
-            provision: true,
-        })
-        expect(report.protection.provisioned).toBe(true)
-        expect(report.protection.strict_up_to_date).toBe(true)
-        // The PUT was issued against develop (the integration base), not a shared staging branch.
-        expect(gh.calls).toContain(`api PUT protection ${BASE}`)
-    })
-
     describe('v2 stable develop protection', () => {
         const scaffoldArgs = (gh: FakeGhClient, extra: Partial<Parameters<typeof runScaffold>[0]> = {}) => ({
             targetRoot: root,
@@ -531,15 +520,6 @@ describe('runScaffold', () => {
             )
             expect(report.protection.strict_up_to_date).toBe(true)
             expect(gh.protectionPuts).toEqual([])
-        })
-
-        it('permanent mode REFUSES a baseline-shaped (strict-off) protection', async () => {
-            const gh = new FakeGhClient({
-                protection: {
-                    [BASE]: {...PROTECTED, strictUpToDate: false},
-                },
-            })
-            await expect(runScaffold(scaffoldArgs(gh, {config: PERMANENT_CFG}))).rejects.toThrow(/strict/i)
         })
     })
 
@@ -1493,5 +1473,34 @@ describe('dependency-cruiser template content', () => {
         expect(cjs).toContain('components-no-app')
         // The exemption that keeps Next.js server actions a legal cross-layer boundary.
         expect(cjs).toContain('^src/app/actions')
+    })
+})
+
+describe('hasActiveFeatureRun (the --provision active-run guard, D74)', () => {
+    let dataDir: string
+    beforeEach(async () => {
+        dataDir = await mkdtemp(join(tmpdir(), 'scaffold-active-run-'))
+    })
+    afterEach(async () => {
+        await rm(dataDir, {recursive: true, force: true})
+    })
+
+    it('detects a non-terminal v2 run for the repo', async () => {
+        await new FeatureStore(dataDir).write(featureRunFixture({repo: 'acme/widgets', status: 'parked'}))
+        await expect(hasActiveFeatureRun(dataDir, 'acme/widgets')).resolves.toBe(true)
+    })
+
+    it('ignores a terminal run for the repo', async () => {
+        await new FeatureStore(dataDir).write(featureRunFixture({repo: 'acme/widgets', status: 'ready-for-review'}))
+        await expect(hasActiveFeatureRun(dataDir, 'acme/widgets')).resolves.toBe(false)
+    })
+
+    it("ignores another repo's active run", async () => {
+        await new FeatureStore(dataDir).write(featureRunFixture({repo: 'acme/other'}))
+        await expect(hasActiveFeatureRun(dataDir, 'acme/widgets')).resolves.toBe(false)
+    })
+
+    it('is false when no v2 run store exists', async () => {
+        await expect(hasActiveFeatureRun(dataDir, 'acme/widgets')).resolves.toBe(false)
     })
 })

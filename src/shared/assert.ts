@@ -27,3 +27,8 @@ export function at<T>(a: readonly T[], i: number): T {
 export function getOrThrow<K, V>(m: ReadonlyMap<K, V>, k: K, msg?: string): V {
     return nonNull(m.get(k), msg ?? 'missing map key')
 }
+
+/** Exhaustiveness check for closed unions: a compile error when a member is unhandled, a throw at runtime. */
+export function assertNever(x: never): never {
+    throw new Error(`assertNever: unhandled value ${JSON.stringify(x)}`)
+}

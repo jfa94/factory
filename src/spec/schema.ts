@@ -8,7 +8,7 @@
  * store's `tasks.json` and is reused across runs (Δ X).
  *
  * Decision 25 — the SINGLE producer dial. `risk_tier` is the frozen
- * `RiskTierEnum` (low | medium | high), imported NOT redefined. The legacy
+ * `RiskTierEnum` (low | medium | high). The legacy
  * routine/feature/security classifier and the separate review-depth axis are
  * DELETED: this schema rejects those legacy values and any `review_*` field.
  *
@@ -16,8 +16,22 @@
  * field, an out-of-enum risk tier, or a legacy axis — never silently coerce.
  */
 import {z} from 'zod'
-import {RiskTierEnum} from '../types/index.js'
 import type {Prd} from './gh.js'
+
+/** The single producer dial (Decision 25). */
+export const RiskTierEnum = z.enum(['low', 'medium', 'high'])
+export type RiskTier = z.infer<typeof RiskTierEnum>
+
+/**
+ * A run-facing pointer into the durable spec store, keyed by (repo, spec-id).
+ * `spec_id = "<issue>-<slug>"`; the issue number is the stable lookup key.
+ */
+export const SpecPointerSchema = z.object({
+    repo: z.string().min(1),
+    spec_id: z.string().min(1),
+    issue_number: z.number().int().positive(),
+})
+export type SpecPointer = z.infer<typeof SpecPointerSchema>
 
 /**
  * One durable spec task. The `.strict()` shape is load-bearing: it makes a

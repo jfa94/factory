@@ -64,6 +64,22 @@ describe('exec', () => {
         })
         expect(r.stdout).toBe('set-by-test')
     })
+
+    it('clips each stream at maxBuffer and flags truncation, including later chunks', async () => {
+        const script =
+            "process.stdout.write('a'.repeat(6));process.stderr.write('b'.repeat(6));" +
+            "setTimeout(()=>{process.stdout.write('c'.repeat(6));process.stderr.write('d'.repeat(6));" +
+            "setTimeout(()=>{process.stdout.write('e');process.stderr.write('f')},50)},50)"
+        const r = await exec(NODE, ['-e', script], {maxBuffer: 8})
+        expect(r.stdout).toBe('aaaaaacc')
+        expect(r.stderr).toBe('bbbbbbdd')
+        expect(r.truncated).toBe(true)
+    })
+
+    it('tolerates a child that exits without reading piped stdin', async () => {
+        const r = await exec(NODE, ['-e', 'process.exit(0)'], {input: 'x'.repeat(1 << 20)})
+        expect(r.code).toBe(0)
+    })
 })
 
 describe('execOrThrow', () => {

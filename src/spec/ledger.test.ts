@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {readLedger, appendLedgerEntries, latestByTask, type LedgerEntry} from './ledger.js'
-import {specDir} from '../core/state/paths.js'
+import {specDir} from './paths.js'
 
 const REPO = 'acme/widgets'
 const SPEC_ID = '42-checkout'

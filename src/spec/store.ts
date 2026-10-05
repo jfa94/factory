@@ -32,11 +32,10 @@ import {slugify, validateId} from '../shared/ids.js'
 import {at} from '../shared/index.js'
 import {createLogger} from '../shared/logging.js'
 import {resolveDataDir, type DataDirOptions} from '../config/index.js'
-import {specDir, specsRoot, repoKey, docsFactoryDir} from '../core/state/paths.js'
-import type {SpecPointer} from '../types/index.js'
+import {specDir, specsRoot, repoKey, docsFactoryDir} from './paths.js'
 import type {Prd} from './gh.js'
 import {readLedger, type Ledger} from './ledger.js'
-import {parsePrd, parseSpecManifest, parseSpecTasks, type SpecManifest} from './schema.js'
+import {parsePrd, parseSpecManifest, parseSpecTasks, type SpecManifest, type SpecPointer} from './schema.js'
 
 const log = createLogger('spec:store')
 

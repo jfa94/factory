@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs'
+import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {atomicWriteFile, atomicWriteFileSync} from './atomic-write.js'
@@ -64,6 +64,27 @@ describe('atomicWriteFile (async)', () => {
         await atomicWriteFile(target, 'first')
         await atomicWriteFile(target, 'second')
         expect(readFileSync(target, 'utf8')).toBe('second')
+        assertNoTempResidue()
+    })
+})
+
+describe('a failed rename', () => {
+    // A non-empty directory at the target makes rename() fail on every platform.
+    function blockedTarget(): string {
+        const target = join(dir, 'occupied')
+        mkdirSync(join(target, 'child'), {recursive: true})
+        return target
+    }
+
+    it('sync: throws and removes the temp file', () => {
+        expect(() => {
+            atomicWriteFileSync(blockedTarget(), 'x')
+        }).toThrow()
+        assertNoTempResidue()
+    })
+
+    it('async: rejects and removes the temp file', async () => {
+        await expect(atomicWriteFile(blockedTarget(), 'x')).rejects.toThrow()
         assertNoTempResidue()
     })
 })

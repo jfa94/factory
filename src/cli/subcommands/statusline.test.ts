@@ -14,12 +14,10 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest'
 import {runStatusline} from './statusline.js'
 import {usageCachePath, StatuslineUsageSignal} from '../../quota/usage-source.js'
 import {EXIT} from '../../shared/exit-codes.js'
-import {StateManager} from '../../core/state/index.js'
-import {currentRepoLinkPath, STATE_FILE} from '../../core/state/paths.js'
-import {FakeGitClient} from '../../git/index.js'
-import type {SpecPointer, TaskState} from '../../types/index.js'
+import {FakeGitClient} from '../../git/fakes.js'
 import {FeatureStore} from '../../feature/store.js'
-import {digest, validateFeatureSpec, type FeatureRun} from '../../feature/schema.js'
+import type {FeatureRun} from '../../feature/schema.js'
+import {featureRunFixture} from '../../feature/test-fixtures.js'
 
 /** A FakeGitClient whose origin resolves to `slug` (the payload-cwd repo anchor, Decision 61). */
 function git(slug: string): FakeGitClient {
@@ -289,128 +287,24 @@ describe('runStatusline (passthrough)', () => {
     })
 })
 
-describe('runStatusline (run-progress suffix, S11)', () => {
-    let dataDir: string
-    let state: StateManager
-    const FIXED_NOW = 8_999_999_000 // epoch seconds
-    const SPEC: SpecPointer = {repo: 'acme/widgets', spec_id: '7-x', issue_number: 7}
-    const RUN = 'run-progress'
-
-    function task(seed: Partial<TaskState> & {task_id: string; status: TaskState['status']}): TaskState {
-        return {
-            depends_on: [],
-            escalation_rung: 0,
-            reviewers: [],
-            merge_resyncs: 0,
-            ...seed,
-        }
-    }
-
-    /**
-     * Run the statusline with a captured display and no passthrough/cache noise. The
-     * progress suffix keys off the payload's cwd → per-repo current pointer (Decision 61), so
-     * feed a payload carrying `workspace.current_dir` and a git seam resolving to SPEC.
-     */
-    async function display(env: NodeJS.ProcessEnv = {}, now = FIXED_NOW): Promise<string> {
-        let displayed = ''
-        const code = await runStatusline([], {
-            dataDirOptions: {dataDir},
-            now: () => now,
-            readStdin: () => Promise.resolve(JSON.stringify({workspace: {current_dir: '/repo'}})),
-            env,
-            gitClient: git(SPEC.repo),
-            writeStdout: (s) => {
-                displayed += s
-            },
-        })
-        expect(code).toBe(EXIT.OK)
-        return displayed
-    }
-
-    beforeEach(async () => {
-        dataDir = mkdtempSync(join(tmpdir(), 'factory-statusline-progress-'))
-        state = new StateManager({dataDir})
-        await state.create({run_id: RUN, staging_branch: `staging-${RUN}`, spec: SPEC})
-        await state.update(RUN, (s) => ({
-            ...s,
-            status: 'running',
-            tasks: {
-                a: task({task_id: 'a', status: 'done'}),
-                b: task({task_id: 'b', status: 'executing', phase: 'exec'}),
-                c: task({task_id: 'c', status: 'pending'}),
-            },
-        }))
-    })
-    afterEach(() => {
-        rmSync(dataDir, {recursive: true, force: true})
-    })
-
-    it('appends done/total for the current run', async () => {
-        expect(await display()).toBe('1/3 tasks completed')
-    })
-
-    it('shows no suffix when no current-run pointer exists', async () => {
-        rmSync(join(dataDir, 'runs'), {recursive: true, force: true})
-        expect(await display()).toBe('')
-    })
-
-    it('degrades to no suffix on a torn/truncated state.json (never throws)', async () => {
-        writeFileSync(join(currentRepoLinkPath(dataDir, SPEC.repo), STATE_FILE), '{"run_id":"tor')
-        expect(await display()).toBe('')
-    })
-
-    it("keeps a terminal run's suffix within the 30-min linger, then drops it", async () => {
-        const endedAt = new Date((FIXED_NOW - 60) * 1000).toISOString() // 1 min ago
-        await state.update(RUN, (s) => ({
-            ...s,
-            status: 'completed',
-            ended_at: endedAt,
-            tasks: {a: task({task_id: 'a', status: 'done'})},
-        }))
-        expect(await display()).toBe('1/1 tasks completed')
-        // Same run seen 31 min after ended_at → gone.
-        expect(await display({}, FIXED_NOW + 31 * 60)).toBe('')
-    })
-
-    it('is disabled by FACTORY_STATUSLINE_PROGRESS=0', async () => {
-        expect(await display({FACTORY_STATUSLINE_PROGRESS: '0'})).toBe('')
-    })
-
-    it('composes with the passthrough display (suffix after original stdout)', async () => {
-        // The payload must carry a cwd (Decision 61) so the progress suffix resolves; `cat`
-        // echoes it back as the passthrough text, and the suffix follows it.
-        const payload = JSON.stringify({workspace: {current_dir: '/repo'}})
-        let displayed = ''
-        const code = await runStatusline([], {
-            dataDirOptions: {dataDir},
-            now: () => FIXED_NOW,
-            readStdin: () => Promise.resolve(payload),
-            originalStatusline: 'cat',
-            env: {},
-            gitClient: git(SPEC.repo),
-            writeStdout: (s) => {
-                displayed += s
-            },
-        })
-        expect(code).toBe(EXIT.OK)
-        expect(displayed).toBe(`${payload} 1/3 tasks completed`)
-    })
-})
-
 describe('runStatusline (v2 feature progress)', () => {
     let dataDir: string
     const FIXED_NOW = Date.parse('2026-09-07T03:00:00Z') / 1000
     const REPO = 'acme/widgets'
 
-    async function display(): Promise<string> {
+    const PAYLOAD = JSON.stringify({workspace: {current_dir: '/repo'}})
+
+    async function display(
+        opts: {env?: NodeJS.ProcessEnv; payload?: string; originalStatusline?: string} = {}
+    ): Promise<string> {
         let displayed = ''
         const code = await runStatusline([], {
-            featureProgress: true,
             dataDirOptions: {dataDir},
             now: () => FIXED_NOW,
-            readStdin: () => Promise.resolve(JSON.stringify({workspace: {current_dir: '/repo'}})),
-            env: {},
+            readStdin: () => Promise.resolve(opts.payload ?? PAYLOAD),
+            env: opts.env ?? {},
             gitClient: git(REPO),
+            ...(opts.originalStatusline === undefined ? {} : {originalStatusline: opts.originalStatusline}),
             writeStdout: (s) => {
                 displayed += s
             },
@@ -419,63 +313,7 @@ describe('runStatusline (v2 feature progress)', () => {
         return displayed
     }
 
-    function run(): FeatureRun {
-        const sha = 'a'.repeat(40)
-        const spec = validateFeatureSpec({
-            version: 2,
-            revision: 1,
-            base_sha: sha,
-            contracts: {},
-            prd: {issue_number: 1, title: 'Value', body: '- Return a value.', labels: [], body_truncated: false},
-            spec_md: 'Return a value.',
-            tasks: [
-                {
-                    task_id: 'value',
-                    slice_id: 'slice',
-                    requirement_ids: ['R1'],
-                    title: 'Return value',
-                    description: 'Return the requested value.',
-                    files: ['value.ts'],
-                    acceptance_criteria: ['Return a value.'],
-                    tests_to_write: ['Assert the value.'],
-                    depends_on: [],
-                    risk_tier: 'low',
-                    risk_rationale: 'Local value',
-                },
-            ],
-        })
-        return {
-            version: 2,
-            run_id: 'run',
-            repo: REPO,
-            root: '/repo',
-            branch: 'factory/1-run',
-            worktree: '/repo/.claude/worktrees/feature-run',
-            base_branch: 'develop',
-            remote: 'origin',
-            ship_mode: 'no-ship',
-            debug: false,
-            e2e: false,
-            ignore_quota: true,
-            spec,
-            spec_digest: digest(spec),
-            status: 'running',
-            stage: 'implement',
-            task_index: 0,
-            accepted_sha: sha,
-            task_base_sha: sha,
-            slice_base_sha: sha,
-            attempts: {},
-            checkpoints: [],
-            answers: [],
-            feedback: [],
-            claims: [],
-            confirmed_claims: [],
-            candidate_satisfied: false,
-            delivery: {},
-            audit: [],
-        }
-    }
+    const run = (): FeatureRun => featureRunFixture({repo: REPO})
 
     beforeEach(() => {
         dataDir = mkdtempSync(join(tmpdir(), 'factory-statusline-feature-'))
@@ -506,5 +344,31 @@ describe('runStatusline (v2 feature progress)', () => {
     it('shows only the lifecycle when nothing is in flight', async () => {
         await new FeatureStore(dataDir).write({...run(), status: 'parked'})
         expect(await display()).toBe('0/1 tasks accepted (parked)')
+    })
+
+    it('shows no suffix when the repo has no run', async () => {
+        expect(await display()).toBe('')
+    })
+
+    it("shows no suffix for a terminal run or another repo's run", async () => {
+        const store = new FeatureStore(dataDir)
+        await store.write({...run(), run_id: 'done', status: 'completed'})
+        await store.write({...run(), run_id: 'other', repo: 'acme/other'})
+        expect(await display()).toBe('')
+    })
+
+    it('shows no suffix when the payload carries no cwd', async () => {
+        await new FeatureStore(dataDir).write(run())
+        expect(await display({payload: '{}'})).toBe('')
+    })
+
+    it('is disabled by FACTORY_STATUSLINE_PROGRESS=0', async () => {
+        await new FeatureStore(dataDir).write(run())
+        expect(await display({env: {FACTORY_STATUSLINE_PROGRESS: '0'}})).toBe('')
+    })
+
+    it('composes with the passthrough display (suffix after original stdout)', async () => {
+        await new FeatureStore(dataDir).write(run())
+        expect(await display({originalStatusline: 'cat'})).toBe(`${PAYLOAD} 0/1 tasks accepted (running)`)
     })
 })

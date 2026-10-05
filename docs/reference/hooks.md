@@ -13,14 +13,12 @@ reports persisted state and blocks once, only when the owning session's in-fligh
 attempt has a staged result file for every role that the engine has not consumed
 (`next-action` was never called). The block names the exact command; a re-entry
 with `stop_hook_active` always allows. It never resumes, retries or completes a
-run. V2 does not wire the legacy holdout or SubagentStop gates.
+run.
 
 Tool guards complement engine validation; they are not an operating-system sandbox
 for arbitrary programs. The engine binds evidence to exact commits and spec digests.
 
-## Historical v1 hook behavior
-
-The sections below describe retained legacy modules, not the active v2 wiring.
+## Dispatcher
 
 The `factory-hook` dispatcher (`dist/factory-hook.js`, built from `src/hooks/`)
 enforces invariants at Claude Code tool-use time, independent of any CLI call.
@@ -33,20 +31,18 @@ exits `2`.
 
 ## The guards
 
-| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)).                                                                                                                                                                                                                                                                                                                |
-| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                                                                                                                                                                                                                                                             |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `stop-gate`         | Stop                                        | **One-shot recovery block** + corruption block. NEVER finalizes and performs NO state mutation. An owned run left `running` with every task terminal blocks **once** with an instruction to run `/factory:resume` (the runner frontend that reaches the real `finalizeRun`); an inaccessible data directory blocks once too. Both arms are guarded by `stop_hook_active` — a re-entry after a block always allows (loop guard), degrading to a log hint. Never blocks a session end with pending work — the run stays resumable via `/factory:resume`. See [one-shot recovery](#stop-gate-one-shot-recovery). |
-| `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`. A mid-run **compaction** can drop the runner's protocol from conversation context; this emits an `additionalContext` reminder so a compacted session never loses the pointer. Reads no state (the reminder is static).                                                                                                                                                                                                                                                                                              |
+| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches (`main`, `master`, `develop`, `production`, `release`, `prod`). In autonomous mode it also denies nested shells and hook bypasses.                                                                |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                        |
+| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`). |
+| `feature-guards`    | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | v2 path and session ownership: owned workers cannot write engine state, result journals, locks or durable specs, or publish PRs; review snapshots are read-only; test writers may edit test paths only.                                           |
+| `feature-stop`      | Stop                                        | Observational Stop hook: reports persisted state and blocks once only for staged, unconsumed results (see [Current v2 wiring](#current-v2-wiring)).                                                                                               |
+| `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`, so a compacted session never loses the protocol. Reads no state (the reminder is static).                                                               |
 
 ## `hooks.json` wiring
 
-Eight guards are wired across six matcher entries (some guards run under more
+Six guards are wired across four matcher entries (some guards run under more
 than one matcher):
 
 ```mermaid
@@ -55,14 +51,11 @@ graph TD
     Bash["matcher: ^Bash$"] --> wpB[write-protection]
     Bash --> bp[branch-protection]
     Bash --> sg[secret-guard]
-    Bash --> pg1[pipeline-guards]
-    Bash --> hg1[holdout-guard]
+    Bash --> fg1[feature-guards]
     EWM["matcher: ^(Edit|Write|MultiEdit)$"] --> wp[write-protection]
-    EWM --> pg2[pipeline-guards]
-    RGG["matcher: ^(Read|Grep|Glob)$"] --> hg2[holdout-guard]
+    EWM --> fg2[feature-guards]
   end
-  Stop["Stop"] --> stop[stop-gate]
-  SubagentStop["SubagentStop"] --> ss[subagent-stop]
+  Stop["Stop"] --> fs[feature-stop]
   SessionStart["SessionStart (matcher: compact)"] --> sst[session-start]
 ```
 
@@ -72,116 +65,6 @@ Each entry carries a timeout (5–15s) and a status message. The full mapping is
 `hooks/hooks.json` is TCB-protected (the `write-protection` guard denies edits to it),
 so every wiring change is hand-made; a wiring test in `src/hooks/main.test.ts` asserts
 the file and the registry stay in agreement.
-
-### `stop-gate` one-shot recovery
-
-The Stop hook has two blocking arms, and both block **at most once**:
-
-| Situation                                              | First stop                                                           | Re-entry (`stop_hook_active`) |
-| ------------------------------------------------------ | -------------------------------------------------------------------- | ----------------------------- |
-| Owned run `running`, ≥1 task, all tasks terminal       | **block** — "run `/factory:resume` now to execute the real finalize" | allow (log hint only)         |
-| Data directory unreadable / unenumerable               | **block** — investigate before stopping                              | allow                         |
-| Pending work, foreign run, debug run, no run, no owner | allow                                                                | allow                         |
-
-Claude Code sets `stop_hook_active` on a Stop event that fires because a previous
-Stop-hook block continued the session. Reading it is what makes the recovery
-**one-shot**: the session gets exactly one push toward `/factory:resume`, and can
-never be held hostage in a block loop. The hook still never mutates state — a
-state-only status flip would bypass the real `finalizeRun` delivery (rollup PR,
-PRD close, e2e-failed override).
-
-## Fail-closed posture
-
-The guards fail **closed**: a write whose target sits inside a run worktree but
-whose run/task state is missing or broken is treated as deny, never silently
-allowed. The `pipeline-guards` ship arm is a categorical boundary — PRs are opened
-and merged ONLY by the engine (a `child_process` `gh` call inside `factory next-action`
-that never transits this Bash-tool hook), so any `gh pr create`/`gh pr merge`
-reaching the hook is an agent-initiated attempt and is unconditionally denied while
-a run is active. The merge gate that actually gates shipping is derived from
-fresh ground truth _inside the engine_ (derive-don't-store) — there is structurally
-no stored `*_gate` boolean to forge (see
-[../explanation/derive-dont-store.md](../explanation/derive-dont-store.md)).
-
-The `pipeline-guards`, `holdout-guard`, and the run-scoped checks act only when
-they can resolve an owning run from their own inputs (below); otherwise they pass
-through — so enabling the plugin in an unrelated session never leaks a live run's
-scope into it.
-
-## Run ownership
-
-No hook reads a shared mutable global pointer — none exists (the global
-`runs/current` was retired, [Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)).
-Each guard **derives the run it belongs to from the signal it already holds**
-(Decision 30), so runs across different repos run concurrently without
-cross-contamination:
-
-- **Write-scope arm** (`pipeline-guards`, `Edit\|Write\|MultiEdit`): derives
-  `{run_id, task_id}` from the **absolute target path**. A producer writes into
-  `<repo-root>/.claude/worktrees/<run_id>/<task_id>/…`, so the path encodes both ids
-  ([Decision 67](../explanation/decisions.md#decision-67--task-worktrees--results-relocate-into-the-target-repos-claudeworktrees)). A
-  target under no worktree is not a producer write → pass through; a target under
-  a worktree whose run/task state is missing or corrupt → deny (fail closed).
-  The worktrees root is a **required, git-derived anchor** — `<main-worktree-root>/.claude/worktrees`,
-  derived from the git common dir and resolved once in `loadCliDeps` as `workDir` — never an
-  unanchored `.claude/worktrees/` segment scan: this arm fires on every `Edit`/`Write`/`MultiEdit`
-  system-wide, and `.claude/worktrees/` is also where Claude Code's own native worktree feature
-  puts unrelated worktrees in any repo.
-- **Bash arms** (nested-shell, ship): resolve the active run via
-  [`loadOwnerScopedRun`](#active-run-resolution) — the owning session's run when
-  `CLAUDE_CODE_SESSION_ID` is set, else the cwd repo's current run, else the
-  newest non-terminal run. No active run → pass through (these arms are
-  lower-stakes — the nested-shell arm is a rail, the ship arm is dormant in
-  production).
-- **`stop-gate`**: resolves the run owned by the **stopping session**
-  (`findActiveByOwner`) rather than the global pointer, so a clobber can't make it
-  attribute the hint to the wrong run. When the stopping session owns no single active
-  run — no active run, an unknown session, or an ambiguous ≥2-owned set — it passes
-  through (allow), logging the pass-through. It **never** finalizes and **never** mutates
-  state: an owned, all-terminal run stays `running`, and the block (or, on a
-  `stop_hook_active` re-entry, the log hint) points at `/factory:resume`, which
-  re-derives all-terminal and routes through the real `finalizeRun` (a state-only
-  status flip would bypass the rollup PR, PRD close, and e2e-failed override — see
-  [one-shot recovery](#stop-gate-one-shot-recovery)).
-- **`subagent-stop`**: attributes a stopping reviewer's verdict to the run owned
-  by its own session (`findActiveByOwner`); no owned run → the result is skipped
-  (it is observational, never authoritative).
-- **`holdout-guard`**: run-independent (reads only `dataDir`) — correctly global.
-
-Because `factory run create` **requires** an owning session id
-(`--session-id` or `CLAUDE_CODE_SESSION_ID` — always, no exemption since
-Decision 42), an ownerless run never arises in normal operation. The stop-gate's
-owner check is therefore belt-and-suspenders for unusual paths rather than a
-routine code path.
-
-The write-scope arm is a **rail**, not the boundary: the authoritative TDD
-enforcement is the deterministic commit-order gate on the task branch
-(`src/verifier/deterministic/strategies/tdd.ts`), so a path-anchor miss (e.g. a
-producer write issued via `Bash`) does not weaken enforcement.
-
-### Active run resolution
-
-The Bash arms (and the statusline tick) resolve "which run is active" via
-`loadOwnerScopedRun` (`src/hooks/hook-context.ts`) in a strict 3-tier order. The
-global repo-less `runs/current` pointer is **retired**
-([Decision 61](../explanation/decisions.md#decision-61--closing-the-outer-quality-loop-review-misses-reviewer-value-single-pointer)),
-so there is no last-writer-wins fallback to race:
-
-1. **Owner session** — `CLAUDE_CODE_SESSION_ID` set → the run THAT session owns
-   (`findActiveByOwner`); `null` if none, so a concurrent run owned by another
-   session is never inherited.
-2. **CWD repo** — no session id but a cwd → the cwd repo's per-repo current
-   pointer (`resolveRepo` → `readCurrentForRepo`). An underivable repo (not a
-   checkout / no `origin`, a `UsageError`) falls through; any other resolution
-   failure surfaces LOUD.
-3. **Scan** — neither → the newest non-terminal run (`listRuns`). Deliberately
-   broader than the old global pointer: the deny arms only need "a run is
-   active", and returning `null` in a degraded env would silently re-open the
-   ship / nested-shell gates.
-
-Corruption stays loud at every tier — a corrupt `state.json` behind a live
-pointer throws (the guard pipeline maps it to a fail-closed deny); only genuine
-absence resolves to `null`.
 
 ## write-protection (TCB)
 
@@ -229,7 +112,7 @@ full shell parser; it covers the common file-writing forms:
 
 Env-prefixes (`VAR=…`) and pass-through wrappers (`sudo`, `env`, `xargs`, …) are skipped
 when locating a segment's binary. Exotic quoting or nested-shell forms that evade the
-heuristic are already denied by the `pipeline-guards` nested-shell / hook-bypass arm.
+heuristic are denied in autonomous mode by the `branch-protection` nested-shell / hook-bypass arm.
 
 ## secret-guard
 

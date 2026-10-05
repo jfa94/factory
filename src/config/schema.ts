@@ -39,10 +39,6 @@ export type Effort = z.infer<typeof EffortEnum>
 /** Quality gate thresholds (WS6 extends). Defaults from the bash gate scripts. */
 export const QualitySchema = z
     .object({
-        /** Percent of acceptance criteria held out as an unreadable answer-key. */
-        holdoutPercent: z.number().min(0).max(100).default(20),
-        /** Min pass-rate (%) on the holdout set to clear the gate. */
-        holdoutPassRate: z.number().min(0).max(100).default(80),
         /** Target mutation score (%) for the mutation gate. */
         mutationScoreTarget: z.number().min(0).max(100).default(80),
         /** Allowed coverage regression (percentage points) before the gate fails. */
@@ -99,23 +95,6 @@ export const QuotaSchema = z
             .length(7)
             .refine(nonDecreasing, {message: 'thresholds must be non-decreasing'})
             .default([20, 40, 60, 80, 95, 95, 95]),
-        /**
-         * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
-         * renamed model-router, narrowed) selects the producer model for a task from
-         * its risk tier; this is the ONLY dial it carries — the review panel is
-         * risk-INVARIANT (Decision 25/26), so there is NO review-depth/round cap here
-         * (the old `--tier` routine/feature/security review caps are DELETED).
-         * Defaults: low/medium→sonnet (balanced), high→opus (strong). low defaults to
-         * SONNET, not haiku — even low-risk work is code generation, which haiku
-         * underperforms; override `producerModels.low` per-repo for cheaper low-risk runs.
-         */
-        producerModels: z
-            .object({
-                low: z.string().default('claude-sonnet-4-5'),
-                medium: z.string().default('claude-sonnet-4-5'),
-                high: z.string().default('claude-opus-4-6'),
-            })
-            .default({}),
     })
     .default({})
 
@@ -161,32 +140,9 @@ export type SpecConfig = z.infer<typeof SpecSchema>
  */
 export const SPEC_DEFAULTS: Readonly<SpecConfig> = Object.freeze(SpecSchema.parse({}))
 
-/** Judgment-panel reviewer config (WS7 extends). */
-export const ReviewSchema = z
-    .object({
-        /** Reviewer model id (panel runs on a fixed model per Decision 26). */
-        model: z.string().optional(),
-        /**
-         * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
-         * `warn` records the absence loudly (task state + report + summary);
-         * `block` additionally fails the merge gate — a task cannot ship without an
-         * independent second-vendor review.
-         */
-        requireCrossVendor: z.enum(['warn', 'block']).default('warn'),
-    })
-    .default({})
-
-/** Codex cross-vendor executor config (WS7/WS8). */
-export const CodexSchema = z
-    .object({
-        model: z.string().optional(),
-    })
-    .default({})
-
 /**
- * Git / PR I/O + serial-writer config (WS3 owns). Centralizes the base branch,
- * the integration branch, the required-status-checks contract the run refuses to
- * start without (#2 / Δ A), and whether protection provisioning is opted in.
+ * Git / PR I/O config (WS3 owns). Centralizes the base branch and the
+ * required-status-checks contract the run refuses to start without (#2 / Δ A).
  *
  * Per the seam contract ("all defaults live in this file; WS_ extend their
  * slice"), WS3 adds this sub-schema rather than scattering branch/protection
@@ -201,27 +157,12 @@ export const GitSchema = z
          */
         baseBranch: z.string().min(1).default('develop'),
         /**
-         * Required status-check contexts of develop's RUN PROFILE — under
-         * `developProtection: "run-scoped"` (default) they are escalated onto
-         * develop for the duration of a run (Decision 74); under `"permanent"`
-         * they are asserted at scaffold and provisioned with `--provision`.
+         * Required status-check contexts of develop's protection profile, asserted
+         * by scaffold and run preflight and provisioned with `--provision`.
          * Defaults to the three contexts the rendered quality-gate workflow
          * always reports (Decision 53) — the rollup PR cannot merge red.
          */
         developRequiredStatusChecks: z.array(z.string()).default(['Quality', 'Mutation Testing', 'Security Scan']),
-        /**
-         * Lifecycle of develop's protection profile (Decision 74).
-         * `run-scoped` (default): scaffold writes/asserts only the light BASELINE —
-         * `developBaselineStatusChecks` required for non-admins, strict off,
-         * `enforce_admins` OFF so repo admins can push straight to develop; `run
-         * create` escalates to the strict run profile (`developRequiredStatusChecks`
-         * + strict + enforce_admins) and every run-terminal path drops back to
-         * baseline. `permanent`: the strict profile is provisioned at scaffold and
-         * never removed (pre-D74 behavior). NOTE (run-scoped): escalation and
-         * de-escalation are full-replace PUTs — custom hand-made protection on
-         * develop is clobbered; use `permanent` to opt out.
-         */
-        developProtection: z.enum(['run-scoped', 'permanent']).default('run-scoped'),
         /**
          * Required status-check contexts of develop's BASELINE profile (run-scoped
          * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
@@ -233,24 +174,6 @@ export const GitSchema = z
          * set value (including `[]`) overrides the derivation.
          */
         developBaselineStatusChecks: z.array(z.string()).optional(),
-        /**
-         * Required status-check contexts provisioned onto each per-run
-         * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
-         * local GateRunner is the primary task-level enforcement, and a required
-         * check here would make every task-PR merge wait on CI wall-clock.
-         */
-        stagingRequiredStatusChecks: z.array(z.string()).default([]),
-        /**
-         * Opt-in protection provisioning. OFF by default — the run VERIFIES and
-         * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips
-         * this to issue the `gh api` PUT.
-         */
-        provision: z.boolean().default(false),
-        /**
-         * Branch-name prefix for run-scoped task branches (Δ M). The full name is
-         * `<branchPrefix>/<run_id>/<task_id>`.
-         */
-        branchPrefix: z.string().min(1).default('factory'),
         /**
          * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
          * before giving up with `ci-timeout`. Sized above the slowest expected
@@ -271,41 +194,6 @@ export const GitSchema = z
     .default({})
 
 /**
- * Playwright e2e config (Decision 39/40). All optional/defaulted so a repo that
- * never passes `--e2e` pays nothing. `startCommand`/`baseURL` are OPTIONAL OVERRIDES
- * (Decision 40 D10): the run-start assessment resolves the real boot pair itself and
- * writes it into the repo's `playwright.config.ts`; a value set here wins over the
- * assessment's (`resolveBootConfig` in `src/orchestrator/e2e.ts`). The runner module
- * actually reads every key below — no declared-but-never-load-bearing keys (the
- * `redTestCommand` cautionary tale — declared for years, read by nothing, pruned
- * in S7/Decision 46 — must NOT repeat here).
- */
-export const E2eConfigSchema = z
-    .object({
-        /**
-         * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
-         * for both Playwright's `webServer` (test runs) and the e2e-author's
-         * live-exploration boot. Normally unset — the run-start assessment resolves it.
-         */
-        startCommand: z.string().optional(),
-        /** OPTIONAL override of the base URL the app serves once booted (D10 — normally
-         * assessment-resolved). */
-        baseURL: z.string().url().optional(),
-        /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
-        readyTimeoutMs: z.number().int().positive().default(30_000),
-        /**
-         * Per-task cap on e2e-triggered reopens (Decision 39). A critical spec still
-         * red after this many reopens of its mapped task fails the run outright
-         * instead of looping forever.
-         */
-        reopenCap: z.number().int().nonnegative().default(2),
-    })
-    .default({})
-
-/** Fully-resolved e2e config (all defaults applied). */
-export type E2eConfig = z.infer<typeof E2eConfigSchema>
-
-/**
  * The single root config schema. Every sub-block defaults, so an empty object
  * (or a missing config file) parses to a complete config.
  */
@@ -314,55 +202,7 @@ export const ConfigSchema = z
         quality: QualitySchema,
         quota: QuotaSchema,
         spec: SpecSchema,
-        review: ReviewSchema,
-        codex: CodexSchema,
         git: GitSchema,
-        e2e: E2eConfigSchema,
-        /**
-         * FLOOR of the circuit-breaker threshold: the run aborts when cumulative genuine
-         * capability-budget failures reach `max(this, ceil(0.15 × total tasks))` — big
-         * task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3).
-         * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
-         * total capability-budget drops); the field keeps its name for config back-compat.
-         */
-        maxConsecutiveFailures: z.number().int().positive().default(3),
-        /**
-         * How many tasks the runner may have in flight at once. Surfaced to the
-         * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
-         * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
-         */
-        maxParallelTasks: z.number().int().positive().default(3),
-        /**
-         * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
-         * before `next-task` flags it in `work.stale` (advisory — a hung agent that
-         * died silently is never re-driven inside a live session otherwise). Default
-         * 15: stalls are the #1 operational pain (design-review-2026-07-07). Also
-         * sizes the runner's heartbeat cron, so keep it under 60 (the usage-cache
-         * staleness ceiling — pipeline-runner SKILL).
-         */
-        stallTtlMinutes: z.number().int().positive().default(15),
-        /**
-         * HARD wall-clock cap (minutes) on one in-flight spawn. Past this age
-         * `next-task` lists the task in `work.hung` (disjoint from `stale`): the
-         * runner kills the spawn's agents EVEN IF ALIVE and re-drives — bounded by
-         * SPAWN_REDRIVE_CAP (orchestrator.ts), after which the task fails
-         * `blocked-environmental` and finalize/rescue-auto take over (Decision 66).
-         * Must exceed stallTtlMinutes (the advisory liveness-checked tier below
-         * it) — enforced by the superRefine below.
-         */
-        hungSpawnMinutes: z.number().int().positive().default(120),
-    })
-    .superRefine((cfg, ctx) => {
-        if (cfg.hungSpawnMinutes <= cfg.stallTtlMinutes) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['hungSpawnMinutes'],
-                message:
-                    `hungSpawnMinutes (${cfg.hungSpawnMinutes}) must exceed stallTtlMinutes ` +
-                    `(${cfg.stallTtlMinutes}) — the hard kill-even-if-alive tier sits above the ` +
-                    'advisory liveness-checked stale band',
-            })
-        }
     })
     .default({})
 

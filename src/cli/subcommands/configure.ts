@@ -36,7 +36,7 @@ Usage:
 
 Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
-  factory configure --set quality.holdoutPercent=25
+  factory configure --set quality.mutationScoreTarget=85
   factory configure --set git.baseBranch=develop
   factory configure --set git.autoProvision=true`
 

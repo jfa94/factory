@@ -42,7 +42,7 @@ import {readFile} from 'node:fs/promises'
 import {z} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {stringifyJson, readJsonFile} from '../shared/json.js'
-import {specBuildDir} from '../core/state/paths.js'
+import {specBuildDir, specDir} from './paths.js'
 import {makeSpecId, type SpecStore} from './store.js'
 import type {GhClient, Prd} from './gh.js'
 import {runSpecGates, specifiabilityGate, extractPrdRequirements} from './gates.js'
@@ -58,13 +58,12 @@ import {
     type ReviewContext,
     type GenerateResult,
 } from './agents.js'
-import type {Config, SpecPointer} from '../types/index.js'
+import type {Config} from '../config/schema.js'
 import {evaluate as evaluateQuota, type UsageSignal} from '../quota/index.js'
-import {parseSpecManifest, type SpecManifest} from './schema.js'
+import {parseSpecManifest, type SpecManifest, type SpecPointer} from './schema.js'
 import {nowIso} from '../shared/time.js'
 import {digest, validateFeatureSpec} from '../feature/schema.js'
 import type {RepositorySnapshot} from './snapshot.js'
-import {specDir} from '../core/state/paths.js'
 
 /** Scratch file names threaded between the three actions. */
 const PRD_FILE = 'prd.json'

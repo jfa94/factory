@@ -1,12 +1,10 @@
 /**
  * WS3 — typed GhClient over an injectable {@link GhRunner}.
  *
- * Narrow `gh` surface for idempotent PR create (Δ P), serial merge (Δ L), and the
- * branch-protection probe (#2 / Δ A). Every JSON read goes through
- * {@link parseGhJson}, which FAILS LOUD when `ExecResult.truncated === true`
- * (reusing the frozen exec seam) — a clipped `gh --json` payload must NEVER be
- * silently mis-parsed into a wrong control-flow decision (e.g. "no PR exists" →
- * duplicate create).
+ * Narrow `gh` surface for the branch-protection probe and provisioning (#2 / Δ A).
+ * JSON reads FAIL LOUD when `ExecResult.truncated === true` (see {@link parseGhJson})
+ * — a clipped `gh --json` payload must NEVER be silently mis-parsed into a wrong
+ * control-flow decision.
  */
 import {z} from 'zod'
 import type {ExecOptions, ExecResult} from '../shared/index.js'
@@ -14,34 +12,6 @@ import {createLogger, parseJson} from '../shared/index.js'
 import {defaultGhRunner, runOrThrow, type GhRunner} from './exec-tools.js'
 
 const log = createLogger('gh')
-
-/** A pull request as returned by `gh pr list/view --json`. */
-export interface PullRequest {
-    number: number
-    headRefName: string
-    baseRefName: string
-    state: 'OPEN' | 'CLOSED' | 'MERGED'
-    /** GitHub mergeable status (MERGEABLE | CONFLICTING | UNKNOWN), if requested. */
-    mergeable?: string | undefined
-    /** Merge-state status (CLEAN | BEHIND | BLOCKED | DIRTY | ...), if requested. */
-    mergeStateStatus?: string | undefined
-    /** Squash/merge commit (`null` until merged), if requested — the merged-SHA fact. */
-    mergeCommit?: {oid: string} | null | undefined
-    url?: string | undefined
-}
-
-/** Result of {@link GhClient.prCreate}. */
-export interface CreatedPr {
-    number: number
-    url: string
-}
-
-/**
- * Aggregate state of a PR's CI checks (the "ONE full-CI gate", §④). `none` means
- * the PR has NO checks configured (a normal answer — the rollup proceeds, there is
- * nothing to gate); `pending` means at least one check is still running.
- */
-export type ChecksState = 'passing' | 'pending' | 'failing' | 'none'
 
 /** Branch-protection facts as the probe reads them (raw GET shape, narrowed). */
 export interface ProtectionApiResult {
@@ -55,42 +25,6 @@ export interface ProtectionApiResult {
     hasMergeQueue: boolean
 }
 
-/** Args for {@link GhClient.prList}. */
-export interface PrListArgs {
-    head: string
-    base?: string
-    state?: 'open' | 'closed' | 'merged' | 'all'
-    /**
-     * Explicit `--repo owner/name`. Without it `gh pr list` resolves the repo from
-     * the process cwd — wrong (or a confusing failure) when the CLI runs outside the
-     * target checkout (e.g. `rescue scan --run <id>` from elsewhere).
-     */
-    repo?: string
-}
-
-/** Args for {@link GhClient.prCreate}. */
-export interface PrCreateArgs {
-    base: string
-    head: string
-    title: string
-    body: string
-}
-
-/** Options for {@link GhClient.prMergeSquash}. */
-export interface PrMergeOptions {
-    deleteBranch?: boolean
-    /** Enqueue via merge-queue/auto rather than merge now (probe-detected upgrade). */
-    auto?: boolean
-    /**
-     * Override the squash-merge commit subject. The rollup passes the plain run title
-     * here (develop only ever receives a COMPLETE run — Decision 34), so the develop
-     * history records the run that shipped.
-     */
-    subject?: string
-    /** Override the squash-merge commit body. */
-    body?: string
-}
-
 /** Per-call gh options. */
 export interface GhOpts {
     cwd?: string
@@ -98,16 +32,6 @@ export interface GhOpts {
 
 /** The typed `gh` surface WS3 depends on. */
 export interface GhClient {
-    /** `gh pr list --head <head> [--base] [--state] --json ...` (Δ P lookup). */
-    prList(args: PrListArgs, opts?: GhOpts): Promise<PullRequest[]>
-    /** `gh pr create ...` → {number, url}. */
-    prCreate(args: PrCreateArgs, opts?: GhOpts): Promise<CreatedPr>
-    /** `gh pr view <number> --json <fields>`. */
-    prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest>
-    /** `gh pr checks <number> --json bucket` aggregated to a single CI state (§④ gate). */
-    prChecks(number: number, opts?: GhOpts): Promise<ChecksState>
-    /** `gh pr merge <number> --squash [--auto] [--delete-branch]` (Δ L action). */
-    prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void>
     /** GET branch-protection via `gh api` (probe; 404 → not enabled). */
     repoProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<ProtectionApiResult>
     /** PUT branch-protection via `gh api` (--provision ONLY). */
@@ -122,28 +46,6 @@ export interface GhClient {
     ): Promise<void>
     /** Detect whether native GitHub merge-queue is available for this branch. */
     mergeQueueProbe(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>
-    /**
-     * Delete ONLY the remote head ref via the API (`DELETE /git/refs/heads/<branch>`).
-     * Never touches the local branch — a per-task worktree holds it checked-out, so
-     * `git branch -D` would fail (that is exactly why `gh pr merge --delete-branch`
-     * cannot be used). Idempotent: a missing ref is success, not an error.
-     */
-    deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>
-    /** DELETE branch protection (`gh api -X DELETE …/branches/<branch>/protection`). 404 → success. */
-    deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>
-    /** Read-only remote-branch probe (`gh api …/branches/<branch>`). 404 → false; other failures throw. */
-    branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>
-    /** Remote branch tip sha via the same probe. 404 → null (branch gone); other failures throw. */
-    branchTip(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<string | null>
-    /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered + failure comments). */
-    issueComment(args: {repo: string; number: number; body: string}, opts?: GhOpts): Promise<void>
-    /**
-     * `gh issue view <number> --repo <repo> --json comments` → existing comment bodies.
-     * The finalize failure-comment dedup lookup (scan for the run's marker).
-     */
-    listIssueComments(args: {repo: string; number: number}, opts?: GhOpts): Promise<string[]>
-    /** `gh issue close <number> --repo <repo> [--comment <comment>]` (close PRD on completion). */
-    issueClose(args: {repo: string; number: number; comment?: string}, opts?: GhOpts): Promise<void>
 }
 
 /** Body for a branch-protection PUT (the subset WS3 sets). */
@@ -161,52 +63,6 @@ export interface ProtectionPutBody {
 // ---------------------------------------------------------------------------
 // Zod shapes for the gh JSON payloads (LOUD on a wrong shape).
 // ---------------------------------------------------------------------------
-
-const PullRequestSchema = z.object({
-    number: z.number().int(),
-    headRefName: z.string(),
-    baseRefName: z.string(),
-    state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
-    mergeable: z.string().optional(),
-    mergeStateStatus: z.string().optional(),
-    mergeCommit: z.object({oid: z.string()}).nullish(),
-    url: z.string().optional(),
-})
-
-/**
- * The fields `prView` MUST always request: every NON-optional key of
- * {@link PullRequestSchema}. `gh pr view --json <subset>` returns ONLY the
- * requested fields, so a caller asking for just a subset (e.g. the rollup wants
- * `state,mergeable`) would otherwise leave `headRefName`/`baseRefName`/`state`
- * absent and make the strict {@link parseGhJson} throw. prView unions these into
- * every query so its guarantee always matches the schema. Derived FROM the schema
- * so the two can never drift (add a required field → it's auto-requested).
- */
-const REQUIRED_VIEW_FIELDS: readonly string[] = Object.entries(PullRequestSchema.shape)
-    .filter(([, schema]) => !schema.isOptional())
-    .map(([key]) => key)
-
-/**
- * Aggregate `gh pr checks --json bucket` rows into one {@link ChecksState}. A
- * single failing/cancelled check fails the gate; any pending check holds it;
- * otherwise (pass/skipping) it passes. An empty set is `none` (no checks).
- */
-export function aggregateChecks(rows: readonly {bucket?: string | undefined}[]): ChecksState {
-    if (rows.length === 0) {
-        return 'none'
-    }
-    const buckets = rows.map((r) => (r.bucket ?? '').toLowerCase())
-    if (buckets.some((b) => b === 'fail' || b === 'cancel')) {
-        return 'failing'
-    }
-    if (buckets.some((b) => b === 'pending')) {
-        return 'pending'
-    }
-    return 'passing'
-}
-
-/** `gh pr checks --json bucket` rows — only `bucket` is read. */
-const GhChecksSchema = z.array(z.object({bucket: z.string().optional()}))
 
 /** `gh api …/branches/…/protection` — only the fields the protection read consumes. */
 const GhProtectionSchema = z.object({
@@ -249,172 +105,6 @@ export class DefaultGhClient implements GhClient {
     private execOpts(opts?: GhOpts): ExecOptions {
         const cwd = opts?.cwd
         return cwd != null && cwd.length > 0 ? {cwd} : {}
-    }
-
-    async prList(args: PrListArgs, opts?: GhOpts): Promise<PullRequest[]> {
-        const argv = [
-            'pr',
-            'list',
-            '--head',
-            args.head,
-            '--state',
-            args.state ?? 'open',
-            '--json',
-            'number,headRefName,baseRefName,state,mergeable,mergeStateStatus,mergeCommit,url',
-        ]
-        if (args.base != null && args.base.length > 0) {
-            argv.push('--base', args.base)
-        }
-        if (args.repo != null && args.repo.length > 0) {
-            argv.push('--repo', args.repo)
-        }
-        const r = await runOrThrow('gh', this.runner, argv, this.execOpts(opts))
-        return parseGhJson(r, z.array(PullRequestSchema), 'gh pr list')
-    }
-
-    async prCreate(args: PrCreateArgs, opts?: GhOpts): Promise<CreatedPr> {
-        // `gh pr create` prints the PR URL to stdout. Use --json on view afterwards
-        // would need a number; instead create then parse the URL it emits.
-        const r = await runOrThrow(
-            'gh',
-            this.runner,
-            ['pr', 'create', '--base', args.base, '--head', args.head, '--title', args.title, '--body', args.body],
-            this.execOpts(opts)
-        )
-        if (r.truncated) {
-            throw new Error('gh pr create: output truncated — cannot trust the emitted PR URL')
-        }
-        const url = r.stdout.trim().split(/\s+/).pop() ?? ''
-        const m = /\/pull\/(\d+)\s*$/.exec(url)
-        if (!m) {
-            throw new Error(`gh pr create: could not parse PR number from output: ${r.stdout.trim()}`)
-        }
-        return {number: Number(m[1]), url}
-    }
-
-    async prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest> {
-        // Always request the schema's required fields (REQUIRED_VIEW_FIELDS): a caller
-        // may pass only a subset (e.g. the rollup wants state+mergeable), but the strict
-        // parse needs number+headRefName+baseRefName+state present or it throws.
-        const requested = Array.from(new Set([...REQUIRED_VIEW_FIELDS, ...fields]))
-        const r = await runOrThrow(
-            'gh',
-            this.runner,
-            ['pr', 'view', String(number), '--json', requested.join(',')],
-            this.execOpts(opts)
-        )
-        return parseGhJson(r, PullRequestSchema, 'gh pr view')
-    }
-
-    async prChecks(number: number, opts?: GhOpts): Promise<ChecksState> {
-        const r = await this.runner(['pr', 'checks', String(number), '--json', 'bucket'], this.execOpts(opts))
-        if (r.truncated) {
-            throw new Error('gh pr checks: output truncated — refusing to parse clipped checks JSON')
-        }
-        const stdout = r.stdout.trim()
-        if (stdout === '' || stdout === '[]') {
-            // No checks: gh either prints an empty array, or exits non-zero with
-            // "no checks reported". Both mean the gate has nothing to enforce. A
-            // different non-zero (auth/network) is a real failure → throw.
-            if (r.code !== 0 && !/no checks reported/i.test(r.stderr)) {
-                throw new Error(`gh pr checks #${number} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
-            }
-            return 'none'
-        }
-        const rows = GhChecksSchema.parse(parseJson(stdout, 'gh pr checks'))
-        return aggregateChecks(rows)
-    }
-
-    async prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void> {
-        const argv = ['pr', 'merge', String(number), '--squash']
-        if (opts?.auto === true) {
-            argv.push('--auto')
-        }
-        if (opts?.deleteBranch === true) {
-            argv.push('--delete-branch')
-        }
-        if (opts?.subject !== undefined) {
-            argv.push('--subject', opts.subject)
-        }
-        if (opts?.body !== undefined) {
-            argv.push('--body', opts.body)
-        }
-        await runOrThrow('gh', this.runner, argv, this.execOpts(opts))
-    }
-
-    async deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void> {
-        // Remote-ref delete via the API — never `git branch -D` (a worktree holds the
-        // local branch). Idempotent: a 422 "Reference does not exist" / 404 means the
-        // ref is already gone (success). Message-anchored like deleteProtection — a bare
-        // /422/ would also swallow REFUSALS (ruleset-protected ref → "422: Validation
-        // Failed"). Any other non-zero is a real error → throw.
-        const path = `repos/${owner}/${repo}/git/refs/heads/${branch}`
-        const r = await this.runner(['api', '--method', 'DELETE', path], this.execOpts(opts))
-        if (r.code !== 0 && !/Reference does not exist|Not Found|HTTP 404/i.test(r.stderr)) {
-            throw new Error(`gh api DELETE ${path} failed (code=${r.code ?? 'null'}): ${r.stderr.trim()}`)
-        }
-    }
-
-    async branchExists(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean> {
-        return (await this.branchTip(owner, repo, branch, opts)) !== null
-    }
-
-    async branchTip(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<string | null> {
-        const path = `repos/${owner}/${repo}/branches/${branch}`
-        const r = await this.runner(['api', path], this.execOpts(opts))
-        if (r.code === 0) {
-            if (r.truncated) {
-                throw new Error(`gh api ${path}: output truncated — refusing to parse clipped branch JSON`)
-            }
-            const parsed = z.object({commit: z.object({sha: z.string()})}).parse(parseJson(r.stdout, path))
-            return parsed.commit.sha
-        }
-        // A 404 is the ANSWER (branch gone). Any other non-zero (auth, network) throws —
-        // never silently reported as "missing" (mirrors repoProtection).
-        if (/404|Not Found|Branch not found/i.test(r.stderr)) {
-            return null
-        }
-        throw ghApiFailure(path, r)
-    }
-
-    async deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void> {
-        const argv = ['api', '-X', 'DELETE', `/repos/${owner}/${repo}/branches/${branch}/protection`]
-        const r = await this.runner(argv, this.execOpts(opts))
-        // A 404 / "Branch not protected" is the ANSWER (the branch had no protection, or was
-        // already deleted by a prior finalize), not an error — mirror repoProtection. Any OTHER
-        // non-zero (403 no-admin, 5xx, network) is a real failure → throw, so an auth/permission
-        // failure is never silently masked as "already gone".
-        if (r.code !== 0 && !/404|Not Found|Branch not protected/i.test(r.stderr)) {
-            throw new Error(`gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`)
-        }
-    }
-
-    async issueComment(args: {repo: string; number: number; body: string}, opts?: GhOpts): Promise<void> {
-        const argv = ['issue', 'comment', String(args.number), '--repo', args.repo, '--body', args.body]
-        await runOrThrow('gh', this.runner, argv, this.execOpts(opts))
-    }
-
-    async listIssueComments(args: {repo: string; number: number}, opts?: GhOpts): Promise<string[]> {
-        const r = await runOrThrow(
-            'gh',
-            this.runner,
-            ['issue', 'view', String(args.number), '--repo', args.repo, '--json', 'comments'],
-            this.execOpts(opts)
-        )
-        const parsed = parseGhJson(
-            r,
-            z.object({comments: z.array(z.object({body: z.string()}))}),
-            'gh issue view comments'
-        )
-        return parsed.comments.map((c) => c.body)
-    }
-
-    async issueClose(args: {repo: string; number: number; comment?: string}, opts?: GhOpts): Promise<void> {
-        const argv = ['issue', 'close', String(args.number), '--repo', args.repo]
-        if (args.comment !== undefined) {
-            argv.push('--comment', args.comment)
-        }
-        await runOrThrow('gh', this.runner, argv, this.execOpts(opts))
     }
 
     async repoProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<ProtectionApiResult> {

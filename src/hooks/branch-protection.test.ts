@@ -1,7 +1,7 @@
 /**
  * WS9 — branch-protection adversarial tests (implemented body). Ports the bash
  * parse vectors; the exec seam (current-branch) is faked. Each destructive form
- * must block; the staging-in-orchestrator-worktree exception allows.
+ * must block.
  */
 import {describe, it, expect} from 'vitest'
 import {decideBranchProtection, type BranchProtectionDeps} from './branch-protection.js'
@@ -17,7 +17,6 @@ function bashInput(command: string) {
 function deps(currentBranch: string, extra: Partial<BranchProtectionDeps> = {}): BranchProtectionDeps {
     return {
         resolveCurrentBranch: () => Promise.resolve(currentBranch),
-        cwd: '/work/repo',
         autonomousMode: false,
         ...extra,
     }
@@ -86,44 +85,6 @@ describe('branch-protection — allowed forms pass', () => {
         const d = await decideBranchProtection(bashInput('ls -la'), deps('main'))
         expect(isDeny(d)).toBe(false)
     })
-
-    it('staging exception: push to staging ALLOWED inside an orchestrator worktree', async () => {
-        const d = await decideBranchProtection(
-            bashInput('git push origin staging'),
-            deps('staging', {
-                autonomousMode: true,
-                cwd: '/work/.claude/worktrees/orchestrator-abc',
-            })
-        )
-        expect(isDeny(d)).toBe(false)
-    })
-
-    it('staging exception does NOT apply outside an orchestrator worktree', async () => {
-        const d = await decideBranchProtection(
-            bashInput('git push origin staging'),
-            deps('staging', {autonomousMode: true, cwd: '/work/repo'})
-        )
-        expect(isDeny(d)).toBe(true)
-    })
-
-    it('staging exception: reset --hard ON staging ALLOWED inside an orchestrator worktree (Check 6)', async () => {
-        const d = await decideBranchProtection(
-            bashInput('git reset --hard HEAD~1'),
-            deps('staging', {
-                autonomousMode: true,
-                cwd: '/work/.claude/worktrees/orchestrator-abc',
-            })
-        )
-        expect(isDeny(d)).toBe(false)
-    })
-
-    it('staging reset --hard exception does NOT apply outside an orchestrator worktree (Check 6)', async () => {
-        const d = await decideBranchProtection(
-            bashInput('git reset --hard HEAD~1'),
-            deps('staging', {autonomousMode: true, cwd: '/work/repo'})
-        )
-        expect(isDeny(d)).toBe(true)
-    })
 })
 
 describe('branch-protection — nested-shell denial (autonomous)', () => {
@@ -156,7 +117,7 @@ describe('branch-protection — default current-branch resolver (WS9)', () => {
 
     /** deps that exercise the REAL default resolver via an injected exec seam. */
     function execDeps(exec: BranchProtectionDeps['exec']): BranchProtectionDeps {
-        return {exec, cwd: '/work/repo', autonomousMode: false}
+        return {exec, autonomousMode: false}
     }
 
     function execResult(over: Partial<ExecResult>): ExecResult {

@@ -54,7 +54,8 @@ import {
     type NodeRuntime,
     type NodeRuntimeDeclarations,
 } from '../../ci/index.js'
-import {StateManager} from '../../core/state/index.js'
+import {FeatureStore} from '../../feature/store.js'
+import {terminal} from '../../feature/schema.js'
 import {ensureTargetSettings, buildTargetDataDirRules, type TargetDataDirRules} from './target-settings.js'
 import {ensureGateContract, preflightGateContract, recommendFastCheck} from './scaffold-gates.js'
 import {loadScaffoldLock, saveScaffoldLock, sha256Hex, SCAFFOLD_LOCK_REL, type ScaffoldLock} from './scaffold-lock.js'
@@ -156,7 +157,7 @@ export interface ScaffoldOptions {
      * Answers "does ANY non-terminal run exist for this repo?" (D74). Guards the
      * run-scoped `--provision` PUT: writing the baseline while a run is active
      * would downgrade the escalated strict profile mid-run. The CLI wrapper wires
-     * the StateManager query; omitted (tests without run state) → treated as no
+     * {@link hasActiveFeatureRun}; omitted (tests without run state) → treated as no
      * active run.
      */
     readonly hasActiveRun?: () => Promise<boolean>
@@ -1071,13 +1072,18 @@ async function run(argv: string[]): Promise<ExitCode> {
         // Bake the resolved data dir into the target permission rules.
         dataDirRules: buildTargetDataDirRules({dataDir, home: homedir()}),
         provision: args.flag('provision') === true,
-        hasActiveRun: () => new StateManager({dataDir}).hasOtherActiveForRepo(`${owner}/${repo}`),
+        hasActiveRun: () => hasActiveFeatureRun(dataDir, `${owner}/${repo}`),
         waiveMutation: waived.includes('mutation'),
         waiveCoverage: waived.includes('coverage'),
         forceManaged: args.flag('force-managed') === true,
     })
     emitJson(report)
     return EXIT.OK
+}
+
+/** True iff a non-terminal v2 run exists for `repo` ("owner/name") in the data dir. */
+export async function hasActiveFeatureRun(dataDir: string, repo: string): Promise<boolean> {
+    return (await new FeatureStore(dataDir).list()).some((run) => run.repo === repo && !terminal(run))
 }
 
 export const scaffoldCommand: Subcommand = {

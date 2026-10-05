@@ -45,6 +45,7 @@ describe('#2 / Δ A — branch-protection refuse-to-run gate', () => {
                 ghClient: gh,
                 owner: 'o',
                 repo: 'r',
+                branch: 'staging',
                 requiredChecks: ['ci'],
                 provision: false,
             })

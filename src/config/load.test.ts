@@ -174,10 +174,10 @@ describe('loadConfig', () => {
     it('merges a present config.json over defaults', () => {
         const dd = join(home, 'data')
         mkdirSync(dd, {recursive: true})
-        writeFileSync(configPath(dd), JSON.stringify({stallTtlMinutes: 45}))
+        writeFileSync(configPath(dd), JSON.stringify({git: {rollupCiWaitMinutes: 45}}))
         const cfg = loadConfig({dataDir: dd})
-        expect(cfg.stallTtlMinutes).toBe(45)
-        expect(cfg.quality.holdoutPercent).toBe(20) // untouched default
+        expect(cfg.git.rollupCiWaitMinutes).toBe(45)
+        expect(cfg.quality.mutationScoreTarget).toBe(80) // untouched default
     })
 
     it('throws LOUDLY on a corrupt config.json (no silent default)', () => {
@@ -190,7 +190,7 @@ describe('loadConfig', () => {
     it('throws on a schema-invalid config.json', () => {
         const dd = join(home, 'data')
         mkdirSync(dd, {recursive: true})
-        writeFileSync(configPath(dd), JSON.stringify({stallTtlMinutes: -5}))
+        writeFileSync(configPath(dd), JSON.stringify({git: {rollupCiWaitMinutes: -5}}))
         expect(() => loadConfig({dataDir: dd})).toThrow()
     })
 
@@ -200,7 +200,7 @@ describe('loadConfig', () => {
         mkdirSync(dd, {recursive: true})
         writeFileSync(
             configPath(dd),
-            JSON.stringify({git: {stagingBranch: 'custom'}, e2e: {testDir: 'tests'}, stallTtlMinutes: 45})
+            JSON.stringify({git: {stagingBranch: 'custom', rollupCiWaitMinutes: 45}, e2e: {testDir: 'tests'}})
         )
         const warned: string[] = []
         const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -209,9 +209,9 @@ describe('loadConfig', () => {
         })
         try {
             const cfg = loadConfig({dataDir: dd})
-            expect(cfg.stallTtlMinutes).toBe(45)
+            expect(cfg.git.rollupCiWaitMinutes).toBe(45)
             expect('stagingBranch' in cfg.git).toBe(false)
-            expect('testDir' in cfg.e2e).toBe(false)
+            expect('e2e' in cfg).toBe(false)
             loadConfig({dataDir: dd}) // second load: no duplicate warnings
             const text = warned.join('')
             // One warn line per retired key (each line names the key twice: message + --unset hint).

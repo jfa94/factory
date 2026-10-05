@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {nonNull, at, getOrThrow} from './assert.js'
+import {nonNull, at, getOrThrow, assertNever} from './assert.js'
 
 describe('nonNull', () => {
     it('returns the value when present', () => {
@@ -37,5 +37,11 @@ describe('getOrThrow', () => {
     })
     it('throws when the key is absent', () => {
         expect(() => getOrThrow(new Map<string, number>(), 'missing')).toThrow(/missing map key/)
+    })
+})
+
+describe('assertNever', () => {
+    it('throws naming the unhandled value', () => {
+        expect(() => assertNever('bogus' as never)).toThrow(/unhandled value "bogus"/)
     })
 })

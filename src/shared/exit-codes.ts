@@ -26,8 +26,3 @@ export const EXIT = {
 
 /** The literal union `0 | 1 | 2 | 3` of valid process exit codes. */
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT]
-
-/** Type guard: is `n` one of the frozen exit codes? */
-export function isExitCode(n: number): n is ExitCode {
-    return n === EXIT.OK || n === EXIT.ERROR || n === EXIT.USAGE || n === EXIT.CONFLICT
-}

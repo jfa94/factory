@@ -83,7 +83,7 @@ content).
 ## Step 3 — Handle a protection refusal
 
 If scaffold refuses because `develop` is unprotected, the run cannot start safely
-(serial-writer correctness depends on required-up-to-date protection, Δ A/L). Offer the user
+(the feature PR must not merge red, Δ A/L). Offer the user
 two options:
 
 - **Provision it** (enables strict protection on `develop`): re-run with `--provision`.
@@ -98,8 +98,7 @@ two options:
 
 Do not proceed against an unprotected repo.
 
-The retired `developProtection` and baseline settings do not select a relaxed v2
-profile. No scaffold or run transition downgrades existing protection.
+The retired `developProtection` setting is ignored and selects no relaxed profile. No scaffold or run transition downgrades existing protection.
 
 ## Step 4 — Summary
 

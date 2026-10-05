@@ -29,7 +29,7 @@ const distDir = resolve(repoRoot, 'dist')
 // `require` internally; an ESM bundle has none, so esbuild's `__require` stub
 // throws "Dynamic require of X". Defining a real `require` via createRequire makes
 // the stub (`typeof require !== "undefined"`) resolve those against node's module
-// system. Required the moment the bundle pulls in StateManager (→ proper-lockfile).
+// system. Required while the bundle pulls in shared/file-lock (→ proper-lockfile).
 const BANNER = [
     '#!/usr/bin/env node',
     "import { createRequire as __factoryCreateRequire } from 'node:module';",

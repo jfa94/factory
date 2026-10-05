@@ -9,7 +9,6 @@
  * hope). Provisioning is OPT-IN (--provision); default OFF.
  */
 import {createLogger} from '../shared/index.js'
-import {FALLBACK_STAGING_BRANCH} from './run-staging.js'
 import {MUTATION_CHECK_CONTEXT, type RequiredCheckExtras} from '../verifier/deterministic/gate-contract.js'
 import type {GhClient} from './gh-client.js'
 import type {ProtectionApiResult} from './gh-client.js'
@@ -75,14 +74,13 @@ export interface ProbeProtectionArgs {
     ghClient: GhClient
     owner: string
     repo: string
-    /** Branch to probe. Defaults to the configured staging branch. */
-    branch?: string
+    /** Branch to probe. */
+    branch: string
 }
 
 /** Probe live branch-protection state (read-only). */
 export async function probeProtection(args: ProbeProtectionArgs): Promise<ProtectionState> {
-    const branch = args.branch ?? FALLBACK_STAGING_BRANCH
-    const result: ProtectionApiResult = await args.ghClient.repoProtection(args.owner, args.repo, branch)
+    const result: ProtectionApiResult = await args.ghClient.repoProtection(args.owner, args.repo, args.branch)
     return {
         enabled: result.enabled,
         requiredStatusChecks: result.requiredStatusChecks,
@@ -102,7 +100,7 @@ export async function probeProtection(args: ProbeProtectionArgs): Promise<Protec
 export function requireProtectionOrRefuse(
     state: ProtectionState,
     requiredChecks: readonly string[],
-    branch: string = FALLBACK_STAGING_BRANCH,
+    branch: string,
     opts: {requireStrict?: boolean} = {}
 ): ProtectionState {
     const reasons: string[] = []
@@ -131,7 +129,7 @@ export interface ProvisionProtectionArgs {
     ghClient: GhClient
     owner: string
     repo: string
-    branch?: string
+    branch: string
     requiredChecks: readonly string[]
     /** Must be true (--provision). A false value REFUSES rather than provisions. */
     provision: boolean
@@ -143,7 +141,7 @@ export interface ProvisionProtectionArgs {
  * repo's protection without explicit opt-in).
  */
 export async function provisionProtection(args: ProvisionProtectionArgs): Promise<ProtectionState> {
-    const branch = args.branch ?? FALLBACK_STAGING_BRANCH
+    const branch = args.branch
     if (!args.provision) {
         throw new Error('provisionProtection called without --provision opt-in — refusing to mutate branch protection')
     }
@@ -166,7 +164,7 @@ export async function provisionStableProtection(args: ProvisionProtectionArgs): 
     if (!args.provision) {
         throw new Error('stable protection changes require --provision')
     }
-    const branch = args.branch ?? FALLBACK_STAGING_BRANCH
+    const branch = args.branch
     const state = await probeProtection({...args, branch})
     if (!state.enabled) {
         return provisionProtection(args)

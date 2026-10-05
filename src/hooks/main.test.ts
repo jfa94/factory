@@ -24,12 +24,8 @@ describe('hook dispatch', () => {
             'branch-protection',
             'feature-guards',
             'feature-stop',
-            'holdout-guard',
-            'pipeline-guards',
             'secret-guard',
             'session-start',
-            'stop-gate',
-            'subagent-stop',
             'write-protection',
         ])
         hookRegistry['__test-hook'] = {describe: 't', run: () => EXIT.OK}

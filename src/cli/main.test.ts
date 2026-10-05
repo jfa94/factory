@@ -27,11 +27,10 @@ describe('cli dispatch', () => {
                 dailyThresholds: unknown[]
             }
             spec: Record<string, unknown>
-            e2e: Record<string, unknown>
         }
         const parsed = JSON.parse(chunks.join('')) as ConfigDefaultsShape
         // The full schema shape must be present (every block defaults).
-        expect(parsed).toHaveProperty('quality.holdoutPercent')
+        expect(parsed).toHaveProperty('quality.mutationScoreTarget')
         expect(Array.isArray(parsed.quota.hourlyThresholds)).toBe(true)
         expect(parsed.quota.hourlyThresholds).toHaveLength(5)
         expect(parsed.quota.dailyThresholds).toHaveLength(7)
@@ -40,7 +39,7 @@ describe('cli dispatch', () => {
         // Pruned decorative keys (S6) must never appear.
         expect(parsed.spec).not.toHaveProperty('specModel')
         expect(parsed.spec).not.toHaveProperty('specEffort')
-        expect(parsed.e2e).not.toHaveProperty('enabled')
+        expect(parsed).not.toHaveProperty('e2e')
     })
 
     it('--help returns OK', async () => {

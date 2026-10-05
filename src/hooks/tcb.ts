@@ -62,7 +62,7 @@ import type {TcbCategory, TcbRule, TcbMatch, TcbContext} from '../types/tcb.js'
 // The TCB structural types (TcbCategory, TcbRule, TcbMatch, TcbContext) now live
 // in the foundational `src/types/tcb.ts` leaf — imported above and re-exported
 // here so the type facade points DOWN (hooks → types) while existing consumers
-// (write-protection, types/index) still resolve them from `./tcb.js`.
+// (write-protection) still resolve them from `./tcb.js`.
 export type {TcbCategory, TcbRule, TcbMatch, TcbContext}
 
 // canonicalizePath moved to src/shared/fs.ts; re-exported so hook-internal

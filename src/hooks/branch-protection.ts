@@ -15,10 +15,6 @@
  *   5. `git push <remote> --delete <protected>`
  *   6. `git reset --hard` while ON a protected branch
  *   7. `git branch -D/-d/--delete <protected>`
- *
- * Exception: the pipeline-managed `staging` branch is writable, but ONLY inside
- * an orchestrator worktree (cwd under `.claude/worktrees/orchestrator-*`) — the
- * serial writer merges task PRs into staging there.
  */
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 import {exec as defaultExec, type ExecResult} from '../shared/exec.js'
@@ -39,18 +35,7 @@ import {
 } from './hook-io.js'
 
 /** The protected-branch set (hardcoded — a destructive op on any is denied). */
-export const PROTECTED_BRANCHES: readonly string[] = [
-    'main',
-    'master',
-    'develop',
-    'staging',
-    'production',
-    'release',
-    'prod',
-]
-
-/** Pipeline-managed branches writable from an orchestrator worktree. */
-export const PIPELINE_MANAGED_BRANCHES: readonly string[] = ['staging']
+export const PROTECTED_BRANCHES: readonly string[] = ['main', 'master', 'develop', 'production', 'release', 'prod']
 
 const log = createLogger('branch-protection')
 
@@ -63,8 +48,6 @@ export interface BranchProtectionDeps {
     exec?: ((command: string, args?: readonly string[], opts?: {cwd?: string}) => Promise<ExecResult>) | undefined
     /** Override current-branch resolution entirely (tests). */
     resolveCurrentBranch?: CurrentBranchResolver
-    /** cwd used for the orchestrator-worktree exception (defaults to process.cwd()). */
-    cwd?: string
     /** Whether autonomous mode is active (defaults to FACTORY_AUTONOMOUS_MODE === "1"). */
     autonomousMode?: boolean
 }
@@ -72,26 +55,6 @@ export interface BranchProtectionDeps {
 /** Is `name` a protected branch? */
 export function isProtectedBranch(name: string): boolean {
     return PROTECTED_BRANCHES.includes(name)
-}
-
-/** Is cwd inside an orchestrator worktree (`.claude/worktrees/orchestrator-*`)? */
-function inOrchestratorWorktree(cwd: string): boolean {
-    return cwd.includes('/.claude/worktrees/orchestrator-')
-}
-
-/**
- * May the pipeline write the given protected branch? Only when (a) autonomous
- * mode is on, (b) the branch is pipeline-managed (`staging`), and (c) cwd is in
- * an orchestrator worktree. Mirrors the bash `_pipeline_can_write`.
- */
-function pipelineCanWrite(branch: string, cwd: string, autonomousMode: boolean): boolean {
-    if (!autonomousMode) {
-        return false
-    }
-    if (!PIPELINE_MANAGED_BRANCHES.includes(branch)) {
-        return false
-    }
-    return inOrchestratorWorktree(cwd)
 }
 
 /** Default current-branch resolver: `git [-C dir] [--git-dir d] symbolic-ref --short HEAD`. */
@@ -144,7 +107,6 @@ export async function decideBranchProtection(
         return allow()
     }
 
-    const cwd = deps.cwd ?? process.cwd()
     const autonomousMode = deps.autonomousMode ?? isAutonomous()
 
     // Nested-shell / hook-bypass denial — AUTONOMOUS MODE ONLY, by design (a faithful
@@ -171,9 +133,7 @@ export async function decideBranchProtection(
         const current = await resolveCurrent(inv)
         if (current.length > 0 && isProtectedBranch(current)) {
             if (inv.destBranch.length === 0 || inv.destBranch === current) {
-                if (!pipelineCanWrite(current, cwd, autonomousMode)) {
-                    return deny('on_protected_branch', `currently on '${current}' — push will publish to protected`)
-                }
+                return deny('on_protected_branch', `currently on '${current}' — push will publish to protected`)
             }
         }
     }
@@ -198,9 +158,7 @@ export async function decideBranchProtection(
     // --- Check 4: plain push to a protected branch ---
     if (inv.subcommand === 'push') {
         if (inv.destBranch.length > 0 && isProtectedBranch(inv.destBranch)) {
-            if (!pipelineCanWrite(inv.destBranch, cwd, autonomousMode)) {
-                return deny('push_to_protected', `push targets protected branch '${inv.destBranch}'`)
-            }
+            return deny('push_to_protected', `push targets protected branch '${inv.destBranch}'`)
         }
     }
 
@@ -215,9 +173,7 @@ export async function decideBranchProtection(
     if (inv.subcommand === 'reset' && inv.isHardReset) {
         const current = await resolveCurrent(inv)
         if (current.length > 0 && isProtectedBranch(current)) {
-            if (!pipelineCanWrite(current, cwd, autonomousMode)) {
-                return deny('hard_reset_on_protected', `hard reset while on protected branch '${current}'`)
-            }
+            return deny('hard_reset_on_protected', `hard reset while on protected branch '${current}'`)
         }
     }
 

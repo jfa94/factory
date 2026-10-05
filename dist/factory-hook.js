@@ -104,7 +104,7 @@ var require_polyfills = __commonJS({
       }
       if (platform === "win32") {
         fs.rename = typeof fs.rename !== "function" ? fs.rename : (function(fs$rename) {
-          function rename3(from, to, cb) {
+          function rename2(from, to, cb) {
             var start = Date.now();
             var backoff = 0;
             fs$rename(from, to, function CB(er) {
@@ -124,8 +124,8 @@ var require_polyfills = __commonJS({
               if (cb) cb(er);
             });
           }
-          if (Object.setPrototypeOf) Object.setPrototypeOf(rename3, fs$rename);
-          return rename3;
+          if (Object.setPrototypeOf) Object.setPrototypeOf(rename2, fs$rename);
+          return rename2;
         })(fs.rename);
       }
       fs.read = typeof fs.read !== "function" ? fs.read : (function(fs$read) {
@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile3;
-      function readFile3(path, options, cb) {
+      fs2.readFile = readFile2;
+      function readFile2(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path, options, cb);
@@ -601,9 +601,9 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$readdir = fs2.readdir;
-      fs2.readdir = readdir3;
+      fs2.readdir = readdir2;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path, options, cb) {
+      function readdir2(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path2, options2, cb2, startTime) {
@@ -1763,22 +1763,6 @@ function exec(command, args = [], opts = {}) {
     }
   });
 }
-var ExecError = class extends Error {
-  result;
-  command;
-  args;
-  constructor(command, args, result) {
-    const where = [command, ...args].join(" ");
-    super(
-      `command failed (code=${result.code ?? "null"}` + (result.signal ? `, signal=${result.signal}` : "") + `): ${where}
-${result.stderr.trim()}`
-    );
-    this.name = "ExecError";
-    this.command = command;
-    this.args = args;
-    this.result = result;
-  }
-};
 
 // src/shared/atomic-write.ts
 import { mkdir, open, rename, unlink } from "node:fs/promises";
@@ -1846,30 +1830,6 @@ function parseJson(text, sourcePath) {
     throw new JsonParseError(`invalid JSON${where}: ${cause.message}`, sourcePath, cause);
   }
 }
-function stringifyJson(value) {
-  return JSON.stringify(value, null, 2) + "\n";
-}
-
-// src/shared/fs-errors.ts
-function isEnoent(err) {
-  return err instanceof Error && err.code === "ENOENT";
-}
-
-// src/shared/assert.ts
-function nonNull(x, msg) {
-  if (x == null) {
-    throw new Error(msg ?? "unexpected nullish value");
-  }
-  return x;
-}
-function at(a, i) {
-  return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
-}
-
-// src/shared/time.ts
-function nowIso() {
-  return (/* @__PURE__ */ new Date()).toISOString();
-}
 
 // src/shared/secret-patterns.ts
 var SECRET_CONTENT_PATTERNS = [
@@ -1932,21 +1892,6 @@ function detectSecrets(text) {
   return hits;
 }
 
-// src/shared/ids.ts
-var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-function isValidId(id) {
-  return ID_PATTERN.test(id);
-}
-function validateId(id, label = "id") {
-  if (id.length === 0) {
-    throw new Error(`${label}: empty`);
-  }
-  if (!ID_PATTERN.test(id)) {
-    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
-  }
-  return id;
-}
-
 // src/shared/file-lock.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
 import { mkdir as mkdir2 } from "node:fs/promises";
@@ -1986,16 +1931,20 @@ async function withFileLock(opts, fn) {
   }
 }
 
-// src/shared/usage-error.ts
-var UsageError = class extends Error {
-  isUsageError = true;
-  constructor(message) {
-    super(message);
-    this.name = "UsageError";
+// src/shared/assert.ts
+function nonNull(x, msg) {
+  if (x == null) {
+    throw new Error(msg ?? "unexpected nullish value");
   }
-};
-function isUsageError(err) {
-  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+  return x;
+}
+function at(a, i) {
+  return nonNull(a[i], `index ${i} out of range (length ${a.length})`);
+}
+
+// src/shared/fs-errors.ts
+function isEnoent(err) {
+  return err instanceof Error && err.code === "ENOENT";
 }
 
 // src/shared/fs.ts
@@ -2375,31 +2324,10 @@ function decisionToExitCode(decision) {
 }
 
 // src/hooks/branch-protection.ts
-var PROTECTED_BRANCHES = [
-  "main",
-  "master",
-  "develop",
-  "staging",
-  "production",
-  "release",
-  "prod"
-];
-var PIPELINE_MANAGED_BRANCHES = ["staging"];
+var PROTECTED_BRANCHES = ["main", "master", "develop", "production", "release", "prod"];
 var log3 = createLogger("branch-protection");
 function isProtectedBranch(name) {
   return PROTECTED_BRANCHES.includes(name);
-}
-function inOrchestratorWorktree(cwd) {
-  return cwd.includes("/.claude/worktrees/orchestrator-");
-}
-function pipelineCanWrite(branch, cwd, autonomousMode) {
-  if (!autonomousMode) {
-    return false;
-  }
-  if (!PIPELINE_MANAGED_BRANCHES.includes(branch)) {
-    return false;
-  }
-  return inOrchestratorWorktree(cwd);
 }
 function makeDefaultResolver(execFn) {
   return async (inv) => {
@@ -2430,7 +2358,6 @@ async function decideBranchProtection(input, deps = {}) {
   if (command.length === 0) {
     return allow();
   }
-  const cwd = deps.cwd ?? process.cwd();
   const autonomousMode = deps.autonomousMode ?? isAutonomous();
   if (autonomousMode && isNestedShellOrHookBypass(command)) {
     return deny("nested_shell_denied", `nested-shell or hook-bypass not allowed in autonomous mode: ${command}`);
@@ -2445,9 +2372,7 @@ async function decideBranchProtection(input, deps = {}) {
     const current = await resolveCurrent(inv);
     if (current.length > 0 && isProtectedBranch(current)) {
       if (inv.destBranch.length === 0 || inv.destBranch === current) {
-        if (!pipelineCanWrite(current, cwd, autonomousMode)) {
-          return deny("on_protected_branch", `currently on '${current}' \u2014 push will publish to protected`);
-        }
+        return deny("on_protected_branch", `currently on '${current}' \u2014 push will publish to protected`);
       }
     }
   }
@@ -2466,9 +2391,7 @@ async function decideBranchProtection(input, deps = {}) {
   }
   if (inv.subcommand === "push") {
     if (inv.destBranch.length > 0 && isProtectedBranch(inv.destBranch)) {
-      if (!pipelineCanWrite(inv.destBranch, cwd, autonomousMode)) {
-        return deny("push_to_protected", `push targets protected branch '${inv.destBranch}'`);
-      }
+      return deny("push_to_protected", `push targets protected branch '${inv.destBranch}'`);
     }
   }
   if (inv.subcommand === "push" && inv.namedArg.length > 0) {
@@ -2479,9 +2402,7 @@ async function decideBranchProtection(input, deps = {}) {
   if (inv.subcommand === "reset" && inv.isHardReset) {
     const current = await resolveCurrent(inv);
     if (current.length > 0 && isProtectedBranch(current)) {
-      if (!pipelineCanWrite(current, cwd, autonomousMode)) {
-        return deny("hard_reset_on_protected", `hard reset while on protected branch '${current}'`);
-      }
+      return deny("hard_reset_on_protected", `hard reset while on protected branch '${current}'`);
     }
   }
   if (inv.subcommand === "branch" && inv.namedArg.length > 0) {
@@ -6555,10 +6476,6 @@ var NEVER = INVALID;
 // src/config/schema.ts
 var EffortEnum = external_exports.enum(["low", "medium", "high", "xhigh", "max"]);
 var QualitySchema = external_exports.object({
-  /** Percent of acceptance criteria held out as an unreadable answer-key. */
-  holdoutPercent: external_exports.number().min(0).max(100).default(20),
-  /** Min pass-rate (%) on the holdout set to clear the gate. */
-  holdoutPassRate: external_exports.number().min(0).max(100).default(80),
   /** Target mutation score (%) for the mutation gate. */
   mutationScoreTarget: external_exports.number().min(0).max(100).default(80),
   /** Allowed coverage regression (percentage points) before the gate fails. */
@@ -6594,22 +6511,7 @@ var QuotaSchema = external_exports.object({
   /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
   hourlyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(5).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 90]),
   /** 7d-window utilization checkpoints by day 1..7 (% caps, non-decreasing). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
-  dailyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(7).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 95, 95, 95]),
-  /**
-   * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
-   * renamed model-router, narrowed) selects the producer model for a task from
-   * its risk tier; this is the ONLY dial it carries — the review panel is
-   * risk-INVARIANT (Decision 25/26), so there is NO review-depth/round cap here
-   * (the old `--tier` routine/feature/security review caps are DELETED).
-   * Defaults: low/medium→sonnet (balanced), high→opus (strong). low defaults to
-   * SONNET, not haiku — even low-risk work is code generation, which haiku
-   * underperforms; override `producerModels.low` per-repo for cheaper low-risk runs.
-   */
-  producerModels: external_exports.object({
-    low: external_exports.string().default("claude-sonnet-4-5"),
-    medium: external_exports.string().default("claude-sonnet-4-5"),
-    high: external_exports.string().default("claude-opus-4-6")
-  }).default({})
+  dailyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(7).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 95, 95, 95])
 }).default({});
 var SpecSchema = external_exports.object({
   /**
@@ -6629,20 +6531,6 @@ var SpecSchema = external_exports.object({
   prdBodyMaxBytes: external_exports.number().int().positive().default(64 * 1024)
 }).default({});
 var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
-var ReviewSchema = external_exports.object({
-  /** Reviewer model id (panel runs on a fixed model per Decision 26). */
-  model: external_exports.string().optional(),
-  /**
-   * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
-   * `warn` records the absence loudly (task state + report + summary);
-   * `block` additionally fails the merge gate — a task cannot ship without an
-   * independent second-vendor review.
-   */
-  requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
-}).default({});
-var CodexSchema = external_exports.object({
-  model: external_exports.string().optional()
-}).default({});
 var GitSchema = external_exports.object({
   /**
    * The durable base branch staging forks from and rolls up into. NEVER
@@ -6651,27 +6539,12 @@ var GitSchema = external_exports.object({
    */
   baseBranch: external_exports.string().min(1).default("develop"),
   /**
-   * Required status-check contexts of develop's RUN PROFILE — under
-   * `developProtection: "run-scoped"` (default) they are escalated onto
-   * develop for the duration of a run (Decision 74); under `"permanent"`
-   * they are asserted at scaffold and provisioned with `--provision`.
+   * Required status-check contexts of develop's protection profile, asserted
+   * by scaffold and run preflight and provisioned with `--provision`.
    * Defaults to the three contexts the rendered quality-gate workflow
    * always reports (Decision 53) — the rollup PR cannot merge red.
    */
   developRequiredStatusChecks: external_exports.array(external_exports.string()).default(["Quality", "Mutation Testing", "Security Scan"]),
-  /**
-   * Lifecycle of develop's protection profile (Decision 74).
-   * `run-scoped` (default): scaffold writes/asserts only the light BASELINE —
-   * `developBaselineStatusChecks` required for non-admins, strict off,
-   * `enforce_admins` OFF so repo admins can push straight to develop; `run
-   * create` escalates to the strict run profile (`developRequiredStatusChecks`
-   * + strict + enforce_admins) and every run-terminal path drops back to
-   * baseline. `permanent`: the strict profile is provisioned at scaffold and
-   * never removed (pre-D74 behavior). NOTE (run-scoped): escalation and
-   * de-escalation are full-replace PUTs — custom hand-made protection on
-   * develop is clobbered; use `permanent` to opt out.
-   */
-  developProtection: external_exports.enum(["run-scoped", "permanent"]).default("run-scoped"),
   /**
    * Required status-check contexts of develop's BASELINE profile (run-scoped
    * mode, Decision 74) — enforced on non-admin PRs into develop while NO run
@@ -6684,24 +6557,6 @@ var GitSchema = external_exports.object({
    */
   developBaselineStatusChecks: external_exports.array(external_exports.string()).optional(),
   /**
-   * Required status-check contexts provisioned onto each per-run
-   * `staging-<run-id>` branch at run create. Default EMPTY: the engine's
-   * local GateRunner is the primary task-level enforcement, and a required
-   * check here would make every task-PR merge wait on CI wall-clock.
-   */
-  stagingRequiredStatusChecks: external_exports.array(external_exports.string()).default([]),
-  /**
-   * Opt-in protection provisioning. OFF by default — the run VERIFIES and
-   * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips
-   * this to issue the `gh api` PUT.
-   */
-  provision: external_exports.boolean().default(false),
-  /**
-   * Branch-name prefix for run-scoped task branches (Δ M). The full name is
-   * `<branchPrefix>/<run_id>/<task_id>`.
-   */
-  branchPrefix: external_exports.string().min(1).default("factory"),
-  /**
    * Outer bound (minutes) finalize waits for the rollup PR's full-CI gate
    * before giving up with `ci-timeout`. Sized above the slowest expected
    * quality-gate run (mutation on a cold cache); a timeout still parks the
@@ -6712,74 +6567,11 @@ var GitSchema = external_exports.object({
   ...git,
   developBaselineStatusChecks: git.developBaselineStatusChecks ?? git.developRequiredStatusChecks.filter((c) => c !== "Mutation Testing")
 })).default({});
-var E2eConfigSchema = external_exports.object({
-  /**
-   * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
-   * for both Playwright's `webServer` (test runs) and the e2e-author's
-   * live-exploration boot. Normally unset — the run-start assessment resolves it.
-   */
-  startCommand: external_exports.string().optional(),
-  /** OPTIONAL override of the base URL the app serves once booted (D10 — normally
-   * assessment-resolved). */
-  baseURL: external_exports.string().url().optional(),
-  /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
-  readyTimeoutMs: external_exports.number().int().positive().default(3e4),
-  /**
-   * Per-task cap on e2e-triggered reopens (Decision 39). A critical spec still
-   * red after this many reopens of its mapped task fails the run outright
-   * instead of looping forever.
-   */
-  reopenCap: external_exports.number().int().nonnegative().default(2)
-}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
   spec: SpecSchema,
-  review: ReviewSchema,
-  codex: CodexSchema,
-  git: GitSchema,
-  e2e: E2eConfigSchema,
-  /**
-   * FLOOR of the circuit-breaker threshold: the run aborts when cumulative genuine
-   * capability-budget failures reach `max(this, ceil(0.15 × total tasks))` — big
-   * task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3).
-   * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
-   * total capability-budget drops); the field keeps its name for config back-compat.
-   */
-  maxConsecutiveFailures: external_exports.number().int().positive().default(3),
-  /**
-   * How many tasks the runner may have in flight at once. Surfaced to the
-   * runner on the `kind:"work"` envelope as `max_parallel` (the runner reads
-   * the envelope, never this file). Min 1 (1 = sequential, today's behavior).
-   */
-  maxParallelTasks: external_exports.number().int().positive().default(3),
-  /**
-   * Minutes an in-flight spawn (`task.spawn_in_flight.spawned_at`) may age
-   * before `next-task` flags it in `work.stale` (advisory — a hung agent that
-   * died silently is never re-driven inside a live session otherwise). Default
-   * 15: stalls are the #1 operational pain (design-review-2026-07-07). Also
-   * sizes the runner's heartbeat cron, so keep it under 60 (the usage-cache
-   * staleness ceiling — pipeline-runner SKILL).
-   */
-  stallTtlMinutes: external_exports.number().int().positive().default(15),
-  /**
-   * HARD wall-clock cap (minutes) on one in-flight spawn. Past this age
-   * `next-task` lists the task in `work.hung` (disjoint from `stale`): the
-   * runner kills the spawn's agents EVEN IF ALIVE and re-drives — bounded by
-   * SPAWN_REDRIVE_CAP (orchestrator.ts), after which the task fails
-   * `blocked-environmental` and finalize/rescue-auto take over (Decision 66).
-   * Must exceed stallTtlMinutes (the advisory liveness-checked tier below
-   * it) — enforced by the superRefine below.
-   */
-  hungSpawnMinutes: external_exports.number().int().positive().default(120)
-}).superRefine((cfg, ctx) => {
-  if (cfg.hungSpawnMinutes <= cfg.stallTtlMinutes) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["hungSpawnMinutes"],
-      message: `hungSpawnMinutes (${cfg.hungSpawnMinutes}) must exceed stallTtlMinutes (${cfg.stallTtlMinutes}) \u2014 the hard kill-even-if-alive tier sits above the advisory liveness-checked stale band`
-    });
-  }
+  git: GitSchema
 }).default({});
 
 // src/config/load.ts
@@ -7154,92 +6946,6 @@ async function runWriteProtection(_argv = [], deps = {}) {
   return decisionToExitCode(decision);
 }
 
-// src/hooks/holdout-guard.ts
-import { sep as sep4 } from "node:path";
-var log6 = createLogger("holdout-guard");
-var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
-var READ_COMMAND_RE = /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
-function isHoldoutPath(canonical) {
-  return canonical.split(sep4).includes("holdouts");
-}
-function readTargetsOf(input) {
-  const ti = input?.tool_input ?? {};
-  const out = [];
-  for (const key of ["file_path", "path", "pattern", "glob"]) {
-    const v = ti[key];
-    if (typeof v === "string" && v.length > 0) {
-      out.push(v);
-    }
-  }
-  return out;
-}
-function bashPathTokens(cmd) {
-  return cmd.split(/[\s;|&><]+/).filter((t) => t.length > 0).filter((t) => !t.startsWith("-"));
-}
-function decideHoldoutGuard(input, deps = {}) {
-  const cwd = deps.cwd ?? process.cwd();
-  let dataDir;
-  try {
-    dataDir = resolveDataDir(deps);
-  } catch (err) {
-    dataDir = void 0;
-    log6.warn(
-      `holdout store dir unresolved (${err.message}); the Bash textual-match arm is inert (no store configured) \u2014 canonical-path denial still applies`
-    );
-  }
-  const tool = toolNameOf(input);
-  if (READ_TOOLS.has(tool)) {
-    for (const t of readTargetsOf(input)) {
-      const canonical = canonicalizePath(t, cwd);
-      if (isHoldoutPath(canonical)) {
-        return deny(
-          "holdout_read_denied",
-          `${tool} of the holdout answer-key store ('${canonical}') is forbidden (\u0394 Y)`
-        );
-      }
-    }
-    return allow();
-  }
-  if (tool === "Bash") {
-    const cmd = commandOf(input);
-    if (cmd.length === 0) {
-      return allow();
-    }
-    const viaReader = READ_COMMAND_RE.test(cmd) ? " via a reader command" : "";
-    for (const tokRaw of bashPathTokens(cmd)) {
-      const tok = tokRaw.replace(/^["']|["']$/g, "");
-      if (!tok.includes("holdouts") && !tok.includes("/") && !tok.includes("..")) {
-        continue;
-      }
-      const canonical = canonicalizePath(tok, cwd);
-      const reachesHoldout = isHoldoutPath(canonical) || dataDir != null && dataDir.length > 0 && tok.includes("holdouts") && tok.includes(dataDir);
-      if (reachesHoldout) {
-        const target = isHoldoutPath(canonical) ? canonical : tok;
-        return deny(
-          "holdout_read_denied",
-          `Bash command referencing the holdout answer-key store ('${target}')${viaReader} is forbidden (\u0394 Y)`
-        );
-      }
-    }
-    return allow();
-  }
-  return allow();
-}
-async function runHoldoutGuard(_argv = [], deps = {}) {
-  let input;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    input = parseHookInput(raw);
-  } catch {
-    const decision2 = deny("malformed_hook_input", "holdout-guard: unparseable hook input");
-    emitPermissionDecision(decision2);
-    return EXIT.ERROR;
-  }
-  const decision = decideHoldoutGuard(input, deps);
-  emitPermissionDecision(decision);
-  return decisionToExitCode(decision);
-}
-
 // src/hooks/secret-guard.ts
 var ENV_COMMITTABLE = /^\.env\.(example|sample|template|test)$/;
 var PATH_BLOCKLIST = [
@@ -7436,2216 +7142,6 @@ async function runSecretGuard(_argv = [], deps = {}) {
   return decisionToExitCode(decision);
 }
 
-// src/hooks/pipeline-guards.ts
-import { join as join5 } from "node:path";
-
-// src/verifier/deterministic/scope.ts
-function isTestPath(file) {
-  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
-    return true;
-  }
-  if (/_test\.(go|py|rb|exs)$/.test(file)) {
-    return true;
-  }
-  if (/Test\.(java|kt|php)$/.test(file)) {
-    return true;
-  }
-  if (/Tests\.(swift|cs)$/.test(file)) {
-    return true;
-  }
-  if (file.endsWith("_spec.rb")) {
-    return true;
-  }
-  if (/^(tests|test|spec|__tests__)\//.test(file)) {
-    return true;
-  }
-  if (/\/(tests|test|spec|__tests__)\//.test(file)) {
-    return true;
-  }
-  return false;
-}
-
-// src/types/phases-vocab.ts
-var TASK_PHASES = ["preflight", "tests", "exec", "verify", "ship"];
-var SPAWN_PHASES = ["tests", "exec", "verify"];
-
-// src/core/state/schema.ts
-var RunStatusEnum = external_exports.enum(["running", "completed", "superseded", "paused", "suspended", "failed"]);
-var TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"];
-function isTerminalRunStatus(s) {
-  return TERMINAL_RUN_STATUSES.includes(s);
-}
-var TaskStatusEnum = external_exports.enum(["pending", "executing", "reviewing", "shipping", "done", "failed"]);
-var TERMINAL_TASK_STATUSES = ["done", "failed"];
-function isTerminalTaskStatus(s) {
-  return TERMINAL_TASK_STATUSES.includes(s);
-}
-var FailureClassEnum = external_exports.enum([
-  "capability-budget",
-  "spec-defect",
-  "blocked-environmental",
-  "needs-context",
-  "blocked-dependency"
-]);
-var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
-var EscalationRungSchema = external_exports.number().int().min(0);
-var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
-var ProducerRoleEnum = external_exports.enum(["test-writer", "implementer"]);
-var SpecPointerSchema = external_exports.object({
-  /** Repo identity, e.g. "owner/name". The first key of (repo, spec-id). */
-  repo: external_exports.string().min(1),
-  /** `<issue>-<slug>`. The second key of (repo, spec-id). */
-  spec_id: external_exports.string().min(1),
-  /** The PRD issue number — the STABLE lookup key embedded in spec_id. */
-  issue_number: external_exports.number().int().positive()
-});
-var ReviewerResultSchema = external_exports.object({
-  /** Reviewer identity (e.g. "implementation", "security", "silent-failure"). */
-  reviewer: external_exports.string().min(1),
-  /** This reviewer's verdict after verify-then-fix adjudication. */
-  verdict: PanelVerdictEnum,
-  /** Pointer to the review artifact (relative to the run's reviews/ dir). */
-  artifact: external_exports.string().optional(),
-  /** Number of confirmed (verified) blocking findings this reviewer raised. */
-  confirmed_blockers: external_exports.number().int().min(0).default(0)
-});
-var FixFindingSchema = external_exports.object({
-  /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
-  reviewer: external_exports.string().min(1),
-  file: external_exports.string().optional(),
-  line: external_exports.number().int().positive().optional(),
-  description: external_exports.string().min(1)
-}).superRefine((finding, ctx) => {
-  const hasFile = finding.file !== void 0;
-  const hasLine = finding.line !== void 0;
-  if (hasFile && !hasLine) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["line"],
-      message: `finding has 'file' but no 'line' \u2014 provide both or neither for a citable finding`
-    });
-  }
-  if (hasLine && !hasFile) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["file"],
-      message: `finding has 'line' but no 'file' \u2014 provide both or neither for a citable finding`
-    });
-  }
-});
-var ReviewDispositionSchema = external_exports.object({
-  /** Which reviewer raised the original finding. */
-  reviewer: external_exports.string().min(1),
-  /** Why it does not gate: verifier-refuted, or raised non-blocking. */
-  disposition: external_exports.enum(["refuted", "non-blocking"]),
-  file: external_exports.string().optional(),
-  line: external_exports.number().int().positive().optional(),
-  /** The verbatim quote from the original finding (fingerprint half 1). */
-  quote: external_exports.string().min(1),
-  /** The one-sentence claim from the original finding (fingerprint half 2). */
-  claim: external_exports.string().min(1),
-  /** The refutation reason (refuted entries only). */
-  note: external_exports.string().optional(),
-  /** The verify round (attempt) that adjudicated it. */
-  round: external_exports.number().int().positive()
-});
-var TaskStateSchema = external_exports.object({
-  task_id: external_exports.string().min(1),
-  status: TaskStatusEnum.default("pending"),
-  /**
-   * Task ids this task depends on (the vertical-slice DAG, Decision 23). A
-   * deliberate denormalization: copied from the {@link SpecTask} at seed time and
-   * then frozen (never mutated), so the hot DAG-traversal readers — `next.ts`
-   * (ready-task selection) and `rescue/scan.ts` (drift scan, which has NO spec in
-   * scope) — read edges straight off run state without coupling to the spec store.
-   * Integrity is pinned at seed time by `seedTasksFromSpec`, where dangling, self,
-   * cyclic, and duplicate edges all fail LOUD.
-   */
-  depends_on: external_exports.array(external_exports.string()).default([]),
-  // --- Producer ladder (Decision 25; the risk_tier dial lives on the SpecTask, not here) ---
-  /** Current rung on the producer escalation ladder (0 = starting rung). */
-  escalation_rung: EscalationRungSchema.default(0),
-  /** Which producer role is/last ran. */
-  producer_role: ProducerRoleEnum.optional(),
-  /**
-   * Defect feedback carried from the implementer's `test-defective` escalation into
-   * the NEXT test-writer re-run (the test-revision recovery, Δ D). Set when the
-   * implementer reports the RED test is wrong; injected into the regenerated
-   * test-writer's prior-failure context (handlers.tests) so it does not re-pin the
-   * same wrong literal; cleared once the test-writer returns `done`. Absent
-   * otherwise. Transient — not a failure field (allowed on any status).
-   */
-  test_revision_feedback: external_exports.string().optional(),
-  /**
-   * The producer's open NEEDS_CONTEXT question (Decision 69). Written on the
-   * first NEEDS_CONTEXT at a phase (the task re-spawns ONCE at the same rung with
-   * the question injected); a second consecutive NEEDS_CONTEXT fails the task
-   * `needs-context` with the question refreshed. `answer` is written only by
-   * `rescue apply --answer` and is injected alongside the question on the
-   * post-reset re-spawn. Cleared when a producer returns `done` (any role — a
-   * completed attempt resolves the question by construction). Deliberately
-   * PRESERVED by rescue's resetTaskRow (unlike most transients): the open
-   * question is the whole point of the reset. Transient — allowed on any status.
-   */
-  needs_context: external_exports.object({
-    question: external_exports.string().min(1),
-    answer: external_exports.string().min(1).optional()
-  }).optional(),
-  /**
-   * The failing gate-id set of the LAST blocked merge-gate verify (sorted,
-   * holdout excluded — Decision 71). An event record like `fix_findings`
-   * (the reviewers it derives from are cleared by escalateOrFail). When the next
-   * blocked verify fails the IDENTICAL set, the escalation is routed to the
-   * `tests` phase (the RED test is suspected as the broken arbiter) instead of
-   * re-rolling the implementer. Cleared on the advancing verify write, on
-   * doneTaskRow, and by rescue's resetTaskRow. Transient — allowed on any status.
-   */
-  last_failing_gates: external_exports.array(external_exports.string().min(1)).optional(),
-  /**
-   * Feedback carried from a failing e2e journey spec into this task's NEXT
-   * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine
-   * when it maps a failing spec to this task via the author manifest and resets the
-   * task to `pending`; injected into the regenerated producer's prior-failure context
-   * (mirrors `test_revision_feedback`, but originates from a RUN-LEVEL phase, not a
-   * per-task producer outcome). Cleared once the task ships again. Absent otherwise.
-   * Transient — not a failure field (allowed on any status).
-   */
-  e2e_feedback: external_exports.string().optional(),
-  /**
-   * Fix-forward instructions carried from a blocked merge-gate verify into the
-   * NEXT producer (`exec`) rung (D5 fix-forward channel). Composed at the
-   * wait-retry branch (`record.ts`) from confirmed reviewer blockers ∪ non-holdout
-   * failing gate evidence, persisted BEFORE `escalateOrFail` clears `reviewers`
-   * (mirrors the `test_revision_feedback` precedent: a separate write ahead of the
-   * ladder transition). `handlers.ts`'s `exec` reads it into `buildProducerContext`
-   * as `confirmedBlockers`. Cleared on the next advance/complete. Absent otherwise.
-   * Transient — not a failure field (allowed on any status).
-   */
-  fix_findings: external_exports.array(FixFindingSchema).optional(),
-  /**
-   * Anti-ratcheting disposition ledger (Decision 68): claims a prior verify round
-   * refuted or raised non-blocking, appended at the wait-retry branch (record.ts,
-   * same separate-write pattern as `fix_findings`) and injected into the NEXT
-   * round's panel reviewer prompts so a fresh-context reviewer cannot blindly
-   * re-raise an already-dismissed claim. Survives `escalateOrFail`'s `{...t}`
-   * spread across rung bumps; cleared when the task ships (doneTaskRow) and on
-   * the advancing verify write. Transient — allowed on any status.
-   */
-  review_dispositions: external_exports.array(ReviewDispositionSchema).optional(),
-  // --- Merge gate (Decision 26/27) ---
-  /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
-  reviewers: external_exports.array(ReviewerResultSchema).default([]),
-  /**
-   * Δ U/S5 — set IFF the ADVANCING verify pass ran WITHOUT an independent
-   * cross-vendor reviewer (runPanel's crossVendorAbsence). An EVENT RECORD like
-   * `reviewers[]` (derive-don't-store exception: which executor actually reviewed
-   * is not derivable after the fact). Written/cleared in the SAME advance write
-   * as `reviewers`; surfaced by the partial report + run summary.
-   */
-  cross_vendor_absent: external_exports.object({ reason: external_exports.string().min(1) }).optional(),
-  // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
-  /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
-  branch: external_exports.string().optional(),
-  /** PR number once created (idempotent-create keyed off branch, Δ P). */
-  pr_number: external_exports.number().int().positive().optional(),
-  // --- Failure classification (Decision 22, Δ D) ---
-  /** Set IFF status === "failed": the closed-enum cause. */
-  failure_class: FailureClassEnum.optional(),
-  /** Human-facing reason string accompanying a fail. */
-  failure_reason: external_exports.string().optional(),
-  /**
-   * The precise resume cursor for the drive orchestrator — which TaskPhase the task is
-   * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
-   * summary; `phase` is the machine cursor. Absent = not started (preflight).
-   * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
-   * not a resume point — terminal writers do not clear it.
-   * NOTE: both this enum and phase-machine's TASK_PHASE_ORDER import the SAME
-   * literal tuple from `types/phases-vocab.ts` (the dependency-free vocabulary
-   * leaf), so they cannot drift; the cross-check test in
-   * src/orchestrator/orchestrator.test.ts is belt-and-braces, not load-bearing.
-   */
-  phase: external_exports.enum(TASK_PHASES).optional(),
-  /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
-  merge_resyncs: external_exports.number().int().min(0).default(0),
-  /**
-   * Same-rung verify re-runs consumed for holdout EVALUATOR failures (malformed
-   * validator output — unparseable/wrong-cardinality/mismatched/blank-evidence-pass).
-   * Distinct from `spawn_in_flight.redrives` (hung-spawn respawn, Decision 66): this
-   * counts delivered-but-broken evaluator output. Cap enforced in record.ts
-   * (HOLDOUT_EVALUATOR_RETRY_CAP); exhaustion fails the task `blocked-environmental`.
-   * Absent = 0.
-   */
-  holdout_evaluator_retries: external_exports.number().int().min(0).optional(),
-  /**
-   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the orchestrator when it
-   * EMITS a spawn for `phase` at `rung`, recording the task-branch `tip_sha` at emit
-   * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
-   * pre-record window leaves the abandoned producer's partial commits on the branch. On
-   * the resume that re-enters the SAME (phase, rung) before any results were recorded,
-   * the orchestrator resets the worktree to `tip_sha` — discarding ONLY the interrupted
-   * phase's work (prior completed phases live below it) — then re-spawns. A fresh
-   * spawn overwrites it; terminal writers (complete/fail) clear it. Absent = no spawn
-   * in flight (the steady state between phases).
-   *
-   * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
-   * Both this enum and orchestrator/results' SPAWN_PHASES import the same tuple from
-   * `types/phases-vocab.ts`, so they cannot drift (the orchestrator.test.ts cross-check
-   * is belt-and-braces, mirroring the `phase` field's pin).
-   */
-  spawn_in_flight: external_exports.object({
-    phase: external_exports.enum(SPAWN_PHASES),
-    rung: external_exports.number().int().min(0),
-    tip_sha: external_exports.string().min(1),
-    /** Epoch SECONDS (the shared quota clock, `OrchestratorDeps.now()`) at
-     * spawn emit; refreshed on a matching re-entry. Stall-TTL detection
-     * (`next.ts` `work.stale`/`work.hung`) reads this — advisory only, no
-     * status change. Defaults to 0 (epoch) so a pre-S? checkpoint persisted
-     * before this field existed parses as maximally aged — it lands in `hung`
-     * (kill + re-drive) — correct: an untimed in-flight spawn should be
-     * flagged for re-drive, not silently trusted. */
-    spawned_at: external_exports.number().default(0),
-    /**
-     * Matching (phase, rung) re-entries already consumed — the bound on the
-     * kill→respawn→hang loop (Decision 66). Incremented by the orchestrator's
-     * re-entry branch; a fresh checkpoint (any phase/rung advance) is written
-     * with 0, so the budget is per-(phase, rung) by construction. Defaults to
-     * 0 so a checkpoint persisted before this field existed parses with a
-     * FULL budget — safe: the cap bounds FUTURE re-entries only (the opposite
-     * gotcha from spawned_at, whose default-0 must read as maximally aged).
-     */
-    redrives: external_exports.number().int().min(0).default(0)
-  }).optional(),
-  // --- Lifecycle timestamps (ISO-8601) ---
-  started_at: external_exports.string().optional(),
-  ended_at: external_exports.string().optional()
-});
-function refineTaskCrossFields(task, ctx) {
-  const isFailed = task.status === "failed";
-  if (isFailed && task.failure_class == null) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["failure_class"],
-      message: `task '${task.task_id}' is 'failed' but has no failure_class (a fail must be classified)`
-    });
-  }
-  if (!isFailed && task.failure_class != null) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["failure_class"],
-      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF failed)`
-    });
-  }
-  const hasReason = task.failure_reason != null && task.failure_reason.length > 0;
-  if (isFailed && !hasReason) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["failure_reason"],
-      message: `task '${task.task_id}' is 'failed' but has no failure_reason (a fail must carry a human-facing reason)`
-    });
-  }
-  if (!isFailed && task.failure_reason != null) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["failure_reason"],
-      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF failed)`
-    });
-  }
-  task.reviewers.forEach((r, i) => {
-    if (r.verdict === "approve" && r.confirmed_blockers !== 0) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["reviewers", i, "confirmed_blockers"],
-        message: `reviewer '${r.reviewer}' approves but records ${r.confirmed_blockers} confirmed blocker(s) (approve \u21D2 0)`
-      });
-    }
-    if (r.verdict === "blocked" && r.confirmed_blockers === 0) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["reviewers", i, "confirmed_blockers"],
-        message: `reviewer '${r.reviewer}' is blocked but records 0 confirmed blockers (blocked \u21D2 \u22651)`
-      });
-    }
-  });
-  const inFlight = task.status === "executing" || task.status === "reviewing" || task.status === "shipping";
-  if (inFlight && task.phase === void 0) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["phase"],
-      message: `task '${task.task_id}' has in-flight status '${task.status}' but no phase cursor \u2014 phase is written in lockstep with status (state from an older factory version); start a fresh run`
-    });
-  }
-  if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["spawn_in_flight", "rung"],
-      message: `task '${task.task_id}' spawn_in_flight.rung (${task.spawn_in_flight.rung}) > escalation_rung (${task.escalation_rung}) \u2014 rung went backward, stale checkpoint from before a rescue reset`
-    });
-  }
-}
-var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
-var QuotaCheckpointSchema = external_exports.discriminatedUnion("binding_window", [
-  external_exports.object({ binding_window: external_exports.literal("5h"), resets_at_epoch: external_exports.number().int().nonnegative() }),
-  external_exports.object({ binding_window: external_exports.literal("7d"), resets_at_epoch: external_exports.number().int().nonnegative() }),
-  external_exports.object({ binding_window: external_exports.literal("unavailable") })
-]);
-function concludedPhaseMarker(afterReason, afterAttempts) {
-  return external_exports.object({
-    status: external_exports.enum(["done", "failed"]),
-    reason: external_exports.string().optional(),
-    ...afterReason,
-    attempts: external_exports.number().int().nonnegative().optional(),
-    ...afterAttempts,
-    ended_at: external_exports.string()
-  });
-}
-function openPhaseMarker(afterReason, afterAttempts) {
-  return external_exports.object({
-    status: external_exports.enum(["done", "failed"]).optional(),
-    reason: external_exports.string().optional(),
-    ...afterReason,
-    attempts: external_exports.number().int().nonnegative().optional(),
-    ...afterAttempts,
-    ended_at: external_exports.string().optional()
-  });
-}
-var DocsPhaseSchema = concludedPhaseMarker({}, {});
-var TraceabilityVerdictRowSchema = external_exports.object({
-  requirement: external_exports.string().min(1),
-  verdict: external_exports.enum(["met", "partial", "unmet"]),
-  evidence: external_exports.string().min(1)
-});
-var TraceabilityPhaseSchema = concludedPhaseMarker(
-  {},
-  {
-    /** One row per PRD requirement; empty ⇔ no parseable audit ever landed. */
-    verdicts: external_exports.array(TraceabilityVerdictRowSchema).default([])
-  }
-);
-var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
-var E2eManifestEntrySchema = external_exports.object({
-  /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
-  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
-  /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
-  spec_path: external_exports.string().min(1),
-  kind: E2eSpecKindEnum,
-  /**
-   * Human-readable journey name (Decision 40 D12) — surfaces in the run report's
-   * "journeys covered" section so a zero-e2e-knowledge operator can read what was
-   * proven. Optional: pre-D12 manifests lack it (renderer falls back to spec_path).
-   */
-  title: external_exports.string().min(1).optional()
-});
-var E2eAdjudicationSpecSchema = external_exports.object({
-  /** Repo-relative path of the failing committed spec. */
-  spec_path: external_exports.string().min(1),
-  /** The failing spec's human-readable title (from the Playwright results). */
-  title: external_exports.string(),
-  /** The failing assertion/step detail (D8), threaded into the adjudicator prompt. */
-  error: external_exports.string().optional(),
-  mode: external_exports.enum(["adjudicate", "update"])
-});
-var E2eAdjudicationSchema = external_exports.object({
-  specs: external_exports.array(E2eAdjudicationSpecSchema).min(1),
-  /** Adjudicator SPAWN attempts (crash retry, mirrors `author_attempts`). */
-  attempts: external_exports.number().int().nonnegative(),
-  requested_at: external_exports.string()
-});
-var E2ePhaseSchema = openPhaseMarker(
-  {
-    /**
-     * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
-     * didn't block completion (Decision 39: only critical red gates). Distinct from
-     * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
-     * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
-     */
-    advisory: external_exports.string().optional()
-  },
-  {
-    /**
-     * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
-     * automatic re-spawn before the phase fails; distinct from `attempts` (suite
-     * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
-     */
-    author_attempts: external_exports.number().int().nonnegative().optional(),
-    /** The author's spec→task manifest, fixed once authored and reused across passes. */
-    manifest: external_exports.array(E2eManifestEntrySchema).default([]),
-    /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
-    reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
-    /** In-flight adjudication cursor (D7) — see {@link E2eAdjudicationSchema}. */
-    adjudication: E2eAdjudicationSchema.optional(),
-    /**
-     * Per-spec adjudication count, keyed by spec_path (D7 cap: 1 per spec per run).
-     * A spec failing AGAIN after its one adjudication is a regression — the run
-     * fails rather than adjudicating in a loop. Survives rescue's reset (like
-     * `reopen_counts`): the cap holds across the whole run.
-     */
-    adjudication_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).optional()
-  }
-);
-var E2eAffectedSpecSchema = external_exports.object({
-  /** Repo-relative path of the existing committed spec. */
-  spec_path: external_exports.string().min(1),
-  /** Task id(s) in THIS run whose work touches the spec's journey. */
-  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
-  expectation: external_exports.enum(["needs-update", "should-still-pass"])
-});
-var E2eAssessmentSchema = openPhaseMarker(
-  {
-    /** Degraded-coverage note on a `done` assessment (e.g. logged-out coverage only). */
-    warning: external_exports.string().optional(),
-    /** Boot config the assessor resolved + wrote into `playwright.config.ts` (D10). */
-    resolved: external_exports.object({
-      start_command: external_exports.string().min(1).optional(),
-      base_url: external_exports.string().min(1).optional()
-    }).optional(),
-    /** Coverage forecast over EXISTING committed specs (empty when none exist). */
-    affected_specs: external_exports.array(E2eAffectedSpecSchema).default([])
-  },
-  {}
-);
-var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
-var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
-var MissSchema = external_exports.object({
-  /** The task whose shipped code the miss traces to (∈ run.tasks — refined below). */
-  task_id: external_exports.string().min(1),
-  /** ISO-8601 record time, stamped by the CLI. */
-  at: external_exports.string(),
-  /** REQUIRED human description — a miss without one is noise. */
-  note: external_exports.string().min(1),
-  /**
-   * Human judgment: which reviewer lens SHOULD have caught it (a panel role), or
-   * 'none' when no lens could have. Stays a bare string here — a frozen state schema
-   * must not import the verifier's panel roster; the `factory miss` CLI validates
-   * it against `panelRolesFor(true) ∪ {'none'}`.
-   */
-  lens: external_exports.string().min(1).optional()
-});
-var RunStateSchema = external_exports.object({
-  /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(3).default(3),
-  /** `run-YYYYMMDD-HHMMSS`. */
-  run_id: external_exports.string().min(1),
-  status: RunStatusEnum.default("running"),
-  execution_mode: ExecutionModeEnum.default("sequential"),
-  ship_mode: ShipModeEnum.default("live"),
-  /**
-   * The Claude Code session id that OWNS this run. MANDATORY at `run create` —
-   * resolution (`--session-id` flag, else `CLAUDE_CODE_SESSION_ID`) failing is a
-   * UsageError, so every new run is owned. The schema keeps the field optional
-   * only for legacy persisted runs created before the requirement. The Stop hook
-   * uses it to scope a resumability HINT to the owning session (`findActiveByOwner`
-   * never matches an ownerless run) — it never blocks, and there is no unscoped
-   * fallback (see hooks/stop-gate.ts). An immutable property, never a derived verdict.
-   */
-  owner_session: external_exports.string().min(1).optional(),
-  /**
-   * The per-run staging branch this run cut + pushed (`staging-<run-id>`). PINNED
-   * ONCE at `run create` (Decision 33) so every later base-ref resolution — worktree
-   * fork point, deterministic-gate diff base, reviewer/holdout inspect ref, ship
-   * merge target, rollup source — reads the branch the run ACTUALLY created, not a
-   * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
-   * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
-   * the already-pushed branch. Git provenance / immutable identity — NOT a derived
-   * verdict, so derive-don't-store does not apply.
-   */
-  staging_branch: external_exports.string().min(1),
-  /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
-  spec: SpecPointerSchema,
-  /** Per-task state, keyed by task_id (cross-field checks applied per task). */
-  tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
-  /**
-   * When true, the quota gate skips pacing and returns null unconditionally. Set once at
-   * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both orchestrators skip the gate without per-call flag threading.
-   * Default false: legacy runs (no field) are unaffected.
-   */
-  ignore_quota: external_exports.boolean().default(false),
-  /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
-  quota: QuotaCheckpointSchema.optional(),
-  /**
-   * Bounded auto-rescue ledger (S10, Decision 48). Stamped INSIDE the same locked
-   * `applyRescue` mutation that performs an `--auto` reset. A sanctioned
-   * stored-EVENT exception to derive-don't-store (precedent: the retired
-   * `paused_minutes`): "how many self-heal cycles already ran" is history no
-   * state/git re-derivation can recover. `factory rescue auto` requires
-   * `attempts < SELF_HEAL_MAX_ATTEMPTS`, bounding the self-heal loop to ≤3
-   * cycles per run (Decision 60; each failed finalize spends one).
-   */
-  self_heal: external_exports.object({
-    attempts: external_exports.number().int().nonnegative(),
-    last_at: external_exports.string()
-  }).optional(),
-  /**
-   * Human-intervention ledger (S11): one entry per human action on the run —
-   * `launch` (run create), `conflict` (a `--supersede` resolution, stamped on the
-   * NEW run alongside its launch), `resume` (a human resume clearing a park),
-   * `recover` (an approved rescue apply that did work). The second sanctioned
-   * stored-EVENT exception (with `self_heal`): which touches happened is history
-   * nothing can re-derive. `--auto` self-heal NEVER appends — it is not a human.
-   * The touch METRIC stays derived: `(completed ? 1 : 0) / touches.length`,
-   * guarded to n/a on an empty ledger — never a fabricated number.
-   */
-  human_touches: external_exports.array(
-    external_exports.object({
-      kind: external_exports.enum(["launch", "conflict", "resume", "recover"]),
-      at: external_exports.string()
-    })
-  ).default([]),
-  /**
-   * review-miss ledger (Decision 61): one entry per human-reported defect in
-   * shipped factory-produced code, post-merge. The THIRD sanctioned stored-EVENT
-   * exception to derive-don't-store (with `self_heal` + `human_touches`) — "a human
-   * found this in shipped code" is history nothing can re-derive. Appended by
-   * `factory miss`; `factory score` derives the miss metrics from it. Default []:
-   * legacy runs (no field) carry no misses.
-   */
-  misses: external_exports.array(MissSchema).default([]),
-  /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
-  docs: DocsPhaseSchema.optional(),
-  /** PRD-traceability phase marker (S9); absent until the phase runs. */
-  traceability: TraceabilityPhaseSchema.optional(),
-  /**
-   * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
-   * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
-   * Default false: a run without the flag never gates on `wantsE2e()`.
-   */
-  e2e: external_exports.boolean().default(false),
-  /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
-  e2e_phase: E2ePhaseSchema.optional(),
-  /** Run-start e2e assessment record (Decision 40 D3); absent until it first spawns. */
-  e2e_assessment: E2eAssessmentSchema.optional(),
-  /**
-   * The `completed` run's staging→develop rollup outcome, persisted at finalize
-   * ONLY when it did not land (`merged:false`). Two shapes: (a) an armed-but-not-
-   * landed rollup PR (`number` present — e.g. the "auto-armed" branch-policy
-   * fallback, D3; the run went terminal at step 7); (b) a forward-reconcile merge
-   * CONFLICT before any rollup PR exists (`number` absent; finalize threw, run
-   * stays NON-terminal). Absent on a merged rollup (nothing to recover) or a
-   * `failed` run (no rollup attempted). Lets `rescue scan` flag either case
-   * (`rollup_pending`) without a live GitHub call. Recovery: (a) `rescue apply
-   * --recheck-rollup` reopens the run so a re-drive re-enters `finalizeRun`,
-   * whose rollup() resume-guard finds the now-merged PR; (b) human resolves the
-   * staging↔develop conflict, then plain `factory resume` re-enters finalize,
-   * which overwrites/clears this marker with the real rollup result.
-   */
-  rollup: external_exports.object({
-    /** Rollup PR number; absent when the block precedes PR creation (reconcile conflict). */
-    number: external_exports.number().int().positive().optional(),
-    merged: external_exports.boolean(),
-    reason: external_exports.string().optional()
-  }).optional(),
-  /**
-   * Whether this run is a `/factory:debug` session. Set once at `run create`;
-   * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
-   * run loops through multiple review⇄fix passes before finalizing, so it defers
-   * `run finalize` (the PRD comment/close) to the debug driver instead of the plain
-   * runner loop, and the Stop gate skips even its resumability hint for it. Default
-   * false: a run without the flag finalizes exactly as before.
-   */
-  debug: external_exports.boolean().default(false),
-  /**
-   * WHY the run went terminal as `failed`/`superseded` — a one-line human-facing
-   * cause (evaluator exhaustion, e2e phase failure, operator cancel, superseding
-   * run id, …). Written ONLY by `StateManager.finalize`, which REQUIRES it for
-   * failed/superseded and FORBIDS it for completed; the schema keeps it optional
-   * so legacy terminal states (written before the field existed) still parse —
-   * they display "reason unavailable". A stored terminal EVENT, not a derived
-   * verdict: the cause at flip time is history nothing can re-derive.
-   */
-  terminal_reason: external_exports.string().min(1).optional(),
-  /** Lifecycle timestamps (ISO-8601). */
-  started_at: external_exports.string(),
-  updated_at: external_exports.string(),
-  ended_at: external_exports.string().nullable().default(null)
-});
-function reasonIffFailed(ctx, opts) {
-  const isFailed = opts.status === "failed";
-  const hasReason = opts.reason != null && opts.reason.length > 0;
-  if (isFailed && !hasReason) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: [...opts.path],
-      message: `run '${opts.runId}' ${opts.label} is 'failed' but has no reason`
-    });
-  }
-  if (!isFailed && hasReason) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: [...opts.path],
-      message: `run '${opts.runId}' ${opts.label} is '${opts.status}' but carries a reason (reason is set IFF failed)`
-    });
-  }
-}
-function refineRunCrossFields(run, ctx) {
-  if (run.quota != null) {
-    const wanted = run.quota.binding_window === "5h" ? "paused" : "suspended";
-    if (run.status !== wanted) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["quota"],
-        message: `run '${run.run_id}' carries a '${run.quota.binding_window}' quota checkpoint but status is '${run.status}' (a '${run.quota.binding_window}' checkpoint pairs with '${wanted}')`
-      });
-    }
-  }
-  if (isTerminalRunStatus(run.status) !== (run.ended_at != null)) {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["ended_at"],
-      message: isTerminalRunStatus(run.status) ? `run '${run.run_id}' is terminal ('${run.status}') but has no ended_at` : `run '${run.run_id}' is '${run.status}' (non-terminal) but carries ended_at`
-    });
-  }
-  if (run.terminal_reason !== void 0 && run.status !== "failed" && run.status !== "superseded") {
-    ctx.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["terminal_reason"],
-      message: `run '${run.run_id}' is '${run.status}' but carries terminal_reason (only failed|superseded may)`
-    });
-  }
-  if (run.docs !== void 0) {
-    reasonIffFailed(ctx, {
-      runId: run.run_id,
-      path: ["docs", "reason"],
-      label: "docs phase",
-      status: run.docs.status,
-      reason: run.docs.reason
-    });
-  }
-  if (run.traceability !== void 0) {
-    reasonIffFailed(ctx, {
-      runId: run.run_id,
-      path: ["traceability", "reason"],
-      label: "traceability phase",
-      status: run.traceability.status,
-      reason: run.traceability.reason
-    });
-    if (run.traceability.status === "done" && run.traceability.verdicts.some((v) => v.verdict === "unmet")) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["traceability", "verdicts"],
-        message: `run '${run.run_id}' traceability phase is 'done' but carries an 'unmet' verdict (unmet must record as failed)`
-      });
-    }
-  }
-  if (run.e2e_phase?.status !== void 0) {
-    const isFailed = run.e2e_phase.status === "failed";
-    reasonIffFailed(ctx, {
-      runId: run.run_id,
-      path: ["e2e_phase", "reason"],
-      label: "e2e phase",
-      status: run.e2e_phase.status,
-      reason: run.e2e_phase.reason
-    });
-    const hasAdvisory = run.e2e_phase.advisory != null && run.e2e_phase.advisory.length > 0;
-    if (isFailed && hasAdvisory) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["e2e_phase", "advisory"],
-        message: `run '${run.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
-      });
-    }
-  }
-  if (run.e2e_assessment?.status !== void 0) {
-    reasonIffFailed(ctx, {
-      runId: run.run_id,
-      path: ["e2e_assessment", "reason"],
-      label: "e2e assessment",
-      status: run.e2e_assessment.status,
-      reason: run.e2e_assessment.reason
-    });
-  }
-  for (const [k, value] of Object.entries(run.tasks)) {
-    if (k !== value.task_id) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["tasks", k, "task_id"],
-        message: `tasks map key '${k}' does not match row task_id '${value.task_id}'`
-      });
-    }
-  }
-  run.misses.forEach((e, i) => {
-    if (run.tasks[e.task_id] === void 0) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["misses", i, "task_id"],
-        message: `miss-ledger references task '${e.task_id}' which is not in run '${run.run_id}'`
-      });
-    }
-  });
-}
-var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
-function parseRunState(raw) {
-  return RunStateChecked.parse(raw);
-}
-
-// src/core/state/manager.ts
-import { mkdir as mkdir3, readFile, readdir, readlink, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
-import { existsSync as existsSync4 } from "node:fs";
-import { basename as basename3, dirname as dirname3, join as join4 } from "node:path";
-
-// src/core/state/paths.ts
-import { join as join3 } from "node:path";
-var SPECS_DIR = "specs";
-var RUNS_DIR = "runs";
-var CURRENT_LINK = "current";
-var CURRENT_DIR = "current";
-var STATE_FILE = "state.json";
-function repoKey(repo) {
-  const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
-  if (key.length === 0) {
-    throw new Error(`repoKey: repo '${repo}' has no usable characters`);
-  }
-  if (/^\.+$/.test(key)) {
-    throw new Error(`repoKey: repo '${repo}' resolves to a path-traversal segment '${key}'`);
-  }
-  return key;
-}
-function runsRoot(dataDir) {
-  return join3(dataDir, RUNS_DIR);
-}
-function runDir(dataDir, runId) {
-  validateId(runId, "run-id");
-  return join3(runsRoot(dataDir), runId);
-}
-function runStatePath(dataDir, runId) {
-  return join3(runDir(dataDir, runId), STATE_FILE);
-}
-function currentRepoRoot(dataDir) {
-  return join3(dataDir, CURRENT_DIR);
-}
-function currentRepoLinkPath(dataDir, repo) {
-  return join3(currentRepoRoot(dataDir), repoKey(repo));
-}
-function specsRoot(dataDir) {
-  return join3(dataDir, SPECS_DIR);
-}
-function specDir(dataDir, repo, specId) {
-  validateId(specId, "spec-id");
-  return join3(specsRoot(dataDir), repoKey(repo), specId);
-}
-
-// src/core/state/manager.ts
-var log7 = createLogger("state");
-var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
-function isStaleStateError(err) {
-  return err instanceof JsonParseError || err instanceof ZodError || isUsageError(err);
-}
-var StateManager = class _StateManager {
-  dataDir;
-  lockTuning;
-  constructor(opts = {}) {
-    this.dataDir = resolveDataDir(opts);
-    this.lockTuning = { ...DEFAULT_LOCK_TUNING, ...opts.lock ?? {} };
-  }
-  // ---- paths -------------------------------------------------------------
-  statePath(runId) {
-    return runStatePath(this.dataDir, runId);
-  }
-  lockfilePath(runId) {
-    return join4(runDir(this.dataDir, runId), "state.lock");
-  }
-  /**
-   * Reject any state file not stamped with the CURRENT schema version, with a clear
-   * UsageError instead of a raw ZodError. ABSENT rejects too — every writer stamps
-   * the version, so an unstamped file predates the current schema. Ephemeral runs
-   * can't be migrated; the remedy is always a fresh run.
-   */
-  static guardedParse(raw, context) {
-    const v = raw?.schema_version;
-    if (v !== 3) {
-      throw new UsageError(
-        `run state at '${context}' uses schema v${JSON.stringify(v)}; only v3 is supported \u2014 this state was created by an older factory version; start a fresh run`
-      );
-    }
-    return parseRunState(raw);
-  }
-  specLockfilePath(repo, specId) {
-    return join4(specDir(this.dataDir, repo, specId), "create.lock");
-  }
-  // ---- lock --------------------------------------------------------------
-  /**
-   * Acquire `lockfilePath` (whose parent `dir` must already exist), run `fn`, and
-   * always release. `realpath:false` lets us lock a path whose target may be
-   * mid-rename or not yet exist (proper-lockfile creates `<path>.lock`).
-   * `label` names the resource in the loud not-found + compromised errors.
-   */
-  async runWithLock(dir, lockfilePath, label, fn) {
-    return withFileLock({ dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning }, fn);
-  }
-  /**
-   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
-   * must already exist — `create` mkdirs it before first lock; mutators lock an
-   * existing run.
-   */
-  async withLock(runId, fn) {
-    return this.runWithLock(runDir(this.dataDir, runId), this.lockfilePath(runId), `run '${runId}'`, fn);
-  }
-  /**
-   * Run `fn` while holding the per-spec lock, keyed by `(repo, specId)`. The
-   * durable spec dir is the lock parent — it always exists once the spec is
-   * resolved, so this is a stable serialization point for the resolve-or-reuse
-   * scan→create critical section (two concurrent same-spec creates can't both
-   * observe "no active run" and mint two orphan runs; the per-run clobber guard
-   * only protects against a same run_id collision). Distinct lockfile from
-   * {@link withLock}, so the nested `create` call inside the body never deadlocks.
-   */
-  async withSpecLock(repo, specId, fn) {
-    return this.runWithLock(
-      specDir(this.dataDir, repo, specId),
-      this.specLockfilePath(repo, specId),
-      `spec '${repo}/${specId}'`,
-      fn
-    );
-  }
-  // ---- create ------------------------------------------------------------
-  /**
-   * Create a brand-new run. Mkdirs the run store layout, writes the initial
-   * state.json atomically under the lock, and (best-effort) points the per-repo
-   * `current/<repo-key>` pointer at it. Refuses to clobber an existing run dir.
-   */
-  async create(args) {
-    const dir = runDir(this.dataDir, args.run_id);
-    if (existsSync4(this.statePath(args.run_id))) {
-      throw new Error(`state: run '${args.run_id}' already exists`);
-    }
-    await mkdir3(join4(dir, "holdouts"), { recursive: true });
-    await mkdir3(join4(dir, "reviews"), { recursive: true });
-    const now = nowIso();
-    const state = parseRunState({
-      run_id: args.run_id,
-      status: "running",
-      execution_mode: args.execution_mode ?? "sequential",
-      ship_mode: args.ship_mode ?? "live",
-      // Stamp the owning session only when known (best-effort) — an ownerless run
-      // is INVISIBLE to the Stop gate (findActiveByOwner never matches it; there is
-      // no unscoped fallback), so that session's loop can stop freely.
-      ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
-      staging_branch: args.staging_branch,
-      ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
-      ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
-      ...args.debug !== void 0 ? { debug: args.debug } : {},
-      spec: args.spec,
-      tasks: args.tasks ?? {},
-      ...args.human_touches !== void 0 ? { human_touches: args.human_touches.map((t) => ({ kind: t.kind, at: t.at ?? now })) } : {},
-      started_at: now,
-      updated_at: now,
-      ended_at: null
-    });
-    await this.withLock(args.run_id, async () => {
-      if (existsSync4(this.statePath(args.run_id))) {
-        throw new Error(`state: run '${args.run_id}' already exists`);
-      }
-      await atomicWriteFile(this.statePath(args.run_id), stringifyJson(state));
-    });
-    await atomicWriteFile(join4(dir, "audit.jsonl"), "");
-    await atomicWriteFile(join4(dir, "metrics.jsonl"), "");
-    await this.pointCurrentAt(state);
-    return state;
-  }
-  // ---- read (lock-free) --------------------------------------------------
-  /**
-   * Read + validate a run's state. LOCK-FREE: the atomic rename on the writer
-   * side guarantees a reader sees a whole file. LOUD on a missing run or a
-   * schema/JSON violation (never a silent partial).
-   */
-  async read(runId) {
-    const path = this.statePath(runId);
-    const raw = await readFile(path, "utf8");
-    return _StateManager.guardedParse(parseJson(raw, path), path);
-  }
-  /**
-   * True iff a RunState exists on disk for this run id. Synchronous,
-   * no read/parse — mirrors the existence check `create()` already uses
-   * internally before writing. Lets a caller distinguish "no run was ever
-   * created" from a genuine read failure without parsing.
-   */
-  exists(runId) {
-    return existsSync4(this.statePath(runId));
-  }
-  /**
-   * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
-   * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
-   * (no pointer for this repo yet) is simply null — `pointCurrentAt` writes both
-   * pointers on every create, so a repo with a run always has its per-repo link.
-   * Loud on a corrupt state.json behind the pointer (same contract as readCurrent).
-   */
-  async readCurrentForRepo(repo) {
-    return this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
-  }
-  /**
-   * Read + validate a run's state THROUGH a `current`-style directory symlink (the
-   * OS follows the link during the path walk, so no readlink is needed). Returns
-   * null ONLY on genuine ABSENCE (missing/dangling link → ENOENT); a corrupt/invalid
-   * state.json propagates LOUDLY (swallowing it would make a corrupt active run
-   * indistinguishable from "no current run"). Shared by {@link readCurrent} and
-   * {@link readCurrentForRepo}.
-   */
-  async readThroughLink(link) {
-    if (!existsSync4(link)) {
-      return null;
-    }
-    const statePath = join4(link, "state.json");
-    let raw;
-    try {
-      raw = await readFile(statePath, "utf8");
-    } catch (err) {
-      if (isEnoent(err)) {
-        return null;
-      }
-      throw err;
-    }
-    return _StateManager.guardedParse(parseJson(raw, statePath), statePath);
-  }
-  // ---- enumerate (lock-free) ---------------------------------------------
-  /**
-   * Enumerate every run in the store, newest-first (run-id descending — the id is
-   * lexicographically chronological). Each run dir's state.json is read + validated
-   * through {@link read}. Non-directory entries (the `runs/current` symlink and any
-   * `*.tmp.<pid>` link create() leaves behind) are excluded. A run dir without a
-   * state.json (mid-creation, or cleaned) is skipped silently; one whose state.json
-   * is unreadable/corrupt/invalid is skipped with a LOUD warning — a single corrupt
-   * historical run must not brick `run create`'s resolve-or-reuse scan. (Targeted
-   * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
-   * a bad entry, and never silently.)
-   */
-  /**
-   * Readdir the runs root, tolerating a missing root (no runs yet → []) and
-   * filtering to directories (excludes the `current` + temp symlinks). The shared
-   * prologue of {@link listRuns} and {@link listStaleRunDirs}.
-   */
-  async runDirEntries() {
-    try {
-      const entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
-      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch (err) {
-      if (isEnoent(err)) {
-        return [];
-      }
-      throw err;
-    }
-  }
-  async listRuns() {
-    const runs = [];
-    for (const name of await this.runDirEntries()) {
-      try {
-        runs.push(await this.read(name));
-      } catch (err) {
-        if (isEnoent(err)) {
-          continue;
-        }
-        log7.warn(`state: skipping unreadable run '${name}': ${err.message}`);
-      }
-    }
-    return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
-  }
-  /**
-   * Enumerate the run dirs THIS engine cannot parse (D57) — the population
-   * {@link listRuns} warn-skips: an old-schema stamp (`schema_version !== 3`) or
-   * corrupt JSON. These are `rescue gc` sweep candidates; a stale pointer at one
-   * of them is what crashed `run create` in the 2026-07-07 incident. Best-effort
-   * raw field extraction (`staging_branch`, `spec.repo`) enables the GitHub-side
-   * teardown; a structurally-invalid v3 state is NOT stale (current-engine
-   * wreckage — surfaces loudly through targeted reads, never swept here).
-   */
-  async listStaleRunDirs() {
-    const stale = [];
-    for (const name of await this.runDirEntries()) {
-      let raw;
-      try {
-        raw = await readFile(runStatePath(this.dataDir, name), "utf8");
-      } catch (err) {
-        if (isEnoent(err)) {
-          continue;
-        }
-        throw err;
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        stale.push({ run_id: name, reason: "corrupt-json" });
-        continue;
-      }
-      const obj = parsed;
-      const v = obj?.schema_version;
-      if (v === 3) {
-        continue;
-      }
-      const branch = obj?.staging_branch;
-      const repo = obj?.spec?.repo;
-      stale.push({
-        run_id: name,
-        reason: `schema-v${JSON.stringify(v)}`,
-        ...typeof branch === "string" && branch.length > 0 ? { staging_branch: branch } : {},
-        ...typeof repo === "string" && repo.length > 0 ? { repo } : {}
-      });
-    }
-    return stale.sort((a, b) => b.run_id.localeCompare(a.run_id));
-  }
-  /**
-   * Delete a run dir outright and drop any `current` pointer naming it (D57) —
-   * `rescue gc --apply`'s stale-run sweep. NOT a lifecycle verb: live runs are
-   * cancelled/superseded through state, never deleted; this exists solely for
-   * wreckage {@link read} cannot even parse, so it takes no lock (there is no
-   * valid state to serialize against).
-   */
-  async deleteRun(runId) {
-    await rm(runDir(this.dataDir, runId), { recursive: true, force: true });
-    const links = [];
-    try {
-      const repoLinks = await readdir(currentRepoRoot(this.dataDir), { withFileTypes: true });
-      links.push(...repoLinks.map((e) => join4(currentRepoRoot(this.dataDir), e.name)));
-    } catch (err) {
-      if (!isEnoent(err)) {
-        throw err;
-      }
-    }
-    for (const link of links) {
-      let target;
-      try {
-        target = await readlink(link);
-      } catch {
-        continue;
-      }
-      if (basename3(target) === runId) {
-        await rm(link, { force: true }).catch(() => {
-        });
-      }
-    }
-  }
-  /**
-   * Find the single NON-terminal run for `(repo, issueNumber)`, or null. Powers the
-   * resolve-or-reuse path of `run create`: a repeated create returns the live run
-   * instead of spawning an orphan. Matches by the STABLE issue number, not the exact
-   * `spec_id` — a spec id is `<issue>-<slug>` where the slug is agent-named and can
-   * drift across regenerations, and one issue means at most one active run: the
-   * supersede teardown, the weekly-quota wall, and the no-silent-reuse prompt must
-   * all see a drifted-slug run.
-   *
-   * @throws when ≥2 active runs match — a state defect (duplicates have occurred in
-   *         the wild); silently picking one could tear down or reuse the wrong run.
-   *         Fail loud and let `/factory:resume` repair.
-   */
-  async findActiveByIssue(repo, issueNumber) {
-    const runs = await this.listRuns();
-    const matches = runs.filter(
-      (r) => r.spec.repo === repo && r.spec.issue_number === issueNumber && !isTerminalRunStatus(r.status)
-    );
-    if (matches.length > 1) {
-      throw new Error(
-        `findActiveByIssue: ${matches.length} active runs for issue #${issueNumber} in ${repo} (${matches.map((r) => r.run_id).join(", ")}) \u2014 one issue must have at most one active run; repair with /factory:resume`
-      );
-    }
-    return matches.length === 1 ? at(matches, 0) : null;
-  }
-  /**
-   * TRUE when another NON-terminal run (any issue) exists for `repo` besides
-   * `excludeRunId`. Active-run uniqueness is per (repo, issue) — two PRDs can
-   * have simultaneously active runs on one repo — so the D74 de-escalation
-   * sites (finalize / supersede / cancel `--cleanup`) and scaffold's
-   * `--provision` must not drop develop to baseline while a sibling run still
-   * relies on the strict profile.
-   */
-  async hasOtherActiveForRepo(repo, excludeRunId) {
-    const runs = await this.listRuns();
-    return runs.some((r) => r.spec.repo === repo && r.run_id !== excludeRunId && !isTerminalRunStatus(r.status));
-  }
-  /**
-   * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
-   * (empty session → `[]`). The raw list behind {@link findActiveByOwner}: callers
-   * that must DISTINGUISH "none owned" from "ambiguous (≥2 owned)" — e.g. `run cancel`,
-   * which fails LOUD on ambiguity rather than guessing which run to abandon — branch
-   * on `.length`.
-   */
-  async findAllActiveByOwner(session) {
-    if (session.length === 0) {
-      return [];
-    }
-    const runs = await this.listRuns();
-    return runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
-  }
-  /**
-   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
-   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
-   * only for the run the stopping/acting session actually owns, never a concurrent
-   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
-   * session minting runs in two repos) all return null, so the caller fails SAFE
-   * (passes through) rather than gating the wrong run. Callers that must tell "none"
-   * from "ambiguous" apart use {@link findAllActiveByOwner} and branch on its length.
-   */
-  async findActiveByOwner(session) {
-    const owned = await this.findAllActiveByOwner(session);
-    return owned.length === 1 ? at(owned, 0) : null;
-  }
-  // ---- update (locked read-modify-write) ---------------------------------
-  /**
-   * Atomically mutate a run under the lock. `mutator` receives the current state
-   * and returns the next state; the result is re-validated through the schema
-   * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
-   * stamped. This is the ONLY write path for an existing run.
-   */
-  async update(runId, mutator) {
-    return this.withLock(runId, async () => {
-      const current = await this.read(runId);
-      const next = await mutator(current);
-      if (next.run_id !== runId) {
-        throw new Error(
-          `state: update mutator changed run_id ('${runId}' \u2192 '${next.run_id}') \u2014 identity is immutable`
-        );
-      }
-      if (next.spec.repo !== current.spec.repo || next.spec.spec_id !== current.spec.spec_id || next.spec.issue_number !== current.spec.issue_number) {
-        throw new Error(
-          `state: update mutator changed the spec pointer for run '${runId}' \u2014 identity is immutable`
-        );
-      }
-      const validated = parseRunState({
-        ...next,
-        updated_at: nowIso()
-      });
-      await atomicWriteFile(this.statePath(runId), stringifyJson(validated));
-      return validated;
-    });
-  }
-  /**
-   * Convenience: mutate a single task in place. Throws if the task is absent
-   * (a typo'd task id is a loud error, not a silent create).
-   */
-  async updateTask(runId, taskId, mutator) {
-    return this.update(runId, (state) => {
-      const task = state.tasks[taskId];
-      if (!task) {
-        throw new Error(`state: run '${runId}' has no task '${taskId}'`);
-      }
-      return { ...state, tasks: { ...state.tasks, [taskId]: mutator(task) } };
-    });
-  }
-  async finalize(runId, status, reason) {
-    if (!isTerminalRunStatus(status)) {
-      throw new Error(`state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`);
-    }
-    if (status === "completed" && reason !== void 0) {
-      throw new Error(`state: finalize 'completed' takes no reason; got '${reason}'`);
-    }
-    if (status !== "completed" && (reason === void 0 || reason.trim().length === 0)) {
-      throw new Error(`state: finalize '${status}' requires a non-empty reason`);
-    }
-    return this.update(runId, (state) => {
-      if (isTerminalRunStatus(state.status) && state.status !== status) {
-        throw new Error(
-          `state: run '${runId}' already terminal as '${state.status}'; cannot re-finalize as '${status}'`
-        );
-      }
-      if (isTerminalRunStatus(state.status) && state.terminal_reason !== void 0 && reason !== void 0 && state.terminal_reason !== reason) {
-        throw new Error(
-          `state: run '${runId}' already finalized '${status}' with reason '${state.terminal_reason}'; refusing to replace it with '${reason}'`
-        );
-      }
-      return {
-        ...state,
-        status,
-        quota: void 0,
-        terminal_reason: state.terminal_reason ?? reason,
-        ended_at: state.ended_at ?? nowIso()
-      };
-    });
-  }
-  // ---- current symlink ---------------------------------------------------
-  /**
-   * Repoint the PER-REPO current pointer `current/<repo-key>` → `../runs/<run-id>`
-   * at a freshly-created run (L2.6/L2.7) — the single live pointer, authoritative
-   * for the human CLI per checkout. The legacy GLOBAL `runs/current` link is
-   * RETIRED (Decision 61): nothing reads it; this method only best-effort rms a
-   * leftover from an older engine.
-   *
-   * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
-   * best-effort symlink catch below): if THIS repo's current pointer already names a
-   * still-live run owned by a DIFFERENT known session, refuse to hide it. Same-repo
-   * concurrent runs by distinct sessions are thus serialized, while cross-repo creates
-   * (a different repo's pointer) never trip it. The just-created run's `state.json`
-   * already exists, so it stays addressable via `--run <id>` after the throw.
-   * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
-   *
-   * POINTER-LIVENESS TOLERANCE (D57): an UNPARSEABLE pointer target (old-schema,
-   * corrupt JSON) classifies as STALE — warn loudly and repoint. A run this engine
-   * cannot parse cannot be owned by a live session of this engine, so it can never
-   * prove the "still-live, different owner" condition the guard exists for. Mirrors
-   * {@link listRuns}' tolerate-loudly precedent; readCurrentForRepo keeps its loud
-   * contract for every other caller.
-   *
-   * The tolerance is SCOPED to recognized parse/schema failures ({@link isStaleStateError}
-   * — JSON parse errors, the schema-version UsageError, or a Zod validation error);
-   * any other error (EACCES, EIO, or an unexpected bug) rethrows loudly instead of
-   * being treated as stale, so a transient read failure on a genuinely live,
-   * different-owner run never silently repoints over it.
-   */
-  async pointCurrentAt(state) {
-    const repo = state.spec.repo;
-    let existing;
-    try {
-      existing = await this.readCurrentForRepo(repo);
-    } catch (err) {
-      if (!isStaleStateError(err)) {
-        throw err;
-      }
-      log7.warn(
-        `state: current pointer for repo '${repo}' names an unparseable run \u2014 treating as stale and repointing: ${err.message}`
-      );
-      existing = null;
-    }
-    if (existing !== null && existing.run_id !== state.run_id && !isTerminalRunStatus(existing.status) && existing.owner_session !== void 0 && state.owner_session !== void 0 && existing.owner_session !== state.owner_session) {
-      throw new Error(
-        `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
-      );
-    }
-    await this.repointSymlink(currentRepoLinkPath(this.dataDir, repo), join4("..", RUNS_DIR, state.run_id));
-    await rm(join4(runsRoot(this.dataDir), CURRENT_LINK), { force: true }).catch(() => {
-    });
-  }
-  /**
-   * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
-   * then rename). Best-effort: a failure is logged, not fatal — `current` is a
-   * convenience pointer, not load-bearing state.
-   */
-  async repointSymlink(link, target) {
-    const tmp = `${link}.tmp.${process.pid}`;
-    try {
-      await mkdir3(dirname3(link), { recursive: true });
-      await unlink2(tmp).catch(() => {
-      });
-      await symlink(target, tmp);
-      await rm(link, { force: true, recursive: false }).catch(() => {
-      });
-      await rename2(tmp, link);
-    } catch (err) {
-      log7.warn(`state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`);
-      await unlink2(tmp).catch(() => {
-      });
-    }
-  }
-};
-
-// src/core/phase-machine/phases.ts
-var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
-var RunPhaseEnum = external_exports.enum(["finalize"]);
-
-// src/core/phase-machine/spawn.ts
-var SpawnRoleEnum = external_exports.enum([
-  "test-writer",
-  "implementer",
-  "implementation-reviewer",
-  "quality-reviewer",
-  "silent-failure-hunter",
-  "systemic-failure-reviewer",
-  "database-design-reviewer",
-  "scribe"
-]);
-var AgentSpecSchema = external_exports.object({
-  /** The reviewer/producer role (closed set). */
-  role: SpawnRoleEnum,
-  /** The runner-facing `Task(subagent_type)` value, spawned verbatim (C4). */
-  agent_type: external_exports.string().min(1),
-  /** Worktree isolation. Defaults to "worktree". */
-  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
-  /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
-  model: external_exports.string().min(1),
-  /**
-   * Optional hard turn budget for the agent (positive integer). Omitted ⇒ the runner
-   * falls back to the agent's own frontmatter `maxTurns` (single-source-of-truth —
-   * mirrors how `effort` already works below). Set only when the engine deliberately
-   * overrides the frontmatter default.
-   */
-  max_turns: external_exports.number().int().positive().optional(),
-  /**
-   * The composed agent prompt, spawned VERBATIM (3b(i)/(ii)). Producer specs
-   * always set it (`handlers.ts` `producerSpawn`); panel reviewer specs omit it —
-   * the runner still builds those prompts inline from `agents/<role>.md` +
-   * `skills/review-protocol/SKILL.md` (unchanged).
-   */
-  prompt: external_exports.string().min(1).optional(),
-  /**
-   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
-   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
-   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
-   */
-  effort: EffortEnum.optional()
-});
-var CrossVendorStampSchema = external_exports.union([
-  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1), prompt: external_exports.string().min(1) }),
-  external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
-]);
-var VerifierSpecSchema = external_exports.object({
-  agent_type: external_exports.string().min(1),
-  model: external_exports.string().min(1),
-  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
-  prompt_template: external_exports.string().min(1),
-  interpolate_fields: external_exports.array(external_exports.string().min(1)).min(1)
-});
-var SpawnRequestSchema = external_exports.object({
-  /** Engine resumes here after the agents return. A per-task phase. */
-  resume_phase: TaskPhaseEnum,
-  /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: external_exports.array(AgentSpecSchema).min(1),
-  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
-  cross_vendor: CrossVendorStampSchema.optional(),
-  /** Finding-verifier spawn template — verify panel manifests only (3b/iii). */
-  verifier_spec: VerifierSpecSchema.optional()
-});
-
-// src/hooks/hook-context.ts
-import { isAbsolute as isAbsolute2, relative, sep as sep5 } from "node:path";
-
-// src/git/exec-tools.ts
-function makeRunner(command) {
-  return (args, opts) => exec(command, args, opts);
-}
-var defaultGitRunner = makeRunner("git");
-var defaultGhRunner = makeRunner("gh");
-async function runOrThrow(command, runner, args, opts) {
-  const result = await runner(args, opts);
-  if (result.code !== 0) {
-    throw new ExecError(command, args, result);
-  }
-  return result;
-}
-
-// src/git/git-client.ts
-import { dirname as dirname4 } from "node:path";
-var log8 = createLogger("git");
-var DefaultGitClient = class {
-  runner;
-  constructor(runner = defaultGitRunner) {
-    this.runner = runner;
-  }
-  toExecOpts(opts) {
-    return opts?.cwd != null && opts.cwd.length > 0 ? { cwd: opts.cwd } : {};
-  }
-  exec(args, opts) {
-    return this.runner(args, this.toExecOpts(opts));
-  }
-  execOrThrow(args, opts) {
-    return runOrThrow("git", this.runner, args, this.toExecOpts(opts));
-  }
-  async fetch(remote, ref, opts) {
-    await this.execOrThrow(["fetch", remote, ref], opts);
-  }
-  async revParse(ref, opts) {
-    const r = await this.execOrThrow(["rev-parse", ref], opts);
-    return r.stdout.trim();
-  }
-  async branchExists(ref, opts) {
-    const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
-    const r = await this.exec(["show-ref", "--verify", "--quiet", fullRef], opts);
-    if (r.code === 0) {
-      return true;
-    }
-    if (r.code === 1) {
-      return false;
-    }
-    throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
-  }
-  async refExists(ref, opts) {
-    const r = await this.exec(["rev-parse", "--verify", "--quiet", ref], opts);
-    if (r.code === 0) {
-      return true;
-    }
-    if (r.code === 1) {
-      return false;
-    }
-    throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
-  }
-  async isTracked(relPath, opts) {
-    const r = await this.exec(["ls-files", "--error-unmatch", "--", relPath], opts);
-    if (r.code === 0) {
-      return true;
-    }
-    if (r.code === 1) {
-      return false;
-    }
-    throw new Error(`git ls-files failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
-  }
-  async commitsAhead(base, branch, opts) {
-    const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
-    const n = Number.parseInt(r.stdout.trim(), 10);
-    if (!Number.isFinite(n)) {
-      throw new Error(`git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`);
-    }
-    return n;
-  }
-  async checkoutB(branch, startPoint, opts) {
-    log8.debug(`checkout -B ${branch} ${startPoint}`);
-    await this.execOrThrow(["checkout", "-B", branch, startPoint], opts);
-  }
-  async currentBranch(opts) {
-    const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
-    return r.stdout.trim();
-  }
-  async showToplevel(opts) {
-    const r = await this.execOrThrow(["rev-parse", "--show-toplevel"], opts);
-    return r.stdout.trim();
-  }
-  async mainWorktreeRoot(opts) {
-    const r = await this.execOrThrow(["rev-parse", "--path-format=absolute", "--git-common-dir"], opts);
-    return dirname4(r.stdout.trim());
-  }
-  async remoteUrl(remote, opts) {
-    const r = await this.exec(["remote", "get-url", remote], opts);
-    if (r.code !== 0) {
-      return null;
-    }
-    const url = r.stdout.trim();
-    return url.length > 0 ? url : null;
-  }
-  async lsRemoteHeads(remote, branch, opts) {
-    const r = await this.execOrThrow(["ls-remote", "--heads", remote, branch], opts);
-    const line = r.stdout.trim();
-    if (line.length === 0) {
-      return null;
-    }
-    const sha = line.split(/\s+/)[0];
-    return sha != null && sha.length > 0 ? sha : null;
-  }
-  async mergeBase(a, b, opts) {
-    const r = await this.execOrThrow(["merge-base", a, b], opts);
-    return r.stdout.trim();
-  }
-  async worktreeAdd(args, opts) {
-    await this.execOrThrow(["worktree", "add", ...args], opts);
-  }
-  async worktreeExists(path, opts) {
-    const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
-    return r.stdout.split("\n").some((line) => line === `worktree ${path}`);
-  }
-  async worktreeRemove(args, opts) {
-    const r = await this.exec(["worktree", "remove", ...args], opts);
-    return r.code;
-  }
-  async push(remote, branch, opts) {
-    const args = ["push"];
-    if (opts?.setUpstream === true) {
-      args.push("-u");
-    }
-    args.push(remote, branch);
-    await this.execOrThrow(args, opts);
-  }
-  async mergeFfOrCommit(branch, ref, opts) {
-    log8.debug(`merge --no-edit ${ref} into ${branch}`);
-    await this.execOrThrow(["checkout", branch], opts);
-    await this.execOrThrow(["merge", "--no-edit", ref], opts);
-  }
-  async tryMergeNoForce(branch, ref, opts) {
-    const mergeArgs = opts?.message !== void 0 ? ["merge", "-m", opts.message, ref] : ["merge", "--no-edit", ref];
-    log8.debug(`tryMerge ${mergeArgs.slice(1).join(" ")} into ${branch}`);
-    await this.execOrThrow(["checkout", branch], opts);
-    const r = await this.exec(mergeArgs, opts);
-    if (r.code === 0) {
-      return { merged: true };
-    }
-    const conflict = (r.stderr.trim().length > 0 ? r.stderr : r.stdout).trim() || `git merge exited ${r.code ?? "null"}`;
-    await this.exec(["merge", "--abort"], opts);
-    return { merged: false, conflict };
-  }
-  async resetHardClean(ref, opts) {
-    log8.debug(`reset --hard ${ref} && clean -fd`);
-    await this.execOrThrow(["reset", "--hard", ref], opts);
-    await this.execOrThrow(["clean", "-fd"], opts);
-  }
-  async diffNames(base, ref, opts) {
-    const r = await this.execOrThrow(["diff", "--name-only", `${base}...${ref}`], opts);
-    return r.stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  }
-};
-
-// src/git/repo.ts
-function parseRemoteUrl(url) {
-  const trimmed = url.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  let path;
-  const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
-  if (scp && !trimmed.includes("://")) {
-    path = scp[1];
-  } else {
-    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
-    if (withScheme) {
-      const afterScheme = nonNull(withScheme[1]);
-      const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) {
-        path = afterScheme.slice(firstSlash + 1);
-      }
-    }
-  }
-  if (path === void 0) {
-    return null;
-  }
-  let p = path.replace(/\/+$/, "");
-  p = p.replace(/\.git$/i, "");
-  const segments = p.split("/").filter((s) => s.length > 0);
-  if (segments.length < 2) {
-    return null;
-  }
-  const name = at(segments, segments.length - 1);
-  const owner = at(segments, segments.length - 2);
-  if (owner.length === 0 || name.length === 0) {
-    return null;
-  }
-  return `${owner}/${name}`;
-}
-var REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
-function isValidRepoSlug(slug) {
-  const parts = slug.split("/");
-  return parts.length === 2 && parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== "." && seg !== "..");
-}
-function validateRepoSlug(slug) {
-  if (!isValidRepoSlug(slug)) {
-    throw new UsageError(
-      `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not '.'/'..' (no slashes, spaces, or other characters), got '${slug}'`
-    );
-  }
-  return slug;
-}
-async function resolveRepo(args) {
-  const remote = args.remote ?? "origin";
-  const explicit = typeof args.explicit === "string" && args.explicit.length > 0 ? validateRepoSlug(args.explicit) : void 0;
-  const derived = await deriveRepo(args.gitClient, remote, args.cwd);
-  if (explicit !== void 0) {
-    if (derived === null) {
-      return explicit;
-    }
-    if (explicit.toLowerCase() === derived.toLowerCase()) {
-      return derived;
-    }
-    throw new UsageError(
-      `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); omit --repo to use the remote, or fix the value`
-    );
-  }
-  if (derived === null) {
-    throw new UsageError(
-      `--repo is required: could not derive it from the '${remote}' remote (run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`
-    );
-  }
-  return validateRepoSlug(derived);
-}
-async function deriveRepo(gitClient, remote, cwd) {
-  const url = await gitClient.remoteUrl(remote, { cwd });
-  if (url === null) {
-    return null;
-  }
-  return parseRemoteUrl(url);
-}
-
-// src/git/gh-client.ts
-var log9 = createLogger("gh");
-var PullRequestSchema = external_exports.object({
-  number: external_exports.number().int(),
-  headRefName: external_exports.string(),
-  baseRefName: external_exports.string(),
-  state: external_exports.enum(["OPEN", "CLOSED", "MERGED"]),
-  mergeable: external_exports.string().optional(),
-  mergeStateStatus: external_exports.string().optional(),
-  mergeCommit: external_exports.object({ oid: external_exports.string() }).nullish(),
-  url: external_exports.string().optional()
-});
-var REQUIRED_VIEW_FIELDS = Object.entries(PullRequestSchema.shape).filter(([, schema]) => !schema.isOptional()).map(([key]) => key);
-var GhChecksSchema = external_exports.array(external_exports.object({ bucket: external_exports.string().optional() }));
-var GhProtectionSchema = external_exports.object({
-  required_status_checks: external_exports.object({ strict: external_exports.boolean().optional(), contexts: external_exports.array(external_exports.string()).optional() }).nullish()
-});
-var GhRulesSchema = external_exports.array(external_exports.object({ type: external_exports.string().optional() }));
-
-// src/git/rollup.ts
-var log10 = createLogger("git");
-var GIT_DEFAULTS = GitSchema.parse({});
-
-// src/git/branch.ts
-var DEFAULT_PREFIX = GitSchema.parse({}).branchPrefix;
-
-// src/git/worktree.ts
-var log11 = createLogger("git");
-
-// src/git/provision.ts
-var log12 = createLogger("provision");
-
-// src/git/pr.ts
-var log13 = createLogger("git");
-
-// src/git/serial-writer.ts
-var log14 = createLogger("git");
-var MERGE_LOCK_DEFAULTS = {
-  ...DEFAULT_FILE_LOCK_TUNING,
-  stale: 3e4,
-  retries: 100,
-  retryMinTimeout: 25,
-  retryMaxTimeout: 1e3
-};
-
-// src/shared/command-allowlist.ts
-var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
-function runnerName(argv) {
-  const bin = argv[0] ?? "";
-  return bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
-}
-function validateCommand(command, isAllowedRunner) {
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
-  for (const t of tokens) {
-    if (!SAFE_TOKEN.test(t)) {
-      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
-    }
-  }
-  if (tokens[0] === void 0) {
-    return { ok: false, reason: "unsafe_command", detail: "empty command" };
-  }
-  if (!isAllowedRunner(tokens)) {
-    return {
-      ok: false,
-      reason: "unallowed_runner",
-      detail: `runner '${runnerName(tokens)}' not allowlisted`
-    };
-  }
-  return { ok: true, argv: tokens };
-}
-
-// src/verifier/deterministic/gate-id.ts
-var GATE_IDS = [
-  "test",
-  "tdd",
-  "coverage",
-  "mutation",
-  "sast",
-  "type",
-  "lint",
-  "build"
-];
-
-// src/verifier/deterministic/gate-contract.ts
-var log15 = createLogger("gate-contract");
-var MUTATION_CHECK_CONTEXT = "Mutation Testing";
-var GATE_CONTRACT_STACKS = ["npm", "deno", "custom"];
-var COMMAND_GATES = ["test", "type", "build", "lint", "coverage"];
-function isAllowedGateRunner(argv) {
-  const runner = runnerName(argv);
-  const a1 = argv[1];
-  switch (runner) {
-    case "deno":
-      return a1 === "test" || a1 === "check" || a1 === "task" || a1 === "lint" || a1 === "fmt";
-    case "go":
-      return a1 === "test";
-    case "cargo":
-      return a1 === "test" || a1 === "check" || a1 === "build";
-    case "npm":
-    case "pnpm":
-    case "yarn":
-      return a1 === "run" && argv[2] !== void 0;
-    case "vitest":
-    case "tsc":
-    case "eslint":
-    case "jest":
-    case "mocha":
-    case "pytest":
-      return true;
-    default:
-      return false;
-  }
-}
-function validateGateCommand(command) {
-  return validateCommand(command, isAllowedGateRunner);
-}
-var ROOT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
-var RootsSchema = external_exports.array(
-  external_exports.string().refine((r) => r.split("/").every((seg) => ROOT_SEGMENT_RE.test(seg)), {
-    message: "mutation root must be a plain repo-relative directory path (no globs, no leading /)"
-  }).refine((r) => r.split("/").every((seg) => seg !== ".." && seg !== "."), {
-    message: "mutation root must not contain '.' or '..' segments"
-  })
-).nonempty("mutation roots must name at least one directory");
-var ContractedSchema = external_exports.object({
-  contracted: external_exports.literal(true),
-  /** Stack-specific command override; validated + only on {@link COMMAND_GATES}. */
-  command: external_exports.string().optional(),
-  /** Mutable-source roots (mutation gate ONLY); defaults to {@link MUTATION_DEFAULT_ROOTS}. */
-  roots: RootsSchema.optional()
-}).strict();
-var UncontractedSchema = external_exports.object({
-  contracted: external_exports.literal(false),
-  /** Why this gate is waived — required; the committed audit trail. */
-  reason: external_exports.string().min(1, "uncontracted gate requires a non-empty reason")
-}).strict();
-var EntrySchema = external_exports.discriminatedUnion("contracted", [ContractedSchema, UncontractedSchema]);
-var SetupStepSchema = external_exports.object({
-  name: external_exports.string().min(1).optional(),
-  uses: external_exports.string().min(1).optional(),
-  with: external_exports.record(external_exports.string()).optional(),
-  run: external_exports.string().min(1).optional()
-}).strict().superRefine((step, issues) => {
-  if (step.uses === void 0 === (step.run === void 0)) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "setup step requires exactly one of 'uses' or 'run'"
-    });
-  }
-  if (step.with !== void 0 && step.uses === void 0) {
-    issues.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      message: "'with' is only allowed on a 'uses' step"
-    });
-  }
-});
-var GateContractSchema = external_exports.object({
-  version: external_exports.literal(1),
-  stack: external_exports.enum(GATE_CONTRACT_STACKS),
-  gates: external_exports.object(Object.fromEntries(GATE_IDS.map((id) => [id, EntrySchema]))).strict(),
-  /** CI env-boot steps rendered into the managed workflow (Decision 73). */
-  setup_steps: external_exports.array(SetupStepSchema).optional(),
-  /**
-   * Extra required CI contexts for this repo's develop branch, merged into
-   * BOTH protection profiles (run + baseline) — additive-only per-repo
-   * required checks (e.g. outsidey's `pgTAP`). `'Mutation Testing'` is
-   * rejected here — it has its own switch below.
-   */
-  requiredChecks: external_exports.array(external_exports.string().min(1, "requiredChecks entries must be non-empty")).refine((cs) => !cs.includes(MUTATION_CHECK_CONTEXT), {
-    message: `'${MUTATION_CHECK_CONTEXT}' is managed by the profiles \u2014 use requireMutationAtRest instead`
-  }).optional(),
-  /**
-   * Keep `'Mutation Testing'` required on develop's BASELINE profile too
-   * (at rest, between runs) instead of the default run-profile-only.
-   */
-  requireMutationAtRest: external_exports.boolean().optional()
-}).strict().superRefine((contract, issues) => {
-  for (const id of GATE_IDS) {
-    const entry = contract.gates[id];
-    if (entry.contracted && entry.roots !== void 0 && id !== "mutation") {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "roots"],
-        message: `gate '${id}' does not use mutable-source roots (allowed on: mutation)`
-      });
-    }
-    if (!entry.contracted || entry.command === void 0) {
-      continue;
-    }
-    if (!COMMAND_GATES.includes(id)) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `gate '${id}' does not execute a command override (allowed on: ${COMMAND_GATES.join(", ")})`
-      });
-      continue;
-    }
-    const v = validateGateCommand(entry.command);
-    if (!v.ok) {
-      issues.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["gates", id, "command"],
-        message: `${v.reason}: ${v.detail}`
-      });
-    }
-  }
-});
-
-// src/git/protection.ts
-var log16 = createLogger("git");
-
-// src/git/staging.ts
-var log17 = createLogger("git");
-var GIT_DEFAULTS2 = GitSchema.parse({});
-
-// src/hooks/hook-context.ts
-async function loadOwnerScopedRun(opts = {}) {
-  let dataDir;
-  try {
-    dataDir = resolveDataDir(opts);
-  } catch {
-    return null;
-  }
-  const manager = new StateManager({ ...opts, dataDir });
-  const env = opts.env ?? process.env;
-  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
-  if (session.length > 0) {
-    const run = await manager.findActiveByOwner(session);
-    return run === null ? null : { dataDir, run };
-  }
-  if (opts.cwd !== void 0 && opts.cwd.length > 0) {
-    const gitClient = opts.gitClient ?? new DefaultGitClient();
-    try {
-      const repo = await resolveRepo({ cwd: opts.cwd, gitClient });
-      const run = await manager.readCurrentForRepo(repo);
-      if (run !== null) {
-        return { dataDir, run };
-      }
-    } catch (err) {
-      if (!(err instanceof UsageError)) {
-        throw err;
-      }
-    }
-  }
-  const runs = await manager.listRuns();
-  const active = runs.find((r) => !isTerminalRunStatus(r.status));
-  return active === void 0 ? null : { dataDir, run: active };
-}
-function runTaskForPath(worktreesRoot, absPath) {
-  if (worktreesRoot.length === 0 || absPath.length === 0) {
-    return null;
-  }
-  const rootCanon = canonicalizePath(worktreesRoot);
-  const pathCanon = canonicalizePath(absPath);
-  const rel = relative(rootCanon, pathCanon);
-  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep5}`) || isAbsolute2(rel)) {
-    return null;
-  }
-  const segments = rel.split(sep5);
-  if (segments.length < 2) {
-    return null;
-  }
-  const [run_id, task_id] = segments;
-  if (run_id == null || run_id.length === 0 || task_id == null || task_id.length === 0) {
-    return null;
-  }
-  if (!isValidId(run_id) || !isValidId(task_id)) {
-    return null;
-  }
-  return { run_id, task_id };
-}
-var IN_FLIGHT_STATUSES = /* @__PURE__ */ new Set(["executing", "reviewing", "shipping"]);
-function activePhaseOf(task) {
-  if (!IN_FLIGHT_STATUSES.has(task.status)) {
-    return null;
-  }
-  return task.phase ?? null;
-}
-function resolveActiveTask(run, explicitTaskId) {
-  const taskId = explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
-  if (taskId.length > 0) {
-    const task2 = run.tasks[taskId];
-    if (!task2) {
-      return null;
-    }
-    return { task: task2, phase: activePhaseOf(task2) };
-  }
-  const inFlight = Object.values(run.tasks).filter(
-    (t) => t.status === "executing" || t.status === "reviewing" || t.status === "shipping"
-  );
-  if (inFlight.length !== 1) {
-    return null;
-  }
-  const task = at(inFlight, 0);
-  return { task, phase: activePhaseOf(task) };
-}
-function isTestWriterPhase(active) {
-  if (!active) {
-    return false;
-  }
-  if (active.phase !== TaskPhaseEnum.enum.tests) {
-    return false;
-  }
-  return active.task.producer_role === void 0 || active.task.producer_role === "test-writer";
-}
-
-// src/hooks/pipeline-guards.ts
-var WRITE_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
-var GH_PR_CREATE_RE = /(^|[\s&;|(])gh\s+pr\s+create\b/;
-var GH_PR_MERGE_RE = /(^|[\s&;|(])gh\s+pr\s+merge\b/;
-function isGhPrCreate(cmd) {
-  return GH_PR_CREATE_RE.test(cmd);
-}
-function isGhPrMerge(cmd) {
-  return GH_PR_MERGE_RE.test(cmd);
-}
-function isPlausiblyUnderClaudeWorktrees(p) {
-  const segments = p.split(/[/\\]/);
-  for (let i = 0; i + 1 < segments.length; i++) {
-    if (segments[i] === ".claude" && segments[i + 1] === "worktrees") {
-      return true;
-    }
-  }
-  return false;
-}
-async function decideWriteScope(input, deps) {
-  const targets = filePathsOf(input);
-  if (targets.length === 0 || !targets.some(isPlausiblyUnderClaudeWorktrees)) {
-    return null;
-  }
-  const gitClient = deps.gitClient ?? new DefaultGitClient();
-  const cwd = deps.cwd ?? input?.cwd;
-  let workDir;
-  try {
-    workDir = join5(await gitClient.mainWorktreeRoot(cwd !== void 0 ? { cwd } : {}), ".claude", "worktrees");
-  } catch {
-    return null;
-  }
-  const loadRunById = deps.loadRunById ?? ((dir, runId) => new StateManager({ ...deps, dataDir: dir }).read(runId));
-  for (const target of targets) {
-    const ref = runTaskForPath(workDir, target);
-    if (ref === null) {
-      continue;
-    }
-    let dataDir;
-    try {
-      dataDir = resolveDataDir(deps);
-    } catch {
-      return deny(
-        "test_writer_scope_broken",
-        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', but the plugin data dir cannot be resolved; failing closed.`
-      );
-    }
-    let run;
-    try {
-      run = await loadRunById(dataDir, ref.run_id);
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        continue;
-      }
-      return deny(
-        "test_writer_scope_broken",
-        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', whose run state exists but cannot be read; failing closed.`
-      );
-    }
-    const activeTask = resolveActiveTask(run, ref.task_id);
-    if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
-      return deny(
-        "test_writer_scope",
-        `Test-writer phase: only test files allowed. Detected write to '${target}'. Move implementation code to the GREEN (exec) phase.`
-      );
-    }
-  }
-  return null;
-}
-async function decidePipelineGuards(input, deps = {}) {
-  const tool = toolNameOf(input);
-  const cmd = commandOf(input);
-  if (WRITE_TOOLS2.has(tool)) {
-    const scoped = await decideWriteScope(input, deps);
-    if (scoped !== null) {
-      return scoped;
-    }
-  }
-  if (cmd.length === 0) {
-    return allow();
-  }
-  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
-  const cwd = deps.cwd ?? input?.cwd;
-  const active = await loadRun({ ...deps, ...cwd !== void 0 ? { cwd } : {} });
-  if (active === null) {
-    return allow();
-  }
-  if (isNestedShellOrHookBypass(cmd)) {
-    return deny(
-      "nested_shell_denied",
-      `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`
-    );
-  }
-  if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
-    const op = isGhPrCreate(cmd) ? "gh pr create" : "gh pr merge";
-    return deny(
-      "ship_agent_denied",
-      `agent-initiated '${op}' is not allowed while a pipeline run is active: the factory engine opens and merges PRs deterministically, never an agent.`
-    );
-  }
-  return allow();
-}
-async function runPipelineGuards(_argv = [], deps = {}) {
-  let input;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    input = parseHookInput(raw);
-  } catch {
-    const decision2 = deny("malformed_hook_input", "pipeline-guards: unparseable hook input");
-    emitPermissionDecision(decision2);
-    return EXIT.ERROR;
-  }
-  let decision;
-  try {
-    decision = await decidePipelineGuards(input, deps);
-  } catch (err) {
-    decision = deny("pipeline_guard_error", err.message);
-    emitPermissionDecision(decision);
-    return EXIT.ERROR;
-  }
-  emitPermissionDecision(decision);
-  return decisionToExitCode(decision);
-}
-
-// src/hooks/subagent-stop.ts
-var log18 = createLogger("hook:subagent-stop");
-function reviewerNameOf(agentType) {
-  const t = agentType.replace(/^factory:/, "");
-  switch (t) {
-    case "implementation-reviewer":
-      return "implementation";
-    case "quality-reviewer":
-      return "quality";
-    case "silent-failure-hunter":
-      return "silent-failure";
-    case "systemic-failure-reviewer":
-      return "systemic-failure";
-    default:
-      return null;
-  }
-}
-function parseVerdict(lastMessage) {
-  if (lastMessage == null || lastMessage.length === 0) {
-    return PanelVerdictEnum.enum.blocked;
-  }
-  const m = lastMessage.match(/STATUS:\s+([A-Z_]+)/g);
-  if (!m || m.length === 0) {
-    return PanelVerdictEnum.enum.blocked;
-  }
-  const last = at(m, m.length - 1).replace(/STATUS:\s+/, "");
-  return last === "DONE" ? PanelVerdictEnum.enum.approve : PanelVerdictEnum.enum.blocked;
-}
-function taskIdFromHeader(transcriptText) {
-  if (transcriptText == null || transcriptText.length === 0) {
-    return null;
-  }
-  const m = /\[task:([a-zA-Z0-9_-]+)\]/.exec(transcriptText);
-  return m ? nonNull(m[1]) : null;
-}
-async function handleSubagentStop(input, deps = {}) {
-  if (!input) {
-    return null;
-  }
-  const agentType = input.agent_type ?? input.subagent_type ?? "";
-  if (agentType.length === 0) {
-    return null;
-  }
-  const reviewer = reviewerNameOf(agentType);
-  if (reviewer === null) {
-    return null;
-  }
-  const manager = deps.manager ?? new StateManager(deps);
-  const sessionId = sessionIdOf(input);
-  const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
-  if (run === null) {
-    if (sessionId !== void 0) {
-      log18.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
-    }
-    return null;
-  }
-  let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
-  if (taskId.length === 0) {
-    const transcriptPath = input.agent_transcript_path ?? input.transcript_path;
-    let transcriptText;
-    if (transcriptPath != null && transcriptPath.length > 0 && deps.readTranscript) {
-      try {
-        transcriptText = await deps.readTranscript(transcriptPath);
-      } catch (err) {
-        log18.warn(
-          `could not read transcript '${transcriptPath}': ${err.message} \u2014 falling back to last_assistant_message / single-reviewing-task resolution`
-        );
-        transcriptText = void 0;
-      }
-    }
-    const fromHeader = taskIdFromHeader(transcriptText) ?? taskIdFromHeader(input.last_assistant_message);
-    if (fromHeader != null) {
-      taskId = fromHeader;
-    }
-  }
-  if (taskId.length === 0) {
-    const reviewing = Object.values(run.tasks).filter((t) => t.status === "reviewing");
-    if (reviewing.length === 1) {
-      taskId = at(reviewing, 0).task_id;
-    }
-  }
-  if (taskId.length === 0) {
-    log18.error(
-      `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 orchestrator record is the single writer`
-    );
-    return null;
-  }
-  if (!run.tasks[taskId]) {
-    log18.error(`resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`);
-    return null;
-  }
-  const verdict = parseVerdict(input.last_assistant_message);
-  log18.info(
-    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 orchestrator records reviews via the drive --results record)`
-  );
-  return null;
-}
-async function runSubagentStop(_argv = [], deps = {}) {
-  let input;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    input = parseHookInput(raw);
-  } catch (err) {
-    log18.error(`malformed SubagentStop input: ${err.message}`);
-    return EXIT.OK;
-  }
-  try {
-    await handleSubagentStop(input, deps);
-  } catch (err) {
-    log18.error(`SubagentStop handler error: ${err.message}`);
-  }
-  return EXIT.OK;
-}
-
-// src/hooks/stop-gate.ts
-var log19 = createLogger("hook:stop-gate");
-var ALLOW = { kind: "allow" };
-function decideStop(run, stoppingSession, stopHookActive = false) {
-  if (run === null) {
-    return ALLOW;
-  }
-  if (run.status !== "running") {
-    return ALLOW;
-  }
-  if (run.debug) {
-    return ALLOW;
-  }
-  if (run.owner_session !== void 0 && stoppingSession !== void 0 && stoppingSession !== run.owner_session) {
-    return ALLOW;
-  }
-  const tasks = Object.values(run.tasks);
-  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
-  const pending = tasks.length === 0 || nonTerminal.length > 0;
-  if (pending) {
-    return ALLOW;
-  }
-  return stopHookActive ? { kind: "allow-unfinalized", run_id: run.run_id } : { kind: "block-finalize", run_id: run.run_id };
-}
-async function runStopGate(_argv = [], deps = {}) {
-  const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
-  const manager = deps.manager ?? new StateManager(deps);
-  let stoppingSession;
-  let stopHookActive = false;
-  try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    const input = parseHookInput(raw);
-    stoppingSession = sessionIdOf(input);
-    stopHookActive = input?.stop_hook_active === true;
-  } catch (err) {
-    log19.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
-    stoppingSession = void 0;
-  }
-  let run;
-  try {
-    run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
-    if (run === null && stoppingSession !== void 0) {
-      log19.warn(`Stop: session '${stoppingSession}' has no single attributed active run; passing through.`);
-    }
-  } catch (err) {
-    const rawMsg = err.message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
-    const reason = `could not enumerate run state: ${rawMsg}. Investigate the factory data directory before stopping.`;
-    log19.error(reason);
-    if (stopHookActive) {
-      return EXIT.OK;
-    }
-    emitBlockDecision(deny(reason), emit2);
-    return EXIT.OK;
-  }
-  const action = decideStop(run, stoppingSession, stopHookActive);
-  if (action.kind === "block-finalize") {
-    const reason = `run ${action.run_id}: all tasks are terminal but the run is not finalized. Run \`/factory:resume\` now to execute the real finalize (rollup PR, PRD close, report) \u2014 never flip run status by hand.`;
-    log19.info(reason);
-    emitBlockDecision(deny(reason), emit2);
-    return EXIT.OK;
-  }
-  if (action.kind === "allow-unfinalized") {
-    log19.info(
-      `run ${action.run_id}: all tasks terminal but the run is not finalized \u2014 left running; \`/factory:resume\` will run the real finalize`
-    );
-  }
-  return EXIT.OK;
-}
-
 // src/hooks/session-start.ts
 var FACTORY_HARNESS_REMINDER = `<FACTORY_HARNESS_REMINDER>
 You are the factory pipeline runner. Iron Laws:
@@ -9660,16 +7156,22 @@ function runSessionStart(_argv = [], deps = {}) {
 }
 
 // src/hooks/feature-guards.ts
-import { relative as relative2, resolve as resolve4, sep as sep6 } from "node:path";
+import { relative, resolve as resolve4, sep as sep4 } from "node:path";
 
 // src/feature/store.ts
-import { access, mkdir as mkdir4, readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
-import { join as join6 } from "node:path";
+import { access, mkdir as mkdir3, readFile, readdir } from "node:fs/promises";
+import { join as join3 } from "node:path";
 
 // src/feature/schema.ts
 import { createHash } from "node:crypto";
 
 // src/spec/schema.ts
+var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
+var SpecPointerSchema = external_exports.object({
+  repo: external_exports.string().min(1),
+  spec_id: external_exports.string().min(1),
+  issue_number: external_exports.number().int().positive()
+});
 var SpecTaskSchema = external_exports.object({
   /** Stable task id within the spec (charset enforced by the consumer). */
   task_id: external_exports.string().min(1),
@@ -9868,12 +7370,12 @@ var FeatureStore = class {
     this.dataDir = dataDir;
   }
   dir(id) {
-    return join6(this.dataDir, "runs-v2", IdSchema.parse(id));
+    return join3(this.dataDir, "runs-v2", IdSchema.parse(id));
   }
   async read(id) {
     let raw;
     try {
-      raw = JSON.parse(await readFile2(join6(this.dir(id), "state.json"), "utf8"));
+      raw = JSON.parse(await readFile(join3(this.dir(id), "state.json"), "utf8"));
     } catch (error) {
       if (isEnoent(error)) {
         throw new Error(
@@ -9891,7 +7393,7 @@ var FeatureStore = class {
   async list() {
     let names;
     try {
-      names = await readdir2(join6(this.dataDir, "runs-v2"));
+      names = await readdir(join3(this.dataDir, "runs-v2"));
     } catch (error) {
       if (isEnoent(error)) {
         return [];
@@ -9906,15 +7408,15 @@ var FeatureStore = class {
       throw new Error("spec snapshot digest mismatch");
     }
     const dir = this.dir(run.run_id);
-    await atomicWriteFile(join6(dir, "state.json"), JSON.stringify(checked, null, 2) + "\n");
-    await atomicWriteFile(join6(dir, "ledger.md"), renderLedger(checked));
+    await atomicWriteFile(join3(dir, "state.json"), JSON.stringify(checked, null, 2) + "\n");
+    await atomicWriteFile(join3(dir, "ledger.md"), renderLedger(checked));
   }
   async withRepo(repo, fn) {
-    const dir = join6(this.dataDir, "locks-v2");
+    const dir = join3(this.dataDir, "locks-v2");
     return withFileLock(
       {
         dir,
-        lockfile: join6(dir, digest(repo)),
+        lockfile: join3(dir, digest(repo)),
         label: repo,
         dirPolicy: "create",
         tuning: DEFAULT_FILE_LOCK_TUNING
@@ -9924,19 +7426,19 @@ var FeatureStore = class {
   }
   async recordResult(id, result) {
     const checked = ResultSchema.parse(result);
-    await atomicWriteFile(join6(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
+    await atomicWriteFile(join3(this.dir(id), "results", `${checked.attempt_id}.json`), JSON.stringify(checked));
   }
   /**
    * Staged results live outside `runs-v2/**` so the driver session may write them
    * (engine state stays read-only to agents). The file's existence is the submission.
    */
   stagedPaths(id, attempt, roles = attempt.roles) {
-    const dir = join6(this.dataDir, "staged-v2", IdSchema.parse(id), IdSchema.parse(attempt.id));
-    return Object.fromEntries(roles.map((role) => [role, join6(dir, `${IdSchema.parse(role)}.json`)]));
+    const dir = join3(this.dataDir, "staged-v2", IdSchema.parse(id), IdSchema.parse(attempt.id));
+    return Object.fromEntries(roles.map((role) => [role, join3(dir, `${IdSchema.parse(role)}.json`)]));
   }
   async stage(id, attempt, roles) {
     const paths = this.stagedPaths(id, attempt, roles);
-    await mkdir4(join6(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
+    await mkdir3(join3(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
     return paths;
   }
   /** Roles whose staged file exists (parseability not checked). */
@@ -9965,7 +7467,7 @@ var FeatureStore = class {
     const invalid = {};
     for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile2(path, "utf8")))));
+        parts.push(ResultSchema.parse(JSON.parse(unwrap(await readFile(path, "utf8")))));
       } catch (error) {
         if (isEnoent(error) || error instanceof SyntaxError) {
           missing.push(role);
@@ -10043,10 +7545,36 @@ function unwrap(text) {
   return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
 }
 
+// src/verifier/deterministic/scope.ts
+function isTestPath(file) {
+  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) {
+    return true;
+  }
+  if (/_test\.(go|py|rb|exs)$/.test(file)) {
+    return true;
+  }
+  if (/Test\.(java|kt|php)$/.test(file)) {
+    return true;
+  }
+  if (/Tests\.(swift|cs)$/.test(file)) {
+    return true;
+  }
+  if (file.endsWith("_spec.rb")) {
+    return true;
+  }
+  if (/^(tests|test|spec|__tests__)\//.test(file)) {
+    return true;
+  }
+  if (/\/(tests|test|spec|__tests__)\//.test(file)) {
+    return true;
+  }
+  return false;
+}
+
 // src/hooks/feature-guards.ts
 function inside(root, path) {
-  const rel = relative2(canonicalizePath(root), canonicalizePath(path));
-  return rel === "" || !rel.startsWith(`..${sep6}`) && rel !== ".." && !rel.startsWith(sep6);
+  const rel = relative(canonicalizePath(root), canonicalizePath(path));
+  return rel === "" || !rel.startsWith(`..${sep4}`) && rel !== ".." && !rel.startsWith(sep4);
 }
 function decideFeatureGuard(input, runs, dataDir) {
   if (input === null) {
@@ -10088,7 +7616,7 @@ function decideFeatureGuard(input, runs, dataDir) {
         if (!producer) {
           return deny("Factory: independent review snapshots are read-only");
         }
-        if (attempt.stage === "tests" && !isTestPath(relative2(run.worktree, path))) {
+        if (attempt.stage === "tests" && !isTestPath(relative(run.worktree, path))) {
           return deny("Factory: test-writer may edit only test paths");
         }
       }
@@ -10164,25 +7692,9 @@ var hookRegistry = {
     describe: "PreToolUse Edit|Write|MultiEdit: deny writes to hardcoded TCB paths (\u0394 W)",
     run: (argv) => runWriteProtection(argv)
   },
-  "holdout-guard": {
-    describe: "PreToolUse Read|Grep|Glob|Bash: deny reads of the holdout answer-key store (\u0394 Y)",
-    run: (argv) => runHoldoutGuard(argv)
-  },
   "secret-guard": {
     describe: "PreToolUse Bash: block git commit/push staging a known secret shape (\u0394 B)",
     run: (argv) => runSecretGuard(argv)
-  },
-  "pipeline-guards": {
-    describe: "PreToolUse: test-writer scope + nested-shell + derive-don't-store ship gating (\u0394 V)",
-    run: (argv) => runPipelineGuards(argv)
-  },
-  "subagent-stop": {
-    describe: "SubagentStop: log a stopping reviewer's parsed verdict (observational \u2014 the orchestrator record is the single writer of task.reviewers[])",
-    run: (argv) => runSubagentStop(argv)
-  },
-  "stop-gate": {
-    describe: "Stop: one-shot block telling the session to `/factory:resume` an owned all-terminal unfinalized run (never mutates state); one-shot block on state corruption; stop_hook_active re-entries always allow",
-    run: (argv) => runStopGate(argv)
   },
   "session-start": {
     describe: "SessionStart (compact): re-inject the runner Iron Laws + a pointer to reload the pipeline-runner skill",

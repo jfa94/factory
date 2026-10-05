@@ -19,7 +19,7 @@ import {readFile, mkdir} from 'node:fs/promises'
 import {join, dirname} from 'node:path'
 import {z} from 'zod'
 
-import {specDir} from '../core/state/paths.js'
+import {specDir} from './paths.js'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {isEnoent} from '../shared/fs-errors.js'
 import {parseJson, stringifyJson} from '../shared/json.js'

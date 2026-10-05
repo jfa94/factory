@@ -9,7 +9,7 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {detectMutationRoots, detectStack, resolveGateContract, recommendFastCheck} from './scaffold-gates.js'
-import {DEFAULT_GATES} from '../../verifier/deterministic/index.js'
+import {DEFAULT_GATES} from '../../verifier/deterministic/gate-contract.js'
 
 let root: string
 

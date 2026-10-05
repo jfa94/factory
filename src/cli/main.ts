@@ -23,7 +23,7 @@ import {scaffoldCommand} from './subcommands/scaffold.js'
 import {specCommand} from './subcommands/spec.js'
 import {featureCommand} from '../feature/cli.js'
 import {autonomyCommand} from './subcommands/autonomy.js'
-import {runStatusline} from './subcommands/statusline.js'
+import {statuslineCommand} from './subcommands/statusline.js'
 
 /** The mutable subcommand registry. Downstream WS add entries to this object. */
 export const cliRegistry: Record<string, Subcommand> = {
@@ -50,10 +50,7 @@ export const cliRegistry: Record<string, Subcommand> = {
     scaffold: scaffoldCommand,
     'next-action': featureCommand('next-action'),
     'next-task': featureCommand('next-task'),
-    statusline: {
-        describe: 'Capture rate limits and display feature progress',
-        run: (argv) => runStatusline(argv, {featureProgress: true}),
-    },
+    statusline: statuslineCommand,
     autonomy: autonomyCommand,
 }
 

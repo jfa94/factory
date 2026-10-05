@@ -4,7 +4,7 @@ import {join} from 'node:path'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {featureCommand} from './cli.js'
 import {FeatureStore} from './store.js'
-import {specDir} from '../core/state/paths.js'
+import {specDir} from '../spec/paths.js'
 import {validateFeatureSpec} from './schema.js'
 
 const fake = vi.hoisted(() => ({

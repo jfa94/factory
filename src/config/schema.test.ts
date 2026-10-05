@@ -5,17 +5,12 @@ describe('ConfigSchema', () => {
     it('an empty object parses to a fully-defaulted config', () => {
         const cfg = ConfigSchema.parse({})
         // Quality defaults (from the bash gate scripts).
-        expect(cfg.quality.holdoutPercent).toBe(20)
-        expect(cfg.quality.holdoutPassRate).toBe(80)
         expect(cfg.quality.mutationScoreTarget).toBe(80)
         expect(cfg.quality.coverageRegressionTolerancePct).toBe(0.5)
         expect(cfg.quality.securityRedactFindings).toBe(true)
         // Quota defaults.
         expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90])
         expect(cfg.quota.dailyThresholds).toEqual([20, 40, 60, 80, 95, 95, 95])
-        // Top-level.
-        expect(cfg.maxConsecutiveFailures).toBe(3)
-        expect(cfg.maxParallelTasks).toBe(3)
         // A6: rollup CI wait budget (minutes) — sized above a cold-cache mutation run.
         expect(cfg.git.rollupCiWaitMinutes).toBe(30)
     })
@@ -40,20 +35,29 @@ describe('ConfigSchema', () => {
         expect(cfg).toEqual(defaultConfig())
     })
 
+    it('a config carrying the keys retired with v1 still loads to the defaults', () => {
+        const cfg = ConfigSchema.parse({
+            quality: {holdoutPercent: 25, holdoutPassRate: 90},
+            quota: {producerModels: {low: 'haiku'}},
+            review: {model: 'opus', requireCrossVendor: 'block'},
+            codex: {model: 'gpt'},
+            git: {
+                stagingRequiredStatusChecks: ['CI'],
+                provision: true,
+                branchPrefix: 'bot',
+                developProtection: 'permanent',
+            },
+            e2e: {startCommand: 'npm start', reopenCap: 1},
+            maxConsecutiveFailures: 5,
+            maxParallelTasks: 2,
+            stallTtlMinutes: 30,
+            hungSpawnMinutes: 10,
+        })
+        expect(cfg).toEqual(defaultConfig())
+    })
+
     it('defaultConfig() equals parsing {}', () => {
         expect(defaultConfig()).toEqual(ConfigSchema.parse({}))
-    })
-
-    it('review.requireCrossVendor defaults to warn, accepts block, rejects anything else (S5/C)', () => {
-        expect(ConfigSchema.parse({}).review.requireCrossVendor).toBe('warn')
-        expect(ConfigSchema.parse({review: {requireCrossVendor: 'block'}}).review.requireCrossVendor).toBe('block')
-        expect(() => ConfigSchema.parse({review: {requireCrossVendor: 'off'}})).toThrow()
-    })
-
-    it('git.developProtection defaults to run-scoped, accepts permanent, rejects anything else (D74)', () => {
-        expect(ConfigSchema.parse({}).git.developProtection).toBe('run-scoped')
-        expect(ConfigSchema.parse({git: {developProtection: 'permanent'}}).git.developProtection).toBe('permanent')
-        expect(() => ConfigSchema.parse({git: {developProtection: 'off'}})).toThrow()
     })
 
     it('git.developBaselineStatusChecks derives from developRequiredStatusChecks minus Mutation Testing (D74)', () => {
@@ -111,37 +115,17 @@ describe('ConfigSchema', () => {
     })
 
     it('merges partial overrides while defaulting the rest', () => {
-        const cfg = ConfigSchema.parse({quality: {holdoutPercent: 35}})
-        expect(cfg.quality.holdoutPercent).toBe(35)
+        const cfg = ConfigSchema.parse({quality: {mutationScoreTarget: 35}})
+        expect(cfg.quality.mutationScoreTarget).toBe(35)
         // sibling keys still default
-        expect(cfg.quality.holdoutPassRate).toBe(80)
+        expect(cfg.quality.coverageRegressionTolerancePct).toBe(0.5)
         // other blocks still default
         expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90])
     })
 
     it('rejects out-of-range values (loud, not silent)', () => {
-        expect(() => ConfigSchema.parse({quality: {holdoutPercent: 150}})).toThrow()
-        expect(() => ConfigSchema.parse({stallTtlMinutes: -1})).toThrow()
-        expect(() => ConfigSchema.parse({hungSpawnMinutes: 0})).toThrow()
-        expect(() => ConfigSchema.parse({hungSpawnMinutes: -1})).toThrow()
-        // maxParallelTasks: min 1 (N4) — 0 and negatives reject.
-        expect(() => ConfigSchema.parse({maxParallelTasks: 0})).toThrow()
-        expect(() => ConfigSchema.parse({maxParallelTasks: -1})).toThrow()
-    })
-
-    it('defaults the two-band stall clocks (Decision 66)', () => {
-        const cfg = ConfigSchema.parse({})
-        expect(cfg.stallTtlMinutes).toBe(15)
-        expect(cfg.hungSpawnMinutes).toBe(120)
-    })
-
-    it('rejects hungSpawnMinutes ≤ stallTtlMinutes (the hard tier must sit above the advisory band)', () => {
-        expect(() => ConfigSchema.parse({hungSpawnMinutes: 10})).toThrow() // under the 15 default
-        expect(() => ConfigSchema.parse({stallTtlMinutes: 200})).toThrow() // over the 120 default
-        expect(() => ConfigSchema.parse({stallTtlMinutes: 60, hungSpawnMinutes: 60})).toThrow() // equal
-        const cfg = ConfigSchema.parse({stallTtlMinutes: 30, hungSpawnMinutes: 60})
-        expect(cfg.stallTtlMinutes).toBe(30)
-        expect(cfg.hungSpawnMinutes).toBe(60)
+        expect(() => ConfigSchema.parse({quality: {mutationScoreTarget: 150}})).toThrow()
+        expect(() => ConfigSchema.parse({quality: {coverageRegressionTolerancePct: -1}})).toThrow()
     })
 
     it('rejects a wrong-length threshold curve', () => {
@@ -170,51 +154,5 @@ describe('ConfigSchema', () => {
         // Zod strips unknown keys by default, so an injected retired key is dropped.
         const injected = ConfigSchema.parse({humanReviewLevel: 2})
         expect('humanReviewLevel' in injected).toBe(false)
-    })
-
-    describe('e2e (Decision 39 — Playwright config)', () => {
-        it('defaults readyTimeoutMs, reopenCap; leaves startCommand/baseURL unset', () => {
-            const cfg = ConfigSchema.parse({})
-            expect(cfg.e2e.readyTimeoutMs).toBe(30_000)
-            expect(cfg.e2e.reopenCap).toBe(2)
-            expect(cfg.e2e.startCommand).toBeUndefined()
-            expect(cfg.e2e.baseURL).toBeUndefined()
-        })
-
-        it('round-trips a fully-configured e2e block', () => {
-            const cfg = ConfigSchema.parse({
-                e2e: {
-                    startCommand: 'npm run dev',
-                    baseURL: 'http://localhost:3000',
-                    readyTimeoutMs: 60_000,
-                    reopenCap: 1,
-                },
-            })
-            expect(cfg.e2e).toEqual({
-                startCommand: 'npm run dev',
-                baseURL: 'http://localhost:3000',
-                readyTimeoutMs: 60_000,
-                reopenCap: 1,
-            })
-        })
-
-        it('merges a partial e2e override while defaulting siblings', () => {
-            const cfg = ConfigSchema.parse({e2e: {startCommand: 'npm start'}})
-            expect(cfg.e2e.startCommand).toBe('npm start')
-            expect(cfg.e2e.reopenCap).toBe(2)
-        })
-
-        it('rejects a negative reopenCap (loud, not silent); a retired testDir key is stripped', () => {
-            expect(() => ConfigSchema.parse({e2e: {reopenCap: -1}})).toThrow()
-            expect('testDir' in ConfigSchema.parse({e2e: {testDir: 'other'}}).e2e).toBe(false)
-        })
-
-        it('rejects a non-URL baseURL (loud, not silent)', () => {
-            expect(() => ConfigSchema.parse({e2e: {baseURL: 'not-a-url'}})).toThrow()
-        })
-
-        it('reopenCap accepts 0 (no reopen budget, still schema-valid)', () => {
-            expect(ConfigSchema.parse({e2e: {reopenCap: 0}}).e2e.reopenCap).toBe(0)
-        })
     })
 })

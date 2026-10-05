@@ -111,49 +111,7 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
 // Re-export from shared so every existing `from "./args.js"` import site keeps working.
 export {UsageError, isUsageError} from '../shared/usage-error.js'
 
-import {ShipModeEnum, type ShipMode} from '../core/state/index.js'
-export type {ShipMode}
-
-/**
- * Validate the `--ship-mode` flag; returns `undefined` when absent. Validates
- * against {@link ShipModeEnum} (the single source of truth for the closed set) so
- * adding a mode to the enum can never silently diverge from what the CLI accepts.
- */
-export function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
-    if (raw === undefined) {
-        return undefined
-    }
-    const parsed = ShipModeEnum.safeParse(raw)
-    if (parsed.success) {
-        return parsed.data
-    }
-    throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(' | ')})`)
-}
-
 /** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
 export function optionalString(raw: string | boolean | undefined): string | undefined {
     return typeof raw === 'string' && raw.length > 0 ? raw : undefined
-}
-
-/**
- * The shared three-way `--results <path>` grammar: absent → undefined;
- * present with a path → `parse(path)` with failures rethrown as
- * `--results <path>: <msg>` usage errors; present without a path → loud.
- */
-export async function parseResultsFlag<T>(
-    args: ParsedArgs,
-    parse: (path: string) => Promise<T>
-): Promise<T | undefined> {
-    const path = args.flag('results')
-    if (typeof path === 'string' && path.length > 0) {
-        try {
-            return await parse(path)
-        } catch (err) {
-            throw new UsageError(`--results ${path}: ${err instanceof Error ? err.message : String(err)}`)
-        }
-    }
-    if (path !== undefined) {
-        throw new UsageError('--results requires a file path')
-    }
-    return undefined
 }

@@ -19,16 +19,12 @@
  * `rate_limits`, unresolvable data dir, a broken original statusline command) is
  * a clean no-op that still returns {@link EXIT.OK}; nothing here throws.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- fs seam: paths are internal derived run/spec/state/repo paths, never external input; runtime write-danger is covered by the TCB write-deny hook */
-import {readFile} from 'node:fs/promises'
-import {join} from 'node:path'
 import type {ExitCode} from '../../shared/exit-codes.js'
 import {EXIT} from '../../shared/exit-codes.js'
 import {parseArgs} from '../args.js'
 import {emitHelp} from '../io.js'
 import {readStdin} from '../../shared/stdin.js'
 import {resolveDataDir, type DataDirOptions} from '../../config/index.js'
-import {currentRepoLinkPath, STATE_FILE} from '../../core/state/paths.js'
 import {resolveRepo, DefaultGitClient, type GitClient} from '../../git/index.js'
 import {usageCachePath} from '../../quota/usage-source.js'
 import {atomicWriteFile} from '../../shared/atomic-write.js'
@@ -58,8 +54,6 @@ displayed statusline text, NOT a JSON envelope.`
 
 /** Dependencies for {@link runStatusline}, all injectable for tests. */
 export interface StatuslineDeps {
-    /** Production v2 status display; legacy rendering remains available for archived diagnostics. */
-    featureProgress?: boolean
     /** Data-dir resolution options (env / explicit dataDir override). */
     dataDirOptions?: DataDirOptions
     /** Injectable clock (epoch SECONDS) for deterministic tests. */
@@ -86,7 +80,7 @@ export interface StatuslineDeps {
 
 /**
  * The invoking session's cwd from the CC statusline payload — the repo anchor for
- * the per-repo current pointer. CC pipes `workspace.current_dir` (with a bare `cwd`
+ * the progress suffix. CC pipes `workspace.current_dir` (with a bare `cwd`
  * as an older/simpler fallback). Undefined when neither is present.
  */
 function cwdOf(payload: unknown): string | undefined {
@@ -106,22 +100,9 @@ export function progressEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.FACTORY_STATUSLINE_PROGRESS !== '0'
 }
 
-/** How long a terminal run's suffix lingers after `ended_at` (30 min). */
-const TERMINAL_LINGER_SEC = 30 * 60
-
 /**
- * S11 — the run-progress suffix appended to the displayed statusline, e.g.
- * ` 3/7 tasks completed`. Terminal runs show only for
- * {@link TERMINAL_LINGER_SEC} after `ended_at`, then the suffix disappears.
- *
- * The run is keyed off the PER-REPO current pointer, resolved from the payload's
- * cwd (Decision 61) — so two concurrent runs in different checkouts each show their OWN run,
- * not whichever wrote a global pointer last. No cwd in the payload → no suffix.
- *
- * DELIBERATELY raw reads: the per-repo `current/<repo>` symlink dereferenced
- * straight to `state.json` + a plain `JSON.parse` — never `parseRunState`. A
- * torn/partial concurrent write, a schema mismatch, or a missing pointer must
- * degrade to "no suffix", not a Zod throw: the statusline NEVER breaks.
+ * S11 — the progress suffix (e.g. ` 3/7 tasks accepted (running)`) for the repo's
+ * non-terminal v2 run, keyed off the payload's cwd. Any failure degrades to no suffix.
  * ponytail: one `git remote get-url` per tick, uncached — cache if it ever shows
  * up on the statusline latency budget.
  */
@@ -132,47 +113,20 @@ async function renderProgress(deps: StatuslineDeps, payload: unknown): Promise<s
         }
         const cwd = cwdOf(payload)
         if (cwd === undefined) {
-            return '' // no cwd → cannot key the per-repo pointer.
+            return '' // no cwd → cannot resolve the repo.
         }
         const dataDir = resolveDataDir(deps.dataDirOptions ?? {})
         const gitClient = deps.gitClient ?? new DefaultGitClient()
         const repo = await resolveRepo({cwd, gitClient}) // throws (→ "") outside a checkout
-        // Read THROUGH the symlink — no readlink dance, a dangling pointer just throws.
-        if (deps.featureProgress === true) {
-            const run = (await new FeatureStore(dataDir).list()).find((run) => run.repo === repo && !terminal(run))
-            if (run === undefined) {
-                return ''
-            }
-            // Persisted status is a lifecycle, not proof of a live worker: show the lease age.
-            const attempt = run.in_flight
-            const now = new Date((deps.now ?? defaultNowEpoch)() * 1000).toISOString()
-            const live = attempt
-                ? `; ${attempt.stage} issued ${age(attempt.issued_at, now)} ago, activity unverified`
-                : ''
-            return ` ${run.checkpoints.length}/${run.spec.tasks.length} tasks accepted (${run.status}${live})`
-        }
-        const raw = await readFile(join(currentRepoLinkPath(dataDir, repo), STATE_FILE), 'utf8')
-        const run = JSON.parse(raw) as {
-            run_id?: unknown
-            status?: unknown
-            ended_at?: unknown
-            tasks?: Record<string, {status?: unknown} | undefined>
-        }
-        if (typeof run.run_id !== 'string' || typeof run.status !== 'string') {
+        const run = (await new FeatureStore(dataDir).list()).find((run) => run.repo === repo && !terminal(run))
+        if (run === undefined) {
             return ''
         }
-
-        if (run.status === 'completed' || run.status === 'failed' || run.status === 'superseded') {
-            const endedMs = typeof run.ended_at === 'string' ? Date.parse(run.ended_at) : NaN
-            const nowSec = (deps.now ?? defaultNowEpoch)()
-            if (!Number.isFinite(endedMs) || nowSec - endedMs / 1000 > TERMINAL_LINGER_SEC) {
-                return ''
-            }
-        }
-
-        const tasks = Object.values(run.tasks ?? {})
-        const done = tasks.filter((t) => t?.status === 'done').length
-        return ` ${done}/${tasks.length} tasks completed`
+        // Persisted status is a lifecycle, not proof of a live worker: show the lease age.
+        const attempt = run.in_flight
+        const now = new Date((deps.now ?? defaultNowEpoch)() * 1000).toISOString()
+        const live = attempt ? `; ${attempt.stage} issued ${age(attempt.issued_at, now)} ago, activity unverified` : ''
+        return ` ${run.checkpoints.length}/${run.spec.tasks.length} tasks accepted (${run.status}${live})`
     } catch {
         return '' // no run / unreadable state / anything — the suffix just vanishes.
     }
@@ -295,6 +249,6 @@ export async function runStatusline(argv: string[] = [], deps: StatuslineDeps = 
 }
 
 export const statuslineCommand: Subcommand = {
-    describe: 'Capture Claude Code rate limits to usage-cache.json + chain the statusline',
+    describe: 'Capture rate limits and display feature progress',
     run: (argv) => runStatusline(argv),
 }

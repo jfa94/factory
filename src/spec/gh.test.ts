@@ -1,6 +1,6 @@
 import {describe, it, expect, vi} from 'vitest'
 import {RealGhClient, GhAuthError, IssueNotFoundError, type ExecFn} from './gh.js'
-import type {ExecResult} from '../types/index.js'
+import type {ExecResult} from '../shared/exec.js'
 import {nonNull} from '../shared/index.js'
 
 function execResult(over: Partial<ExecResult>): ExecResult {

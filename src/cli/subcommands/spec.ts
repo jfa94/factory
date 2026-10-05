@@ -12,8 +12,7 @@ import {repositorySnapshot} from '../../spec/snapshot.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
-import {defaultSpecBuildRoot} from '../../core/state/paths.js'
-import {StateManager} from '../../core/state/index.js'
+import {defaultSpecBuildRoot} from '../../spec/paths.js'
 import {StatuslineUsageSignal} from '../../quota/index.js'
 import {nowEpoch} from '../../shared/time.js'
 import {
@@ -75,32 +74,6 @@ function wireDeps(): SpecBuildDeps {
         usage: new StatuslineUsageSignal({dataDir}),
         now: nowEpoch,
         scratchRoot: defaultSpecBuildRoot(),
-    }
-}
-
-/**
- * The `--supersede` weekly-parked pre-check: mirrors the `resolveOrCreateRun` weekly
- * wall (lifecycle.ts) BEFORE Phase 1 regenerates anything. Without it the regen loop
- * would replace the parked run's durable spec, and Phase 2's wall would then refuse
- * the supersede — stranding the parked run with a dangling spec pointer. Read-only;
- * honors `--ignore-quota` at the call site. Returns null when nothing blocks (no
- * active run, or an active run supersede may proceed against). Exported for tests.
- */
-export async function weeklyParkedPause(repo: string, issue: number): Promise<SpecBuildEnvelope | null> {
-    const run = await new StateManager({}).findActiveByIssue(repo, issue)
-    const quota = run?.quota
-    if (run?.status !== 'suspended' || quota?.binding_window !== '7d') {
-        return null
-    }
-    return {
-        kind: 'pause',
-        repo,
-        issue,
-        scope: '7d',
-        reason:
-            `run '${run.run_id}' is weekly-parked (7d quota window); superseding would strand it — ` +
-            `resume with /factory:resume after the window resets, or pass --ignore-quota`,
-        resets_at_epoch: quota.resets_at_epoch,
     }
 }
 

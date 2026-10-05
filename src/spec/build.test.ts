@@ -5,7 +5,8 @@
  * auto-derive, exit-code mapping) lives in src/cli/subcommands/spec.test.ts.
  */
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {rm, mkdir, writeFile} from 'node:fs/promises'
+import {rm, mkdir, mkdtemp, writeFile} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {resolveSpec, gateSpec, storeSpec, buildManifest, type SpecBuildDeps} from './build.js'
@@ -13,9 +14,8 @@ import {SpecStore, SPEC_DEFAULTS, type GhClient, type Prd} from './index.js'
 import {fakeUsageSignal, type UsageReading} from '../quota/index.js'
 import {loadConfig} from '../config/index.js'
 import {stringifyJson} from '../shared/json.js'
-import {specBuildDir} from '../core/state/paths.js'
+import {specBuildDir} from './paths.js'
 import {at} from '../shared/index.js'
-import {makeTempDataDir} from '../cli/test-fixtures.js'
 import {extractPrdRequirements} from './gates.js'
 
 const REPO = 'owner/app'
@@ -187,7 +187,7 @@ async function writeScratch(name: string, value: unknown): Promise<void> {
 }
 
 beforeEach(async () => {
-    dataDir = await makeTempDataDir('spec-seam-')
+    dataDir = await mkdtemp(join(tmpdir(), 'spec-seam-'))
 })
 afterEach(async () => {
     await rm(dataDir, {recursive: true, force: true})

@@ -21,8 +21,6 @@ export {
     JsonParseError,
 } from './json.js'
 
-export {appendJsonl, readJsonl} from './jsonl.js'
-
 export {nowIso, nowEpoch, parseIso8601ToEpoch, epochToIso} from './time.js'
 
 export {
@@ -43,7 +41,7 @@ export type {FileLockTuning, FileLockOptions} from './file-lock.js'
 
 export {UsageError, isUsageError} from './usage-error.js'
 
-export {nonNull, at, getOrThrow} from './assert.js'
+export {nonNull, at, getOrThrow, assertNever} from './assert.js'
 
 export {isEnoent} from './fs-errors.js'
 

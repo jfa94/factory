@@ -13,7 +13,7 @@ config with `factory config-defaults`.
 Edits are persisted as a **sparse overlay** — only the keys you set are written,
 so unset keys continue to track future default changes.
 
-Key paths are dotted (e.g. `quality.holdoutPercent`, `git.baseBranch`).
+Key paths are dotted (e.g. `quality.mutationScoreTarget`, `git.baseBranch`).
 
 ## Data dir (`CLAUDE_PLUGIN_DATA`)
 
@@ -60,8 +60,6 @@ Quality-gate thresholds.
 
 | Key                              | Type                  | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `holdoutPercent`                 | number 0–100          | `20`    | Percent of acceptance criteria withheld as an unreadable answer-key.                                                                                                                                                                                                                                                                                                                                                          |
-| `holdoutPassRate`                | number 0–100          | `80`    | Min pass-rate (%) on the holdout set to clear the gate.                                                                                                                                                                                                                                                                                                                                                                       |
 | `mutationScoreTarget`            | number 0–100          | `80`    | Target mutation score (%) for the mutation gate.                                                                                                                                                                                                                                                                                                                                                                              |
 | `coverageRegressionTolerancePct` | number ≥0             | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                                                                                                                                                                                                                                                                                                                                        |
 | `securityCommand`                | string (optional)     | —       | Custom SAST/security command; else the built-in semgrep run.                                                                                                                                                                                                                                                                                                                                                                  |
@@ -79,7 +77,7 @@ otherwise fail the `build` gate on a missing-env crash, a **false-negative floor
 unrelated to task quality. `quality.gateEnv` closes that gap: its name→value map is
 merged over `process.env` into the spawn env of every gate command
 (`defaultGateTools(gateEnv)`, `src/verifier/deterministic/tools.ts`, wired from config in
-`src/cli/wiring.ts`).
+`src/feature/runtime.ts`).
 
 **Setting values.** Mirror your CI build-step env by setting each leaf individually:
 
@@ -109,21 +107,15 @@ exercises the same build CI does.
 
 The two-window quota pacer.
 
-| Key                     | Type      | Default                  | Meaning                                                                                                                                                                                                                                                 |
-| ----------------------- | --------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hourlyThresholds`      | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                                                                                                                                                                                                            |
-| `dailyThresholds`       | number[7] | `[20,40,60,80,95,95,95]` | 7d-window utilization caps by day 1..7 (%). Ramps to 95% by window-day 5 (a 5-workday spend pattern) then plateaus through days 6–7, leaving a 5% end-of-window reserve. "Window-day N" is a position in the rolling 7d window, not a calendar weekday. |
-| `producerModels.low`    | string    | `claude-sonnet-4-5`      | Producer model for low risk tier.                                                                                                                                                                                                                       |
-| `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                                                                                                                                                                                                                    |
-| `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                                                                                                                                                                                                                      |
+| Key                | Type      | Default                  | Meaning                                                                                                                                                                                                                                                 |
+| ------------------ | --------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hourlyThresholds` | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                                                                                                                                                                                                            |
+| `dailyThresholds`  | number[7] | `[20,40,60,80,95,95,95]` | 7d-window utilization caps by day 1..7 (%). Ramps to 95% by window-day 5 (a 5-workday spend pattern) then plateaus through days 6–7, leaving a 5% end-of-window reserve. "Window-day N" is a position in the rolling 7d window, not a calendar weekday. |
 
 Each `hourlyThresholds` / `dailyThresholds` element is validated as a percentage in
 `[0, 100]`, and the array as a whole must be **non-decreasing** (a later checkpoint may
 not cap lower than an earlier one) — an out-of-range or descending value is a loud config
 error, never persisted.
-
-The review panel is risk-_invariant_ (Decision 26), so there is no review-depth
-dial here. `producerModels` is the only dial the quota router carries.
 
 ## `spec`
 
@@ -140,112 +132,15 @@ The Decision-21 apex pin (the model/effort the spec generator AND reviewer run a
 is deliberately **not** a config key: it is an _unconditional_ pin, hard consts in
 `src/spec/agents.ts` — invariant by construction.
 
-## `review`
-
-The judgment panel.
-
-| Key                  | Type                | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| -------------------- | ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | string (optional)   | —       | **Holdout-validator model override only.** The review panel no longer reads this key — each reviewer runs on a fixed **per-role** model ([Decision 64](../explanation/decisions.md#decision-64--per-role-reviewer-model-reverses-the-single-fixed-reviewer-model)). It now only overrides the `general-purpose` holdout-validator sidecar's model (`resolveReviewModel`, consumed at `src/orchestrator/orchestrator.ts`); unset ⇒ the documented fallback. |
-| `requireCrossVendor` | `"warn" \| "block"` | `warn`  | Policy when no cross-vendor (Codex) reviewer ran on the advancing verify pass ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)). `warn` records the absence loudly; `block` additionally fails the merge gate so a task cannot ship single-vendor.                                                                                                                         |
-
-Cross-vendor availability is **probed at spawn time** (`codex --version`, memoized),
-never inferred from config presence — the engine stamps `cross_vendor` on the verify
-spawn manifest and the runner executes the quality-reviewer via `codex exec` when
-Codex is present. `requireCrossVendor` only sets the policy for when it is **absent**.
-See [verifier.md](../explanation/verifier.md).
-
-> **Recommendation (Decision 61).** The default stays `warn`. Flip to `block` **only
-> once Codex is reliably provisioned in the run environment AND autonomous repair is
-> live** (self-heal recovers environmental blocks) — under `block`, a missing Codex
-> fails the task _environmental_ (not merge-gate-blocked), which is rescue-recoverable
-> but becomes a stall source without self-repair. Set it per-maintainer via
-> `factory configure --set review.requireCrossVendor=block` (writes
-> `$CLAUDE_PLUGIN_DATA/config.json`, not the repo).
-
-> **Turn budgets are no longer configurable here.** The former `review.maxTurnsDeep` /
-> `review.maxTurnsQuick` keys and the whole `testWriter` block are **deleted**. Every
-> agent's turn cap (`max_turns`) is now single-sourced to its own frontmatter
-> (`agents/*.md` `maxTurns:`) — the engine never stamps it, so it is plugin-author-owned,
-> not operator-tunable ([Decision 63](../explanation/decisions.md#decision-63--per-agent-dial-pinning--max_turns-single-sourced-to-frontmatter)).
-> The one carve-out is the `general-purpose` holdout-validator sidecar, whose cap is the
-> `HOLDOUT_MAX_TURNS` const in `src/orchestrator/orchestrator.ts` (no frontmatter to fall
-> back to).
-
-## `codex`
-
-| Key     | Type              | Default | Meaning                               |
-| ------- | ----------------- | ------- | ------------------------------------- |
-| `model` | string (optional) | —       | Codex cross-vendor implementer model. |
-
 ## `git`
 
 Branch and protection contract.
 
-| Key                           | Type     | Default                                                           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ----------------------------- | -------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `baseBranch`                  | string   | `develop`                                                         | The durable integration base: each run's `staging-<run-id>` branch forks from it and rolls up into it. Scaffold protects this branch. Never `main`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `developProtection`           | enum     | `run-scoped`                                                      | Decision 74. `run-scoped`: develop sits at the **baseline** profile at rest; `run create` escalates to the strict run profile and every run-terminal path (finalize / supersede / `cancel --cleanup`) drops it back; `resume` re-escalates idempotently. `permanent`: scaffold writes the strict profile once and the engine never touches develop protection again (pre-D74 behavior). Run-scoped caveat: the engine's PUTs are full replaces — custom manual rules on develop get clobbered.                                                                                                                                                                   |
-| `developBaselineStatusChecks` | string[] | derived: `developRequiredStatusChecks` minus `"Mutation Testing"` | The at-rest baseline profile (run-scoped mode): required checks for **non-admin** PRs into develop, `strict: false`, `enforce_admins: false` — admins can push develop directly between runs. Derived default drops exactly the mutation gate, so a custom run-profile context (e.g. a repo's pgTAP check) stays required at rest; an explicitly set value (including `[]`) overrides. A repo's committed contract can add checks additively via `requiredChecks`, or keep `"Mutation Testing"` required at rest via `requireMutationAtRest` — see [per-repo required checks](automated-gates.md#per-repo-required-checks-requiredchecks-requiremutationatrest). |
-| `developRequiredStatusChecks` | string[] | `["Quality", "Mutation Testing", "Security Scan"]`                | Status checks the **strict run profile** enforces on `develop` (written at `run create` in run-scoped mode; at scaffold `--provision` in permanent mode). Defaults to the three contexts the rendered quality-gate workflow always reports (Decision 53), so the rollup PR cannot merge red. A repo's committed `.factory/gates.json` can add extra contexts via `requiredChecks` (additive-only) — see [per-repo required checks](automated-gates.md#per-repo-required-checks-requiredchecks-requiremutationatrest).                                                                                                                                            |
-| `stagingRequiredStatusChecks` | string[] | `[]`                                                              | Status checks provisioned onto each **`staging-<run-id>`** branch at run create. Empty by default: the engine's local GateRunner is the primary task-level gate, and a required check here would make every task-PR merge wait on CI wall-clock. Protection itself (strict-up-to-date) is still mandatory.                                                                                                                                                                                                                                                                                                                                                       |
-| `provision`                   | boolean  | `false`                                                           | Opt-in protection provisioning. Off by default — the run verifies and refuses when protection is missing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `branchPrefix`                | string   | `factory`                                                         | Prefix for run-scoped task branches: `<branchPrefix>/<run_id>/<task_id>`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `rollupCiWaitMinutes`         | int >0   | `30`                                                              | Outer bound (minutes) finalize waits for the rollup PR's full-CI gate before giving up with `ci-timeout`. Sized above the slowest expected quality-gate run (mutation on a cold cache); a timeout parks the run recoverably (`factory resume` re-enters the poll). Replaces the former hard-coded ~20-min bound ([Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots)).                                                                                                                                                                                                             |
-
-## `e2e`
-
-The run-level end-to-end phase ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag),
-overhauled by [Decision 40](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)).
-All keys are optional/defaulted, so a repo that never passes `--e2e` pays nothing. Every
-key below is **actually read** by the runtime at each call site (`src/orchestrator/e2e.ts`,
-`src/orchestrator/assessment.ts`, `src/verifier/e2e/runner.ts`) — nothing here is
-declared-but-unwired.
-
-**Boot config is resolved, not required (Decision 40 D2/D10).** `startCommand`/`baseURL`
-are **optional overrides**. The single source of truth for the boot command + URL is the
-repo's `playwright.config.ts`, which the run-start **e2e-assessment** phase resolves and
-writes on the first `--e2e` run (`resolveBootConfig` = config override ?? assessment-resolved).
-An `--e2e` run no longer requires these keys to be set; instead `factory run create --e2e`
-eagerly checks three static prerequisites — `package.json`, a `@playwright/test` dependency,
-and a `playwright.config.ts` — and fails loud at create time if any is missing. Set the two
-keys only to **override** what the assessment would otherwise resolve.
-
-| Key              | Type              | Default | Meaning                                                                                                                                                                                                                          |
-| ---------------- | ----------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `startCommand`   | string (optional) | —       | **Optional override.** Command that boots the target app — for Playwright's `webServer` (test runs) and the e2e-author's live-exploration boot. Unset ⇒ the assessment-resolved value in `playwright.config.ts` is used instead. |
-| `baseURL`        | URL (optional)    | —       | **Optional override.** Base URL the app serves once `startCommand` is up. Validated as a well-formed URL at config-parse time. Unset ⇒ the assessment-resolved value is used.                                                    |
-| `readyTimeoutMs` | int >0            | `30000` | Max wait for `startCommand` to become ready before the boot is a failure (ms).                                                                                                                                                   |
-| `reopenCap`      | int ≥0            | `2`     | Per-task cap on e2e-triggered reopens. A critical spec still red after this many reopens of its mapped task fails the run outright instead of looping forever.                                                                   |
-
-To override the assessment-resolved boot config, set either or both keys:
-
-```bash
-factory configure --set e2e.startCommand="npm run dev"
-factory configure --set e2e.baseURL="http://localhost:3000"
-```
-
-> The committed critical suite lives in the literal `e2e/` directory — persistence there IS
-> the criticality signal (no `@critical` tag exists). This is **not configurable** (the
-> retired `e2e.testDir` key is ignored with a warning): the seeded
-> `templates/playwright.config.ts` hardcodes `e2e`, and the TCB `e2e-suite` write-guard is
-> hardcoded to the same path component; a custom `testDir` would silently diverge from what
-> actually runs and gates, so the engine holds the path as the constant `E2E_TEST_DIR`
-> (`src/orchestrator/e2e-paths.ts`) rather than leaving it a knob. The **target repo's own** `playwright.config.ts` is checked against the same
-> literal at run birth (S4): `run create --e2e` refuses a config whose declared `testDir` is
-> not `e2e`/`./e2e` (an absent declaration fails closed — Playwright defaults to `tests`,
-> outside the write-deny). (There is **no** CI `e2e` job — [Decision 40 D11](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)
-> removed it from `quality-gate.yml`; e2e gating is run-level only.) See
-> [Run with end-to-end tests](../guides/run-with-e2e.md).
-
-## Root keys
-
-| Key                      | Type   | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------ | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxConsecutiveFailures` | int >0 | `3`     | **Floor** of the circuit-breaker threshold: the run aborts when cumulative genuine `capability-budget` failures (cascade/wedge fails excluded) reach `max(floor, ceil(0.15 × total tasks))` — big task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3; 30 → 5, 40 → 6). The ratio is a module constant, not config. The key keeps its historical name for back-compat.                                                                                                                                                                                                                                                                                                                                      |
-| `maxParallelTasks`       | int >0 | `3`     | Max tasks the runner drives in flight at once; emitted to the runner as `max_parallel` on the `work` envelope (the runner reads the envelope, never this file). `1` = sequential.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `stallTtlMinutes`        | int >0 | `15`    | Minutes an in-flight spawn (`spawn_in_flight.spawned_at`) may age before `next-task` flags its task in the `work` envelope's `stale` list (the ADVISORY band: `stallTtlMinutes < age ≤ hungSpawnMinutes`). A silently-dead agent inside a live session is otherwise never re-driven. The flag tells the runner to liveness-check the spawn's agents and, only if all are dead, abandon and re-drive via `next-action` (see [cli.md](./cli.md#next-task) and [state-model.md](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)). Also sizes the runner's heartbeat cron, which clamps the interval to `min(TTL, 59)` because `*/60` is invalid cron syntax — keep it under 60 anyway (usage-cache staleness ceiling). |
-| `hungSpawnMinutes`       | int >0 | `120`   | HARD wall-clock cap on one in-flight spawn (Decision 66). Past this age `next-task` flags the task in the `work` envelope's `hung` list (disjoint from `stale`): the runner kills the spawn's agents **even if alive** and re-drives. Bounded engine-side by `SPAWN_REDRIVE_CAP` (2) per `(phase, rung)` checkpoint — once spent, the re-drive fails the task `blocked-environmental` so finalize → rescue-auto → page own the escalation. Must exceed `stallTtlMinutes` (schema-enforced).                                                                                                                                                                                                                                           |
+| Key                           | Type     | Default                                            | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------- | -------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseBranch`                  | string   | `develop`                                          | The durable integration base: the feature branch forks from it and its PR targets it. Scaffold protects this branch. Never `main`.                                                                                                                                                                                                                                                                                                                                    |
+| `developRequiredStatusChecks` | string[] | `["Quality", "Mutation Testing", "Security Scan"]` | Status checks scaffold and run preflight require on `develop` (provisioned with scaffold `--provision`). Defaults to the three contexts the rendered quality-gate workflow always reports (Decision 53), so the feature PR cannot merge red. A repo's committed `.factory/gates.json` can add extra contexts via `requiredChecks` (additive-only) — see [per-repo required checks](automated-gates.md#per-repo-required-checks-requiredchecks-requiremutationatrest). |
+| `rollupCiWaitMinutes`         | int >0   | `30`                                               | Outer bound (minutes) the engine waits for the feature PR's required CI and merge before parking the run (`ci`). Sized above the slowest expected quality-gate run (mutation on a cold cache); work is preserved and resume rechecks. Replaces the former hard-coded ~20-min bound ([Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots)).                                               |
 
 ## Retired keys
 
@@ -258,12 +153,19 @@ These schema keys were removed because they were **never actually consumed**. Zo
 strips an unknown key silently, so `loadConfig` warns loudly (once per process per
 file) when a raw overlay still carries one:
 
-| Retired key         | Why it is gone                                                                                                                                                     | Replacement                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `git.stagingBranch` | Every consumer read the schema default, never a set value — there is no shared staging branch. The real branch is per-run `staging-<run-id>` (`runStagingBranch`). | none needed (the prefix is a constant)                        |
-| `e2e.testDir`       | A `superRefine` already rejected every non-default value, so the knob could only ever hold `e2e`. Both the template and the TCB write-guard hardcode that path.    | the `E2E_TEST_DIR` constant (`src/orchestrator/e2e-paths.ts`) |
+| Retired key         | Why it is gone                                                                                                                                                     | Replacement                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `git.stagingBranch` | Every consumer read the schema default, never a set value — there is no shared staging branch. The real branch is per-run `staging-<run-id>` (`runStagingBranch`). | none needed (the prefix is a constant)               |
+| `e2e.testDir`       | A `superRefine` already rejected every non-default value, so the knob could only ever hold `e2e`. Both the template and the TCB write-guard hardcode that path.    | the literal `e2e` path in the template and TCB guard |
 
-Remove them from your overlay:
+Keys retired with v1 execution are ignored silently when an existing overlay still
+carries them: `quality.holdoutPercent`, `quality.holdoutPassRate`,
+`quota.producerModels`, the `review`, `codex` and `e2e` blocks,
+`git.stagingRequiredStatusChecks`, `git.provision`, `git.branchPrefix`,
+`git.developProtection`, `maxConsecutiveFailures`, `maxParallelTasks`,
+`stallTtlMinutes` and `hungSpawnMinutes`.
+
+Remove the warned keys from your overlay:
 
 ```bash
 factory configure --unset git.stagingBranch

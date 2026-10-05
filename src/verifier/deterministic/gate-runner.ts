@@ -4,7 +4,7 @@
  * ONE runner orchestrates the per-gate STRATEGIES. Given a {@link GateContext}, it
  * runs each ENABLED strategy, collects GateEvidence[] from those that RAN (skips
  * are recorded but excluded from the conjunction), and DERIVES the conjunctive
- * verdict via deriveAllGatesVerdict (src/core/state/derive.ts). There is no stored
+ * verdict via deriveAllGatesVerdict (./verdict.ts). There is no stored
  * gate boolean and no API to inject a verdict — a verdict can ONLY come out of the
  * derive accessor over evidence a strategy produced (Δ V).
  *
@@ -12,15 +12,22 @@
  * all-skipped / empty-evidence run FAILS (deriveAllGatesVerdict over zero evidence
  * is false — never default-open).
  */
-import {assertNever, deriveAllGatesVerdict} from '../../types/index.js'
+import {assertNever} from '../../shared/assert.js'
+import {deriveAllGatesVerdict, type GateEvidence, type GateVerdict} from './verdict.js'
 import type {Config} from '../../config/schema.js'
-import type {GateEvidence, GateVerdict} from '../../types/index.js'
 import {createLogger} from '../../shared/index.js'
-import type {CoverageStore} from './coverage-store.js'
 import {classifySkip, loadGateContract, type GateContract, type GateContractLoad} from './gate-contract.js'
 import type {ExemptReader} from './tdd-exempt.js'
 import type {GateTools} from './tools.js'
-import {GATE_IDS, ran, type GateId, type GateOutcome, type GateStrategy, type StrategyContext} from './strategy.js'
+import {
+    GATE_IDS,
+    ran,
+    type CoverageStore,
+    type GateId,
+    type GateOutcome,
+    type GateStrategy,
+    type StrategyContext,
+} from './strategy.js'
 import {testStrategy} from './strategies/test.js'
 import {tddStrategy} from './strategies/tdd.js'
 import {coverageStrategy} from './strategies/coverage.js'

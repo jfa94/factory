@@ -24,7 +24,7 @@ stay visible). You never hand-edit `config.json`.
 
 ```bash
 factory configure                 # print the full resolved config (defaults + overlay) as JSON
-factory configure --get <key>     # print one resolved value, e.g. --get quality.holdoutPercent
+factory configure --get <key>     # print one resolved value, e.g. --get quality.mutationScoreTarget
 ```
 
 ## Change
@@ -39,8 +39,8 @@ factory configure --unset <key>         # repeatable; reverts the key to its def
 error and **nothing is written**. Examples:
 
 ```bash
-factory configure --set quality.holdoutPercent=25
-factory configure --set git.provision=true
+factory configure --set quality.mutationScoreTarget=85
+factory configure --set git.rollupCiWaitMinutes=45
 factory configure --unset quality.securityCommand
 ```
 
@@ -52,8 +52,6 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 
 | Key                              | Default | Meaning                                               |
 | -------------------------------- | ------- | ----------------------------------------------------- |
-| `holdoutPercent`                 | 20      | % of acceptance criteria held out as an answer-key    |
-| `holdoutPassRate`                | 80      | Min % of withheld criteria that must pass             |
 | `mutationScoreTarget`            | 80      | Min mutation score (%)                                |
 | `coverageRegressionTolerancePct` | 0.5     | Max coverage drop (pp) before the gate fails          |
 | `securityCommand`                | —       | Custom SAST command (else built-in semgrep)           |
@@ -90,73 +88,27 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 > The Decision-21 apex pin (spec generator + reviewer model/effort) is NOT config —
 > it is invariant by construction, hard consts in `src/spec/agents.ts`.
 
-### Review panel (`review.*`)
-
-| Key                  | Default | Meaning                                                                                                                                             |
-| -------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`              | —       | Holdout-validator model override only — the panel now stamps a fixed per-role model (Δ T reversal) and no longer reads this key                     |
-| `requireCrossVendor` | warn    | Second-vendor reviewer policy (Δ U/S5): `warn` surfaces an absence in the report/summary; `block` fails the merge gate until Codex actually reviews |
-
-> `requireCrossVendor` needs `codex.model` set AND the `codex` CLI installed —
-> the engine probes `codex --version` and stamps the verify manifest; with
-> `block` + no working Codex, verify wait-retries instead of shipping
-> single-vendor.
->
-> Reviewer/producer turn budgets (`max_turns`) are no longer config — each
-> agent's own frontmatter (`agents/*.md` `maxTurns:`) is the single source of
-> truth (not overridable via `/factory:configure`).
-
-### E2E phase (`e2e.*`, Decisions 39 + 40)
-
-| Key              | Default | Meaning                                                                                                                         |
-| ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `startCommand`   | —       | **Optional override** (D10) of the boot command — normally the run-start e2e-assessment resolves this itself                    |
-| `baseURL`        | —       | **Optional override** (D10) of the base URL the app serves once booted — normally assessment-resolved                           |
-| `testDir`        | e2e     | Repo-relative dir the COMMITTED critical suite lives in — persistence here IS the criticality signal, no `@critical` tag exists |
-| `readyTimeoutMs` | 30000   | Max wait for the boot command to become ready before the boot fails                                                             |
-| `reopenCap`      | 2       | Per-task cap on e2e-triggered reopens; a critical spec still red after this many fails the run outright                         |
-
-> No setup is required before `--e2e` (Decision 40). `run create --e2e` only
-> checks the static prerequisites (`package.json`, `@playwright/test` dep,
-> `playwright.config.ts` — `factory scaffold` provides them); the run-start
-> **e2e-assessment** then resolves the real boot command + base URL and writes
-> them into the repo's `playwright.config.ts`. Set `e2e.startCommand`/
-> `e2e.baseURL` only to override what assessment resolved (a config value wins).
-> If neither source can produce a boot pair, the phase **suspends** loud
-> (resumable via `/factory:resume`) rather than skipping silently.
-
 ### Quota pacer (`quota.*`)
 
-`hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([20,40,60,80,95,95,95]), and the
-producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by risk tier).
+`hourlyThresholds` ([20,40,60,80,90]) and `dailyThresholds` ([20,40,60,80,95,95,95]).
 
-### Git / serial-writer (`git.*`)
+### Git (`git.*`)
 
-| Key                           | Default                                     | Meaning                                                                                        |
-| ----------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `baseBranch`                  | develop                                     | Branch staging forks from / rolls up into (never main)                                         |
-| `stagingBranch`               | staging                                     | Integration branch task PRs serial-merge into                                                  |
-| `developProtection`           | run-scoped                                  | D74: strict profile only while a run is active; `permanent` = always strict                    |
-| `developBaselineStatusChecks` | derived: run profile minus Mutation Testing | At-rest checks on develop (run-scoped; non-admin PRs, admins bypass); explicit value overrides |
-| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan    | Checks the strict run profile enforces on develop (rollup PR gate)                             |
-| `stagingRequiredStatusChecks` | []                                          | Checks provisioned onto each per-run staging branch                                            |
-| `provision`                   | false                                       | Write branch protection when missing (else refuse)                                             |
-| `branchPrefix`                | factory                                     | Prefix for run-scoped task branches                                                            |
-
-> Run-scoped caveat (D74): the engine owns develop's protection shape — its escalate /
-> de-escalate PUTs are full replaces, so custom manual rules on develop get clobbered.
-> Use `developProtection: permanent` if you manage develop's protection yourself.
-
-### Other roots
-
-`codex.model` (—), `maxConsecutiveFailures` (3 — the
-circuit-breaker FLOOR; effective threshold `max(floor, ceil(0.15 × total tasks))`),
-`maxParallelTasks` (3 — max tasks the runner drives in flight; emitted as
-`max_parallel` on the work envelope).
+| Key                           | Default                                  | Meaning                                                              |
+| ----------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
+| `baseBranch`                  | develop                                  | Branch the feature branch forks from and its PR targets (never main) |
+| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks scaffold and run preflight require on develop                 |
+| `rollupCiWaitMinutes`         | 30                                       | Max wait for the feature PR's CI before parking the run              |
 
 > Retired (locked decision 5 — human gates removed): `humanReviewLevel`,
 > `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`, the
 > `safety.*` block, `execution.*`. These keys no longer exist; do not write them.
+>
+> Retired with v1 execution: `quality.holdoutPercent/holdoutPassRate`,
+> `quota.producerModels`, the `review.*`, `codex.*` and `e2e.*` blocks,
+> `git.stagingRequiredStatusChecks/provision/branchPrefix/developProtection`,
+> `maxConsecutiveFailures`, `maxParallelTasks`, `stallTtlMinutes` and
+> `hungSpawnMinutes`. An existing config carrying them still loads; they are ignored.
 
 ## Interactive
 

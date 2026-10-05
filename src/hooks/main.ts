@@ -17,11 +17,7 @@ import {nonNull} from '../shared/index.js'
 import type {Hook} from './registry-types.js'
 import {runBranchProtection} from './branch-protection.js'
 import {runWriteProtection} from './write-protection.js'
-import {runHoldoutGuard} from './holdout-guard.js'
 import {runSecretGuard} from './secret-guard.js'
-import {runPipelineGuards} from './pipeline-guards.js'
-import {runSubagentStop} from './subagent-stop.js'
-import {runStopGate} from './stop-gate.js'
 import {runSessionStart} from './session-start.js'
 import {runFeatureGuard, runFeatureStop} from './feature-guards.js'
 
@@ -40,27 +36,9 @@ export const hookRegistry: Record<string, Hook> = {
         describe: 'PreToolUse Edit|Write|MultiEdit: deny writes to hardcoded TCB paths (Δ W)',
         run: (argv) => runWriteProtection(argv),
     },
-    'holdout-guard': {
-        describe: 'PreToolUse Read|Grep|Glob|Bash: deny reads of the holdout answer-key store (Δ Y)',
-        run: (argv) => runHoldoutGuard(argv),
-    },
     'secret-guard': {
         describe: 'PreToolUse Bash: block git commit/push staging a known secret shape (Δ B)',
         run: (argv) => runSecretGuard(argv),
-    },
-    'pipeline-guards': {
-        describe: "PreToolUse: test-writer scope + nested-shell + derive-don't-store ship gating (Δ V)",
-        run: (argv) => runPipelineGuards(argv),
-    },
-    'subagent-stop': {
-        describe:
-            "SubagentStop: log a stopping reviewer's parsed verdict (observational — the orchestrator record is the single writer of task.reviewers[])",
-        run: (argv) => runSubagentStop(argv),
-    },
-    'stop-gate': {
-        describe:
-            'Stop: one-shot block telling the session to `/factory:resume` an owned all-terminal unfinalized run (never mutates state); one-shot block on state corruption; stop_hook_active re-entries always allow',
-        run: (argv) => runStopGate(argv),
     },
     'session-start': {
         describe:

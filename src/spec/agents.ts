@@ -17,11 +17,13 @@ import {z} from 'zod'
 import type {Prd} from './gh.js'
 import {SpecTasksSchema, type SpecTask} from './schema.js'
 import type {ReviewVerdict} from './review.js'
-import {SPEC_GENERATOR_AGENT_TYPE, SPEC_REVIEWER_AGENT_TYPE} from '../core/phase-machine/index.js'
 
 /** Decision-21 apex pin — invariant by construction, deliberately NOT config. */
 const APEX_MODEL = 'opus'
 const APEX_EFFORT = 'xhigh'
+
+const SPEC_GENERATOR_AGENT_TYPE = 'spec-generator'
+const SPEC_REVIEWER_AGENT_TYPE = 'spec-reviewer'
 
 /** The two spec-agent roles. */
 export type SpecAgentRole = 'spec-generator' | 'spec-reviewer'

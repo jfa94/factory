@@ -5,19 +5,19 @@
  * a pure-ish implementer: it runs its machine-check (via an injectable tool wrapper
  * over shared/exec.ts) and reports a {@link GateOutcome}. It does NOT compute a
  * verdict — the runner derives the verdict from the collected GateEvidence via
- * src/core/state/derive.ts (derive-don't-store, Δ V).
+ * ./verdict.ts (derive-don't-store, Δ V).
  *
  * A strategy NEVER returns a pre-existing pass: the only way to a `pass` outcome is
  * to actually run the check and observe success. A "not applicable" situation is a
  * distinct {@link GateSkip} outcome — so "nothing ran" is structurally never
  * confused with "the gate passed".
  */
-import type {GateEvidence} from '../../types/index.js'
+import type {GateEvidence} from './verdict.js'
 import type {Config} from '../../config/schema.js'
 import type {ExemptReader} from './tdd-exempt.js'
 import type {GateContract} from './gate-contract.js'
-import type {CoverageStore} from './coverage-store.js'
 import {GATE_IDS, type GateId} from './gate-id.js'
+import type {CoverageSummary} from './tools.js'
 
 // Re-exported from the leaf gate-id.ts so existing importers of strategy.ts are
 // unaffected.
@@ -26,7 +26,7 @@ export {GATE_IDS, type GateId}
 /**
  * A strategy ran and produced ground-truth evidence. `observed` is the raw
  * machine-checkable pass signal (true iff the check passed NOW). The runner feeds
- * this evidence into deriveGateVerdict / deriveAllGatesVerdict — it is never a
+ * this evidence into deriveAllGatesVerdict — it is never a
  * stored boolean.
  */
 export interface GateRan {
@@ -100,6 +100,13 @@ export interface StrategyContext<TTools> {
      * the coverage strategy measures uncached — never a correctness fallback.
      */
     readonly coverageStore?: CoverageStore | undefined
+}
+
+/** Coverage summaries keyed by content-addressed git tree SHA (a perf cache, S8). */
+export interface CoverageStore {
+    /** Cached summary for a tree SHA, or null on a miss. Throws LOUD on a corrupt entry. */
+    get(treeSha: string): Promise<CoverageSummary | null>
+    put(treeSha: string, summary: CoverageSummary): Promise<void>
 }
 
 /**

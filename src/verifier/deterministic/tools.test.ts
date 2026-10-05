@@ -22,6 +22,7 @@ import {exec, at, nonNull, type ExecResult} from '../../shared/index.js'
 import {
     DefaultBuildTool,
     DefaultEslintTool,
+    DefaultFsProbe,
     DefaultGitProbe,
     DefaultArgvRunner,
     DefaultStrykerTool,
@@ -521,5 +522,81 @@ describe('DefaultGitProbe.commits (oldest-first + merge first-parent + tag)', ()
         })
         const probe = new DefaultGitProbe()
         await expect(probe.commits('base', 'T1', {cwd: '/wt'})).rejects.toThrow(/truncated/i)
+    })
+})
+
+describe('DefaultGitProbe ref/diff probes', () => {
+    beforeEach(() => {
+        execMock.mockReset()
+    })
+
+    it('refExists answers from the rev-parse --verify exit code', async () => {
+        execMock.mockResolvedValueOnce(res('abc\n')).mockResolvedValueOnce(res('', 1))
+        const probe = new DefaultGitProbe()
+        await expect(probe.refExists('origin/main', {cwd: '/wt'})).resolves.toBe(true)
+        await expect(probe.refExists('gone', {cwd: '/wt'})).resolves.toBe(false)
+        expect(execMock).toHaveBeenNthCalledWith(1, 'git', ['rev-parse', '--verify', '--quiet', 'origin/main'], {
+            cwd: '/wt',
+        })
+    })
+
+    it('treeSha resolves HEAD^{tree}; revParse throws on a non-zero exit', async () => {
+        execMock.mockResolvedValueOnce(res('tree1\n')).mockResolvedValueOnce(res('', 128))
+        const probe = new DefaultGitProbe()
+        await expect(probe.treeSha({cwd: '/wt'})).resolves.toBe('tree1')
+        await expect(probe.revParse('nope', {cwd: '/wt'})).rejects.toThrow(/rev-parse nope failed/)
+    })
+
+    it('changedFiles throws on a failed diff', async () => {
+        execMock.mockResolvedValueOnce(res('', 128))
+        await expect(new DefaultGitProbe().changedFiles('base', {cwd: '/wt'})).rejects.toThrow(/git diff vs base/)
+    })
+
+    it('commits throws when any per-commit git read fails', async () => {
+        const failing = ['log --format=%H', 'show -s', 'diff-tree', 'log -1']
+        for (const step of failing) {
+            execMock.mockReset()
+            execMock.mockImplementation((_cmd: string, args: readonly string[] = []) => {
+                const a = args.join(' ')
+                if (a.startsWith(step)) {
+                    return Promise.resolve(res('', 1))
+                }
+                return Promise.resolve(res(a.startsWith('show -s') ? 'p1 p2' : 'c1'))
+            })
+            await expect(new DefaultGitProbe().commits('base', 'T1', {cwd: '/wt'})).rejects.toThrow(/failed/)
+        }
+        execMock.mockImplementation((_cmd: string, args: readonly string[] = []) => {
+            const a = args.join(' ')
+            if (a.startsWith('diff-tree')) {
+                return Promise.resolve(res('', 1))
+            }
+            return Promise.resolve(res(a.startsWith('show -s') ? 'p1' : 'c1'))
+        })
+        await expect(new DefaultGitProbe().commits('base', 'T1', {cwd: '/wt'})).rejects.toThrow(/diff-tree failed/)
+    })
+})
+
+describe('DefaultFsProbe against a real directory', () => {
+    let dir: string
+    beforeEach(async () => {
+        dir = await mkdtemp(join(tmpdir(), 'fs-probe-'))
+        await writeFile(join(dir, 'present.json'), '{}')
+    })
+    afterEach(async () => {
+        await rm(dir, {recursive: true, force: true})
+    })
+
+    it('exists and existsAny resolve paths under cwd', async () => {
+        const probe = new DefaultFsProbe()
+        await expect(probe.exists('present.json', {cwd: dir})).resolves.toBe(true)
+        await expect(probe.exists('absent.json', {cwd: dir})).resolves.toBe(false)
+        await expect(probe.existsAny(['absent.json', 'present.json'], {cwd: dir})).resolves.toBe(true)
+        await expect(probe.existsAny(['absent.json'], {cwd: dir})).resolves.toBe(false)
+    })
+})
+
+describe('DefaultArgvRunner', () => {
+    it('rejects an empty command', async () => {
+        await expect(new DefaultArgvRunner().run([], {cwd: '/wt'})).rejects.toThrow(/empty command/)
     })
 })

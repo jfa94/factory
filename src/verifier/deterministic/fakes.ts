@@ -13,9 +13,8 @@
  * `Promise.reject(err)` (NOT a synchronous `throw`) so `.rejects`/`.catch`
  * consumers observe a real rejection, exactly as with the real async tools.
  */
-import type {CoverageStore} from './coverage-store.js'
 import type {GateContract, GateContractLoad} from './gate-contract.js'
-import {GATE_IDS} from './strategy.js'
+import {GATE_IDS, type CoverageStore} from './strategy.js'
 import type {
     CommandRunner,
     CommitInfo,
