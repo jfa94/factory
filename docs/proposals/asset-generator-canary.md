@@ -324,3 +324,39 @@ lint excerpt showing stderr deprecation noise by merging both streams, each
 capped independently; and the implementer refusing a file-redirect dispatch by a
 cwd guard on `next-action`/`resume` plus the runner rule to paste the prompt
 verbatim from a session rooted in the target repository.
+
+## Issue #7: reliability-remediation canary (2026-10-05)
+
+Run `e7bbd744` on `2.0.0-rc.4` (main-only, base resolved to `main`, quota active)
+delivered issue #7 as PR #9, squash-merged (`7300301`), status `completed`, branch
+protection unchanged: seven tasks in two slices, 17 commits, 31 attempts, 127
+audit rows, zero rejected results, zero manual recovers. It included one planned
+`run stop`/`resume --recover` (the retired test-writer's commit was kept) and one
+organic compaction. Review snapshots were all removed.
+
+Repair passes: two. `fmt-001` spent one because Vitest 4 (Vite 8) reports a missing
+module as `Failed to resolve import "x" from "<root-relative>"`, which the
+decision-2 parser did not know (`fc3aff83`). The test-writer worked around it with
+a lazy `import.meta.glob` import, a pattern earlier canaries had already left in
+this repo. The feature review confirmed one real defect: the docs stage left a
+Prettier-misaligned table in `docs/README.md`, which the contracted gates do not
+check.
+
+Not a clean pass:
+
+- One `environment` park: the pre-test baseline was genuinely red because macOS
+  display sleep hangs headless Chrome's GPU screenshot path. It was fixed in the
+  environment (`caffeinate -d`), not in the plugin.
+- Delivery: `gh pr merge --auto` failed where the repo disables auto-merge
+  (`8c83be40`), and a direct merge exposed that `gh pr checks --required` omits
+  required checks that have not reported yet (`2357f098`: a policy refusal is now
+  pending CI). Both were fixed live; the run merged within the transient budget.
+- The runner asked before pushing despite `ship_mode` live (the operator's global
+  push-confirmation rule).
+- Setup: under `--plugin-dir` the data directory splits between `factory-inline`
+  (plugin processes) and `factory-jfa94` (Bash tool). That staled the quota cache
+  and made the `.claude/` guard block staged-result writes until the session was
+  relaunched with settings for `factory-jfa94`. The scaffold does not exclude
+  `.claude/` and `.stryker-tmp/` from the target's tests and lint, and does not
+  format the files it manages.
+- The acceptance evaluator left a 579 MB scratch copy in `/tmp`.

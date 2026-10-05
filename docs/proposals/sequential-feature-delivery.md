@@ -111,5 +111,9 @@ traps. Ten decisions address these across five phases:
       stop/resume and one compaction. Pass: zero manual recovers, zero `environment`
       parks, no refused or ignored briefs, and snapshots cleaned up.
 
-This remediation is **not release-ready** until that canary passes. The canary
-needs separate authorization.
+This remediation is **not release-ready** until that canary passes. Canary #5
+(issue #7, 2026-10-05) delivered and merged with zero manual recovers and no
+refused briefs, but not cleanly: one environment park (display sleep) and three
+defects fixed during the run (Vitest 4 load failures, auto-merge, unreported
+required checks). See the [canary ledger](asset-generator-canary.md). The
+criterion stays open until a run passes with no environment park and no live fixes.
