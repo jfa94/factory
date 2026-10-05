@@ -524,7 +524,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(await readFile(brief, 'utf8')).toContain('- Role: implementer')
     })
 
-    it('still rejects already-satisfied from implement when the checkpoint moved', async () => {
+    it('re-issues an already-satisfied implement result whose checkpoint moved (decision 4)', async () => {
         const f = await fixture()
         let action = await f.engine.advance('run', 'driver')
         if (action.kind !== 'execute' || action.attempt.stage !== 'implement') {
@@ -534,11 +534,15 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await writeFile(join(worktree, 'value.js'), 'export const value = 1\n')
         await git(worktree, 'add', 'value.js')
         await git(worktree, 'commit', '-m', '[first] moved checkpoint')
+        const attempt = action.attempt
         action = await submit(f, result(action, {status: 'already-satisfied'}))
-        expect(action).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('unchanged task checkpoint') as string,
-        })
+        expect(action).toMatchObject({kind: 'execute', attempt: {id: attempt.id, roles: ['implementer']}})
+        expect(await readBrief(action)).toContain(
+            '## Previous result rejected\n\nThe engine rejected an earlier result for this role. Fix every reason below; a third rejection parks the run for a human.\n\n- already-satisfied requires an unchanged task checkpoint'
+        )
+        const staged = f.store.stagedPaths('run', attempt).implementer ?? ''
+        expect(await readFile(staged.replace(/\.json$/, '.rejected-1.json'), 'utf8')).toContain('already-satisfied')
+        expect((await f.store.read('run')).attempts).toEqual({})
     }, 30_000)
 
     it('consumes a durable result after a crash without repeating the producer', async () => {
@@ -616,7 +620,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(await stop({session_id: 'owner'})).toBe('allow')
     })
 
-    it('reads a staged result through a markdown fence and names a schema-invalid one in the wait reason', async () => {
+    it('re-issues a schema-invalid staged file and reads the corrected one through a markdown fence (decision 4)', async () => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         if (action.kind !== 'execute') {
@@ -627,10 +631,9 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         await git(action.attempt.worktree, 'add', 'value.js')
         await git(action.attempt.worktree, 'commit', '-m', '[first] fenced result')
         await writeFile(path, JSON.stringify({...result(action), status: 'finished'}))
-        expect(await f.engine.advance('run', 'driver')).toMatchObject({
-            kind: 'wait',
-            reason: expect.stringContaining('staged file rejected (implementer: status') as string,
-        })
+        const reissued = await f.engine.advance('run', 'driver')
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {id: action.attempt.id, roles: ['implementer']}})
+        expect(await readBrief(reissued)).toContain('- implementer: status')
         expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
         await writeFile(path, 'Done.\n```json\n' + JSON.stringify(result(action)) + '\n```\n')
         expect(await f.engine.advance('run', 'driver')).toMatchObject({
@@ -639,23 +642,28 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         })
     })
 
-    it('treats a half-written staged file as not yet submitted and never retires its lease', async () => {
+    it.each([
+        ['half-written', '{"status": "do'],
+        ['prose', 'Done, all tests pass.'],
+        ['empty', ''],
+    ])('rejects a %s staged file instead of awaiting it (decision 4)', async (_kind, body) => {
         const f = await fixture()
         const action = await f.engine.advance('run', 'driver')
         if (action.kind !== 'execute') {
             throw new Error('missing attempt')
         }
         const path = at(Object.values(action.staged), 0)
-        await writeFile(path, '{"attempt_id": "' + action.attempt.id)
-        const waiting = await f.engine.advance('run', 'driver')
-        expect(waiting).toMatchObject({kind: 'wait', reason: expect.stringContaining('awaiting implementer') as string})
-        expect(waiting).not.toMatchObject({reason: expect.stringContaining('rejected') as string})
-        expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
+        await writeFile(path, body)
+        const reissued = await f.engine.advance('run', 'driver')
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {id: action.attempt.id, roles: ['implementer']}})
+        expect(await readBrief(reissued)).toContain('- implementer: unparseable JSON')
+        expect(await readFile(path.replace(/\.json$/, '.rejected-1.json'), 'utf8')).toBe(body)
+        // Explicit recovery is unchanged: with the file moved aside the attempt is retired.
         await f.engine.stop('run')
         const recovered = await f.engine.resume('run', {recover: true})
         expect(recovered.in_flight).toBeUndefined()
+        expect(recovered.rejections).toBeUndefined()
         expect(recovered.audit.at(-2)?.event).toBe('interrupted attempt retired; work retained')
-        expect(await readFile(path, 'utf8')).toContain(action.attempt.id)
     })
 
     it('keeps a partial review panel on the same attempt and redispatches only the missing roles', async () => {
@@ -699,23 +707,46 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect((await f.store.read('run')).checkpoints.map((row) => row.task_id)).toEqual(['first'])
     }, 30_000)
 
-    it('rejects invalid review evidence and explicitly recovers without losing its journal or work', async () => {
+    it('re-issues invalid review evidence twice, parks on the third, and recovers without losing work (decision 4)', async () => {
         const f = await fixture()
         let action = await f.engine.advance('run', 'driver')
         action = await respond(f, action)
         if (action.kind !== 'execute' || action.attempt.stage !== 'task-review') {
             throw new Error('missing review')
         }
-        const paths = await stage(f, result(action, {reviews: []}))
+        let paths: Record<string, string> = {}
+        for (let n = 1; n <= 2; n++) {
+            paths = await stage(f, result(action, {reviews: []}))
+            const reissued = await f.engine.advance('run', 'driver')
+            expect(reissued).toMatchObject({kind: 'execute', attempt: {id: action.attempt.id}})
+            expect((await f.store.read('run')).rejections?.['quality-reviewer']).toHaveLength(n)
+        }
+        await stage(f, result(action, {reviews: []}))
+        const parked = await f.engine.advance('run', 'driver')
+        expect(parked).toMatchObject({
+            kind: 'park',
+            reason: expect.stringContaining('quality-reviewer: result rejected 3 times') as string,
+        })
+        const run = await f.store.read('run')
+        expect(run.stop_reason?.kind).toBe('producer')
+        expect(run.attempts).toEqual({})
+        expect(run.in_flight?.id).toBe(action.attempt.id)
+        expect(run.audit.filter((row) => row.event === 'result rejected')).toHaveLength(3)
+        const path = at(Object.values(paths), 0)
+        for (const n of [1, 2, 3]) {
+            expect(JSON.parse(await readFile(path.replace(/\.json$/, `.rejected-${n}.json`), 'utf8'))).toEqual({
+                status: 'done',
+            })
+        }
+        // A rejection never un-parks the run.
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'park'})
-        expect((await f.store.read('run')).in_flight?.id).toBe(action.attempt.id)
         const head = await f.runtime.head(action.attempt.worktree)
         const recovered = await f.engine.resume('run', {recover: true})
         expect(recovered.in_flight).toBeUndefined()
+        expect(recovered.rejections).toBeUndefined()
         expect(recovered.status).toBe('running')
         expect(recovered.stage).toBe('task-review')
-        expect(recovered.audit.at(-2)?.event).toBe('invalid durable result retired; evidence and work retained')
-        expect(JSON.parse(await readFile(at(Object.values(paths), 0), 'utf8'))).toEqual({status: 'done'})
+        expect(recovered.audit.at(-2)?.event).toBe('interrupted attempt retired; work retained')
         expect(await f.runtime.head(action.attempt.worktree)).toBe(head)
         const next = await f.engine.advance('run', 'new-driver')
         expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})

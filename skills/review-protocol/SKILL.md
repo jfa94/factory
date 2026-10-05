@@ -37,7 +37,8 @@ Each claim's `quote` must be an **exact substring of a real source line** within
 of the cited `line` in the cited `file`, at least **10 characters** long. The engine reads the
 actual file at the attempt SHA and **rejects the WHOLE review** (`invalid citation`) when any
 single quote is not found in that window — wrong file, past EOF, hallucinated, or
-paraphrased. Nothing is truncated or dropped individually: one bad citation parks the run.
+paraphrased. Nothing is truncated or dropped individually: one bad citation rejects the whole
+result, which is re-issued with the reason at most twice before the run parks.
 Copy the characters verbatim from the file — **no `+`/`-` diff markers**, no paraphrase, no
 ellipsis. A fabricated or approximate quote is worse than omitting the claim.
 </EXTREMELY-IMPORTANT>
@@ -59,16 +60,16 @@ ellipsis. A fabricated or approximate quote is worse than omitting the claim.
 
 ## Red Flags — STOP and re-read this prompt
 
-| Thought                                              | Reality                                                                             |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| "Looks fine, I'll return no claims"                  | An empty `claims: []` row is valid — but only after you actually verified.          |
-| "I'll describe the issue without a quote"            | `quote` is required and citation-verified. A bad quote rejects the ENTIRE review.   |
-| "I'll quote the `+` line from the diff"              | Citation-verify matches the FILE, not the diff. Quote the source line, no marker.   |
-| "I'll paraphrase the line, close enough"             | The match is an exact substring. Paraphrase fails and parks the run. Copy verbatim. |
-| "More claims = better review"                        | Signal/noise. Drop low-likelihood × low-impact noise.                               |
-| "I'm unsure, I'll file it as `important` to be safe" | Claims are for confirmed defects. Unsure means no claim — there is no warning tier. |
-| "I know this bug from training data"                 | Not traced here = not found. Drop it.                                               |
-| "That refuted claim still looks wrong"               | Refile ONLY with NEW evidence, and say so in the `claim` text.                      |
+| Thought                                              | Reality                                                                              |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| "Looks fine, I'll return no claims"                  | An empty `claims: []` row is valid — but only after you actually verified.           |
+| "I'll describe the issue without a quote"            | `quote` is required and citation-verified. A bad quote rejects the ENTIRE review.    |
+| "I'll quote the `+` line from the diff"              | Citation-verify matches the FILE, not the diff. Quote the source line, no marker.    |
+| "I'll paraphrase the line, close enough"             | The match is an exact substring. Paraphrase rejects the whole review. Copy verbatim. |
+| "More claims = better review"                        | Signal/noise. Drop low-likelihood × low-impact noise.                                |
+| "I'm unsure, I'll file it as `important` to be safe" | Claims are for confirmed defects. Unsure means no claim — there is no warning tier.  |
+| "I know this bug from training data"                 | Not traced here = not found. Drop it.                                                |
+| "That refuted claim still looks wrong"               | Refile ONLY with NEW evidence, and say so in the `claim` text.                       |
 
 ## What to look for
 

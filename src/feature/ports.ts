@@ -1,5 +1,19 @@
 import type {FeatureRun, FeatureSpec, Stage, Claim} from './schema.js'
 
+/** Unusable agent output: the engine re-issues `roles` with the reason, at most twice, then parks. */
+export class ResultRejected extends Error {
+    constructor(
+        readonly roles: string[],
+        reason: string,
+        readonly freshSnapshot = false
+    ) {
+        super(reason)
+    }
+}
+
+/** A git/gh/install failure worth retrying after a wait; five in a row park the run. */
+export class TransientFailure extends Error {}
+
 export interface CheckResult {
     passed: boolean
     observed: number

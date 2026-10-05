@@ -1,8 +1,12 @@
 import {describe, expect, it, vi} from 'vitest'
 import {defaultConfig} from '../config/schema.js'
 import type {ExecResult} from '../shared/exec.js'
+import {provisionWorktree} from '../git/provision.js'
+import {TransientFailure} from './ports.js'
 import {LocalFeatureRuntime} from './runtime.js'
 import {FeatureRunSchema} from './schema.js'
+
+vi.mock('../git/provision.js', () => ({provisionWorktree: vi.fn()}))
 
 const sha = 'a'.repeat(40)
 const run = FeatureRunSchema.parse({
@@ -203,8 +207,66 @@ describe('feature runtime external evidence', () => {
         expect(await f.runtime.citation('/repo', claim)).toBe(true)
         expect(await f.runtime.citation('/repo', {...claim, quote: 'not present in source'})).toBe(false)
         expect(await f.runtime.citation('/repo', {...claim, file: '../outside'})).toBe(false)
+        f.command.mockImplementation((_name, args) => reply(args[0] === 'ls-tree' ? '' : 'return requestedValue'))
+        expect(await f.runtime.citation('/repo', claim)).toBe(false)
         f.command.mockResolvedValue(response('supabase/migrations/001.sql'))
         expect(await f.runtime.databaseChanged(run, sha)).toBe(true)
+    })
+    it.each([
+        ['git fetch', (args: readonly string[]) => args[0] === 'fetch', 'reconcile'],
+        ['gh pr list', (args: readonly string[]) => args[1] === 'list', 'deliver'],
+        ['git push', (args: readonly string[]) => args[0] === 'push', 'deliver'],
+        ['gh pr create', (args: readonly string[]) => args[1] === 'create', 'deliver'],
+        ['gh pr list', (args: readonly string[]) => args[1] === 'list', 'merged'],
+    ] as const)('classifies a failed %s as transient (%s)', async (_label, failing, call) => {
+        const f = setup()
+        f.command.mockImplementation((name, args) =>
+            failing(args) ? reply('network down', 1) : reply(name === 'gh' ? '[]' : sha)
+        )
+        const pending =
+            call === 'reconcile'
+                ? f.runtime.reconcileBase(run)
+                : call === 'merged'
+                  ? f.runtime.mergedDelivery(run)
+                  : f.runtime.deliver(run)
+        await expect(pending).rejects.toBeInstanceOf(TransientFailure)
+    })
+    it('treats a PR missing after push and unreadable checks as transient, an ambiguous PR as fatal', async () => {
+        const f = setup()
+        f.command.mockImplementation((name) => reply(name === 'gh' ? '[]' : sha))
+        await expect(f.runtime.deliver(run)).rejects.toThrow(
+            new TransientFailure('feature PR identity is missing after push')
+        )
+        let lists = 0
+        f.command.mockImplementation((name, args) =>
+            reply(name === 'gh' && args[1] === 'list' ? JSON.stringify(lists++ ? [pr, pr] : []) : sha)
+        )
+        const ambiguous = f.runtime.deliver(run)
+        await expect(ambiguous).rejects.toThrow('ambiguous after push')
+        await expect(ambiguous).rejects.not.toBeInstanceOf(TransientFailure)
+        f.command.mockImplementation((name, args) =>
+            args[1] === 'checks' ? reply('', 2) : reply(name === 'gh' ? JSON.stringify([pr]) : sha)
+        )
+        await expect(f.runtime.deliver(run)).rejects.toBeInstanceOf(TransientFailure)
+    })
+    it('removes a snapshot whose provisioning failed and reports the failure as transient', async () => {
+        const f = setup()
+        vi.mocked(provisionWorktree).mockRejectedValueOnce(new Error('pnpm install failed'))
+        await expect(f.runtime.snapshot(run, 'a1', sha)).rejects.toThrow(
+            new TransientFailure('worktree setup failed: pnpm install failed')
+        )
+        const target = '/repo/.claude/worktrees/review-run-a1'
+        expect(f.command).toHaveBeenLastCalledWith('git', ['worktree', 'remove', '--force', target], '/repo')
+        vi.mocked(provisionWorktree).mockResolvedValueOnce(undefined)
+        expect(await f.runtime.snapshot(run, 'a2', sha)).toBe('/repo/.claude/worktrees/review-run-a2')
+    })
+    it('reports a failed feature worktree provision as transient', async () => {
+        const f = setup()
+        f.command.mockImplementation((_name, args) => reply(args[0] === 'symbolic-ref' ? 'factory/1-run' : sha))
+        vi.mocked(provisionWorktree).mockRejectedValueOnce('offline')
+        await expect(f.runtime.prepare('/repo', '/repo', 'factory/1-run', sha)).rejects.toThrow(
+            new TransientFailure('worktree setup failed: offline')
+        )
     })
     it('uses quota evidence unless the run explicitly overrides it', async () => {
         const f = setup()

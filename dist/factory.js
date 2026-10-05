@@ -104,7 +104,7 @@ var require_polyfills = __commonJS({
       }
       if (platform === "win32") {
         fs.rename = typeof fs.rename !== "function" ? fs.rename : (function(fs$rename) {
-          function rename2(from, to, cb) {
+          function rename3(from, to, cb) {
             var start = Date.now();
             var backoff = 0;
             fs$rename(from, to, function CB(er) {
@@ -124,8 +124,8 @@ var require_polyfills = __commonJS({
               if (cb) cb(er);
             });
           }
-          if (Object.setPrototypeOf) Object.setPrototypeOf(rename2, fs$rename);
-          return rename2;
+          if (Object.setPrototypeOf) Object.setPrototypeOf(rename3, fs$rename);
+          return rename3;
         })(fs.rename);
       }
       fs.read = typeof fs.read !== "function" ? fs.read : (function(fs$read) {
@@ -7506,7 +7506,7 @@ function resolveNodeRuntimeDeclarations(declarations) {
 }
 
 // src/feature/store.ts
-import { access as access2, mkdir as mkdir4, readFile as readFile3, readdir } from "node:fs/promises";
+import { access as access2, mkdir as mkdir4, readFile as readFile3, readdir, rename as rename2 } from "node:fs/promises";
 import { join as join4 } from "node:path";
 
 // src/feature/schema.ts
@@ -8147,6 +8147,10 @@ var FeatureRunSchema = external_exports.object({
   answers: external_exports.array(external_exports.object({ task_id: IdSchema, question: external_exports.string(), answer: external_exports.string(), at: external_exports.string() })),
   question: external_exports.string().optional(),
   feedback: external_exports.array(external_exports.string()),
+  /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
+  rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
+  /** Consecutive transient infrastructure failures. */
+  transient_failures: external_exports.number().int().positive().optional(),
   claims: external_exports.array(ClaimSchema),
   confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),
@@ -8207,17 +8211,50 @@ var FeatureStore = class {
     }
     return run5;
   }
+  /** Readable runs; a run whose state is unreadable, invalid or another version is skipped with a warning. */
   async list() {
+    const { runs, skipped } = await this.scan();
+    for (const [id, why] of skipped) {
+      process.stderr.write(`Factory: skipping unreadable run ${id}: ${why}
+`);
+    }
+    return runs;
+  }
+  /** Ids of the runs `list()` skips. */
+  async skipped() {
+    return (await this.scan()).skipped.map(([id]) => id);
+  }
+  async scan() {
     let names;
     try {
       names = await readdir(join4(this.dataDir, "runs-v2"));
     } catch (error) {
       if (isEnoent(error)) {
-        return [];
+        return { runs: [], skipped: [] };
       }
       throw error;
     }
-    return Promise.all(names.filter((name) => IdSchema.safeParse(name).success).map((name) => this.read(name)));
+    const runs = [];
+    const skipped = [];
+    for (const name of names.filter((name2) => IdSchema.safeParse(name2).success)) {
+      try {
+        runs.push(await this.read(name));
+      } catch (error) {
+        skipped.push([name, error instanceof Error ? error.message : String(error)]);
+      }
+    }
+    return { runs, skipped };
+  }
+  async exists(id) {
+    try {
+      await access2(this.dir(id));
+      return true;
+    } catch (error) {
+      if (isEnoent(error)) {
+        return false;
+      }
+      throw error;
+    }
   }
   async write(run5) {
     const checked = FeatureRunSchema.parse(run5);
@@ -8276,6 +8313,11 @@ var FeatureStore = class {
     await mkdir4(join4(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
     return paths;
   }
+  /** Move a rejected role's staged file aside as evidence; the role's path is free for its re-issue. */
+  async rejectStaged(id, attempt, role, n) {
+    const path3 = this.stagedPaths(id, attempt, [role])[role] ?? "";
+    await rename2(path3, path3.replace(/\.json$/, `.rejected-${n}.json`));
+  }
   /** Roles whose staged file exists (parseability not checked). */
   async stagedPresent(id, attempt) {
     const present = [];
@@ -8292,9 +8334,9 @@ var FeatureStore = class {
     return present;
   }
   /**
-   * Read every role's staged file and merge them into one attempt result. A missing,
-   * half-written or schema-invalid file reads as "not yet"; only explicit recovery
-   * judges it. Reviewer identity is bound from the path; any non-done status wins.
+   * Read every role's staged file and merge them into one attempt result. A missing file
+   * reads as "not yet"; an unparseable (including empty) or schema-invalid one is also
+   * named in `invalid`. Reviewer identity is bound from the path; any non-done status wins.
    */
   async staged(id, attempt) {
     const parts = [];
@@ -8304,8 +8346,11 @@ var FeatureStore = class {
       try {
         parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile3(path3, "utf8"))))]);
       } catch (error) {
-        if (isEnoent(error) || error instanceof SyntaxError) {
+        if (isEnoent(error)) {
           missing.push(role);
+        } else if (error instanceof SyntaxError) {
+          missing.push(role);
+          invalid[role] = `unparseable JSON: ${error.message}`;
         } else if (error instanceof ZodError) {
           missing.push(role);
           invalid[role] = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
@@ -10518,6 +10563,17 @@ import { randomUUID as randomUUID2 } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { join as join15 } from "node:path";
 
+// src/feature/ports.ts
+var ResultRejected = class extends Error {
+  constructor(roles, reason, freshSnapshot = false) {
+    super(reason);
+    this.roles = roles;
+    this.freshSnapshot = freshSnapshot;
+  }
+};
+var TransientFailure = class extends Error {
+};
+
 // src/feature/brief.ts
 var PRODUCER_ROLES = ["test-writer", "implementer", "scribe", "e2e-author", "spec-generator"];
 var REVIEWER_ROLES = [
@@ -10759,6 +10815,14 @@ function renderBrief(run5, attempt, role) {
 - Worktree: ${attempt.worktree}`,
     producer ? "Work in the worktree above. Commit completed work with `[task_id]` tags. Preserve accepted commits and repair forward; never reset, force-push, delete branches or change engine state. Do not weaken tests." : "The worktree is an immutable snapshot: review it independently and never modify it. Every claim or decision needs evidence from the code.",
     ...body(run5, attempt, role),
+    ...run5.rejections?.[role] !== void 0 ? [
+      section(
+        "Previous result rejected",
+        `The engine rejected an earlier result for this role. Fix every reason below; a third rejection parks the run for a human.
+
+${list(run5.rejections[role])}`
+      )
+    ] : [],
     section("Result contract", contract(role, run5))
   ].join("\n\n");
 }
@@ -10766,6 +10830,8 @@ function renderBrief(run5, attempt, role) {
 // src/feature/engine.ts
 var PANEL = ["quality-reviewer", "implementation-reviewer", "silent-failure-hunter", "systemic-failure-reviewer"];
 var PRODUCERS = ["tests", "implement", "docs", "e2e-author", "spec-repair"];
+var REISSUES = 2;
+var TRANSIENT_LIMIT = 5;
 var FeatureEngine = class {
   constructor(store, runtime) {
     this.store = store;
@@ -10775,10 +10841,10 @@ var FeatureEngine = class {
     return this.store.withRepo(input.repo, async () => {
       const id = IdSchema.parse(input.runId);
       const spec = validateFeatureSpec(input.spec);
-      const runs = await this.store.list();
-      if (runs.some((run6) => run6.run_id === id)) {
+      if (await this.store.exists(id)) {
         throw new Error(`run ${id} already exists`);
       }
+      const runs = await this.store.list();
       const active = runs.find((run6) => run6.repo === input.repo && !terminal(run6));
       if (active) {
         throw new Error(`repository already has active run ${active.run_id}; resume or cancel it`);
@@ -10833,20 +10899,28 @@ var FeatureEngine = class {
       if (run5.status === "parked") {
         return this.parked(run5);
       }
+      const failures = run5.transient_failures ?? 0;
+      delete run5.transient_failures;
       try {
         if (run5.in_flight) {
           const staged = await this.store.staged(id, run5.in_flight);
           if ("missing" in staged) {
+            const invalid = Object.entries(staged.invalid);
+            if (invalid.length) {
+              throw new ResultRejected(
+                invalid.map(([role]) => role),
+                invalid.map(([role, why]) => `${role}: ${why}`).join("; ")
+              );
+            }
             const roles = run5.in_flight.redispatch;
             if (roles) {
               delete run5.in_flight.redispatch;
               await this.store.write(run5);
               return await this.execute(run5, { ...run5.in_flight, roles });
             }
-            const rejected = Object.entries(staged.invalid).map(([role, why]) => `${role}: ${why}`);
             return this.wait(
               run5,
-              `awaiting ${staged.missing.join(", ")} for ${run5.in_flight.id}; do not spawn it twice` + (rejected.length ? `; staged file rejected (${rejected.join("; ")})` : "")
+              `awaiting ${staged.missing.join(", ")} for ${run5.in_flight.id}; do not spawn it twice`
             );
           }
           const recorded = structuredClone(run5);
@@ -10875,11 +10949,61 @@ var FeatureEngine = class {
         }
         return this.wait(run5, "checkpoint saved; advance again");
       } catch (error) {
-        this.park(run5, "environment", error instanceof Error ? error.message : String(error));
+        if (error instanceof ResultRejected) {
+          return this.rejected(run5, error);
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (error instanceof TransientFailure && failures + 1 < TRANSIENT_LIMIT) {
+          run5.transient_failures = failures + 1;
+          run5.status = "waiting";
+          run5.stop_reason = { kind: "environment", message };
+          this.audit(run5, "transient failure", { count: failures + 1, message });
+          await this.store.write(run5);
+          return this.wait(run5, `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`);
+        }
+        this.park(run5, "environment", message);
         await this.store.write(run5);
         return this.parked(run5);
       }
     });
+  }
+  /** Move the rejected files aside and re-issue their roles, or park once a role exhausts its re-issues. */
+  async rejected(run5, error) {
+    const attempt = run5.in_flight;
+    if (attempt === void 0) {
+      throw new Error(`result rejected without an active attempt: ${error.message}`);
+    }
+    const rejections = run5.rejections ??= {};
+    for (const role of error.roles) {
+      const reasons = rejections[role] ??= [];
+      reasons.push(error.message);
+      await this.store.rejectStaged(run5.run_id, attempt, role, reasons.length);
+    }
+    this.audit(run5, "result rejected", {
+      attempt: attempt.id,
+      roles: error.roles,
+      reason: error.message,
+      fresh_snapshot: error.freshSnapshot
+    });
+    const exhausted = error.roles.find((role) => (rejections[role]?.length ?? 0) > REISSUES);
+    if (exhausted !== void 0) {
+      this.park(
+        run5,
+        "producer",
+        `${exhausted}: result rejected ${REISSUES + 1} times: ${rejections[exhausted]?.join("; ")}`
+      );
+      await this.store.write(run5);
+      return this.parked(run5);
+    }
+    if (error.freshSnapshot) {
+      delete run5.in_flight;
+      await this.store.write(run5);
+      return this.wait(run5, `result rejected (${error.message}); a fresh attempt is issued next`, 0);
+    }
+    const roles = [.../* @__PURE__ */ new Set([...attempt.redispatch ?? [], ...error.roles])];
+    delete attempt.redispatch;
+    await this.store.write(run5);
+    return this.execute(run5, { ...attempt, roles });
   }
   async stop(id) {
     return this.mutate(id, (run5) => {
@@ -10887,6 +11011,20 @@ var FeatureEngine = class {
         throw new Error("terminal run cannot be stopped");
       }
       this.park(run5, "operator", "Explicit stop; resume is required even after quota recovery");
+      return run5;
+    });
+  }
+  /** The session driving next-action or resume becomes the owner the Stop hook and guards follow. */
+  async own(id, session) {
+    const settled = (run5) => terminal(run5) || run5.owner_session === session;
+    if (settled(await this.store.read(id))) {
+      return;
+    }
+    await this.mutate(id, (run5) => {
+      if (!settled(run5)) {
+        this.audit(run5, "owner session changed", { from: run5.owner_session ?? null, to: session });
+        run5.owner_session = session;
+      }
       return run5;
     });
   }
@@ -10973,6 +11111,8 @@ var FeatureEngine = class {
       run5.status = "running";
       delete run5.stop_reason;
       delete run5.wait_since;
+      delete run5.rejections;
+      delete run5.transient_failures;
       this.audit(run5, "resumed", options);
       return run5;
     });
@@ -10993,6 +11133,7 @@ var FeatureEngine = class {
       throw new Error("stale or duplicate result; inspect the persisted attempt");
     }
     await this.record(run5, result);
+    delete run5.rejections;
     await this.store.recordResult(run5.run_id, attempt.id, result);
   }
   task(run5) {
@@ -11009,8 +11150,8 @@ var FeatureEngine = class {
   parked(run5) {
     return { kind: "park", run_id: run5.run_id, reason: run5.stop_reason?.message ?? "parked" };
   }
-  wait(run5, reason) {
-    return { kind: "wait", run_id: run5.run_id, reason, retry_after_seconds: 60 };
+  wait(run5, reason, seconds = 60) {
+    return { kind: "wait", run_id: run5.run_id, reason, retry_after_seconds: seconds };
   }
   terminal(run5) {
     return { kind: "terminal", run_id: run5.run_id, status: run5.status, delivery: run5.delivery };
@@ -11107,11 +11248,17 @@ var FeatureEngine = class {
     if (!await this.runtime.ancestor(run5.worktree, run5.accepted_sha, head)) {
       throw new Error("producer removed accepted commits");
     }
+    const producer = PRODUCERS.includes(attempt.stage);
     if (["done", "already-satisfied"].includes(result.status) && !await this.runtime.clean(run5.worktree)) {
-      throw new Error("uncommitted work remains; preserve it and finish the attempt");
+      const message = "uncommitted work remains; preserve it and finish the attempt";
+      throw producer ? new ResultRejected(attempt.roles, message) : new Error(message);
     }
-    if (!PRODUCERS.includes(attempt.stage) && (await this.runtime.head(attempt.worktree) !== attempt.head_sha || !await this.runtime.clean(attempt.worktree))) {
-      throw new Error("review snapshot was modified; independent evidence is invalid");
+    if (!producer && (await this.runtime.head(attempt.worktree) !== attempt.head_sha || !await this.runtime.clean(attempt.worktree))) {
+      throw new ResultRejected(
+        attempt.roles,
+        "review snapshot was modified; independent evidence is invalid",
+        true
+      );
     }
     delete run5.in_flight;
     this.audit(run5, "result recorded", result);
@@ -11130,7 +11277,7 @@ var FeatureEngine = class {
     }
     if (result.status === "already-satisfied") {
       if (run5.stage !== "tests" && (run5.stage !== "implement" || head !== run5.task_base_sha)) {
-        throw new Error("already-satisfied requires an unchanged task checkpoint");
+        throw new ResultRejected(attempt.roles, "already-satisfied requires an unchanged task checkpoint");
       }
       if (run5.stage === "tests" && !await this.runtime.testsOnly(run5)) {
         const message = "already-satisfied at the tests stage requires only tagged test-only commits since the task checkpoint; an implementation commit cannot be repaired by the test-writer";
@@ -11172,18 +11319,27 @@ var FeatureEngine = class {
       case "slice-review":
       case "feature-review": {
         const reviews = result.reviews;
-        if (reviews?.length !== attempt.roles.length) {
-          throw new Error("missing or duplicate independent reviewer results");
+        const absent = attempt.roles.filter((role) => reviews?.some((row) => row.reviewer === role) !== true);
+        if (absent.length) {
+          throw new ResultRejected(
+            absent,
+            'reviewer result has no claims array; return "claims": [] when clean'
+          );
         }
-        run5.claims = [];
-        for (const review of reviews) {
-          for (const claim of review.claims) {
-            if (!await this.runtime.citation(attempt.worktree, claim)) {
-              throw new Error(`invalid citation for ${claim.id}`);
-            }
-            run5.claims.push(claim);
+        const claims = (reviews ?? []).flatMap((review) => review.claims);
+        const invalid = [];
+        for (const claim of claims) {
+          if (!await this.runtime.citation(attempt.worktree, claim)) {
+            invalid.push(claim);
           }
         }
+        if (invalid.length) {
+          throw new ResultRejected(
+            [...new Set(invalid.map((claim) => claim.reviewer))],
+            `invalid citation for ${invalid.map((claim) => `${claim.id} (${claim.file}:${claim.line})`).join(", ")}; quote must be exact source within two lines of line`
+          );
+        }
+        run5.claims = claims;
         this.audit(run5, "review recorded", reviews);
         if (run5.claims.length) {
           run5.after_confirm = run5.stage;
@@ -11197,7 +11353,10 @@ var FeatureEngine = class {
         const votes = result.confirmations ?? [];
         const batch = run5.claims.slice(0, CONFIRM_BATCH);
         if (votes.length !== batch.length || new Set(votes.map((v) => v.id)).size !== votes.length || batch.some((c) => !votes.some((v) => v.id === c.id))) {
-          throw new Error("independent confirmation is incomplete");
+          throw new ResultRejected(
+            attempt.roles,
+            `independent confirmation is incomplete; return exactly one confirmation for each of ${batch.map((c) => c.id).join(", ")}`
+          );
         }
         this.audit(run5, "findings confirmed", { claims: batch, votes });
         run5.claims = run5.claims.slice(batch.length);
@@ -11229,7 +11388,10 @@ var FeatureEngine = class {
         const rows = result.acceptance ?? [];
         const expected = acceptanceIds(run5);
         if (rows.length !== expected.length || new Set(rows.map((row) => row.id)).size !== rows.length || expected.some((id) => !rows.some((row) => row.id === id))) {
-          throw new Error("acceptance evidence must cover every requested criterion exactly once");
+          throw new ResultRejected(
+            attempt.roles,
+            `acceptance evidence must cover every requested criterion exactly once: ${expected.join(", ")}`
+          );
         }
         const unmet = rows.filter((row) => !row.met);
         if (unmet.length) {
@@ -11250,22 +11412,27 @@ var FeatureEngine = class {
         break;
       }
       case "spec-repair": {
-        const repair = parseGenerateResult(result.repaired_spec);
-        const spec = validateFeatureSpec({
-          version: VERSION,
-          revision: run5.spec.revision + 1,
-          base_sha: run5.spec.base_sha,
-          prd: run5.spec.prd,
-          contracts: run5.spec.contracts,
-          spec_md: repair.specMd,
-          tasks: repair.tasks
-        });
-        for (const [index, checkpoint] of run5.checkpoints.entries()) {
-          if (spec.tasks[index]?.task_id !== checkpoint.task_id || digest(spec.tasks.find((t) => t.task_id === checkpoint.task_id)) !== digest(run5.spec.tasks.find((t) => t.task_id === checkpoint.task_id))) {
-            throw new Error("spec repair cannot change or reorder the accepted task prefix");
+        let spec;
+        try {
+          const repair = parseGenerateResult(result.repaired_spec);
+          spec = validateFeatureSpec({
+            version: VERSION,
+            revision: run5.spec.revision + 1,
+            base_sha: run5.spec.base_sha,
+            prd: run5.spec.prd,
+            contracts: run5.spec.contracts,
+            spec_md: repair.specMd,
+            tasks: repair.tasks
+          });
+          for (const [index, checkpoint] of run5.checkpoints.entries()) {
+            if (spec.tasks[index]?.task_id !== checkpoint.task_id || digest(spec.tasks.find((t) => t.task_id === checkpoint.task_id)) !== digest(run5.spec.tasks.find((t) => t.task_id === checkpoint.task_id))) {
+              throw new Error("spec repair cannot change or reorder the accepted task prefix");
+            }
           }
+          await this.runtime.validateRepair(run5, spec);
+        } catch (error) {
+          throw new ResultRejected(attempt.roles, error instanceof Error ? error.message : String(error));
         }
-        await this.runtime.validateRepair(run5, spec);
         run5.repaired_spec = spec;
         run5.stage = "spec-review";
         break;
@@ -12389,10 +12556,11 @@ var LocalFeatureRuntime = class {
   get ciWaitMinutes() {
     return this.config.git.rollupCiWaitMinutes;
   }
-  async checked(name, args, cwd) {
+  async checked(name, args, cwd, transient = false) {
     const result = await this.command(name, args, cwd);
     if (result.code !== 0 || result.truncated) {
-      throw new Error(`${name} ${args[0]} failed: ${result.stderr || result.stdout}`);
+      const message = `${name} ${args[0]} failed: ${result.stderr || result.stdout}`;
+      throw transient ? new TransientFailure(message) : new Error(message);
     }
     return result.stdout.trim();
   }
@@ -12417,7 +12585,16 @@ var LocalFeatureRuntime = class {
     if (actual !== branch || !await this.ancestor(worktree, base, await this.head(worktree))) {
       throw new Error("existing feature worktree has a different branch/base; preserved for inspection");
     }
-    await provisionWorktree({ path: worktree, setupCommand: this.config.quality.setupCommand });
+    await this.provision(worktree);
+  }
+  async provision(path3) {
+    try {
+      await provisionWorktree({ path: path3, setupCommand: this.config.quality.setupCommand });
+    } catch (error) {
+      throw new TransientFailure(
+        `worktree setup failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
   head(worktree) {
     return this.checked("git", ["rev-parse", "HEAD"], worktree);
@@ -12535,11 +12712,16 @@ var LocalFeatureRuntime = class {
   async snapshot(run5, id, head) {
     const target = join16(run5.root, ".claude", "worktrees", `review-${run5.run_id}-${id}`);
     await this.checked("git", ["worktree", "add", "--detach", target, head], run5.root);
-    await provisionWorktree({ path: target, setupCommand: this.config.quality.setupCommand });
+    try {
+      await this.provision(target);
+    } catch (error) {
+      await this.checked("git", ["worktree", "remove", "--force", target], run5.root);
+      throw error;
+    }
     return target;
   }
   async citation(worktree, claim) {
-    if (!safeRepoPath(claim.file)) {
+    if (!safeRepoPath(claim.file) || !await this.checked("git", ["ls-tree", "--name-only", "HEAD", "--", claim.file], worktree)) {
       return false;
     }
     const source = await this.checked("git", ["show", `HEAD:${claim.file}`], worktree);
@@ -12556,7 +12738,7 @@ var LocalFeatureRuntime = class {
     return decision.kind === "proceed" ? void 0 : decision.reason;
   }
   async reconcileBase(run5) {
-    await this.checked("git", ["fetch", run5.remote, run5.base_branch], run5.worktree);
+    await this.checked("git", ["fetch", run5.remote, run5.base_branch], run5.worktree, true);
     const base = await this.checked("git", ["rev-parse", `${run5.remote}/${run5.base_branch}`], run5.worktree);
     if (await this.ancestor(run5.worktree, base, await this.head(run5.worktree))) {
       return "unchanged";
@@ -12602,7 +12784,8 @@ var LocalFeatureRuntime = class {
             "--json",
             "number,url,state,headRefOid,baseRefName"
           ],
-          run5.worktree
+          run5.worktree,
+          true
         )
       )
     );
@@ -12620,7 +12803,7 @@ var LocalFeatureRuntime = class {
     if (pr?.state === "CLOSED") {
       throw new Error("feature PR was closed without merge; work preserved");
     }
-    await this.checked("git", ["push", "-u", run5.remote, `HEAD:refs/heads/${run5.branch}`], run5.worktree);
+    await this.checked("git", ["push", "-u", run5.remote, `HEAD:refs/heads/${run5.branch}`], run5.worktree, true);
     if (!pr) {
       await this.checked(
         "gh",
@@ -12641,13 +12824,17 @@ var LocalFeatureRuntime = class {
 Factory run ${run5.run_id}; reviewed HEAD ${head}.
 Spec ${run5.spec_digest}.`
         ],
-        run5.worktree
+        run5.worktree,
+        true
       );
     }
     prs = await list2();
     pr = prs[0];
-    if (!pr || prs.length !== 1) {
-      throw new Error("feature PR identity is missing or ambiguous after push");
+    if (!pr) {
+      throw new TransientFailure("feature PR identity is missing after push");
+    }
+    if (prs.length !== 1) {
+      throw new Error("feature PR identity is ambiguous after push");
     }
     if (pr.headRefOid !== head) {
       return {
@@ -12673,7 +12860,7 @@ Spec ${run5.spec_digest}.`
       run5.worktree
     );
     if (checkResult.truncated || ![0, 1, 8].includes(checkResult.code ?? -1)) {
-      throw new Error(`cannot read required checks: ${checkResult.stderr}`);
+      throw new TransientFailure(`cannot read required checks: ${checkResult.stderr}`);
     }
     const checks = external_exports.array(external_exports.object({ bucket: external_exports.string(), name: external_exports.string() })).parse(checkResult.stdout.trim() ? JSON.parse(checkResult.stdout) : []);
     if (checks.some((check) => ["fail", "cancel"].includes(check.bucket))) {
@@ -12691,7 +12878,8 @@ Spec ${run5.spec_digest}.`
     await this.checked(
       "gh",
       ["pr", "merge", String(pr.number), "--repo", run5.repo, "--squash", "--auto", "--match-head-commit", head],
-      run5.worktree
+      run5.worktree,
+      true
     );
     const updated = (await list2())[0];
     if (updated?.headRefOid !== head) {
@@ -12718,7 +12906,8 @@ Spec ${run5.spec_digest}.`
             "--json",
             "number,url,state,headRefOid,baseRefName"
           ],
-          run5.worktree
+          run5.worktree,
+          true
         )
       )
     );
@@ -12929,6 +13118,9 @@ function featureCommand(name) {
           throw new UsageError(
             `run ${id} belongs to ${run5.root}; run ${name} from that repository (cwd is ${root})`
           );
+        }
+        if (ownerSession !== void 0 && ownerSession !== "") {
+          await engine.own(id, ownerSession);
         }
       }
       if (name === "next-action" || name === "next-task") {

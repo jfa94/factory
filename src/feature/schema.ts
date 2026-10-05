@@ -156,6 +156,10 @@ export const FeatureRunSchema = z
         answers: z.array(z.object({task_id: IdSchema, question: z.string(), answer: z.string(), at: z.string()})),
         question: z.string().optional(),
         feedback: z.array(z.string()),
+        /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
+        rejections: z.record(z.array(z.string())).optional(),
+        /** Consecutive transient infrastructure failures. */
+        transient_failures: z.number().int().positive().optional(),
         claims: z.array(ClaimSchema),
         confirmed_claims: z.array(ClaimSchema).default([]),
         after_confirm: StageSchema.optional(),

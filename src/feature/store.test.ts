@@ -20,6 +20,18 @@ describe('FeatureStore integrity checks', () => {
         await expect(store.read('run')).rejects.toThrow(/run run is missing or uses an unsupported version/)
     })
 
+    it('reports whether a run directory exists and surfaces unreadable data directories', async () => {
+        const store = new FeatureStore(dataDir)
+        expect(await store.exists('run')).toBe(false)
+        await store.write(featureRunFixture())
+        expect(await store.exists('run')).toBe(true)
+        const file = join(dataDir, 'not-a-dir')
+        await writeFile(file, '')
+        const broken = new FeatureStore(file)
+        await expect(broken.exists('run')).rejects.toThrow(/ENOTDIR/)
+        await expect(broken.skipped()).rejects.toThrow(/ENOTDIR/)
+    })
+
     it('refuses to write a run whose spec digest does not match its snapshot', async () => {
         const run = featureRunFixture({spec_digest: 'f'.repeat(64)})
         await expect(new FeatureStore(dataDir).write(run)).rejects.toThrow(/spec snapshot digest mismatch/)

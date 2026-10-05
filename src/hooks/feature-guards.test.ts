@@ -1,3 +1,6 @@
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {runFeatureGuard, runFeatureStop, decideFeatureGuard} from './feature-guards.js'
 import {FeatureStore} from '../feature/store.js'
@@ -27,6 +30,31 @@ describe('v2 hook entry points', () => {
         const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true)
         expect(await runFeatureGuard()).toBe(1)
         expect(output.mock.calls.flat().join('')).toContain('corrupt feature state')
+    })
+    it('locks only the worktrees of a run whose state is unreadable', async () => {
+        const edit = (path: string, cwd = '/elsewhere') => ({tool_name: 'Edit', cwd, tool_input: {file_path: path}})
+        const decide = (input: ReturnType<typeof edit>) => decideFeatureGuard(input, [], undefined, ['bad']).action
+        expect(decide(edit('/repo/.claude/worktrees/feature-bad/a.ts'))).toBe('deny')
+        expect(decide(edit('/repo/.claude/worktrees/review-bad-a1/a.ts'))).toBe('deny')
+        expect(decide(edit('/repo/src/a.ts', '/repo/.claude/worktrees/feature-bad'))).toBe('deny')
+        expect(decide(edit('/repo/.claude/worktrees/feature-badge/a.ts'))).toBe('allow')
+        expect(decide(edit('/repo/src/feature-bad/a.ts'))).toBe('allow')
+        expect(decideFeatureGuard(edit('/repo/.claude/worktrees/feature-bad/a.ts'), []).action).toBe('allow')
+        const dataDir = await mkdtemp(join(tmpdir(), 'feature-guard-'))
+        try {
+            await mkdir(join(dataDir, 'runs-v2', 'bad'), {recursive: true})
+            await writeFile(join(dataDir, 'runs-v2', 'bad', 'state.json'), '{')
+            vi.stubEnv('CLAUDE_PLUGIN_DATA', dataDir)
+            vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+            const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true)
+            vi.mocked(readHookInput).mockResolvedValue(edit('/repo/src/a.ts'))
+            expect(await runFeatureGuard()).toBe(0)
+            vi.mocked(readHookInput).mockResolvedValue(edit('/repo/.claude/worktrees/feature-bad/a.ts'))
+            expect(await runFeatureGuard()).toBe(1)
+            expect(output.mock.calls.flat().join('')).toContain('run bad has unreadable state')
+        } finally {
+            await rm(dataDir, {recursive: true, force: true})
+        }
     })
     it('fails closed on malformed hook input', async () => {
         vi.mocked(readHookInput).mockRejectedValue(new Error('malformed input'))

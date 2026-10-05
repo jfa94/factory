@@ -26,11 +26,26 @@ function inside(root: string, path: string): boolean {
     return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith(sep))
 }
 
-/** V2 ownership is anchored to the feature/snapshot path or exact session ID. */
+/** True when `path` lies in run `id`'s feature worktree or one of its review snapshots. */
+function inRunWorktree(id: string, path: string): boolean {
+    const segments = canonicalizePath(path).split(sep)
+    return segments.some(
+        (name, index) =>
+            segments[index - 2] === '.claude' &&
+            segments[index - 1] === 'worktrees' &&
+            (name === `feature-${id}` || name.startsWith(`review-${id}-`))
+    )
+}
+
+/**
+ * V2 ownership is anchored to the feature/snapshot path or exact session ID. A run whose
+ * state is unreadable (`skipped`) fails closed only inside its own worktrees.
+ */
 export function decideFeatureGuard(
     input: HookInput | null,
     runs: readonly FeatureRun[],
-    dataDir?: string
+    dataDir?: string,
+    skipped: readonly string[] = []
 ): HookDecision {
     if (input === null) {
         return allow()
@@ -38,6 +53,10 @@ export function decideFeatureGuard(
     const cwd = input.cwd ?? process.cwd()
     const paths = filePathsOf(input).map((path) => resolve(cwd, path))
     const session = sessionIdOf(input)
+    const corrupt = skipped.find((id) => [cwd, ...paths].some((path) => inRunWorktree(id, path)))
+    if (corrupt !== undefined) {
+        return deny(`Factory: run ${corrupt} has unreadable state; its worktrees are locked until it is repaired`)
+    }
     for (const run of runs) {
         if (terminal(run)) {
             continue
@@ -85,7 +104,8 @@ export async function runFeatureGuard(_argv: string[] = []): Promise<ExitCode> {
     try {
         const input = await readHookInput()
         const dataDir = resolveDataDir()
-        decision = decideFeatureGuard(input, await new FeatureStore(dataDir).list(), dataDir)
+        const store = new FeatureStore(dataDir)
+        decision = decideFeatureGuard(input, await store.list(), dataDir, await store.skipped())
     } catch (error) {
         decision = deny(
             `Factory feature state cannot be checked: ${error instanceof Error ? error.message : String(error)}`

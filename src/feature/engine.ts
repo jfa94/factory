@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto'
 import {join} from 'node:path'
 import {type FeatureStore, type Staged} from './store.js'
-import type {FeatureRuntime} from './ports.js'
+import {ResultRejected, TransientFailure, type FeatureRuntime} from './ports.js'
 import {
     VERSION,
     REPAIR_PASSES,
@@ -22,6 +22,9 @@ import {acceptanceIds, currentTask, renderBrief} from './brief.js'
 
 const PANEL = ['quality-reviewer', 'implementation-reviewer', 'silent-failure-hunter', 'systemic-failure-reviewer']
 const PRODUCERS: readonly Stage[] = ['tests', 'implement', 'docs', 'e2e-author', 'spec-repair']
+/** Rejections a role may receive before the next one parks the run. */
+const REISSUES = 2
+const TRANSIENT_LIMIT = 5
 
 export class FeatureEngine {
     constructor(
@@ -46,10 +49,11 @@ export class FeatureEngine {
         return this.store.withRepo(input.repo, async () => {
             const id = IdSchema.parse(input.runId)
             const spec = validateFeatureSpec(input.spec)
-            const runs = await this.store.list()
-            if (runs.some((run) => run.run_id === id)) {
+            // A corrupt run is skipped by list() but its directory still blocks the id.
+            if (await this.store.exists(id)) {
                 throw new Error(`run ${id} already exists`)
             }
+            const runs = await this.store.list()
             const active = runs.find((run) => run.repo === input.repo && !terminal(run))
             if (active) {
                 throw new Error(`repository already has active run ${active.run_id}; resume or cancel it`)
@@ -107,23 +111,30 @@ export class FeatureEngine {
             if (run.status === 'parked') {
                 return this.parked(run)
             }
+            const failures = run.transient_failures ?? 0
+            delete run.transient_failures
             try {
                 if (run.in_flight) {
                     // The staged file's existence is the submission: no driver hand-off is needed,
                     // so a fresh driver consumes a previous driver's finished attempt.
                     const staged = await this.store.staged(id, run.in_flight)
                     if ('missing' in staged) {
+                        const invalid = Object.entries(staged.invalid)
+                        if (invalid.length) {
+                            throw new ResultRejected(
+                                invalid.map(([role]) => role),
+                                invalid.map(([role, why]) => `${role}: ${why}`).join('; ')
+                            )
+                        }
                         const roles = run.in_flight.redispatch
                         if (roles) {
                             delete run.in_flight.redispatch
                             await this.store.write(run)
                             return await this.execute(run, {...run.in_flight, roles})
                         }
-                        const rejected = Object.entries(staged.invalid).map(([role, why]) => `${role}: ${why}`)
                         return this.wait(
                             run,
-                            `awaiting ${staged.missing.join(', ')} for ${run.in_flight.id}; do not spawn it twice` +
-                                (rejected.length ? `; staged file rejected (${rejected.join('; ')})` : '')
+                            `awaiting ${staged.missing.join(', ')} for ${run.in_flight.id}; do not spawn it twice`
                         )
                     }
                     const recorded = structuredClone(run)
@@ -152,11 +163,63 @@ export class FeatureEngine {
                 }
                 return this.wait(run, 'checkpoint saved; advance again')
             } catch (error) {
-                this.park(run, 'environment', error instanceof Error ? error.message : String(error))
+                if (error instanceof ResultRejected) {
+                    return this.rejected(run, error)
+                }
+                const message = error instanceof Error ? error.message : String(error)
+                if (error instanceof TransientFailure && failures + 1 < TRANSIENT_LIMIT) {
+                    run.transient_failures = failures + 1
+                    run.status = 'waiting'
+                    run.stop_reason = {kind: 'environment', message}
+                    this.audit(run, 'transient failure', {count: failures + 1, message})
+                    await this.store.write(run)
+                    return this.wait(run, `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`)
+                }
+                this.park(run, 'environment', message)
                 await this.store.write(run)
                 return this.parked(run)
             }
         })
+    }
+
+    /** Move the rejected files aside and re-issue their roles, or park once a role exhausts its re-issues. */
+    private async rejected(run: FeatureRun, error: ResultRejected): Promise<FeatureAction> {
+        const attempt = run.in_flight
+        if (attempt === undefined) {
+            throw new Error(`result rejected without an active attempt: ${error.message}`)
+        }
+        const rejections = (run.rejections ??= {})
+        for (const role of error.roles) {
+            const reasons = (rejections[role] ??= [])
+            reasons.push(error.message)
+            await this.store.rejectStaged(run.run_id, attempt, role, reasons.length)
+        }
+        this.audit(run, 'result rejected', {
+            attempt: attempt.id,
+            roles: error.roles,
+            reason: error.message,
+            fresh_snapshot: error.freshSnapshot,
+        })
+        const exhausted = error.roles.find((role) => (rejections[role]?.length ?? 0) > REISSUES)
+        if (exhausted !== undefined) {
+            this.park(
+                run,
+                'producer',
+                `${exhausted}: result rejected ${REISSUES + 1} times: ${rejections[exhausted]?.join('; ')}`
+            )
+            await this.store.write(run)
+            return this.parked(run)
+        }
+        if (error.freshSnapshot) {
+            // ponytail: the retired snapshot worktree stays on disk until snapshot removal lands (4.8).
+            delete run.in_flight
+            await this.store.write(run)
+            return this.wait(run, `result rejected (${error.message}); a fresh attempt is issued next`, 0)
+        }
+        const roles = [...new Set([...(attempt.redispatch ?? []), ...error.roles])]
+        delete attempt.redispatch
+        await this.store.write(run)
+        return this.execute(run, {...attempt, roles})
     }
 
     async stop(id: string): Promise<FeatureRun> {
@@ -165,6 +228,21 @@ export class FeatureEngine {
                 throw new Error('terminal run cannot be stopped')
             }
             this.park(run, 'operator', 'Explicit stop; resume is required even after quota recovery')
+            return run
+        })
+    }
+
+    /** The session driving next-action or resume becomes the owner the Stop hook and guards follow. */
+    async own(id: string, session: string): Promise<void> {
+        const settled = (run: FeatureRun): boolean => terminal(run) || run.owner_session === session
+        if (settled(await this.store.read(id))) {
+            return
+        }
+        await this.mutate(id, (run) => {
+            if (!settled(run)) {
+                this.audit(run, 'owner session changed', {from: run.owner_session ?? null, to: session})
+                run.owner_session = session
+            }
             return run
         })
     }
@@ -256,6 +334,8 @@ export class FeatureEngine {
             run.status = 'running'
             delete run.stop_reason
             delete run.wait_since
+            delete run.rejections
+            delete run.transient_failures
             this.audit(run, 'resumed', options)
             return run
         })
@@ -281,6 +361,7 @@ export class FeatureEngine {
             throw new Error('stale or duplicate result; inspect the persisted attempt')
         }
         await this.record(run, result)
+        delete run.rejections
         await this.store.recordResult(run.run_id, attempt.id, result)
     }
 
@@ -300,8 +381,8 @@ export class FeatureEngine {
     private parked(run: FeatureRun): FeatureAction {
         return {kind: 'park', run_id: run.run_id, reason: run.stop_reason?.message ?? 'parked'}
     }
-    private wait(run: FeatureRun, reason: string): FeatureAction {
-        return {kind: 'wait', run_id: run.run_id, reason, retry_after_seconds: 60}
+    private wait(run: FeatureRun, reason: string, seconds = 60): FeatureAction {
+        return {kind: 'wait', run_id: run.run_id, reason, retry_after_seconds: seconds}
     }
     private terminal(run: FeatureRun): FeatureAction {
         return {kind: 'terminal', run_id: run.run_id, status: run.status, delivery: run.delivery}
@@ -417,15 +498,21 @@ export class FeatureEngine {
         if (!(await this.runtime.ancestor(run.worktree, run.accepted_sha, head))) {
             throw new Error('producer removed accepted commits')
         }
+        const producer = PRODUCERS.includes(attempt.stage)
         if (['done', 'already-satisfied'].includes(result.status) && !(await this.runtime.clean(run.worktree))) {
-            throw new Error('uncommitted work remains; preserve it and finish the attempt')
+            const message = 'uncommitted work remains; preserve it and finish the attempt'
+            throw producer ? new ResultRejected(attempt.roles, message) : new Error(message)
         }
         if (
-            !PRODUCERS.includes(attempt.stage) &&
+            !producer &&
             ((await this.runtime.head(attempt.worktree)) !== attempt.head_sha ||
                 !(await this.runtime.clean(attempt.worktree)))
         ) {
-            throw new Error('review snapshot was modified; independent evidence is invalid')
+            throw new ResultRejected(
+                attempt.roles,
+                'review snapshot was modified; independent evidence is invalid',
+                true
+            )
         }
         delete run.in_flight
         this.audit(run, 'result recorded', result)
@@ -446,7 +533,7 @@ export class FeatureEngine {
             // The tests stage may commit passing tests that pin already-delivered behavior before
             // reporting; implement must leave the task checkpoint untouched.
             if (run.stage !== 'tests' && (run.stage !== 'implement' || head !== run.task_base_sha)) {
-                throw new Error('already-satisfied requires an unchanged task checkpoint')
+                throw new ResultRejected(attempt.roles, 'already-satisfied requires an unchanged task checkpoint')
             }
             if (run.stage === 'tests' && !(await this.runtime.testsOnly(run))) {
                 // A test-writer cannot undo an implementation commit by adding commits (a revert
@@ -497,18 +584,27 @@ export class FeatureEngine {
             case 'feature-review': {
                 const reviews = result.reviews
                 // The store binds one row per role from the staged path; a role without claims is absent.
-                if (reviews?.length !== attempt.roles.length) {
-                    throw new Error('missing or duplicate independent reviewer results')
+                const absent = attempt.roles.filter((role) => reviews?.some((row) => row.reviewer === role) !== true)
+                if (absent.length) {
+                    throw new ResultRejected(
+                        absent,
+                        'reviewer result has no claims array; return "claims": [] when clean'
+                    )
                 }
-                run.claims = []
-                for (const review of reviews) {
-                    for (const claim of review.claims) {
-                        if (!(await this.runtime.citation(attempt.worktree, claim))) {
-                            throw new Error(`invalid citation for ${claim.id}`)
-                        }
-                        run.claims.push(claim)
+                const claims = (reviews ?? []).flatMap((review) => review.claims)
+                const invalid: typeof claims = []
+                for (const claim of claims) {
+                    if (!(await this.runtime.citation(attempt.worktree, claim))) {
+                        invalid.push(claim)
                     }
                 }
+                if (invalid.length) {
+                    throw new ResultRejected(
+                        [...new Set(invalid.map((claim) => claim.reviewer))],
+                        `invalid citation for ${invalid.map((claim) => `${claim.id} (${claim.file}:${claim.line})`).join(', ')}; quote must be exact source within two lines of line`
+                    )
+                }
+                run.claims = claims
                 this.audit(run, 'review recorded', reviews)
                 if (run.claims.length) {
                     run.after_confirm = run.stage
@@ -526,7 +622,10 @@ export class FeatureEngine {
                     new Set(votes.map((v) => v.id)).size !== votes.length ||
                     batch.some((c) => !votes.some((v) => v.id === c.id))
                 ) {
-                    throw new Error('independent confirmation is incomplete')
+                    throw new ResultRejected(
+                        attempt.roles,
+                        `independent confirmation is incomplete; return exactly one confirmation for each of ${batch.map((c) => c.id).join(', ')}`
+                    )
                 }
                 this.audit(run, 'findings confirmed', {claims: batch, votes})
                 run.claims = run.claims.slice(batch.length)
@@ -562,7 +661,10 @@ export class FeatureEngine {
                     new Set(rows.map((row) => row.id)).size !== rows.length ||
                     expected.some((id) => !rows.some((row) => row.id === id))
                 ) {
-                    throw new Error('acceptance evidence must cover every requested criterion exactly once')
+                    throw new ResultRejected(
+                        attempt.roles,
+                        `acceptance evidence must cover every requested criterion exactly once: ${expected.join(', ')}`
+                    )
                 }
                 const unmet = rows.filter((row) => !row.met)
                 if (unmet.length) {
@@ -583,26 +685,31 @@ export class FeatureEngine {
                 break
             }
             case 'spec-repair': {
-                const repair = parseGenerateResult(result.repaired_spec)
-                const spec = validateFeatureSpec({
-                    version: VERSION,
-                    revision: run.spec.revision + 1,
-                    base_sha: run.spec.base_sha,
-                    prd: run.spec.prd,
-                    contracts: run.spec.contracts,
-                    spec_md: repair.specMd,
-                    tasks: repair.tasks,
-                })
-                for (const [index, checkpoint] of run.checkpoints.entries()) {
-                    if (
-                        spec.tasks[index]?.task_id !== checkpoint.task_id ||
-                        digest(spec.tasks.find((t) => t.task_id === checkpoint.task_id)) !==
-                            digest(run.spec.tasks.find((t) => t.task_id === checkpoint.task_id))
-                    ) {
-                        throw new Error('spec repair cannot change or reorder the accepted task prefix')
+                let spec: FeatureSpec
+                try {
+                    const repair = parseGenerateResult(result.repaired_spec)
+                    spec = validateFeatureSpec({
+                        version: VERSION,
+                        revision: run.spec.revision + 1,
+                        base_sha: run.spec.base_sha,
+                        prd: run.spec.prd,
+                        contracts: run.spec.contracts,
+                        spec_md: repair.specMd,
+                        tasks: repair.tasks,
+                    })
+                    for (const [index, checkpoint] of run.checkpoints.entries()) {
+                        if (
+                            spec.tasks[index]?.task_id !== checkpoint.task_id ||
+                            digest(spec.tasks.find((t) => t.task_id === checkpoint.task_id)) !==
+                                digest(run.spec.tasks.find((t) => t.task_id === checkpoint.task_id))
+                        ) {
+                            throw new Error('spec repair cannot change or reorder the accepted task prefix')
+                        }
                     }
+                    await this.runtime.validateRepair(run, spec)
+                } catch (error) {
+                    throw new ResultRejected(attempt.roles, error instanceof Error ? error.message : String(error))
                 }
-                await this.runtime.validateRepair(run, spec)
                 run.repaired_spec = spec
                 run.stage = 'spec-review'
                 break

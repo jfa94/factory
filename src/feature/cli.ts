@@ -215,6 +215,9 @@ export function featureCommand(name: string): Subcommand {
                         `run ${id} belongs to ${run.root}; run ${name} from that repository (cwd is ${root})`
                     )
                 }
+                if (ownerSession !== undefined && ownerSession !== '') {
+                    await engine.own(id, ownerSession)
+                }
             }
             if (name === 'next-action' || name === 'next-task') {
                 emitJson(await engine.advance(id, args.requireFlag('driver')))

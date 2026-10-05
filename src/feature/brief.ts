@@ -253,6 +253,14 @@ export function renderBrief(run: FeatureRun, attempt: Attempt, role: string): st
             ? 'Work in the worktree above. Commit completed work with `[task_id]` tags. Preserve accepted commits and repair forward; never reset, force-push, delete branches or change engine state. Do not weaken tests.'
             : 'The worktree is an immutable snapshot: review it independently and never modify it. Every claim or decision needs evidence from the code.',
         ...body(run, attempt, role),
+        ...(run.rejections?.[role] !== undefined
+            ? [
+                  section(
+                      'Previous result rejected',
+                      `The engine rejected an earlier result for this role. Fix every reason below; a third rejection parks the run for a human.\n\n${list(run.rejections[role])}`
+                  ),
+              ]
+            : []),
         section('Result contract', contract(role, run)),
     ].join('\n\n')
 }

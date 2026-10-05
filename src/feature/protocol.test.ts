@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {afterEach, describe, expect, it, vi} from 'vitest'
@@ -12,7 +12,7 @@ import {
     type FeatureSpec,
     type Stage,
 } from './schema.js'
-import type {FeatureRuntime} from './ports.js'
+import {TransientFailure, type FeatureRuntime} from './ports.js'
 import {at} from '../shared/assert.js'
 import {readBrief} from './test-fixtures.js'
 
@@ -169,19 +169,19 @@ describe('feature evidence and recovery protocol', () => {
         action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
         expect(await readBrief(action)).not.toContain('Refuted claims')
-        expect(await submit(f, result(action, {confirmations: []}))).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('confirmation is incomplete') as string,
+        // Decision 4: an incomplete confirmation is re-issued to the verifier with the reason.
+        const reissued = await submit(f, result(action, {confirmations: []}))
+        expect(reissued).toMatchObject({
+            kind: 'execute',
+            attempt: {id: execution(action).attempt.id, roles: ['finding-verifier']},
         })
-        // The invalid staged file stays in place; a corrected one is consumed by explicit recovery.
-        await stage(
+        expect(await readBrief(reissued)).toContain('confirmation is incomplete')
+        action = await submit(
             f,
-            result(action, {
+            result(reissued, {
                 confirmations: [{id: claim.id, confirmed, evidence: 'Checked value.ts at the cited statement'}],
             })
         )
-        await f.engine.resume('run', {recover: true})
-        action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: confirmed ? 'implement' : 'slice-review'}})
         expect((await f.store.read('run')).checkpoints).toHaveLength(confirmed ? 0 : 1)
     })
@@ -203,7 +203,7 @@ describe('feature evidence and recovery protocol', () => {
         expect(await readBrief(action)).toContain(
             `- File: value.ts:1\n- Quote: \`\`\`\n${claim.quote}\n\`\`\`\n- Claim: ${claim.claim}`
         )
-        // Votes for the wrong subset park; recovery with the right ids proceeds.
+        // Decision 4: votes for the wrong subset are re-issued; the right ids proceed.
         await stage(
             f,
             result(action, {
@@ -213,10 +213,9 @@ describe('feature evidence and recovery protocol', () => {
                 ],
             })
         )
-        expect(await f.engine.advance('run', 'driver')).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('confirmation is incomplete') as string,
-        })
+        const reissued = await f.engine.advance('run', 'driver')
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {stage: 'confirm'}})
+        expect(await readBrief(reissued)).toContain('confirmation is incomplete')
         await stage(
             f,
             result(action, {
@@ -226,7 +225,6 @@ describe('feature evidence and recovery protocol', () => {
                 ],
             })
         )
-        await f.engine.resume('run', {recover: true})
         action = await f.engine.advance('run', 'driver')
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'confirm', roles: ['finding-verifier']}})
         expect(await ids(action)).toEqual([three])
@@ -257,21 +255,23 @@ describe('feature evidence and recovery protocol', () => {
             kind === 'citation'
                 ? result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]})
                 : result(action)
-        expect(await submit(f, response)).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining(
-                kind === 'citation' ? 'invalid citation' : 'missing or duplicate'
-            ) as string,
+        // Decision 4: the reviewer is re-issued with the reason instead of parking.
+        const reissued = await submit(f, response)
+        expect(reissued).toMatchObject({
+            kind: 'execute',
+            attempt: {id: execution(action).attempt.id, roles: ['quality-reviewer']},
         })
+        expect(await readBrief(reissued)).toContain(
+            kind === 'citation' ? 'invalid citation for quality-reviewer.1 (value.ts:1)' : 'no claims array'
+        )
         expect((await f.store.read('run')).checkpoints).toEqual([])
     })
     it('requires complete acceptance and repairs unmet feature criteria', async () => {
         const f = await setup('acceptance')
         const action = await f.engine.advance('run', 'driver')
-        expect(await submit(f, result(action, {acceptance: []}))).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('every requested criterion') as string,
-        })
+        const reissued = await submit(f, result(action, {acceptance: []}))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {roles: ['acceptance-evaluator']}})
+        expect(await readBrief(reissued)).toContain('every requested criterion exactly once: R1, value:AC1')
         await stage(
             f,
             result(action, {
@@ -281,7 +281,6 @@ describe('feature evidence and recovery protocol', () => {
                 ],
             })
         )
-        await f.engine.resume('run', {recover: true})
         const repaired = await f.engine.advance('run', 'driver')
         expect(repaired).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
         const next = await submit(f, result(repaired))
@@ -293,11 +292,10 @@ describe('feature evidence and recovery protocol', () => {
         action = await submit(f, result(action, {status: 'spec-defect', message: 'Fix the remaining contract'}))
         expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'spec-repair'}})
         expect(await readBrief(action)).toContain('## Feedback to address\n\n- Fix the remaining contract')
-        // A full FeatureSpec is not the repair contract: the staged file is rejected, never consumed.
-        expect(await submit(f, result(action, {repaired_spec: spec}))).toMatchObject({
-            kind: 'wait',
-            reason: expect.stringContaining('staged file rejected (spec-generator: repaired_spec') as string,
-        })
+        // A full FeatureSpec is not the repair contract: the staged file is rejected and re-issued.
+        const reissued = await submit(f, result(action, {repaired_spec: spec}))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {roles: ['spec-generator']}})
+        expect(await readBrief(reissued)).toContain('- spec-generator: repaired_spec')
         const repair = {specMd: 'Use the corrected contract.', slug: 'values', tasks: spec.tasks}
         await stage(f, result(action, {repaired_spec: repair}))
         action = await f.engine.advance('run', 'driver')
@@ -321,10 +319,10 @@ describe('feature evidence and recovery protocol', () => {
             slug: 'values',
             tasks: [{...at(spec.tasks, 0), title: 'Changed accepted task'}],
         }
-        expect(await submit(f, result(action, {repaired_spec: revised}))).toMatchObject({
-            kind: 'park',
-            reason: expect.stringContaining('accepted task prefix') as string,
-        })
+        const reissued = await submit(f, result(action, {repaired_spec: revised}))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {roles: ['spec-generator']}})
+        expect(await readBrief(reissued)).toContain('accepted task prefix')
+        expect((await f.store.read('run')).attempts).toEqual({})
     })
     it('adds database review and authors e2e only when requested', async () => {
         const f = await setup('docs')
@@ -357,14 +355,24 @@ describe('feature evidence and recovery protocol', () => {
                     Promise.resolve(path !== execution(action).attempt.worktree)
                 )
             }
-            expect(
-                await submit(
-                    f,
-                    result(action, {
-                        reviews: [{reviewer: 'quality-reviewer', claims: []}],
-                    })
-                )
-            ).toMatchObject({kind: 'park'})
+            const next = await submit(
+                f,
+                result(action, {
+                    reviews: [{reviewer: 'quality-reviewer', claims: []}],
+                })
+            )
+            if (kind === 'snapshot') {
+                // Decision 4: a modified snapshot retires the attempt; the next call issues a fresh one.
+                expect(next).toMatchObject({kind: 'wait', retry_after_seconds: 0})
+                expect((await f.store.read('run')).in_flight).toBeUndefined()
+                const fresh = execution(await f.engine.advance('run', 'driver'))
+                expect(fresh.attempt).toMatchObject({stage: 'task-review', roles: ['quality-reviewer']})
+                expect(fresh.attempt.id).not.toBe(execution(action).attempt.id)
+                expect(f.runtime.snapshot.mock.calls).toHaveLength(2)
+                expect(await readBrief(fresh)).toContain('review snapshot was modified')
+                return
+            }
+            expect(next).toMatchObject({kind: 'park'})
             expect((await f.store.read('run')).in_flight?.id).toBe(execution(action).attempt.id)
         }
     )
@@ -455,5 +463,124 @@ describe('feature evidence and recovery protocol', () => {
             '## Refuted claims\n\nIndependent verifiers refuted these earlier claims. Re-file one only with new evidence, and state that evidence in the `claim`.\n\n- value.ts:1: Drops the error path — refuted: The error path is handled by the caller'
         )
         expect(brief).not.toContain('Returns the wrong value')
+    })
+
+    it('re-issues a producer that left uncommitted work, without spending a repair pass', async () => {
+        const f = await setup('implement')
+        const action = execution(await f.engine.advance('run', 'driver'))
+        vi.mocked(f.runtime.clean).mockResolvedValueOnce(false)
+        const reissued = await submit(f, result(action))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {id: action.attempt.id, roles: ['implementer']}})
+        expect(await readBrief(reissued)).toContain('- uncommitted work remains')
+        expect((await f.store.read('run')).rejections).toEqual({
+            implementer: ['uncommitted work remains; preserve it and finish the attempt'],
+        })
+        // Acceptance clears the rejections; repair budgets were never touched.
+        expect(await submit(f, result(reissued))).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
+        const run = await f.store.read('run')
+        expect(run.rejections).toBeUndefined()
+        expect(run.attempts).toEqual({})
+        expect(run.audit.filter((row) => row.event === 'result rejected')).toHaveLength(1)
+    })
+    it('re-issues already-satisfied from e2e-author', async () => {
+        const f = await setup('e2e-author')
+        const action = execution(await f.engine.advance('run', 'driver'))
+        const reissued = await submit(f, result(action, {status: 'already-satisfied'}))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {roles: ['e2e-author']}})
+        expect(await readBrief(reissued)).toContain('## Previous result rejected')
+    })
+    it('re-issues a spec repair that fails validation', async () => {
+        const f = await setup('spec-repair')
+        vi.mocked(f.runtime.validateRepair).mockRejectedValueOnce(new Error('R1 is uncovered'))
+        const action = execution(await f.engine.advance('run', 'driver'))
+        const repair = {specMd: 'Use the corrected contract.', slug: 'values', tasks: spec.tasks}
+        const reissued = await submit(f, result(action, {repaired_spec: repair}))
+        expect(reissued).toMatchObject({kind: 'execute', attempt: {roles: ['spec-generator']}})
+        expect(await readBrief(reissued)).toContain('- R1 is uncovered')
+        expect((await f.store.read('run')).attempts).toEqual({})
+    })
+    it('re-issues one invalid panel role while the others are still running', async () => {
+        const f = await setup('slice-review')
+        const action = execution(await f.engine.advance('run', 'driver'))
+        const [bad, ...rest] = action.attempt.roles
+        await writeFile(action.staged[bad ?? ''] ?? '', 'I found nothing.')
+        const reissued = execution(await f.engine.advance('run', 'driver'))
+        expect(reissued.attempt).toMatchObject({id: action.attempt.id, roles: [bad]})
+        expect(Object.keys(reissued.staged)).toEqual([bad])
+        for (const role of rest) {
+            await writeFile(action.staged[role] ?? '', JSON.stringify({status: 'done', claims: []}))
+        }
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'wait',
+            reason: expect.stringContaining(`awaiting ${bad}`) as string,
+        })
+        await writeFile(reissued.staged[bad ?? ''] ?? '', JSON.stringify({status: 'done', claims: []}))
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'execute', attempt: {stage: 'docs'}})
+        expect((await f.store.read('run')).rejections).toBeUndefined()
+    })
+    it('waits on transient failures, resets the count after a clean call, and parks on the fifth in a row', async () => {
+        const f = await setup('deliver')
+        const run = await f.store.read('run')
+        run.verified_feature = {head_sha: sha, spec_digest: run.spec_digest}
+        await f.store.write(run)
+        vi.mocked(f.runtime.reconcileBase).mockRejectedValue(new TransientFailure('git fetch failed: timeout'))
+        for (let k = 1; k <= 4; k++) {
+            expect(await f.engine.advance('run', 'driver')).toEqual({
+                kind: 'wait',
+                run_id: 'run',
+                reason: `transient failure ${k}/5: git fetch failed: timeout`,
+                retry_after_seconds: 60,
+            })
+            expect(await f.store.read('run')).toMatchObject({
+                status: 'waiting',
+                transient_failures: k,
+                stop_reason: {kind: 'environment'},
+            })
+        }
+        vi.mocked(f.runtime.reconcileBase).mockResolvedValueOnce('unchanged')
+        vi.mocked(f.runtime.deliver).mockResolvedValueOnce({kind: 'pending', number: 1, url: 'url', head: sha})
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait', retry_after_seconds: 60})
+        expect((await f.store.read('run')).transient_failures).toBeUndefined()
+        for (let k = 1; k <= 4; k++) {
+            expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait'})
+        }
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({
+            kind: 'park',
+            reason: 'git fetch failed: timeout',
+        })
+        const parked = await f.store.read('run')
+        expect(parked.stop_reason?.kind).toBe('environment')
+        expect(parked.attempts).toEqual({})
+        expect((await f.engine.resume('run')).transient_failures).toBeUndefined()
+        // A non-transient failure still parks at once.
+        vi.mocked(f.runtime.reconcileBase).mockRejectedValue(new Error('feature PR was closed without merge'))
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'park'})
+    })
+    it('refuses to create over a corrupt run that list() skips', async () => {
+        const f = await setup()
+        await mkdir(join(f.input.root, 'runs-v2', 'broken'), {recursive: true})
+        await writeFile(join(f.input.root, 'runs-v2', 'broken', 'state.json'), '{')
+        const warn = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+        expect((await f.store.list()).map((run) => run.run_id)).toEqual(['run'])
+        expect(warn.mock.calls.flat().join('')).toContain('skipping unreadable run broken')
+        expect(await f.store.skipped()).toEqual(['broken'])
+        await expect(f.engine.create({...f.input, runId: 'broken'})).rejects.toThrow('run broken already exists')
+        expect(await readFile(join(f.input.root, 'runs-v2', 'broken', 'state.json'), 'utf8')).toBe('{')
+        warn.mockRestore()
+    })
+    it('hands ownership to the session that drives the run and journals the change', async () => {
+        const f = await setup()
+        await f.engine.own('run', 'first')
+        await f.engine.own('run', 'first')
+        await f.engine.own('run', 'second')
+        const run = await f.store.read('run')
+        expect(run.owner_session).toBe('second')
+        expect(run.audit.filter((row) => row.event === 'owner session changed').map((row) => row.details)).toEqual([
+            {from: null, to: 'first'},
+            {from: 'first', to: 'second'},
+        ])
+        await f.engine.resume('run', {cancel: true})
+        await f.engine.own('run', 'third')
+        expect((await f.store.read('run')).owner_session).toBe('second')
     })
 })

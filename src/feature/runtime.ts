@@ -17,7 +17,7 @@ import {evaluate, type UsageSignal} from '../quota/index.js'
 import {safeRepoPath} from '../spec/execution.js'
 import {runSpecGates} from '../spec/gates.js'
 import {provisionWorktree} from '../git/provision.js'
-import type {FeatureRuntime, CheckResult, DeliveryResult} from './ports.js'
+import {TransientFailure, type FeatureRuntime, type CheckResult, type DeliveryResult} from './ports.js'
 import type {FeatureRun, Stage, Claim, FeatureSpec} from './schema.js'
 
 const taggedTestsOnly = (commit: CommitInfo): boolean => commit.tagged && classifyCommit(commit.files) === 'test-only'
@@ -45,10 +45,11 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         return this.config.git.rollupCiWaitMinutes
     }
 
-    async checked(name: string, args: readonly string[], cwd: string): Promise<string> {
+    async checked(name: string, args: readonly string[], cwd: string, transient = false): Promise<string> {
         const result = await this.command(name, args, cwd)
         if (result.code !== 0 || result.truncated) {
-            throw new Error(`${name} ${args[0]} failed: ${result.stderr || result.stdout}`)
+            const message = `${name} ${args[0]} failed: ${result.stderr || result.stdout}`
+            throw transient ? new TransientFailure(message) : new Error(message)
         }
         return result.stdout.trim()
     }
@@ -76,7 +77,17 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         if (actual !== branch || !(await this.ancestor(worktree, base, await this.head(worktree)))) {
             throw new Error('existing feature worktree has a different branch/base; preserved for inspection')
         }
-        await provisionWorktree({path: worktree, setupCommand: this.config.quality.setupCommand})
+        await this.provision(worktree)
+    }
+
+    private async provision(path: string): Promise<void> {
+        try {
+            await provisionWorktree({path, setupCommand: this.config.quality.setupCommand})
+        } catch (error) {
+            throw new TransientFailure(
+                `worktree setup failed: ${error instanceof Error ? error.message : String(error)}`
+            )
+        }
     }
 
     head(worktree: string): Promise<string> {
@@ -210,12 +221,21 @@ export class LocalFeatureRuntime implements FeatureRuntime {
     async snapshot(run: FeatureRun, id: string, head: string): Promise<string> {
         const target = join(run.root, '.claude', 'worktrees', `review-${run.run_id}-${id}`)
         await this.checked('git', ['worktree', 'add', '--detach', target, head], run.root)
-        await provisionWorktree({path: target, setupCommand: this.config.quality.setupCommand})
+        try {
+            await this.provision(target)
+        } catch (error) {
+            // The snapshot was never handed out; removing it keeps retries from leaving orphans.
+            await this.checked('git', ['worktree', 'remove', '--force', target], run.root)
+            throw error
+        }
         return target
     }
 
     async citation(worktree: string, claim: Claim): Promise<boolean> {
-        if (!safeRepoPath(claim.file)) {
+        if (
+            !safeRepoPath(claim.file) ||
+            !(await this.checked('git', ['ls-tree', '--name-only', 'HEAD', '--', claim.file], worktree))
+        ) {
             return false
         }
         const source = await this.checked('git', ['show', `HEAD:${claim.file}`], worktree)
@@ -239,7 +259,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
     }
 
     async reconcileBase(run: FeatureRun): Promise<'unchanged' | 'merged' | 'conflict'> {
-        await this.checked('git', ['fetch', run.remote, run.base_branch], run.worktree)
+        await this.checked('git', ['fetch', run.remote, run.base_branch], run.worktree, true)
         const base = await this.checked('git', ['rev-parse', `${run.remote}/${run.base_branch}`], run.worktree)
         if (await this.ancestor(run.worktree, base, await this.head(run.worktree))) {
             return 'unchanged'
@@ -289,7 +309,8 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                                 '--json',
                                 'number,url,state,headRefOid,baseRefName',
                             ],
-                            run.worktree
+                            run.worktree,
+                            true
                         )
                     )
                 )
@@ -307,7 +328,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         if (pr?.state === 'CLOSED') {
             throw new Error('feature PR was closed without merge; work preserved')
         }
-        await this.checked('git', ['push', '-u', run.remote, `HEAD:refs/heads/${run.branch}`], run.worktree)
+        await this.checked('git', ['push', '-u', run.remote, `HEAD:refs/heads/${run.branch}`], run.worktree, true)
         if (!pr) {
             await this.checked(
                 'gh',
@@ -325,13 +346,17 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                     '--body',
                     `Implements #${run.spec.prd.issue_number}.\n\nFactory run ${run.run_id}; reviewed HEAD ${head}.\nSpec ${run.spec_digest}.`,
                 ],
-                run.worktree
+                run.worktree,
+                true
             )
         }
         prs = await list()
         pr = prs[0]
-        if (!pr || prs.length !== 1) {
-            throw new Error('feature PR identity is missing or ambiguous after push')
+        if (!pr) {
+            throw new TransientFailure('feature PR identity is missing after push')
+        }
+        if (prs.length !== 1) {
+            throw new Error('feature PR identity is ambiguous after push')
         }
         if (pr.headRefOid !== head) {
             return {
@@ -357,7 +382,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             run.worktree
         )
         if (checkResult.truncated || ![0, 1, 8].includes(checkResult.code ?? -1)) {
-            throw new Error(`cannot read required checks: ${checkResult.stderr}`)
+            throw new TransientFailure(`cannot read required checks: ${checkResult.stderr}`)
         }
         // Right after PR creation gh reports "no checks reported" with empty stdout; that is pending, not evidence.
         const checks = z
@@ -378,7 +403,8 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         await this.checked(
             'gh',
             ['pr', 'merge', String(pr.number), '--repo', run.repo, '--squash', '--auto', '--match-head-commit', head],
-            run.worktree
+            run.worktree,
+            true
         )
         const updated = (await list())[0]
         if (updated?.headRefOid !== head) {
@@ -408,7 +434,8 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                             '--json',
                             'number,url,state,headRefOid,baseRefName',
                         ],
-                        run.worktree
+                        run.worktree,
+                        true
                     )
                 )
             )

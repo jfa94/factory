@@ -118,6 +118,23 @@ describe('v2 CLI contract', () => {
         expect(await call('resume', '--run', 'run', '--recover')).toBe(2)
     })
 
+    it('hands run ownership to the session that drives next-action or resume', async () => {
+        expect(await call('run', 'create', '--issue', '1', '--run-id', 'run', '--no-ship')).toBe(0)
+        const store = new FeatureStore(dataDir)
+        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'second-session')
+        expect(await call('next-action', '--run', 'run', '--driver', 'driver')).toBe(0)
+        expect((await store.read('run')).owner_session).toBe('second-session')
+        vi.stubEnv('CLAUDE_CODE_SESSION_ID', 'third-session')
+        await call('run', 'stop', '--run', 'run')
+        expect(await call('resume', '--run', 'run', '--recover')).toBe(0)
+        const run = await store.read('run')
+        expect(run.owner_session).toBe('third-session')
+        expect(run.audit.filter((row) => row.event === 'owner session changed').map((row) => row.details)).toEqual([
+            {from: 'owner-session', to: 'second-session'},
+            {from: 'second-session', to: 'third-session'},
+        ])
+    })
+
     it('creates a fresh run with persisted flags, lists it, dispatches, stops and recovers', async () => {
         expect(
             await call('run', 'create', '--issue', '1', '--run-id', 'run', '--no-ship', '--e2e', '--ignore-quota')

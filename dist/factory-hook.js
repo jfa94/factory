@@ -104,7 +104,7 @@ var require_polyfills = __commonJS({
       }
       if (platform === "win32") {
         fs.rename = typeof fs.rename !== "function" ? fs.rename : (function(fs$rename) {
-          function rename2(from, to, cb) {
+          function rename3(from, to, cb) {
             var start = Date.now();
             var backoff = 0;
             fs$rename(from, to, function CB(er) {
@@ -124,8 +124,8 @@ var require_polyfills = __commonJS({
               if (cb) cb(er);
             });
           }
-          if (Object.setPrototypeOf) Object.setPrototypeOf(rename2, fs$rename);
-          return rename2;
+          if (Object.setPrototypeOf) Object.setPrototypeOf(rename3, fs$rename);
+          return rename3;
         })(fs.rename);
       }
       fs.read = typeof fs.read !== "function" ? fs.read : (function(fs$read) {
@@ -7159,7 +7159,7 @@ function runSessionStart(_argv = [], deps = {}) {
 import { relative, resolve as resolve4, sep as sep4 } from "node:path";
 
 // src/feature/store.ts
-import { access, mkdir as mkdir3, readFile, readdir } from "node:fs/promises";
+import { access, mkdir as mkdir3, readFile, readdir, rename as rename2 } from "node:fs/promises";
 import { join as join3 } from "node:path";
 
 // src/feature/schema.ts
@@ -7341,6 +7341,10 @@ var FeatureRunSchema = external_exports.object({
   answers: external_exports.array(external_exports.object({ task_id: IdSchema, question: external_exports.string(), answer: external_exports.string(), at: external_exports.string() })),
   question: external_exports.string().optional(),
   feedback: external_exports.array(external_exports.string()),
+  /** Per-role reasons for rejected results since the last accepted one; never spends repair passes. */
+  rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
+  /** Consecutive transient infrastructure failures. */
+  transient_failures: external_exports.number().int().positive().optional(),
   claims: external_exports.array(ClaimSchema),
   confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),
@@ -7401,17 +7405,50 @@ var FeatureStore = class {
     }
     return run;
   }
+  /** Readable runs; a run whose state is unreadable, invalid or another version is skipped with a warning. */
   async list() {
+    const { runs, skipped } = await this.scan();
+    for (const [id, why] of skipped) {
+      process.stderr.write(`Factory: skipping unreadable run ${id}: ${why}
+`);
+    }
+    return runs;
+  }
+  /** Ids of the runs `list()` skips. */
+  async skipped() {
+    return (await this.scan()).skipped.map(([id]) => id);
+  }
+  async scan() {
     let names;
     try {
       names = await readdir(join3(this.dataDir, "runs-v2"));
     } catch (error) {
       if (isEnoent(error)) {
-        return [];
+        return { runs: [], skipped: [] };
       }
       throw error;
     }
-    return Promise.all(names.filter((name) => IdSchema.safeParse(name).success).map((name) => this.read(name)));
+    const runs = [];
+    const skipped = [];
+    for (const name of names.filter((name2) => IdSchema.safeParse(name2).success)) {
+      try {
+        runs.push(await this.read(name));
+      } catch (error) {
+        skipped.push([name, error instanceof Error ? error.message : String(error)]);
+      }
+    }
+    return { runs, skipped };
+  }
+  async exists(id) {
+    try {
+      await access(this.dir(id));
+      return true;
+    } catch (error) {
+      if (isEnoent(error)) {
+        return false;
+      }
+      throw error;
+    }
   }
   async write(run) {
     const checked = FeatureRunSchema.parse(run);
@@ -7470,6 +7507,11 @@ var FeatureStore = class {
     await mkdir3(join3(this.dataDir, "staged-v2", id, attempt.id), { recursive: true });
     return paths;
   }
+  /** Move a rejected role's staged file aside as evidence; the role's path is free for its re-issue. */
+  async rejectStaged(id, attempt, role, n) {
+    const path = this.stagedPaths(id, attempt, [role])[role] ?? "";
+    await rename2(path, path.replace(/\.json$/, `.rejected-${n}.json`));
+  }
   /** Roles whose staged file exists (parseability not checked). */
   async stagedPresent(id, attempt) {
     const present = [];
@@ -7486,9 +7528,9 @@ var FeatureStore = class {
     return present;
   }
   /**
-   * Read every role's staged file and merge them into one attempt result. A missing,
-   * half-written or schema-invalid file reads as "not yet"; only explicit recovery
-   * judges it. Reviewer identity is bound from the path; any non-done status wins.
+   * Read every role's staged file and merge them into one attempt result. A missing file
+   * reads as "not yet"; an unparseable (including empty) or schema-invalid one is also
+   * named in `invalid`. Reviewer identity is bound from the path; any non-done status wins.
    */
   async staged(id, attempt) {
     const parts = [];
@@ -7498,8 +7540,11 @@ var FeatureStore = class {
       try {
         parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, "utf8"))))]);
       } catch (error) {
-        if (isEnoent(error) || error instanceof SyntaxError) {
+        if (isEnoent(error)) {
           missing.push(role);
+        } else if (error instanceof SyntaxError) {
+          missing.push(role);
+          invalid[role] = `unparseable JSON: ${error.message}`;
         } else if (error instanceof ZodError) {
           missing.push(role);
           invalid[role] = error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
@@ -7610,13 +7655,23 @@ function inside(root, path) {
   const rel = relative(canonicalizePath(root), canonicalizePath(path));
   return rel === "" || !rel.startsWith(`..${sep4}`) && rel !== ".." && !rel.startsWith(sep4);
 }
-function decideFeatureGuard(input, runs, dataDir) {
+function inRunWorktree(id, path) {
+  const segments = canonicalizePath(path).split(sep4);
+  return segments.some(
+    (name, index) => segments[index - 2] === ".claude" && segments[index - 1] === "worktrees" && (name === `feature-${id}` || name.startsWith(`review-${id}-`))
+  );
+}
+function decideFeatureGuard(input, runs, dataDir, skipped = []) {
   if (input === null) {
     return allow();
   }
   const cwd = input.cwd ?? process.cwd();
   const paths = filePathsOf(input).map((path) => resolve4(cwd, path));
   const session = sessionIdOf(input);
+  const corrupt = skipped.find((id) => [cwd, ...paths].some((path) => inRunWorktree(id, path)));
+  if (corrupt !== void 0) {
+    return deny(`Factory: run ${corrupt} has unreadable state; its worktrees are locked until it is repaired`);
+  }
   for (const run of runs) {
     if (terminal(run)) {
       continue;
@@ -7663,7 +7718,8 @@ async function runFeatureGuard(_argv = []) {
   try {
     const input = await readHookInput();
     const dataDir = resolveDataDir();
-    decision = decideFeatureGuard(input, await new FeatureStore(dataDir).list(), dataDir);
+    const store = new FeatureStore(dataDir);
+    decision = decideFeatureGuard(input, await store.list(), dataDir, await store.skipped());
   } catch (error) {
     decision = deny(
       `Factory feature state cannot be checked: ${error instanceof Error ? error.message : String(error)}`

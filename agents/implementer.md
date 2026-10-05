@@ -168,5 +168,6 @@ block is fine). The engine reads your commits from the worktree.
 - `blocked` — the environment prevents work (missing tooling, unbootable worktree, no
   runner). Say what broke in `message`; the run parks for a human. Never guess `done`.
 
-Uncommitted changes with `done` or `already-satisfied`, or a rewritten accepted commit, is
-rejected by the engine as a producer failure. Return the JSON and nothing else.
+Uncommitted changes with `done` or `already-satisfied` reject the whole result: it is
+re-issued to you with the reason at most twice, then the run parks. A rewritten accepted
+commit parks the run at once. Return the JSON and nothing else.

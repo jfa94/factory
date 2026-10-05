@@ -76,11 +76,12 @@ slice and feature checks run longer, and a killed call makes no progress.
   Never author, discard or change a finding or acceptance decision, and never
   merge roles into one file. Once every role's file is written, call
   `factory next-action --run <id> --driver <session>`; the engine binds each
-  file to its role, validates it and journals accepted evidence.
+  file to its role, validates it and journals accepted evidence. When a result
+  is unusable, the engine moves it aside and returns `execute` again for that
+  role with the reason in its brief; dispatch it like any other `execute`. A
+  role is re-issued at most twice before the run parks.
 - `wait`: if `reason` says an attempt is awaiting roles, write any finished
   agent's output to its staged path and call again; never dispatch it twice.
-  If it says a staged file was rejected, that role finished wrong: run
-  `factory resume --run <id> --recover` and the engine redispatches only it.
   A `retry_after_seconds` of 0 means call again now. Otherwise arm one timer
   sized to it with `Bash(run_in_background)`, e.g.
   `until [ $SECONDS -ge <n> ]; do sleep 30; done` (not a bare foreground
@@ -127,7 +128,9 @@ acceptance evaluator supplies evidence for every requested criterion. Producer
 claims, commit ancestry and unrelated green tests are insufficient.
 
 Repair budgets belong to the engine: three passes per task, slice, feature or
-spec repair. Infrastructure waiting is not an implementation repair. Spec repair
+spec repair. Infrastructure waiting is not an implementation repair: a transient
+git, GitHub or install failure returns a 60-second `wait`, and five in a row park
+the run. Rejected agent results do not spend repair passes either. Spec repair
 must preserve the PRD, frozen contracts and accepted task prefix. Accepted work is
 repaired forward.
 

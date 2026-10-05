@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- validated run IDs and engine-owned data paths */
-import {access, mkdir, readFile, readdir} from 'node:fs/promises'
+import {access, mkdir, readFile, readdir, rename} from 'node:fs/promises'
 import {join} from 'node:path'
 import {ZodError} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
@@ -18,8 +18,8 @@ import {
     type FeatureResult,
 } from './schema.js'
 
-/** Per-role staged results: `{missing}` means not every role has a parseable file yet. */
-/** `invalid` names present files that failed the schema, so a driver can tell "still running" from "finished wrong". */
+/** Per-role staged results: `{missing}` means not every role has a usable file yet. */
+/** `invalid` names present files that are unparseable or schema-invalid ("finished wrong", not "still running"). */
 export type Staged = {result: FeatureResult} | {missing: string[]; invalid: Record<string, string>}
 
 export class FeatureStore {
@@ -48,17 +48,52 @@ export class FeatureStore {
         return run
     }
 
+    /** Readable runs; a run whose state is unreadable, invalid or another version is skipped with a warning. */
     async list(): Promise<FeatureRun[]> {
+        const {runs, skipped} = await this.scan()
+        for (const [id, why] of skipped) {
+            process.stderr.write(`Factory: skipping unreadable run ${id}: ${why}\n`)
+        }
+        return runs
+    }
+
+    /** Ids of the runs `list()` skips. */
+    async skipped(): Promise<string[]> {
+        return (await this.scan()).skipped.map(([id]) => id)
+    }
+
+    private async scan(): Promise<{runs: FeatureRun[]; skipped: [string, string][]}> {
         let names: string[]
         try {
             names = await readdir(join(this.dataDir, 'runs-v2'))
         } catch (error) {
             if (isEnoent(error)) {
-                return []
+                return {runs: [], skipped: []}
             }
             throw error
         }
-        return Promise.all(names.filter((name) => IdSchema.safeParse(name).success).map((name) => this.read(name)))
+        const runs: FeatureRun[] = []
+        const skipped: [string, string][] = []
+        for (const name of names.filter((name) => IdSchema.safeParse(name).success)) {
+            try {
+                runs.push(await this.read(name))
+            } catch (error) {
+                skipped.push([name, error instanceof Error ? error.message : String(error)])
+            }
+        }
+        return {runs, skipped}
+    }
+
+    async exists(id: string): Promise<boolean> {
+        try {
+            await access(this.dir(id))
+            return true
+        } catch (error) {
+            if (isEnoent(error)) {
+                return false
+            }
+            throw error
+        }
     }
 
     async write(run: FeatureRun): Promise<void> {
@@ -125,6 +160,12 @@ export class FeatureStore {
         return paths
     }
 
+    /** Move a rejected role's staged file aside as evidence; the role's path is free for its re-issue. */
+    async rejectStaged(id: string, attempt: Attempt, role: string, n: number): Promise<void> {
+        const path = this.stagedPaths(id, attempt, [role])[role] ?? ''
+        await rename(path, path.replace(/\.json$/, `.rejected-${n}.json`))
+    }
+
     /** Roles whose staged file exists (parseability not checked). */
     async stagedPresent(id: string, attempt: Attempt): Promise<string[]> {
         const present: string[] = []
@@ -142,9 +183,9 @@ export class FeatureStore {
     }
 
     /**
-     * Read every role's staged file and merge them into one attempt result. A missing,
-     * half-written or schema-invalid file reads as "not yet"; only explicit recovery
-     * judges it. Reviewer identity is bound from the path; any non-done status wins.
+     * Read every role's staged file and merge them into one attempt result. A missing file
+     * reads as "not yet"; an unparseable (including empty) or schema-invalid one is also
+     * named in `invalid`. Reviewer identity is bound from the path; any non-done status wins.
      */
     async staged(id: string, attempt: Attempt): Promise<Staged> {
         const parts: [string, AgentResult][] = []
@@ -154,8 +195,11 @@ export class FeatureStore {
             try {
                 parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, 'utf8'))))])
             } catch (error) {
-                if (isEnoent(error) || error instanceof SyntaxError) {
+                if (isEnoent(error)) {
                     missing.push(role)
+                } else if (error instanceof SyntaxError) {
+                    missing.push(role)
+                    invalid[role] = `unparseable JSON: ${error.message}`
                 } else if (error instanceof ZodError) {
                     missing.push(role)
                     invalid[role] = error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')
