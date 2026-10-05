@@ -138,6 +138,9 @@ describe('feature runtime external evidence', () => {
                     )
                 }
                 if (args[1] === 'merge') {
+                    // Repos may disable auto-merge; required checks are already verified above.
+                    expect(args).not.toContain('--auto')
+                    expect(args).toEqual(expect.arrayContaining(['--squash', '--match-head-commit', sha]))
                     mergeRequested = true
                     return reply()
                 }

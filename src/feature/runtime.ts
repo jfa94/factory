@@ -462,9 +462,10 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 reason: 'required checks are missing or pending',
             }
         }
+        // Required checks are verified above, so merge directly: `--auto` fails where a repo disables auto-merge.
         await this.checked(
             'gh',
-            ['pr', 'merge', String(pr.number), '--repo', run.repo, '--squash', '--auto', '--match-head-commit', head],
+            ['pr', 'merge', String(pr.number), '--repo', run.repo, '--squash', '--match-head-commit', head],
             run.worktree,
             true
         )

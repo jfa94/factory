@@ -13120,7 +13120,7 @@ Spec ${run5.spec_digest}.`
     }
     await this.checked(
       "gh",
-      ["pr", "merge", String(pr.number), "--repo", run5.repo, "--squash", "--auto", "--match-head-commit", head],
+      ["pr", "merge", String(pr.number), "--repo", run5.repo, "--squash", "--match-head-commit", head],
       run5.worktree,
       true
     );
