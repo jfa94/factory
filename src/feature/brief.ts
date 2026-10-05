@@ -1,6 +1,7 @@
 /** Per-role Markdown briefs: each dispatched agent reads its task, scope and result contract here. */
 import {z} from 'zod'
 import {extractPrdRequirements} from '../spec/gates.js'
+import {isTestPath} from '../verifier/deterministic/scope.js'
 import {CONFIRM_BATCH, type Attempt, type FeatureRun, type FeatureTask} from './schema.js'
 
 export const PRODUCER_ROLES = ['test-writer', 'implementer', 'scribe', 'e2e-author', 'spec-generator']
@@ -109,6 +110,19 @@ const range = (attempt: Attempt): string =>
         `Review exactly this committed range in the snapshot; never compute your own range or file list:\n\n${fence(`git -C ${attempt.worktree} diff ${attempt.base_sha}..${attempt.head_sha}`, 'bash')}`
     )
 
+const priorClaims = (run: FeatureRun): string =>
+    list(
+        (run.rereview?.claims ?? []).map((c) =>
+            c.file === undefined ? c.claim : `${c.file}${c.line === undefined ? '' : `:${c.line}`}: ${c.claim}`
+        )
+    )
+/** Reviewers of a repair see only its diff plus the claims it had to resolve (decision 5). */
+const rereviewSection = (run: FeatureRun, attempt: Attempt): string =>
+    section(
+        'Re-review of a repair',
+        `This is a re-review of a repair. Review only \`git -C ${attempt.worktree} diff ${attempt.base_sha}..${attempt.head_sha}\`. Check each prior claim below and re-file any that is unresolved. Do not file findings outside that diff unless the repair caused them.\n\nPrior claims:\n${priorClaims(run)}`
+    )
+
 const STATUS =
     '`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question for the operator in `message`), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (environment failure; explain in `message`).'
 const json = (value: unknown): string => fence(JSON.stringify(value, null, 2), 'json')
@@ -139,7 +153,12 @@ function body(run: FeatureRun, attempt: Attempt, role: string): string[] {
     const answers = run.answers.length
         ? [section('Operator answers', list(run.answers.map((a) => `${a.task_id}: ${a.question} — ${a.answer}`)))]
         : []
-    const feedback = run.feedback.length ? [section('Feedback to address', list(run.feedback))] : []
+    // A confirmed claim citing a test file is resolved by tightening that test (decision 6).
+    const marked = run.feedback.map((row) => {
+        const file = /^(\S+?):\d+: /.exec(row)?.[1]
+        return role === 'implementer' && file !== undefined && isTestPath(file) ? `${row} (strengthen this test)` : row
+    })
+    const feedback = run.feedback.length ? [section('Feedback to address', list(marked))] : []
     const refutedRows = refuted(run)
     const refutedSection = refutedRows.length
         ? [
@@ -185,6 +204,14 @@ function body(run: FeatureRun, attempt: Attempt, role: string): string[] {
                         )
                         .join('\n\n')
                 ),
+                ...(run.rereview !== undefined && run.after_confirm === run.rereview.boundary
+                    ? [
+                          section(
+                              'Re-review scope',
+                              `These claims come from a re-review of a repair to range ${run.rereview.base}..${attempt.head_sha}. Confirm a claim only if it is in or caused by that repair diff, or it is one of these prior claims still unresolved:\n\n${priorClaims(run)}`
+                          ),
+                      ]
+                    : []),
                 ...answers,
             ]
         case 'acceptance-evaluator':
@@ -253,6 +280,9 @@ export function renderBrief(run: FeatureRun, attempt: Attempt, role: string): st
             ? 'Work in the worktree above. Commit completed work with `[task_id]` tags. Preserve accepted commits and repair forward; never reset, force-push, delete branches or change engine state. Do not weaken tests.'
             : 'The worktree is an immutable snapshot: review it independently and never modify it. Every claim or decision needs evidence from the code.',
         ...body(run, attempt, role),
+        ...(REVIEWER_ROLES.includes(role) && run.rereview?.boundary === attempt.stage
+            ? [rereviewSection(run, attempt)]
+            : []),
         ...(run.rejections?.[role] !== undefined
             ? [
                   section(

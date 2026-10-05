@@ -76,7 +76,10 @@ exception is an engine-declared TDD exemption for this task, stated in your brie
    around it.
 4. **Never weaken a gate to get green.** During a repair, correct a demonstrably wrong test
    only with evidence from the PRD or contracts, in its own commit, and say so in `message`.
-   Never loosen an assertion, skip a test, or relax a gate merely to obtain green.
+   When repair feedback cites a test file (marked "strengthen this test"), add or tighten
+   assertions in that file to resolve the confirmed claim, committed alone as a tagged
+   test-only commit `test(<scope>): … [<task_id>]`. Never remove, skip or loosen an assertion,
+   or relax a gate.
 5. **Preserve accepted work.** Never reset, amend or rewrite commits below your starting
    HEAD, never force-push, delete branches or touch engine state. Repair forward only.
 
@@ -84,7 +87,8 @@ exception is an engine-declared TDD exemption for this task, stated in your brie
 
 | Thought                                                         | Reality                                                                                   |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| "I'll add a better test while I'm here"                         | Forbidden. The implementer writes implementation, not tests. Refactor after green.        |
+| "I'll add a better test while I'm here"                         | Forbidden unless a confirmed claim cites that test file. Then only strengthen it.         |
+| "Strengthening this cited test, I'll drop the flaky assertion"  | Never remove, skip or loosen an assertion. Only add or tighten.                           |
 | "The existing test is wrong, let me loosen it"                  | Only with PRD/contract evidence, in a separate commit, explained in `message`.            |
 | "The test contradicts the spec and the spec contradicts itself" | Return `spec-defect` with the contradiction. Don't guess a resolution.                    |
 | "I'll commit tests and impl together"                           | No. The impl commit is separate from the test commit.                                     |
@@ -117,6 +121,8 @@ exception is an engine-declared TDD exemption for this task, stated in your brie
 - Do NOT modify the test files from the RED commit (a post-GREEN `refactor` commit may rename
   or re-home tests only — never change assertions or add test logic), except as Iron Law 4
   allows during a repair.
+- When a confirmed claim cites a test file, strengthen that test: add or tighten assertions,
+  in a separate tagged test-only commit. Never remove, skip or loosen one.
 - Do NOT add features beyond what the acceptance criteria require.
 - Do NOT hardcode return values to satisfy specific test inputs.
 - Do NOT write fallback code that silently degrades functionality.
@@ -132,8 +138,8 @@ exception is an engine-declared TDD exemption for this task, stated in your brie
 - [ ] Ran tests before writing code and observed the RED tests fail
 - [ ] Wrote the minimum code to make the RED tests pass (+ patched every confirmed claim)
 - [ ] Ran tests after implementation and confirmed pass
-- [ ] Did NOT modify any RED-commit test file (except a post-GREEN refactor re-home or an
-      evidenced Iron Law 4 correction)
+- [ ] Did NOT modify any RED-commit test file (except a post-GREEN refactor re-home, an
+      evidenced Iron Law 4 correction, or strengthening a cited test in a test-only commit)
 - [ ] Output pristine (no warnings / errors)
 - [ ] Committed the impl in the feature worktree with the `[<task_id>]` tag; `git status` clean
 

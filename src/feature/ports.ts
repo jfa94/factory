@@ -14,11 +14,14 @@ export class ResultRejected extends Error {
 /** A git/gh/install failure worth retrying after a wait; five in a row park the run. */
 export class TransientFailure extends Error {}
 
+/** Why the tests stage counts as RED: a failing assertion, a missing declared module, or tests only CI can run. */
+export type RedKind = 'assertion' | 'missing-declared-module' | 'delegated-to-ci'
 export interface CheckResult {
     passed: boolean
     observed: number
     details: string[]
-    assertionFailure: boolean
+    /** Set only at the tests stage, and only when the task's tagged test-only commits demonstrate RED. */
+    red?: RedKind
 }
 export interface DeliveryResult {
     kind: 'merged' | 'review' | 'pending' | 'failed'
@@ -39,6 +42,10 @@ export interface FeatureRuntime {
     /** Every commit since the task checkpoint is a tagged tests-only commit (none is fine). */
     testsOnly(run: FeatureRun): Promise<boolean>
     snapshot(run: FeatureRun, id: string, head: string): Promise<string>
+    /** `git worktree remove --force` from the run root; the engine checks the path first. */
+    removeSnapshot(run: FeatureRun, path: string): Promise<void>
+    /** The feature range's base: `git merge-base HEAD <remote>/<base_branch>` in the feature worktree. */
+    featureBase(run: FeatureRun): Promise<string>
     citation(worktree: string, claim: Claim): Promise<boolean>
     databaseChanged(run: FeatureRun, base: string): Promise<boolean>
     quota(run: FeatureRun): Promise<string | undefined>

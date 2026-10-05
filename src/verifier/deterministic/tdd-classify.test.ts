@@ -38,6 +38,19 @@ describe('deriveTddVerdict (Δ N — ports tdd-gate cases)', () => {
         expect(v.violations).toEqual([])
     })
 
+    it('decision 6: a tagged test-only commit strengthening a test between repairs stays ok', () => {
+        const v = deriveTddVerdict(
+            [
+                commit({sha: 'c1', files: ['tests/x.test.ts'], tagged: true}),
+                commit({sha: 'c2', files: ['src/x.ts'], tagged: true}),
+                commit({sha: 'c3', files: ['tests/x.test.ts'], tagged: true}),
+                commit({sha: 'c4', files: ['src/x.ts'], tagged: true}),
+            ],
+            false
+        )
+        expect(v).toMatchObject({ok: true, violations: []})
+    })
+
     it('case2: impl [task] with no preceding test → impl-without-preceding-test', () => {
         const v = deriveTddVerdict([commit({sha: 'c1', files: ['src/x.ts'], tagged: true})], false)
         expect(v.ok).toBe(false)

@@ -7345,6 +7345,18 @@ var FeatureRunSchema = external_exports.object({
   rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
   /** Consecutive transient infrastructure failures. */
   transient_failures: external_exports.number().int().positive().optional(),
+  /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
+  rereview: external_exports.object({
+    boundary: external_exports.enum(["task-review", "slice-review", "feature-review"]),
+    base: ShaSchema,
+    claims: external_exports.array(
+      external_exports.object({
+        file: external_exports.string().optional(),
+        line: external_exports.number().int().positive().optional(),
+        claim: external_exports.string()
+      })
+    )
+  }).optional(),
   claims: external_exports.array(ClaimSchema),
   confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),

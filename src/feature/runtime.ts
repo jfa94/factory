@@ -1,4 +1,4 @@
-import {access} from 'node:fs/promises'
+import {access, realpath} from 'node:fs/promises'
 import {at} from '../shared/assert.js'
 import {deriveAllGatesVerdict} from '../verifier/deterministic/verdict.js'
 import {join} from 'node:path'
@@ -8,7 +8,9 @@ import {isEnoent} from '../shared/fs-errors.js'
 import type {Config} from '../config/schema.js'
 import {GateRunner} from '../verifier/deterministic/gate-runner.js'
 import {defaultGateTools, type CommitInfo, type ProcResult} from '../verifier/deterministic/tools.js'
-import {testEvidence} from './test-evidence.js'
+import {missingDeclaredModules, testEvidence, type TestEvidence} from './test-evidence.js'
+import {diffScopedTestFiles} from '../verifier/deterministic/scope.js'
+import {isVitestRunnable} from '../verifier/deterministic/strategies/test.js'
 import {deriveTddVerdict, classifyCommit} from '../verifier/deterministic/tdd-classify.js'
 import type {GateId} from '../verifier/deterministic/gate-id.js'
 import {isTddExempt} from '../verifier/deterministic/tdd-exempt.js'
@@ -134,7 +136,12 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                   ? ['test', 'type', 'lint', 'build', 'coverage', 'mutation', 'sast']
                   : ['test', 'type', 'lint']
         const tools = defaultGateTools()
-        const baseRef = full ? (stage === 'slice-check' ? run.slice_base_sha : run.spec.base_sha) : run.task_base_sha
+        const baseRef =
+            stage === 'slice-check'
+                ? run.slice_base_sha
+                : stage === 'feature-check'
+                  ? await this.featureBase(run)
+                  : run.task_base_sha
         const context = {
             runId: run.run_id,
             taskId: task.task_id,
@@ -146,6 +153,8 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         const outputs: ProcResult[] = []
         const testResult = await new GateRunner().run({
             ...context,
+            // task-check runs the whole suite so an unrelated regression is repaired here, not parked later.
+            full: full || stage === 'task-check',
             gates: ['test'],
             tools: {
                 ...tools,
@@ -165,27 +174,59 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 },
             },
         })
-        if (outputs.length !== 1) {
+        // Only the tests stage may delegate: tests vitest cannot run (pgTAP, Go) are left to the PR's CI.
+        const delegated =
+            stage === 'tests' &&
+            outputs.length === 0 &&
+            testResult.skipped.some((row) => row.reason === 'no-vitest-runnable-tests-in-scope')
+        if (!delegated && outputs.length !== 1) {
             throw new Error('test gate did not execute exactly one test command')
         }
-        const tests = testEvidence(at(outputs, 0))
+        const tests: TestEvidence = delegated ? {executed: 0, assertionFailure: false} : testEvidence(at(outputs, 0))
         const result = await new GateRunner().run({
             ...context,
             tools,
             gates: gates.filter((gate) => gate !== 'test'),
         })
-        const report = {
+        const report: CheckResult = {
             passed: deriveAllGatesVerdict([...testResult.evidence, ...result.evidence]).passed,
             observed: tests.executed + result.evidence.length,
-            assertionFailure: tests.assertionFailure,
             details: [...testResult.report, ...result.report, {executed_tests: tests.executed}].map((item) =>
                 JSON.stringify(item)
             ),
         }
+        if (stage === 'tests') {
+            if (delegated) {
+                const files = diffScopedTestFiles(await tools.git.changedFiles(run.task_base_sha, {cwd: run.worktree}))
+                report.red = 'delegated-to-ci'
+                report.details.push(`Delegated to CI: ${files.filter((file) => !isVitestRunnable(file)).join(', ')}`)
+            } else if (!report.passed && tests.executed > 0 && tests.assertionFailure) {
+                report.red = 'assertion'
+            } else if (
+                tests.loadFailures !== undefined &&
+                (await missingDeclaredModules(
+                    tests.loadFailures,
+                    // Vitest prints realpaths (macOS /private/tmp); the worktree is engine-derived.
+                    // eslint-disable-next-line security/detect-non-literal-fs-filename
+                    await realpath(run.worktree),
+                    task.files,
+                    async (path) =>
+                        (await this.checked(
+                            'git',
+                            ['ls-tree', '--name-only', run.task_base_sha, '--', path],
+                            run.worktree
+                        )) !== ''
+                ))
+            ) {
+                report.red = 'missing-declared-module'
+            }
+        }
         if ((stage === 'tests' || stage === 'task-check') && !run.candidate_satisfied && !(await this.exempt(run))) {
             const commits = await tools.git.commits(run.task_base_sha, task.task_id, {cwd: run.worktree})
             if (stage === 'tests') {
-                report.assertionFailure &&= commits.length > 0 && commits.every(taggedTestsOnly)
+                if (!(commits.length > 0 && commits.every(taggedTestsOnly))) {
+                    delete report.red
+                }
             } else {
                 const verdict = deriveTddVerdict(commits, false)
                 report.passed &&= verdict.ok
@@ -229,6 +270,12 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             throw error
         }
         return target
+    }
+    async removeSnapshot(run: FeatureRun, path: string): Promise<void> {
+        await this.checked('git', ['worktree', 'remove', '--force', path], run.root)
+    }
+    featureBase(run: FeatureRun): Promise<string> {
+        return this.checked('git', ['merge-base', 'HEAD', `${run.remote}/${run.base_branch}`], run.worktree)
     }
 
     async citation(worktree: string, claim: Claim): Promise<boolean> {

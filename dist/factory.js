@@ -1536,12 +1536,12 @@ var require_adapter = __commonJS({
       return newFs;
     }
     function toPromise(method) {
-      return (...args) => new Promise((resolve2, reject) => {
+      return (...args) => new Promise((resolve3, reject) => {
         args.push((err, result) => {
           if (err) {
             reject(err);
           } else {
-            resolve2(result);
+            resolve3(result);
           }
         });
         method(...args);
@@ -5809,7 +5809,7 @@ import { spawn } from "node:child_process";
 var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 function exec(command, args = [], opts = {}) {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
@@ -5866,7 +5866,7 @@ function exec(command, args = [], opts = {}) {
         return;
       }
       settled = true;
-      resolve2({
+      resolve3({
         stdout: Buffer.concat(outChunks).toString("utf8"),
         stderr: Buffer.concat(errChunks).toString("utf8"),
         code,
@@ -8151,6 +8151,18 @@ var FeatureRunSchema = external_exports.object({
   rejections: external_exports.record(external_exports.array(external_exports.string())).optional(),
   /** Consecutive transient infrastructure failures. */
   transient_failures: external_exports.number().int().positive().optional(),
+  /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
+  rereview: external_exports.object({
+    boundary: external_exports.enum(["task-review", "slice-review", "feature-review"]),
+    base: ShaSchema,
+    claims: external_exports.array(
+      external_exports.object({
+        file: external_exports.string().optional(),
+        line: external_exports.number().int().positive().optional(),
+        claim: external_exports.string()
+      })
+    )
+  }).optional(),
   claims: external_exports.array(ClaimSchema),
   confirmed_claims: external_exports.array(ClaimSchema).default([]),
   after_confirm: StageSchema.optional(),
@@ -10555,7 +10567,7 @@ var specCommand = {
 };
 
 // src/feature/cli.ts
-import { readFile as readFile12, realpath } from "node:fs/promises";
+import { readFile as readFile12, realpath as realpath2 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -10668,6 +10680,18 @@ var range = (attempt) => section(
 
 ${fence(`git -C ${attempt.worktree} diff ${attempt.base_sha}..${attempt.head_sha}`, "bash")}`
 );
+var priorClaims = (run5) => list(
+  (run5.rereview?.claims ?? []).map(
+    (c) => c.file === void 0 ? c.claim : `${c.file}${c.line === void 0 ? "" : `:${c.line}`}: ${c.claim}`
+  )
+);
+var rereviewSection = (run5, attempt) => section(
+  "Re-review of a repair",
+  `This is a re-review of a repair. Review only \`git -C ${attempt.worktree} diff ${attempt.base_sha}..${attempt.head_sha}\`. Check each prior claim below and re-file any that is unresolved. Do not file findings outside that diff unless the repair caused them.
+
+Prior claims:
+${priorClaims(run5)}`
+);
 var STATUS = "`status` is exactly one of `done`, `already-satisfied` (test-writer or implementer only), `needs-context` (a question for the operator in `message`), `spec-defect` (the spec contradicts the repository; explain in `message`) or `blocked` (environment failure; explain in `message`).";
 var json = (value) => fence(JSON.stringify(value, null, 2), "json");
 function contract(role, run5) {
@@ -10704,7 +10728,11 @@ ${json({ status: "done", message: "optional" })}`;
 function body(run5, attempt, role) {
   const task = currentTask(run5);
   const answers = run5.answers.length ? [section("Operator answers", list(run5.answers.map((a) => `${a.task_id}: ${a.question} \u2014 ${a.answer}`)))] : [];
-  const feedback = run5.feedback.length ? [section("Feedback to address", list(run5.feedback))] : [];
+  const marked = run5.feedback.map((row) => {
+    const file = /^(\S+?):\d+: /.exec(row)?.[1];
+    return role === "implementer" && file !== void 0 && isTestPath(file) ? `${row} (strengthen this test)` : row;
+  });
+  const feedback = run5.feedback.length ? [section("Feedback to address", list(marked))] : [];
   const refutedRows = refuted(run5);
   const refutedSection = refutedRows.length ? [
     section(
@@ -10750,6 +10778,14 @@ ${refutedRows.join("\n")}`
 - Claim: ${c.claim}`
           ).join("\n\n")
         ),
+        ...run5.rereview !== void 0 && run5.after_confirm === run5.rereview.boundary ? [
+          section(
+            "Re-review scope",
+            `These claims come from a re-review of a repair to range ${run5.rereview.base}..${attempt.head_sha}. Confirm a claim only if it is in or caused by that repair diff, or it is one of these prior claims still unresolved:
+
+${priorClaims(run5)}`
+          )
+        ] : [],
         ...answers
       ];
     case "acceptance-evaluator":
@@ -10815,6 +10851,7 @@ function renderBrief(run5, attempt, role) {
 - Worktree: ${attempt.worktree}`,
     producer ? "Work in the worktree above. Commit completed work with `[task_id]` tags. Preserve accepted commits and repair forward; never reset, force-push, delete branches or change engine state. Do not weaken tests." : "The worktree is an immutable snapshot: review it independently and never modify it. Every claim or decision needs evidence from the code.",
     ...body(run5, attempt, role),
+    ...REVIEWER_ROLES.includes(role) && run5.rereview?.boundary === attempt.stage ? [rereviewSection(run5, attempt)] : [],
     ...run5.rejections?.[role] !== void 0 ? [
       section(
         "Previous result rejected",
@@ -10924,9 +10961,13 @@ var FeatureEngine = class {
             );
           }
           const recorded = structuredClone(run5);
+          const attempt = run5.in_flight;
           await this.accept(recorded, staged.result);
           run5 = recorded;
           await this.store.write(run5);
+          if (await this.removeSnapshot(run5, attempt)) {
+            await this.store.write(run5);
+          }
           if (run5.status === "parked") {
             return this.parked(run5);
           }
@@ -10998,6 +11039,9 @@ var FeatureEngine = class {
     if (error.freshSnapshot) {
       delete run5.in_flight;
       await this.store.write(run5);
+      if (await this.removeSnapshot(run5, attempt)) {
+        await this.store.write(run5);
+      }
       return this.wait(run5, `result rejected (${error.message}); a fresh attempt is issued next`, 0);
     }
     const roles = [.../* @__PURE__ */ new Set([...attempt.redispatch ?? [], ...error.roles])];
@@ -11029,7 +11073,8 @@ var FeatureEngine = class {
     });
   }
   async resume(id, options = {}) {
-    return this.mutate(id, async (initial) => {
+    let retired;
+    const resumed = await this.mutate(id, async (initial) => {
       let run5 = initial;
       if (terminal(run5)) {
         throw new Error("terminal run requires a fresh run");
@@ -11065,23 +11110,24 @@ var FeatureEngine = class {
         if (options.recover !== true) {
           throw new Error("attempt still leased; stop its agent, then resume --recover");
         }
-        const attempt = run5.in_flight;
+        const attempt2 = run5.in_flight;
         let staged;
         try {
-          staged = await this.store.staged(id, attempt);
+          staged = await this.store.staged(id, attempt2);
         } catch (error) {
           staged = error instanceof Error ? error : new Error(String(error));
         }
         if (!(staged instanceof Error) && "missing" in staged) {
-          if (staged.missing.length < attempt.roles.length) {
-            attempt.redispatch = staged.missing;
+          if (staged.missing.length < attempt2.roles.length) {
+            attempt2.redispatch = staged.missing;
             this.audit(run5, "partial result retained; missing roles redispatched", {
-              attempt: attempt.id,
+              attempt: attempt2.id,
               missing: staged.missing
             });
           } else {
-            this.audit(run5, "interrupted attempt retired; work retained", attempt);
+            this.audit(run5, "interrupted attempt retired; work retained", attempt2);
             delete run5.in_flight;
+            retired = attempt2;
           }
         } else {
           const recovered = structuredClone(run5);
@@ -11093,18 +11139,20 @@ var FeatureEngine = class {
             }
             await this.accept(recovered, staged.result);
             run5 = recovered;
-            this.audit(run5, "durable result recovered", attempt.id);
+            retired = attempt2;
+            this.audit(run5, "durable result recovered", attempt2.id);
             if (run5.status === "parked") {
               return run5;
             }
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             this.audit(run5, "invalid durable result retired; evidence and work retained", {
-              attempt,
+              attempt: attempt2,
               reason
             });
             run5.feedback = [...run5.feedback, `Previous result rejected: ${reason}`];
             delete run5.in_flight;
+            retired = attempt2;
           }
         }
       }
@@ -11114,6 +11162,17 @@ var FeatureEngine = class {
       delete run5.rejections;
       delete run5.transient_failures;
       this.audit(run5, "resumed", options);
+      return run5;
+    });
+    if (retired === void 0) {
+      return resumed;
+    }
+    const attempt = retired;
+    return this.store.withRepo(resumed.repo, async () => {
+      const run5 = await this.store.read(id);
+      if (await this.removeSnapshot(run5, attempt)) {
+        await this.store.write(run5);
+      }
       return run5;
     });
   }
@@ -11135,6 +11194,30 @@ var FeatureEngine = class {
     await this.record(run5, result);
     delete run5.rejections;
     await this.store.recordResult(run5.run_id, attempt.id, result);
+  }
+  /**
+   * Remove a retired review snapshot (never a producer's feature worktree). Returns true when it
+   * audited a refusal or failure the caller must persist; removal never blocks the run.
+   */
+  async removeSnapshot(run5, attempt) {
+    if (attempt === void 0 || PRODUCERS.includes(attempt.stage)) {
+      return false;
+    }
+    const prefix = join15(run5.root, ".claude", "worktrees", `review-${run5.run_id}-`);
+    try {
+      if (!attempt.worktree.startsWith(prefix) || attempt.worktree.includes("..")) {
+        throw new Error(`refusing to remove ${attempt.worktree}: outside ${prefix}*`);
+      }
+      await this.runtime.removeSnapshot(run5, attempt.worktree);
+      return false;
+    } catch (error) {
+      this.audit(run5, "snapshot removal failed", {
+        attempt: attempt.id,
+        worktree: attempt.worktree,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+      return true;
+    }
   }
   task(run5) {
     return currentTask(run5);
@@ -11173,12 +11256,22 @@ var FeatureEngine = class {
     run5.stage = scope === "spec" ? "spec-repair" : "implement";
     this.audit(run5, "repair scheduled", { scope, pass: used + 1, feedback });
   }
-  reviewBase(run5) {
+  /** Scope the next review at `boundary` to the repair; a repeat repair keeps the first base so the diff spans every round. */
+  rereview(run5, boundary, base, claims) {
+    run5.rereview = { boundary, base: run5.rereview?.boundary === boundary ? run5.rereview.base : base, claims };
+  }
+  async reviewBase(run5) {
+    if (run5.rereview?.boundary === run5.stage) {
+      return run5.rereview.base;
+    }
     if (run5.stage === "task-review") {
       return run5.task_base_sha;
     }
     if (run5.stage === "slice-review") {
       return run5.slice_base_sha;
+    }
+    if (run5.stage === "feature-review" || run5.stage === "acceptance") {
+      return this.runtime.featureBase(run5);
     }
     return run5.spec.base_sha;
   }
@@ -11189,12 +11282,13 @@ var FeatureEngine = class {
     if (!await this.runtime.ancestor(run5.worktree, run5.accepted_sha, head)) {
       throw new Error("accepted commits are missing; work preserved for inspection");
     }
+    const base = await this.reviewBase(run5);
     let roles;
     if (run5.stage === "task-review") {
       roles = ["quality-reviewer"];
     } else if (run5.stage === "slice-review" || run5.stage === "feature-review") {
       roles = [...PANEL];
-      if (await this.runtime.databaseChanged(run5, this.reviewBase(run5))) {
+      if (await this.runtime.databaseChanged(run5, base)) {
         roles.push("database-design-reviewer");
       }
     } else if (run5.stage === "confirm") {
@@ -11214,7 +11308,7 @@ var FeatureEngine = class {
       driver,
       stage: run5.stage,
       head_sha: head,
-      base_sha: this.reviewBase(run5),
+      base_sha: base,
       spec_digest: run5.spec_digest,
       worktree,
       roles,
@@ -11292,15 +11386,16 @@ var FeatureEngine = class {
     switch (run5.stage) {
       case "tests": {
         const red = await this.runtime.checks(run5, "tests");
-        if (head === run5.task_base_sha || red.observed === 0 || red.passed || !red.assertionFailure) {
+        if (head === run5.task_base_sha || red.red === void 0) {
           this.repair(run5, "tests", [
-            "test-writer must commit task tests that demonstrably fail by assertion",
+            "test-writer must commit task tests that demonstrably fail by assertion, or by importing a declared task module absent at the task base",
             ...red.details
           ]);
           if (run5.status !== "parked") {
             run5.stage = "tests";
           }
         } else {
+          this.audit(run5, "red observed", { kind: red.red, details: red.details });
           run5.stage = "implement";
         }
         break;
@@ -11374,6 +11469,14 @@ var FeatureEngine = class {
         }
         delete run5.after_confirm;
         if (blockers.length) {
+          if (boundary === "task-review" || boundary === "slice-review" || boundary === "feature-review") {
+            this.rereview(
+              run5,
+              boundary,
+              attempt.head_sha,
+              blockers.map(({ file, line, claim }) => ({ file, line, claim }))
+            );
+          }
           this.repair(
             run5,
             boundary,
@@ -11396,6 +11499,12 @@ var FeatureEngine = class {
         const unmet = rows.filter((row) => !row.met);
         if (unmet.length) {
           const boundary = run5.candidate_satisfied ? "task-review" : "acceptance";
+          this.rereview(
+            run5,
+            run5.candidate_satisfied ? "task-review" : "feature-review",
+            attempt.head_sha,
+            unmet.map((row) => ({ claim: `${row.id}: ${row.evidence}` }))
+          );
           run5.candidate_satisfied = false;
           this.repair(
             run5,
@@ -11461,6 +11570,7 @@ var FeatureEngine = class {
     const task = this.task(run5);
     run5.checkpoints.push({ task_id: task.task_id, head_sha: head, spec_digest: run5.spec_digest });
     run5.accepted_sha = head;
+    delete run5.rereview;
     const next = run5.spec.tasks[run5.task_index + 1];
     if (next?.slice_id !== task.slice_id) {
       run5.stage = "slice-check";
@@ -11472,6 +11582,9 @@ var FeatureEngine = class {
     this.audit(run5, "task accepted", task.task_id);
   }
   async reviewPassed(run5, boundary) {
+    if (run5.rereview?.boundary === boundary) {
+      delete run5.rereview;
+    }
     if (boundary === "task-review") {
       if (run5.candidate_satisfied) {
         run5.stage = "acceptance";
@@ -11479,6 +11592,7 @@ var FeatureEngine = class {
         await this.acceptTask(run5);
       }
     } else if (boundary === "slice-review") {
+      delete run5.rereview;
       run5.accepted_sha = await this.runtime.head(run5.worktree);
       run5.task_index++;
       run5.task_base_sha = run5.accepted_sha;
@@ -11539,6 +11653,7 @@ var FeatureEngine = class {
       const reconciliation = await this.runtime.reconcileBase(run5);
       if (reconciliation === "merged") {
         delete run5.wait_since;
+        delete run5.rereview;
         run5.stage = "feature-check";
         this.audit(run5, "base integrated; full verification required", {});
         return;
@@ -11592,7 +11707,7 @@ var FeatureEngine = class {
 };
 
 // src/feature/runtime.ts
-import { access as access5 } from "node:fs/promises";
+import { access as access5, realpath } from "node:fs/promises";
 
 // src/verifier/deterministic/verdict.ts
 function deriveAllGatesVerdict(evidence) {
@@ -12108,16 +12223,16 @@ function missingBinResult(tool, cwd) {
     truncated: false
   };
 }
-async function runTool(resolve2, tool, toolArgs, opts, env = {}) {
-  const localBin = await resolve2(tool, opts);
+async function runTool(resolve3, tool, toolArgs, opts, env = {}) {
+  const localBin = await resolve3(tool, opts);
   if (localBin === null) {
     return missingBinResult(tool, opts.cwd);
   }
   return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
 }
 var DefaultVitestTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async run(files, opts) {
@@ -12126,8 +12241,8 @@ var DefaultVitestTool = class {
   }
 };
 var DefaultTscTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async typecheck(opts) {
@@ -12135,8 +12250,8 @@ var DefaultTscTool = class {
   }
 };
 var DefaultEslintTool = class {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   async lint(opts) {
@@ -12164,8 +12279,8 @@ var DefaultArgvRunner = class {
   }
 };
 var DefaultStrykerTool = class _DefaultStrykerTool {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   /** Report path relative to the worktree (stryker html/json reporter default). */
@@ -12248,8 +12363,8 @@ function computeMutationScore(report) {
   return valid > 0 ? detected / valid * 100 : null;
 }
 var DefaultCoverageTool = class _DefaultCoverageTool {
-  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
-    this.resolve = resolve2;
+  constructor(resolve3 = defaultLocalBinResolver, env = {}) {
+    this.resolve = resolve3;
     this.env = env;
   }
   /** Where every measurement must land, relative to the measured tree's root. */
@@ -12455,6 +12570,13 @@ function defaultGateTools(gateEnv = {}) {
 
 // src/feature/test-evidence.ts
 import { stripVTControlCharacters } from "node:util";
+import { dirname as dirname7, isAbsolute, relative as relative2, resolve as resolve2 } from "node:path";
+var LOAD_FAILURE = /^Error: Cannot find (?:module|package) '([^']+)' imported from '([^']+)'$/gm;
+function loadFailures(output) {
+  const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1];
+  const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({ specifier: m[1] ?? "", importer: m[2] ?? "" }));
+  return rows.length > 0 && rows.length === Number(failed) ? rows : void 0;
+}
 function testEvidence(proc) {
   if (proc.truncated) {
     throw new Error("test evidence was truncated");
@@ -12480,7 +12602,8 @@ ${proc.stderr}`);
   }
   if (!Number.isInteger(executed) || executed <= 0) {
     if (proc.code !== 0) {
-      return { executed: 0, assertionFailure: false };
+      const failures = loadFailures(output);
+      return { executed: 0, assertionFailure: false, ...failures ? { loadFailures: failures } : {} };
     }
     throw new Error(
       "test command provided no recognized executed-test evidence; configure a TAP, Node, Jest JSON or Vitest reporter"
@@ -12490,6 +12613,28 @@ ${proc.stderr}`);
     executed,
     assertionFailure: proc.code !== 0 && /AssertionError|ERR_ASSERTION|expected .+ to |toEqual|toBe\(/i.test(output)
   };
+}
+var EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+function declaredModule(failure, root, files) {
+  if (!/^\.\.?\//.test(failure.specifier) || !isAbsolute(failure.importer)) {
+    return void 0;
+  }
+  const target = relative2(root, resolve2(dirname7(failure.importer), failure.specifier));
+  if (target === "" || target.startsWith("..") || isAbsolute(target)) {
+    return void 0;
+  }
+  const stem = target.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
+  const candidates = /* @__PURE__ */ new Set([target, ...EXTENSIONS.flatMap((ext) => [`${stem}${ext}`, `${target}/index${ext}`])]);
+  return files.map((file) => file.replace(/^\.\//, "")).find((file) => candidates.has(file) && !isTestPath(file));
+}
+async function missingDeclaredModules(failures, root, files, existsAtBase) {
+  for (const failure of failures) {
+    const path3 = declaredModule(failure, root, files);
+    if (path3 === void 0 || await existsAtBase(path3)) {
+      return false;
+    }
+  }
+  return failures.length > 0;
 }
 
 // src/verifier/deterministic/tdd-exempt.ts
@@ -12632,7 +12777,7 @@ var LocalFeatureRuntime = class {
     const full = stage === "slice-check" || stage === "feature-check";
     const gates = stage === "tests" ? ["test"] : full ? ["test", "type", "lint", "build", "coverage", "mutation", "sast"] : ["test", "type", "lint"];
     const tools = defaultGateTools();
-    const baseRef = full ? stage === "slice-check" ? run5.slice_base_sha : run5.spec.base_sha : run5.task_base_sha;
+    const baseRef = stage === "slice-check" ? run5.slice_base_sha : stage === "feature-check" ? await this.featureBase(run5) : run5.task_base_sha;
     const context = {
       runId: run5.run_id,
       taskId: task.task_id,
@@ -12644,6 +12789,8 @@ var LocalFeatureRuntime = class {
     const outputs = [];
     const testResult = await new GateRunner().run({
       ...context,
+      // task-check runs the whole suite so an unrelated regression is repaired here, not parked later.
+      full: full || stage === "task-check",
       gates: ["test"],
       tools: {
         ...tools,
@@ -12663,10 +12810,11 @@ var LocalFeatureRuntime = class {
         }
       }
     });
-    if (outputs.length !== 1) {
+    const delegated = stage === "tests" && outputs.length === 0 && testResult.skipped.some((row) => row.reason === "no-vitest-runnable-tests-in-scope");
+    if (!delegated && outputs.length !== 1) {
       throw new Error("test gate did not execute exactly one test command");
     }
-    const tests = testEvidence(at(outputs, 0));
+    const tests = delegated ? { executed: 0, assertionFailure: false } : testEvidence(at(outputs, 0));
     const result = await new GateRunner().run({
       ...context,
       tools,
@@ -12675,15 +12823,38 @@ var LocalFeatureRuntime = class {
     const report = {
       passed: deriveAllGatesVerdict([...testResult.evidence, ...result.evidence]).passed,
       observed: tests.executed + result.evidence.length,
-      assertionFailure: tests.assertionFailure,
       details: [...testResult.report, ...result.report, { executed_tests: tests.executed }].map(
         (item) => JSON.stringify(item)
       )
     };
+    if (stage === "tests") {
+      if (delegated) {
+        const files = diffScopedTestFiles(await tools.git.changedFiles(run5.task_base_sha, { cwd: run5.worktree }));
+        report.red = "delegated-to-ci";
+        report.details.push(`Delegated to CI: ${files.filter((file) => !isVitestRunnable(file)).join(", ")}`);
+      } else if (!report.passed && tests.executed > 0 && tests.assertionFailure) {
+        report.red = "assertion";
+      } else if (tests.loadFailures !== void 0 && await missingDeclaredModules(
+        tests.loadFailures,
+        // Vitest prints realpaths (macOS /private/tmp); the worktree is engine-derived.
+        // eslint-disable-next-line security/detect-non-literal-fs-filename
+        await realpath(run5.worktree),
+        task.files,
+        async (path3) => await this.checked(
+          "git",
+          ["ls-tree", "--name-only", run5.task_base_sha, "--", path3],
+          run5.worktree
+        ) !== ""
+      )) {
+        report.red = "missing-declared-module";
+      }
+    }
     if ((stage === "tests" || stage === "task-check") && !run5.candidate_satisfied && !await this.exempt(run5)) {
       const commits = await tools.git.commits(run5.task_base_sha, task.task_id, { cwd: run5.worktree });
       if (stage === "tests") {
-        report.assertionFailure &&= commits.length > 0 && commits.every(taggedTestsOnly);
+        if (!(commits.length > 0 && commits.every(taggedTestsOnly))) {
+          delete report.red;
+        }
       } else {
         const verdict = deriveTddVerdict(commits, false);
         report.passed &&= verdict.ok;
@@ -12719,6 +12890,12 @@ var LocalFeatureRuntime = class {
       throw error;
     }
     return target;
+  }
+  async removeSnapshot(run5, path3) {
+    await this.checked("git", ["worktree", "remove", "--force", path3], run5.root);
+  }
+  featureBase(run5) {
+    return this.checked("git", ["merge-base", "HEAD", `${run5.remote}/${run5.base_branch}`], run5.worktree);
   }
   async citation(worktree, claim) {
     if (!safeRepoPath(claim.file) || !await this.checked("git", ["ls-tree", "--name-only", "HEAD", "--", claim.file], worktree)) {
@@ -13114,7 +13291,7 @@ function featureCommand(name) {
       if (name === "next-action" || name === "next-task" || name === "resume") {
         const root = await runtime.checked("git", ["rev-parse", "--show-toplevel"], process.cwd());
         const run5 = await store.read(id);
-        if (await realpath(root) !== await realpath(run5.root)) {
+        if (await realpath2(root) !== await realpath2(run5.root)) {
           throw new UsageError(
             `run ${id} belongs to ${run5.root}; run ${name} from that repository (cwd is ${root})`
           );

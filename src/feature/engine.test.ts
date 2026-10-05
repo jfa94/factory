@@ -1,4 +1,4 @@
-import {appendFile, mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises'
+import {appendFile, mkdtemp, mkdir, writeFile, readFile, rm, stat, symlink} from 'node:fs/promises'
 import {dirname, isAbsolute, join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {afterEach, describe, expect, it} from 'vitest'
@@ -64,7 +64,7 @@ async function fixture(mode: 'live' | 'no-ship' | 'local' = 'no-ship', exempt = 
         requirement_ids: ['R1'],
         title: `Deliver value ${id}`,
         description: 'Update the value with an independently tested checkpoint.',
-        files: ['value.js', 'value.test.js', 'README.md', 'notes.md'],
+        files: ['value.js', 'value.test.js', 'double.js', 'double.test.js', 'README.md', 'notes.md'],
         acceptance_criteria: ['Value is available and tests pass.'],
         tests_to_write: ['Test the updated value.'],
         depends_on,
@@ -126,6 +126,45 @@ function result(action: FeatureAction, extra: Partial<FeatureResult> = {}): Feat
 
 type Fixture = Awaited<ReturnType<typeof fixture>>
 
+/** Switch the fixture to the native Vitest gate, re-basing the run before the feature worktree exists. */
+async function nativeVitest(f: Fixture, extra: Record<string, string> = {}): Promise<void> {
+    await symlink(fileURLToPath(new URL('../../node_modules', import.meta.url)), join(f.root, 'node_modules'), 'dir')
+    const contract = JSON.parse(await readFile(join(f.root, '.factory/gates.json'), 'utf8')) as {
+        gates: Record<string, unknown>
+    }
+    contract.gates.test = {contracted: true}
+    await writeFile(join(f.root, '.factory/gates.json'), JSON.stringify(contract))
+    const files: Record<string, string> = {
+        'value.test.js':
+            "import {test, expect} from 'vitest'\nimport {value} from './value.js'\ntest('value is nonnegative', () => expect(value).toBeGreaterThanOrEqual(0))\n",
+        ...extra,
+    }
+    for (const [path, body] of Object.entries(files)) {
+        await writeFile(join(f.root, path), body)
+    }
+    await git(f.root, 'add', '.factory/gates.json', ...Object.keys(files))
+    await git(f.root, 'commit', '-m', 'configure native test runner')
+    const run = await f.store.read('run')
+    run.accepted_sha = run.task_base_sha = run.slice_base_sha = await git(f.root, 'rev-parse', 'HEAD')
+    await f.store.write(run)
+}
+
+async function commit(worktree: string, files: Record<string, string>, message: string): Promise<void> {
+    for (const [path, body] of Object.entries(files)) {
+        await mkdir(dirname(join(worktree, path)), {recursive: true})
+        await writeFile(join(worktree, path), body)
+    }
+    await git(worktree, 'add', ...Object.keys(files))
+    await git(worktree, 'commit', '-m', message)
+}
+
+function executing(action: FeatureAction, stage: string) {
+    if (action.kind !== 'execute' || action.attempt.stage !== stage) {
+        throw new Error(`expected ${stage}, got ${JSON.stringify(action)}`)
+    }
+    return action
+}
+
 /** Write each role's agent-shaped part (its own claims, no identity) to the in-flight staged paths. */
 async function stage(f: Fixture, response: FeatureResult): Promise<Record<string, string>> {
     const attempt = (await f.store.read('run')).in_flight
@@ -185,8 +224,7 @@ async function respond(f: Fixture, action: FeatureAction, noChange = false): Pro
 describe('sequential feature execution with real Git', {timeout: 30_000}, () => {
     it('parks after exactly three repair passes and preserves all committed work', async () => {
         const f = await fixture()
-        f.runtime.checks = () =>
-            Promise.resolve({passed: false, observed: 1, details: ['type error'], assertionFailure: false})
+        f.runtime.checks = () => Promise.resolve({passed: false, observed: 1, details: ['type error']})
         let action = await f.engine.advance('run', 'driver')
         for (let pass = 0; pass < 4; pass++) {
             if (action.kind !== 'execute') {
@@ -209,9 +247,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         let failing = true
         const checks = f.runtime.checks.bind(f.runtime)
         f.runtime.checks = (run, stage) =>
-            failing
-                ? Promise.resolve({passed: false, observed: 1, details: ['type error'], assertionFailure: false})
-                : checks(run, stage)
+            failing ? Promise.resolve({passed: false, observed: 1, details: ['type error']}) : checks(run, stage)
         let action = await f.engine.advance('run', 'driver')
         action = await respond(f, action) // implement → failing task-check → repair scheduled
         expect(await readBrief(action)).toContain('type error')
@@ -447,7 +483,7 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         const checks = f.runtime.checks.bind(f.runtime)
         f.runtime.checks = async (run, stage) =>
             stage === 'tests' && (await f.runtime.head(run.worktree)) !== run.task_base_sha
-                ? {passed: false, observed: 0, details: ['executed_tests: 0'], assertionFailure: false}
+                ? {passed: false, observed: 0, details: ['executed_tests: 0']}
                 : checks(run, stage)
         let action = await f.engine.advance('run', 'driver')
         if (action.kind !== 'execute' || action.attempt.stage !== 'tests') {
@@ -700,11 +736,14 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
             expect(await readBrief(redispatch, role)).toContain(`- Role: ${role}`)
         }
         expect((await f.store.read('run')).in_flight?.redispatch).toBeUndefined()
+        // D1: a partial redispatch keeps the snapshot; accepting the whole panel removes it.
+        expect((await stat(attempt.worktree)).isDirectory()).toBe(true)
         for (const path of Object.values(redispatch.staged)) {
             await writeFile(path, JSON.stringify({status: 'done', claims: []}))
         }
         expect(await f.engine.advance('run', 'new-driver')).toMatchObject({kind: 'execute'})
         expect((await f.store.read('run')).checkpoints.map((row) => row.task_id)).toEqual(['first'])
+        await expect(stat(attempt.worktree)).rejects.toThrow('ENOENT')
     }, 30_000)
 
     it('re-issues invalid review evidence twice, parks on the third, and recovers without losing work (decision 4)', async () => {
@@ -740,14 +779,17 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         }
         // A rejection never un-parks the run.
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'park'})
-        const head = await f.runtime.head(action.attempt.worktree)
+        // D1: recovery removes the retired snapshot, so retained work is read from the feature worktree.
+        const head = await f.runtime.head(run.worktree)
+        expect(head).toBe(action.attempt.head_sha)
         const recovered = await f.engine.resume('run', {recover: true})
         expect(recovered.in_flight).toBeUndefined()
         expect(recovered.rejections).toBeUndefined()
         expect(recovered.status).toBe('running')
         expect(recovered.stage).toBe('task-review')
         expect(recovered.audit.at(-2)?.event).toBe('interrupted attempt retired; work retained')
-        expect(await f.runtime.head(action.attempt.worktree)).toBe(head)
+        expect(await f.runtime.head(run.worktree)).toBe(head)
+        await expect(stat(action.attempt.worktree)).rejects.toThrow()
         const next = await f.engine.advance('run', 'new-driver')
         expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
         if (next.kind !== 'execute') {
@@ -1000,4 +1042,129 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         })
         expect((await f.store.read('run')).answers).toHaveLength(1)
     }, 30_000)
+
+    it('goes RED on a missing declared module, then GREEN, with no repair pass (decision 2)', async () => {
+        const f = await fixture('no-ship', false)
+        await nativeVitest(f)
+        let action = executing(await f.engine.advance('run', 'driver'), 'tests')
+        await commit(
+            action.attempt.worktree,
+            {
+                'double.test.js':
+                    "import {test, expect} from 'vitest'\nimport {double} from './double.js'\ntest('doubles', () => expect(double(2)).toBe(4))\n",
+            },
+            '[first] double tests'
+        )
+        action = executing(await submit(f, result(action)), 'implement')
+        expect((await f.store.read('run')).audit.find((row) => row.event === 'red observed')?.details).toMatchObject({
+            kind: 'missing-declared-module',
+        })
+        await commit(action.attempt.worktree, {'double.js': 'export const double = (n) => n * 2\n'}, '[first] double')
+        action = executing(await submit(f, result(action)), 'task-review')
+        const run = await f.store.read('run')
+        expect(run.attempts).toEqual({})
+        expect(run.feedback).toEqual([])
+    }, 60_000)
+
+    it('delegates a pgTAP-only RED to CI and reaches task-check without parking (decision 7)', async () => {
+        const f = await fixture('no-ship', false)
+        await nativeVitest(f)
+        let action = executing(await f.engine.advance('run', 'driver'), 'tests')
+        await commit(
+            action.attempt.worktree,
+            {'supabase/tests/value.test.sql': 'select plan(1);\nselect ok(true);\n'},
+            '[first] value pgTAP test'
+        )
+        action = executing(await submit(f, result(action)), 'implement')
+        const red = (await f.store.read('run')).audit.find((row) => row.event === 'red observed')
+        expect(red?.details).toMatchObject({
+            kind: 'delegated-to-ci',
+            details: expect.arrayContaining(['Delegated to CI: supabase/tests/value.test.sql']) as string[],
+        })
+        await commit(action.attempt.worktree, {'value.js': 'export const value = 1\n'}, '[first] value 1')
+        action = executing(await submit(f, result(action)), 'task-review')
+        const run = await f.store.read('run')
+        expect(run.status).toBe('running')
+        expect(run.attempts).toEqual({})
+        expect(run.audit.map((row) => row.stage)).toContain('task-check')
+    }, 60_000)
+
+    it('repairs an unrelated regression at task-check instead of parking at the next baseline', async () => {
+        const f = await fixture()
+        await nativeVitest(f, {
+            'bound.test.js':
+                "import {test, expect} from 'vitest'\nimport {value} from './value.js'\ntest('value stays small', () => expect(value).toBeLessThan(5))\n",
+        })
+        let action = executing(await f.engine.advance('run', 'driver'), 'implement')
+        await commit(action.attempt.worktree, {'value.js': 'export const value = 9\n'}, '[first] value 9')
+        action = executing(await submit(f, result(action)), 'implement')
+        const run = await f.store.read('run')
+        expect(run.status).toBe('running')
+        expect(run.attempts).toEqual({'task:first': 1})
+        expect(run.feedback.join('\n')).toContain('bound.test.js')
+        // Decision 5: a gate repair never scopes the next review.
+        expect(run.rereview).toBeUndefined()
+    }, 60_000)
+
+    it('re-reviews only the repair diff, then clears the scope and removes accepted snapshots (decision 5, D1)', async () => {
+        const f = await fixture()
+        let action = executing(await respond(f, await f.engine.advance('run', 'driver')), 'task-review')
+        const reviewed = action.attempt
+        const claim = {
+            severity: 'important' as const,
+            file: 'value.js',
+            line: 1,
+            quote: 'export const value = 1',
+            claim: 'The value must be two',
+        }
+        action = executing(
+            await submit(
+                f,
+                result(action, {
+                    reviews: [
+                        {reviewer: 'quality-reviewer', claims: [{...claim, id: 'x', reviewer: 'quality-reviewer'}]},
+                    ],
+                })
+            ),
+            'confirm'
+        )
+        await expect(stat(reviewed.worktree)).rejects.toThrow('ENOENT')
+        const id = at((await f.store.read('run')).claims, 0).id
+        action = executing(
+            await submit(
+                f,
+                result(action, {confirmations: [{id, confirmed: true, evidence: 'value.js exports one, not two'}]})
+            ),
+            'implement'
+        )
+        expect((await f.store.read('run')).rereview).toEqual({
+            boundary: 'task-review',
+            base: reviewed.head_sha,
+            claims: [{file: 'value.js', line: 1, claim: 'The value must be two'}],
+        })
+        await commit(action.attempt.worktree, {'value.js': 'export const value = 2\n'}, '[first] value 2')
+        action = executing(await submit(f, result(action)), 'task-review')
+        expect(action.attempt.base_sha).toBe(reviewed.head_sha)
+        const brief = await readBrief(action)
+        expect(brief).toContain('This is a re-review of a repair.')
+        expect(brief).toContain('- value.js:1: The value must be two')
+        await respond(f, action)
+        expect((await f.store.read('run')).rereview).toBeUndefined()
+        expect((await f.store.read('run')).checkpoints.map((row) => row.task_id)).toEqual(['first'])
+    }, 60_000)
+
+    it('bases the feature range on the merge-base with the upstream branch (C5)', async () => {
+        const f = await fixture()
+        await f.engine.advance('run', 'driver')
+        const run = await f.store.read('run')
+        expect(await f.runtime.featureBase(run)).toBe(run.spec.base_sha)
+        await writeFile(join(f.root, 'notes.md'), 'upstream\n')
+        await git(f.root, 'add', 'notes.md')
+        await git(f.root, 'commit', '-m', 'upstream change')
+        await git(f.root, 'push', 'origin', 'develop')
+        const upstream = await git(f.root, 'rev-parse', 'HEAD')
+        await git(run.worktree, 'fetch', 'origin')
+        await git(run.worktree, 'merge', '--no-edit', 'origin/develop')
+        expect(await f.runtime.featureBase(run)).toBe(upstream)
+    })
 })

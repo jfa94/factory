@@ -83,10 +83,13 @@ literal>")` against a source/migration file). If the artifact under test is **no
    fabricate a source pin. (A task-level TDD exemption or a contracted gate `command` in the
    repository contracts are the sanctioned escapes for exotic or deferred runners — never a
    text pin.)
-7. **Prove a real failing assertion.** The engine runs the suite after you return and
-   requires at least one executed test that fails BY ASSERTION against the missing
-   implementation. A suite that fails on syntax, import or environment, that executes zero
-   tests, or that passes, sends the task back to you with the evidence.
+7. **Prove RED.** The engine runs the suite after you return. It accepts either at least one
+   executed test that fails BY ASSERTION, or suites that fail only because they import a
+   not-yet-existing module the task declares: import it by relative path (e.g.
+   `./double.js` for a declared `src/double.ts`), and never create a stub. Every load failure
+   must name a declared, non-test task file absent at the task base. A suite that fails on
+   syntax, a bare package, an undeclared or existing path, or that passes, sends the task
+   back to you with the evidence.
 
 ## Red Flags — STOP and re-read this prompt
 
@@ -98,7 +101,7 @@ literal>")` against a source/migration file). If the artifact under test is **no
 | "No runner exists yet, so I'll pin the migration's source text"   | Forbidden source pin. Assert behavior via a probe, or `needs-context` and defer — see Iron Law 6.           |
 | "This existing test duplicates mine — I'll modify it"             | Don't edit existing tests. Remove your duplicate or add a distinct case.                                    |
 | "I'll wrap the call in try/catch to keep the suite green"         | Forbidden. Let exceptions propagate as test failures.                                                       |
-| "I'll add a stub so the import resolves"                          | That is implementation. The suite must fail by assertion, not compile — and a stub commit parks the run.    |
+| "I'll add a stub so the import resolves"                          | That is implementation. Import the declared new module by relative path and let it fail to load.            |
 | "I'll commit from wherever I am"                                  | Commit in the feature worktree on its current branch, or the work is lost.                                  |
 | "The tests pass logic, eslint style is the implementer's problem" | The implementer can't touch your tests. Run `eslint --fix` before committing or a green task fails on lint. |
 
@@ -124,7 +127,8 @@ literal>")` against a source/migration file). If the artifact under test is **no
    preservation, monotonicity, totality. Do NOT introduce a new test dependency the project
    doesn't already have — use plain example-based loops if no property library is available.
 5. **Confirm RED** per the TDD skill: every new test FAILS for the right reason (missing
-   implementation, by assertion), not a typo or import error.
+   implementation: by assertion, or by importing a declared module that does not exist yet),
+   not a typo or an unrelated import error.
 6. **Lint-clean the tests you wrote.** If the repo opts into eslint (an eslint config plus
    `node_modules/.bin/eslint` resolve in the worktree), run `eslint --fix` on the test files
    you authored this attempt, then re-run the test command to confirm every new test still
@@ -152,7 +156,7 @@ source-presence pin asserts what the code _says_, not what it _does_. See Iron L
 - [ ] Every test asserts a specific value or behavior (no presence-only sole assertions)
 - [ ] Did NOT modify any existing test; did NOT write or commit implementation files
 - [ ] No try/catch swallowing failures; no shared mutable state between tests
-- [ ] Ran the suite and observed every new test FAIL by assertion for the correct reason
+- [ ] Ran the suite and observed every new test FAIL for the correct reason (by assertion, or by importing a declared not-yet-existing module; no stubs)
 - [ ] If the repo lints, ran `eslint --fix` on the authored test files and re-confirmed RED (no assertion changed)
 - [ ] Committed the tests in the feature worktree with the `[<task_id>]` tag; `git status` clean
 
@@ -171,7 +175,7 @@ block is fine). The engine reads your commits from the worktree.
 `status` values:
 
 - `done` — failing tests authored and committed with the `[<task_id>]` tag (every new test
-  fails by assertion), tree clean.
+  fails by assertion or by importing a declared not-yet-existing module), tree clean.
 - `already-satisfied` — the task's behavior is ALREADY delivered by the tree you were spawned
   onto (a prior task or run shipped it), or the task is a characterization task that pins
   existing behavior. You MAY first commit tagged, tests-only commits that pin the delivered

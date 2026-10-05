@@ -9,6 +9,7 @@ import {
     validateFeatureSpec,
     type FeatureAction,
     type FeatureResult,
+    type FeatureRun,
     type FeatureSpec,
     type Stage,
 } from './schema.js'
@@ -51,6 +52,7 @@ const spec: FeatureSpec = {
 async function setup(stage?: Stage) {
     const dir = await mkdtemp(join(tmpdir(), 'feature-protocol-'))
     dirs.push(dir)
+    let snapshots = 0
     const runtime = {
         ciWaitMinutes: 1,
         now: () => '2026-09-07T00:00:00Z',
@@ -59,9 +61,14 @@ async function setup(stage?: Stage) {
         clean: vi.fn().mockResolvedValue(true),
         ancestor: vi.fn().mockResolvedValue(true),
         exempt: vi.fn().mockResolvedValue(true),
-        checks: vi.fn().mockResolvedValue({passed: true, observed: 1, details: [], assertionFailure: false}),
+        checks: vi.fn().mockResolvedValue({passed: true, observed: 1, details: []}),
         testsOnly: vi.fn().mockResolvedValue(true),
-        snapshot: vi.fn().mockResolvedValue(join(dir, 'snapshot')),
+        // ponytail: real snapshot paths embed the attempt id; a counter keeps the identity-free brief check meaningful.
+        snapshot: vi.fn((_run: FeatureRun) =>
+            Promise.resolve(join(dir, '.claude', 'worktrees', `review-run-${++snapshots}`))
+        ),
+        removeSnapshot: vi.fn().mockResolvedValue(undefined),
+        featureBase: vi.fn().mockResolvedValue(sha),
         citation: vi.fn().mockResolvedValue(true),
         databaseChanged: vi.fn().mockResolvedValue(false),
         quota: vi.fn().mockResolvedValue(undefined),
@@ -283,8 +290,100 @@ describe('feature evidence and recovery protocol', () => {
         )
         const repaired = await f.engine.advance('run', 'driver')
         expect(repaired).toMatchObject({kind: 'execute', attempt: {stage: 'implement'}})
+        // Decision 5: unmet rows scope the feature re-review to the repair, from the HEAD they were judged at.
+        expect((await f.store.read('run')).rereview).toEqual({
+            boundary: 'feature-review',
+            base: sha,
+            claims: [{claim: 'R1: The value is wrong in value.ts'}],
+        })
         const next = await submit(f, result(repaired))
-        expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'feature-review'}})
+        expect(next).toMatchObject({kind: 'execute', attempt: {stage: 'feature-review', base_sha: sha}})
+        expect(await readBrief(next)).toContain('- R1: The value is wrong in value.ts')
+    })
+    it('bases feature review and acceptance on the merge-base unless a re-review applies (C5)', async () => {
+        const f = await setup('feature-review')
+        f.runtime.featureBase.mockResolvedValue(nextSha)
+        const action = execution(await f.engine.advance('run', 'driver'))
+        expect(action.attempt.base_sha).toBe(nextSha)
+        expect(f.runtime.databaseChanged).toHaveBeenCalledWith(expect.anything(), nextSha)
+        const accepted = execution(
+            await submit(f, result(action, {reviews: action.attempt.roles.map((reviewer) => ({reviewer, claims: []}))}))
+        )
+        expect(accepted.attempt).toMatchObject({stage: 'acceptance', base_sha: nextSha})
+    })
+    it('scopes the finding-verifier of a re-review to the repair and clears the scope on pass (decision 5)', async () => {
+        const f = await setup('task-review')
+        let action = await f.engine.advance('run', 'driver')
+        action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim]}]}))
+        expect(await readBrief(action)).not.toContain('Re-review scope')
+        const evidence = 'Checked value.ts at the cited statement'
+        action = await submit(f, result(action, {confirmations: [{id: claim.id, confirmed: true, evidence}]}))
+        action = await submit(f, result(action))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'task-review'}})
+        const second = {...claim, claim: 'Still returns the wrong value'}
+        action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [second]}]}))
+        expect(await readBrief(action)).toContain(
+            `Confirm a claim only if it is in or caused by that repair diff, or it is one of these prior claims still unresolved:\n\n- value.ts:1: Returns the wrong value`
+        )
+        action = await submit(f, result(action, {confirmations: [{id: claim.id, confirmed: false, evidence}]}))
+        expect(action).toMatchObject({kind: 'execute', attempt: {stage: 'slice-review'}})
+        expect((await f.store.read('run')).rereview).toBeUndefined()
+    })
+    it('removes each accepted review snapshot and refuses a path outside the run prefix (D1)', async () => {
+        const f = await setup('task-review')
+        const outside = join(f.input.root, 'elsewhere')
+        f.runtime.snapshot.mockResolvedValueOnce(outside)
+        let action = execution(await f.engine.advance('run', 'driver'))
+        action = execution(await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: []}]})))
+        expect(f.runtime.removeSnapshot).not.toHaveBeenCalled()
+        expect(
+            (await f.store.read('run')).audit.find((row) => row.event === 'snapshot removal failed')?.details
+        ).toMatchObject({
+            worktree: outside,
+            reason: expect.stringContaining('refusing to remove') as string,
+        })
+        f.runtime.removeSnapshot.mockRejectedValueOnce(new Error('worktree is locked'))
+        const slice = action.attempt
+        action = execution(
+            await submit(f, result(action, {reviews: slice.roles.map((reviewer) => ({reviewer, claims: []}))}))
+        )
+        expect(f.runtime.removeSnapshot).toHaveBeenCalledWith(expect.anything(), slice.worktree)
+        const failed = (await f.store.read('run')).audit.filter((row) => row.event === 'snapshot removal failed')
+        expect(failed.at(-1)?.details).toMatchObject({worktree: slice.worktree, reason: 'worktree is locked'})
+        expect(action.attempt.stage).not.toBe('slice-review')
+    })
+    it('removes a modified snapshot once the fresh-snapshot rejection retires it (D1)', async () => {
+        const f = await setup('task-review')
+        const action = execution(await f.engine.advance('run', 'driver'))
+        f.runtime.clean.mockImplementation((path: string) => Promise.resolve(path !== action.attempt.worktree))
+        const waited = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: []}]}))
+        expect(waited).toMatchObject({kind: 'wait'})
+        expect((await f.store.read('run')).in_flight).toBeUndefined()
+        expect(f.runtime.removeSnapshot).toHaveBeenCalledWith(expect.anything(), action.attempt.worktree)
+    })
+    it('marks confirmed claims on test files as tests to strengthen in the implementer brief (decision 6)', async () => {
+        const f = await setup('task-review')
+        let action = await f.engine.advance('run', 'driver')
+        const weak = {
+            ...claim,
+            id: 'quality-reviewer.2',
+            file: 'value.test.ts',
+            claim: 'Asserts nothing about the value',
+        }
+        action = await submit(f, result(action, {reviews: [{reviewer: 'quality-reviewer', claims: [claim, weak]}]}))
+        const evidence = 'Checked the cited statement in the file'
+        action = await submit(
+            f,
+            result(action, {
+                confirmations: [
+                    {id: claim.id, confirmed: true, evidence},
+                    {id: weak.id, confirmed: true, evidence},
+                ],
+            })
+        )
+        const brief = await readBrief(action)
+        expect(brief).toContain('- value.test.ts:1: Asserts nothing about the value (strengthen this test)')
+        expect(brief).toContain('- value.ts:1: Returns the wrong value\n')
     })
     it('revises a defective spec independently and preserves the accepted prefix', async () => {
         const f = await setup('implement')
@@ -462,7 +561,12 @@ describe('feature evidence and recovery protocol', () => {
         expect(brief).toContain(
             '## Refuted claims\n\nIndependent verifiers refuted these earlier claims. Re-file one only with new evidence, and state that evidence in the `claim`.\n\n- value.ts:1: Drops the error path — refuted: The error path is handled by the caller'
         )
-        expect(brief).not.toContain('Returns the wrong value')
+        // Decision 5: the confirmed claim is no longer absent; it is listed as a prior claim to re-check, never as refuted.
+        const [refutedSection = '', rereview = ''] =
+            brief.split('## Refuted claims')[1]?.split('## Re-review of a repair') ?? []
+        expect(refutedSection).not.toContain('Returns the wrong value')
+        expect(rereview).toContain('This is a re-review of a repair.')
+        expect(rereview).toContain('- value.ts:1: Returns the wrong value')
     })
 
     it('re-issues a producer that left uncommitted work, without spending a repair pass', async () => {

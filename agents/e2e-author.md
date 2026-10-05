@@ -48,8 +48,9 @@ finishing regardless of how you drafted it.
 
 Author a SMALL number of money-path journeys under `<testDir>/` (e.g. `e2e/`), committed
 and load-bearing. Judge which tasks are user-facing from `title`/`acceptance_criteria`/
-`files` — there is no explicit UI flag. Skip non-UI tasks (pure backend/CLI/schema work);
-a feature with no UI surface gets no specs, and you say so in `message`.
+`files` — there is no explicit UI flag. Skip non-UI tasks (pure backend/CLI/schema work).
+A feature with no UI surface gets no specs: commit nothing and return `blocked` with the
+message "--e2e requested but the feature has no user-facing surface; rerun without --e2e".
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law — the control assertion
@@ -106,20 +107,20 @@ block is fine). The engine reads your commits from the worktree.
 ```json
 {
     "status": "done",
-    "message": "<one line per spec: path — plain-language journey name — task_ids covered; note any journey left red or any no-UI verdict>"
+    "message": "<one line per spec: path — plain-language journey name — task_ids covered; note any journey left red>"
 }
 ```
 
 - `done` — every spec is committed with a `[<task_id>]` tag (use the primary task each
-  journey covers), self-validated, tree clean. Also `done` when you reviewed every task and
-  judged NONE UI-facing: commit nothing and state the no-UI verdict in `message`.
+  journey covers), self-validated, tree clean.
 - `needs-context` — a decision only a human can make (which environment, which credentials,
   which behavior is intended); put the question in `message`. The run parks.
 - `spec-defect` — the PRD/spec describes a journey the implemented feature cannot expose as
   specified; state the contradiction in `message`.
 - `blocked` — missing tooling (Playwright, browsers) or an app that will not boot. Say what
   broke in `message`; the run parks for a human. Use this only when truly stuck, not for a
-  single tricky journey.
+  single tricky journey. Also `blocked` when you reviewed every task and judged NONE
+  UI-facing: commit nothing, with exactly the message "--e2e requested but the feature has no user-facing surface; rerun without --e2e".
 
 Uncommitted changes with `done` or a rewritten accepted commit is rejected by the engine as a
 producer failure. Return the JSON and nothing else.

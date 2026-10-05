@@ -1,0 +1,9 @@
+
+ RUN  v3.2.6 /private/tmp/vlf.N7av
+
+
+ Test Files  5 failed (5)
+      Tests  no tests
+   Start at  18:37:17
+   Duration  212ms (transform 74ms, setup 0ms, collect 0ms, tests 0ms, environment 0ms, prepare 214ms)
+

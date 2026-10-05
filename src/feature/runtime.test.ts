@@ -260,6 +260,18 @@ describe('feature runtime external evidence', () => {
         vi.mocked(provisionWorktree).mockResolvedValueOnce(undefined)
         expect(await f.runtime.snapshot(run, 'a2', sha)).toBe('/repo/.claude/worktrees/review-run-a2')
     })
+    it('removes a snapshot worktree from the run root and reads the feature base in the feature worktree', async () => {
+        const f = setup()
+        await f.runtime.removeSnapshot(run, '/repo/.claude/worktrees/review-run-a1')
+        expect(f.command).toHaveBeenLastCalledWith(
+            'git',
+            ['worktree', 'remove', '--force', '/repo/.claude/worktrees/review-run-a1'],
+            '/repo'
+        )
+        f.command.mockImplementation(() => reply(`${sha}\n`))
+        expect(await f.runtime.featureBase(run)).toBe(sha)
+        expect(f.command).toHaveBeenLastCalledWith('git', ['merge-base', 'HEAD', 'origin/develop'], '/repo/feature')
+    })
     it('reports a failed feature worktree provision as transient', async () => {
         const f = setup()
         f.command.mockImplementation((_name, args) => reply(args[0] === 'symbolic-ref' ? 'factory/1-run' : sha))

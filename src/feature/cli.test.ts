@@ -41,7 +41,9 @@ vi.mock('./runtime.js', () => ({
         prepare = () => Promise.resolve(undefined)
         exempt = () => Promise.resolve(true)
         quota = () => Promise.resolve(undefined)
-        checks = () => Promise.resolve({passed: true, observed: 1, details: [], assertionFailure: false})
+        checks = () => Promise.resolve({passed: true, observed: 1, details: []})
+        removeSnapshot = () => Promise.resolve(undefined)
+        featureBase = () => Promise.resolve(fake.sha)
         snapshot = () => Promise.resolve(join(fake.root, 'review'))
         databaseChanged = () => Promise.resolve(false)
     },

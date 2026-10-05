@@ -1,0 +1,37 @@
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/a.test.ts [ src/a.test.ts ]
+Error: Cannot find module './lib/missing.js' imported from '/private/tmp/vlf.N7av/src/a.test.ts'
+ ❯ src/a.test.ts:2:1
+      1| import {describe, it, expect} from 'vitest'
+      2| import {thing} from './lib/missing.js'
+       | ^
+      3| describe('a', () => { it('works', () => { expect(thing()).toBe(1) }) })
+      4| 
+
+Caused by: Error: Failed to load url ./lib/missing.js (resolved id: ./lib/missing.js) in /private/tmp/vlf.N7av/src/a.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../repo/node_modules/.pnpm/vite@7.3.5_@types+node@22.19.19_tsx@4.22.4_yaml@2.9.0/node_modules/vite/dist/node/chunks/config.js:22739:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/s.test.ts [ src/s.test.ts ]
+Error: Transform failed with 1 error:
+/private/tmp/vlf.N7av/src/s.test.ts:2:22: ERROR: Expected identifier but found "="
+  Plugin: vite:esbuild
+  File: /private/tmp/vlf.N7av/src/s.test.ts:2:22
+  
+  Expected identifier but found "="
+  1  |  import {it} from 'vitest'
+  2  |  it('s', () => { const = 1 })
+     |                        ^
+  3  |  
+  
+ ❯ failureErrorWithLog ../../../repo/node_modules/.pnpm/esbuild@0.27.7/node_modules/esbuild/lib/main.js:1748:15
+ ❯ ../../../repo/node_modules/.pnpm/esbuild@0.27.7/node_modules/esbuild/lib/main.js:1017:50
+ ❯ responseCallbacks.<computed> ../../../repo/node_modules/.pnpm/esbuild@0.27.7/node_modules/esbuild/lib/main.js:884:9
+ ❯ handleIncomingPacket ../../../repo/node_modules/.pnpm/esbuild@0.27.7/node_modules/esbuild/lib/main.js:939:12
+ ❯ Socket.readFromStdout ../../../repo/node_modules/.pnpm/esbuild@0.27.7/node_modules/esbuild/lib/main.js:862:7
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+

@@ -1,8 +1,33 @@
 import type {ProcResult} from '../verifier/deterministic/tools.js'
+import {isTestPath} from '../verifier/deterministic/scope.js'
 import {stripVTControlCharacters} from 'node:util'
+import {dirname, isAbsolute, relative, resolve} from 'node:path'
+
+/** A test suite that failed to load: the unresolved import and the absolute path of the file importing it. */
+export interface LoadFailure {
+    specifier: string
+    importer: string
+}
+
+export interface TestEvidence {
+    executed: number
+    assertionFailure: boolean
+    /** Present only when every failed suite of a run with zero executed tests is a recognized load failure. */
+    loadFailures?: LoadFailure[]
+}
+
+// The only form observed from Vitest 3 for a suite that cannot load (direct or transitive
+// import); bare specifiers say "package". Fixtures: test-evidence.test.ts.
+const LOAD_FAILURE = /^Error: Cannot find (?:module|package) '([^']+)' imported from '([^']+)'$/gm
+
+function loadFailures(output: string): LoadFailure[] | undefined {
+    const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1]
+    const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({specifier: m[1] ?? '', importer: m[2] ?? ''}))
+    return rows.length > 0 && rows.length === Number(failed) ? rows : undefined
+}
 
 /** Recognize executed tests, never an exit code alone. Unknown reporters fail closed. */
-export function testEvidence(proc: ProcResult): {executed: number; assertionFailure: boolean} {
+export function testEvidence(proc: ProcResult): TestEvidence {
     if (proc.truncated) {
         throw new Error('test evidence was truncated')
     }
@@ -39,7 +64,8 @@ export function testEvidence(proc: ProcResult): {executed: number; assertionFail
         if (proc.code !== 0) {
             // A failed run that reports no tests (a suite that could not load) is a producer
             // failure to repair, not an unverifiable pass; only a "success" without evidence is.
-            return {executed: 0, assertionFailure: false}
+            const failures = loadFailures(output)
+            return {executed: 0, assertionFailure: false, ...(failures ? {loadFailures: failures} : {})}
         }
         throw new Error(
             'test command provided no recognized executed-test evidence; configure a TAP, Node, Jest JSON or Vitest reporter'
@@ -50,4 +76,39 @@ export function testEvidence(proc: ProcResult): {executed: number; assertionFail
         assertionFailure:
             proc.code !== 0 && /AssertionError|ERR_ASSERTION|expected .+ to |toEqual|toBe\(/i.test(output),
     }
+}
+
+const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+
+/**
+ * The declared non-test task file a relative load failure names, resolved against the importing
+ * file inside `root` (any listed extension, or `/index.<ext>`), or undefined when it names none.
+ */
+export function declaredModule(failure: LoadFailure, root: string, files: readonly string[]): string | undefined {
+    if (!/^\.\.?\//.test(failure.specifier) || !isAbsolute(failure.importer)) {
+        return undefined
+    }
+    const target = relative(root, resolve(dirname(failure.importer), failure.specifier))
+    if (target === '' || target.startsWith('..') || isAbsolute(target)) {
+        return undefined
+    }
+    const stem = target.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, '')
+    const candidates = new Set([target, ...EXTENSIONS.flatMap((ext) => [`${stem}${ext}`, `${target}/index${ext}`])])
+    return files.map((file) => file.replace(/^\.\//, '')).find((file) => candidates.has(file) && !isTestPath(file))
+}
+
+/** RED by load failure: every failure names a declared non-test task file that is absent at the task base. */
+export async function missingDeclaredModules(
+    failures: readonly LoadFailure[],
+    root: string,
+    files: readonly string[],
+    existsAtBase: (path: string) => Promise<boolean>
+): Promise<boolean> {
+    for (const failure of failures) {
+        const path = declaredModule(failure, root, files)
+        if (path === undefined || (await existsAtBase(path))) {
+            return false
+        }
+    }
+    return failures.length > 0
 }

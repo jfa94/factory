@@ -138,9 +138,13 @@ export class FeatureEngine {
                         )
                     }
                     const recorded = structuredClone(run)
+                    const attempt = run.in_flight
                     await this.accept(recorded, staged.result)
                     run = recorded
                     await this.store.write(run)
+                    if (await this.removeSnapshot(run, attempt)) {
+                        await this.store.write(run)
+                    }
                     if ((run.status as string) === 'parked') {
                         return this.parked(run)
                     }
@@ -211,9 +215,11 @@ export class FeatureEngine {
             return this.parked(run)
         }
         if (error.freshSnapshot) {
-            // ponytail: the retired snapshot worktree stays on disk until snapshot removal lands (4.8).
             delete run.in_flight
             await this.store.write(run)
+            if (await this.removeSnapshot(run, attempt)) {
+                await this.store.write(run)
+            }
             return this.wait(run, `result rejected (${error.message}); a fresh attempt is issued next`, 0)
         }
         const roles = [...new Set([...(attempt.redispatch ?? []), ...error.roles])]
@@ -251,7 +257,8 @@ export class FeatureEngine {
         id: string,
         options: {answer?: string; recover?: boolean; cancel?: boolean; ship?: 'live' | 'no-ship'} = {}
     ): Promise<FeatureRun> {
-        return this.mutate(id, async (initial) => {
+        let retired: Attempt | undefined
+        const resumed = await this.mutate(id, async (initial) => {
             let run = initial
             if (terminal(run)) {
                 throw new Error('terminal run requires a fresh run')
@@ -305,6 +312,7 @@ export class FeatureEngine {
                     } else {
                         this.audit(run, 'interrupted attempt retired; work retained', attempt)
                         delete run.in_flight
+                        retired = attempt
                     }
                 } else {
                     const recovered = structuredClone(run)
@@ -316,6 +324,7 @@ export class FeatureEngine {
                         }
                         await this.accept(recovered, staged.result)
                         run = recovered
+                        retired = attempt
                         this.audit(run, 'durable result recovered', attempt.id)
                         if (run.status === 'parked') {
                             return run
@@ -328,6 +337,7 @@ export class FeatureEngine {
                         })
                         run.feedback = [...run.feedback, `Previous result rejected: ${reason}`]
                         delete run.in_flight
+                        retired = attempt
                     }
                 }
             }
@@ -337,6 +347,18 @@ export class FeatureEngine {
             delete run.rejections
             delete run.transient_failures
             this.audit(run, 'resumed', options)
+            return run
+        })
+        if (retired === undefined) {
+            return resumed
+        }
+        // Only once the retirement is written: a crash before it must still find the snapshot.
+        const attempt = retired
+        return this.store.withRepo(resumed.repo, async () => {
+            const run = await this.store.read(id)
+            if (await this.removeSnapshot(run, attempt)) {
+                await this.store.write(run)
+            }
             return run
         })
     }
@@ -363,6 +385,31 @@ export class FeatureEngine {
         await this.record(run, result)
         delete run.rejections
         await this.store.recordResult(run.run_id, attempt.id, result)
+    }
+
+    /**
+     * Remove a retired review snapshot (never a producer's feature worktree). Returns true when it
+     * audited a refusal or failure the caller must persist; removal never blocks the run.
+     */
+    private async removeSnapshot(run: FeatureRun, attempt: Attempt | undefined): Promise<boolean> {
+        if (attempt === undefined || PRODUCERS.includes(attempt.stage)) {
+            return false
+        }
+        const prefix = join(run.root, '.claude', 'worktrees', `review-${run.run_id}-`)
+        try {
+            if (!attempt.worktree.startsWith(prefix) || attempt.worktree.includes('..')) {
+                throw new Error(`refusing to remove ${attempt.worktree}: outside ${prefix}*`)
+            }
+            await this.runtime.removeSnapshot(run, attempt.worktree)
+            return false
+        } catch (error) {
+            this.audit(run, 'snapshot removal failed', {
+                attempt: attempt.id,
+                worktree: attempt.worktree,
+                reason: error instanceof Error ? error.message : String(error),
+            })
+            return true
+        }
     }
 
     private task(run: FeatureRun) {
@@ -412,12 +459,29 @@ export class FeatureEngine {
         this.audit(run, 'repair scheduled', {scope, pass: used + 1, feedback})
     }
 
-    private reviewBase(run: FeatureRun): string {
+    /** Scope the next review at `boundary` to the repair; a repeat repair keeps the first base so the diff spans every round. */
+    private rereview(
+        run: FeatureRun,
+        boundary: NonNullable<FeatureRun['rereview']>['boundary'],
+        base: string,
+        claims: NonNullable<FeatureRun['rereview']>['claims']
+    ): void {
+        run.rereview = {boundary, base: run.rereview?.boundary === boundary ? run.rereview.base : base, claims}
+    }
+
+    private async reviewBase(run: FeatureRun): Promise<string> {
+        if (run.rereview?.boundary === run.stage) {
+            return run.rereview.base
+        }
         if (run.stage === 'task-review') {
             return run.task_base_sha
         }
         if (run.stage === 'slice-review') {
             return run.slice_base_sha
+        }
+        if (run.stage === 'feature-review' || run.stage === 'acceptance') {
+            // After an upstream merge the feature range starts at the merge-base, not the spec base.
+            return this.runtime.featureBase(run)
         }
         return run.spec.base_sha
     }
@@ -429,12 +493,13 @@ export class FeatureEngine {
         if (!(await this.runtime.ancestor(run.worktree, run.accepted_sha, head))) {
             throw new Error('accepted commits are missing; work preserved for inspection')
         }
+        const base = await this.reviewBase(run)
         let roles: string[]
         if (run.stage === 'task-review') {
             roles = ['quality-reviewer']
         } else if (run.stage === 'slice-review' || run.stage === 'feature-review') {
             roles = [...PANEL]
-            if (await this.runtime.databaseChanged(run, this.reviewBase(run))) {
+            if (await this.runtime.databaseChanged(run, base)) {
                 roles.push('database-design-reviewer')
             }
         } else if (run.stage === 'confirm') {
@@ -462,7 +527,7 @@ export class FeatureEngine {
             driver,
             stage: run.stage,
             head_sha: head,
-            base_sha: this.reviewBase(run),
+            base_sha: base,
             spec_digest: run.spec_digest,
             worktree,
             roles,
@@ -551,15 +616,16 @@ export class FeatureEngine {
         switch (run.stage) {
             case 'tests': {
                 const red = await this.runtime.checks(run, 'tests')
-                if (head === run.task_base_sha || red.observed === 0 || red.passed || !red.assertionFailure) {
+                if (head === run.task_base_sha || red.red === undefined) {
                     this.repair(run, 'tests', [
-                        'test-writer must commit task tests that demonstrably fail by assertion',
+                        'test-writer must commit task tests that demonstrably fail by assertion, or by importing a declared task module absent at the task base',
                         ...red.details,
                     ])
                     if (run.status !== 'parked') {
                         run.stage = 'tests'
                     }
                 } else {
+                    this.audit(run, 'red observed', {kind: red.red, details: red.details})
                     run.stage = 'implement'
                 }
                 break
@@ -643,6 +709,14 @@ export class FeatureEngine {
                 }
                 delete run.after_confirm
                 if (blockers.length) {
+                    if (boundary === 'task-review' || boundary === 'slice-review' || boundary === 'feature-review') {
+                        this.rereview(
+                            run,
+                            boundary,
+                            attempt.head_sha,
+                            blockers.map(({file, line, claim}) => ({file, line, claim}))
+                        )
+                    }
                     this.repair(
                         run,
                         boundary,
@@ -669,6 +743,12 @@ export class FeatureEngine {
                 const unmet = rows.filter((row) => !row.met)
                 if (unmet.length) {
                     const boundary = run.candidate_satisfied ? 'task-review' : 'acceptance'
+                    this.rereview(
+                        run,
+                        run.candidate_satisfied ? 'task-review' : 'feature-review',
+                        attempt.head_sha,
+                        unmet.map((row) => ({claim: `${row.id}: ${row.evidence}`}))
+                    )
                     run.candidate_satisfied = false
                     this.repair(
                         run,
@@ -739,6 +819,7 @@ export class FeatureEngine {
         const task = this.task(run)
         run.checkpoints.push({task_id: task.task_id, head_sha: head, spec_digest: run.spec_digest})
         run.accepted_sha = head
+        delete run.rereview
         const next = run.spec.tasks[run.task_index + 1]
         if (next?.slice_id !== task.slice_id) {
             run.stage = 'slice-check'
@@ -751,6 +832,9 @@ export class FeatureEngine {
     }
 
     private async reviewPassed(run: FeatureRun, boundary: Stage): Promise<void> {
+        if (run.rereview?.boundary === boundary) {
+            delete run.rereview
+        }
         if (boundary === 'task-review') {
             if (run.candidate_satisfied) {
                 run.stage = 'acceptance'
@@ -758,6 +842,7 @@ export class FeatureEngine {
                 await this.acceptTask(run)
             }
         } else if (boundary === 'slice-review') {
+            delete run.rereview
             run.accepted_sha = await this.runtime.head(run.worktree)
             run.task_index++
             run.task_base_sha = run.accepted_sha
@@ -825,6 +910,7 @@ export class FeatureEngine {
             const reconciliation = await this.runtime.reconcileBase(run)
             if (reconciliation === 'merged') {
                 delete run.wait_since
+                delete run.rereview // base integration requires full verification
                 run.stage = 'feature-check'
                 this.audit(run, 'base integrated; full verification required', {})
                 return

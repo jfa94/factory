@@ -147,6 +147,28 @@ describe('v2 agent result contract', () => {
         expect(read('agents/implementer.md')).toContain('task checkpoint')
     })
 
+    it('test-writer may prove RED by importing a declared new module, never a stub (decision 2)', () => {
+        const text = read('agents/test-writer.md')
+        expect(text).toContain('not-yet-existing module the task declares: import it by relative path')
+        expect(text).toContain('and never create a stub')
+        expect(text).not.toContain('a stub commit parks the run')
+    })
+
+    it('implementer strengthens a cited test in a tagged test-only commit (decision 6)', () => {
+        const text = read('agents/implementer.md')
+        expect(text).toContain('When repair feedback cites a test file (marked "strengthen this test")')
+        expect(text).toContain('test-only commit')
+        expect(text).toContain('Never remove, skip or loosen an assertion')
+    })
+
+    it('e2e-author blocks a feature with no user-facing surface (C8)', () => {
+        const text = read('agents/e2e-author.md')
+        expect(text.replace(/\s+/g, ' ')).toContain(
+            'return `blocked` with the message "--e2e requested but the feature has no user-facing surface; rerun without --e2e"'
+        )
+        expect(text).not.toContain('no-UI verdict')
+    })
+
     it('every panel reviewer returns claims per the review-protocol skill', () => {
         for (const role of [
             'quality-reviewer',

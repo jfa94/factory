@@ -160,6 +160,20 @@ export const FeatureRunSchema = z
         rejections: z.record(z.array(z.string())).optional(),
         /** Consecutive transient infrastructure failures. */
         transient_failures: z.number().int().positive().optional(),
+        /** A repair's re-review: `boundary` reviews only base..HEAD plus whether these prior claims are resolved. */
+        rereview: z
+            .object({
+                boundary: z.enum(['task-review', 'slice-review', 'feature-review']),
+                base: ShaSchema,
+                claims: z.array(
+                    z.object({
+                        file: z.string().optional(),
+                        line: z.number().int().positive().optional(),
+                        claim: z.string(),
+                    })
+                ),
+            })
+            .optional(),
         claims: z.array(ClaimSchema),
         confirmed_claims: z.array(ClaimSchema).default([]),
         after_confirm: StageSchema.optional(),

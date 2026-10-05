@@ -1,0 +1,16 @@
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/f.test.ts > f
+Error: Cannot find module './lib/dyn.js' imported from '/private/tmp/vlf.N7av/src/f.test.ts'
+ ❯ src/f.test.ts:2:33
+      1| import {it, expect} from 'vitest'
+      2| it('f', async () => { const m = await import('./lib/dyn.js'); expect(m…
+       |                                 ^
+      3| 
+
+Caused by: Error: Failed to load url ./lib/dyn.js (resolved id: ./lib/dyn.js) in /private/tmp/vlf.N7av/src/f.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../repo/node_modules/.pnpm/vite@7.3.5_@types+node@22.19.19_tsx@4.22.4_yaml@2.9.0/node_modules/vite/dist/node/chunks/config.js:22739:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
