@@ -45,6 +45,16 @@ export function parseJson(text: string, sourcePath?: string): unknown {
     }
 }
 
+/** Agents wrap their JSON in a fence or prose despite instructions; the file stays verbatim, only the parse looks past the wrapper. */
+export function unwrapJson(text: string): string {
+    return text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
+}
+
+/** Read an agent-written JSON file, tolerating a fence or prose around the object. */
+export async function readAgentJsonFile(path: string): Promise<unknown> {
+    return parseJson(unwrapJson(await readFile(path, 'utf8')), path)
+}
+
 /** Synchronously read+parse a JSON file (lock-free). Returns `unknown` — validate before use. */
 export function readJsonFileSync(path: string): unknown {
     return parseJson(readFileSync(path, 'utf8'), path)

@@ -41,7 +41,7 @@ import {join} from 'node:path'
 import {readFile} from 'node:fs/promises'
 import {z} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
-import {stringifyJson, readJsonFile} from '../shared/json.js'
+import {stringifyJson, readJsonFile, readAgentJsonFile, unwrapJson} from '../shared/json.js'
 import {specBuildDir, specDir} from './paths.js'
 import {makeSpecId, type SpecStore} from './store.js'
 import type {GhClient, Prd} from './gh.js'
@@ -407,7 +407,7 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
     const raw = await readFile(generatedPath, 'utf8')
     let generated: GenerateResult
     try {
-        generated = parseGenerateResult(JSON.parse(raw))
+        generated = parseGenerateResult(JSON.parse(unwrapJson(raw)))
     } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) {
             throw error
@@ -508,8 +508,8 @@ export async function gateSpec(deps: SpecBuildDeps, repo: string, issue: number)
  */
 export async function storeSpec(deps: SpecBuildDeps, repo: string, issue: number): Promise<SpecBuildEnvelope> {
     const {prdPath, generatedPath, verdictPath} = scratchPaths(deps.scratchRoot, repo, issue)
-    const generated = parseGenerateResult(await readJsonFile(generatedPath))
-    const verdict = parseReviewVerdict(await readJsonFile(verdictPath))
+    const generated = parseGenerateResult(await readAgentJsonFile(generatedPath))
+    const verdict = parseReviewVerdict(await readAgentJsonFile(verdictPath))
     if (deps.snapshot) {
         const expected = await readJsonFile<string>(
             join(specBuildDir(deps.scratchRoot, repo, issue), 'review-input-digest.json')

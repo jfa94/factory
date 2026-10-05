@@ -1,15 +1,14 @@
 import {execOrThrow} from '../shared/exec.js'
-import type {Config} from '../config/schema.js'
 
 export interface RepositorySnapshot {
     base_sha: string
     contracts: Record<string, string>
 }
 
-export async function repositorySnapshot(root: string, config: Config): Promise<RepositorySnapshot> {
+export async function repositorySnapshot(root: string, baseBranch: string): Promise<RepositorySnapshot> {
     const git = async (args: string[]) => (await execOrThrow('git', args, {cwd: root})).stdout.trim()
-    await git(['fetch', 'origin', config.git.baseBranch])
-    const base_sha = await git(['rev-parse', `origin/${config.git.baseBranch}`])
+    await git(['fetch', 'origin', baseBranch])
+    const base_sha = await git(['rev-parse', `origin/${baseBranch}`])
     const paths = (await git(['ls-tree', '-r', '--name-only', base_sha])).split('\n')
     const selected = paths.filter(
         (path) =>

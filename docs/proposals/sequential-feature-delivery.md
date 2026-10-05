@@ -91,3 +91,25 @@ fix on the way (`8e61d1b`, tests-stage `already-satisfied`). #3 deviated from th
 interrupted journey: no explicit stop during CI, only the unplanned park/resume.
 The six canary #4 observations are resolved in `2.0.0-rc.2`; the canary ledger
 names the fix per observation.
+
+## Reliability remediation (2026-10, `v2/reliability-remediation`)
+
+Runs stopped midway because recoverable slips parked, bulky hand-offs passed
+through the runner, some gates could not converge for valid work, and environment
+traps. Ten decisions address these across five phases:
+
+- [x] Delete v1 source; tag `archive/v1-engine` (decision 1).
+- [x] Per-role brief files, identity-free results and reviewer sync (decisions 3, 9, 10).
+- [x] Re-issue rejected results twice before parking; retry transient git/gh/install
+      failures up to five in a row; scope a corrupt state file to its own run (decision 4).
+- [x] Converging gates and reviews: RED kinds, CI delegation for non-vitest tests,
+      full-suite task-check, scoped re-reviews, test-claim strengthening, merge-base
+      feature range and snapshot removal (decisions 2, 5, 6, 7).
+- [x] Base-branch resolution, quota boundary waits, a run-scoped compaction reminder
+      and fenced spec output parsing (decision 8).
+- [ ] Canary on `jfa94/asset-generator` (main-only), with quota active, one
+      stop/resume and one compaction. Pass: zero manual recovers, zero `environment`
+      parks, no refused or ignored briefs, and snapshots cleaned up.
+
+This remediation is **not release-ready** until that canary passes. The canary
+needs separate authorization.

@@ -44,6 +44,7 @@ import {
     type GhClient,
 } from '../../git/index.js'
 import {loadConfig, resolveDataDir, type Config} from '../../config/index.js'
+import {resolveBaseBranch} from '../../git/base-branch.js'
 import {
     injectGateEnvIntoWorkflow,
     renderQualityGate,
@@ -71,8 +72,8 @@ const HELP = `factory scaffold — prepare a repo for Factory v2
 Usage:
   factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage] [--force-managed]
 
-Writes the committed gate contract and CI workflows for git.baseBranch (default:
-develop). Requires stable strict branch protection with the configured required
+Writes the committed gate contract and CI workflows for the base branch: git.baseBranch,
+else develop when origin has it, else origin's default branch. Requires stable strict branch protection with the configured required
 checks. --provision creates or strengthens protection; it never downgrades it.
 Runs do not change protection. One PRD produces one feature branch and one PR.
 
@@ -142,6 +143,8 @@ export interface ScaffoldOptions {
     readonly owner: string
     readonly repo: string
     readonly config: Config
+    /** The resolved base branch (decision 8); the CLI wrapper resolves it, config keeps the raw value. */
+    readonly baseBranch: string
     readonly ghClient: GhClient
     /**
      * The baked, CLI-resolved data-dir permission rules for the target repo's
@@ -649,13 +652,7 @@ async function preflightManagedFiles(
             continue
         }
         const destText = await readFile(dest, 'utf8')
-        const transform = managedTransform(
-            entry.rel,
-            contract,
-            facts,
-            opts.config.quality.gateEnv,
-            opts.config.git.baseBranch
-        )
+        const transform = managedTransform(entry.rel, contract, facts, opts.config.quality.gateEnv, opts.baseBranch)
         const text = await readFile(src, 'utf8')
         const rendered = transform ? transform(text) : text
         if (destText === rendered) {
@@ -907,7 +904,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
                 gates.contract,
                 facts,
                 opts.config.quality.gateEnv,
-                opts.config.git.baseBranch
+                opts.baseBranch
             )
             await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock, transform)
         }
@@ -979,7 +976,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
 
     // One stable strict profile. No run-time downgrade and no full replacement
     // of an existing branch's review/restriction/admin policy.
-    const branch = opts.config.git.baseBranch
+    const branch = opts.baseBranch
     const required = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract)).run
     let state = await probeProtection({ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch})
     if (opts.provision) {
@@ -1062,12 +1059,14 @@ async function run(argv: string[]): Promise<ExitCode> {
     // foreign-plugin env-var leak). resolveDataDir() throwing on an unresolvable dir
     // is the correct loud failure — there is deliberately no placeholder fallback.
     const dataDir = resolveDataDir()
+    const config = loadConfig()
     const report = await runScaffold({
         targetRoot: process.cwd(),
         templatesDir: resolveTemplatesDir(),
         owner,
         repo,
-        config: loadConfig(),
+        config,
+        baseBranch: await resolveBaseBranch(process.cwd(), config.git.baseBranch),
         ghClient: new DefaultGhClient(),
         // Bake the resolved data dir into the target permission rules.
         dataDirRules: buildTargetDataDirRules({dataDir, home: homedir()}),

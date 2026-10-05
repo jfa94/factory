@@ -42,7 +42,7 @@ export const hookRegistry: Record<string, Hook> = {
     },
     'session-start': {
         describe:
-            'SessionStart (compact): re-inject the runner Iron Laws + a pointer to reload the pipeline-runner skill',
+            'SessionStart (compact): inside a live run, re-inject its id, status, next command and the runner skill path',
         run: (argv) => runSessionStart(argv),
     },
 }

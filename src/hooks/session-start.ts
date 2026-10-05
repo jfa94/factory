@@ -1,32 +1,51 @@
 /**
- * SessionStart compaction re-injection hook.
- *
- * The runner's protocol pointer (skills/pipeline-runner/SKILL.md) lives in
- * conversation context, which a mid-run compaction can drop — the runner then
- * stalls with no memory of the Iron Laws or how to resume THE LOOP. `hooks.json`
- * fires this ONLY on `matcher:"compact"` (startup/clear already re-load the skill
- * via the `/factory:run` invocation itself) and emits a small reminder block plus
- * a pointer to reload the authoritative skill.
- *
- * Output: EXIT.OK + `{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext}}`
- * on stdout — the harness contract for injecting text into the resumed session.
+ * SessionStart (compact) hook. A compaction can drop the runner skill from context, so
+ * this re-points a session sitting inside a non-terminal run's root or worktree at the
+ * absolute skill path and the run's exact next command. Elsewhere it emits nothing.
  */
+import {join} from 'node:path'
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
-import {emitSessionStartContext} from './hook-io.js'
+import {resolveDataDir, resolvePluginRoot} from '../config/load.js'
+import {FeatureStore, nextCommand} from '../feature/store.js'
+import {terminal, type FeatureRun} from '../feature/schema.js'
+import {inside} from './feature-guards.js'
+import {emitSessionStartContext, readHookInput} from './hook-io.js'
 
-// ponytail: canonical source is skills/pipeline-runner/SKILL.md (its opening runner charter); this is a
-// hardcoded digest so a mid-compaction session never loses the pointer even before
-// the skill reloads. Keep in sync by hand if the runner's Iron Laws change.
-export const FACTORY_HARNESS_REMINDER = `<FACTORY_HARNESS_REMINDER>
-You are the factory pipeline runner. Iron Laws:
-1. Never decide a transition — the only next action is what the last envelope said.
-2. Spawn exactly what the manifest says; collect output verbatim.
-3. Fail loud — an unknown envelope kind or unexpected error means STOP and surface it.
-Re-load skills/pipeline-runner/SKILL.md before taking any pipeline action.
-</FACTORY_HARNESS_REMINDER>`
+/** The reminder for every non-terminal run containing `cwd`, or undefined when there is none. */
+export function sessionReminder(cwd: string, runs: readonly FeatureRun[], pluginRoot: string): string | undefined {
+    const matches = runs.filter((run) => !terminal(run) && (inside(run.root, cwd) || inside(run.worktree, cwd)))
+    if (matches.length === 0) {
+        return undefined
+    }
+    const skill = join(pluginRoot, 'skills', 'pipeline-runner', 'SKILL.md')
+    return [
+        '<FACTORY_RUN_REMINDER>',
+        ...matches.map((run) => `Factory run ${run.run_id} is ${run.status}. Next: ${nextCommand(run)}`),
+        `Before any pipeline action, re-read ${skill} and follow it.`,
+        '</FACTORY_RUN_REMINDER>',
+    ].join('\n')
+}
 
-/** Run the SessionStart hook end-to-end. No state read — the reminder is static. */
-export function runSessionStart(_argv: string[] = [], deps: {emit?: (s: string) => void} = {}): ExitCode {
-    emitSessionStartContext(FACTORY_HARNESS_REMINDER, deps.emit)
-    return EXIT.OK
+export interface SessionStartDeps {
+    emit?: (s: string) => void
+    cwd?: string
+    runs?: () => Promise<FeatureRun[]>
+    pluginRoot?: string
+}
+
+export async function runSessionStart(_argv: string[] = [], deps: SessionStartDeps = {}): Promise<ExitCode> {
+    try {
+        const cwd = deps.cwd ?? (await readHookInput())?.cwd ?? process.cwd()
+        const runs = deps.runs ? await deps.runs() : await new FeatureStore(resolveDataDir()).list()
+        const reminder = sessionReminder(cwd, runs, deps.pluginRoot ?? resolvePluginRoot())
+        if (reminder !== undefined) {
+            emitSessionStartContext(reminder, deps.emit)
+        }
+        return EXIT.OK
+    } catch (error) {
+        process.stderr.write(
+            `Factory session reminder failed: ${error instanceof Error ? error.message : String(error)}\n`
+        )
+        return EXIT.ERROR
+    }
 }

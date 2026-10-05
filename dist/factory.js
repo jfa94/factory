@@ -1756,6 +1756,12 @@ function parseJson(text, sourcePath) {
     throw new JsonParseError(`invalid JSON${where}: ${cause.message}`, sourcePath, cause);
   }
 }
+function unwrapJson(text) {
+  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+}
+async function readAgentJsonFile(path3) {
+  return parseJson(unwrapJson(await readFile(path3, "utf8")), path3);
+}
 async function readJsonFile(path3) {
   return parseJson(await readFile(path3, "utf8"), path3);
 }
@@ -6149,11 +6155,10 @@ var SpecSchema = external_exports.object({
 var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var GitSchema = external_exports.object({
   /**
-   * The durable base branch staging forks from and rolls up into. NEVER
-   * `main` (Decision 12/16 — the factory never touches main; promotion to main
-   * is human-owned and out of scope).
+   * The feature PR's base branch. Unset resolves at use (decision 8, see
+   * `git/base-branch.ts`): `develop` if the remote has it, else the remote HEAD.
    */
-  baseBranch: external_exports.string().min(1).default("develop"),
+  baseBranch: external_exports.string().min(1).optional(),
   /**
    * Required status-check contexts of develop's protection profile, asserted
    * by scaffold and run preflight and provisioned with `--provision`.
@@ -7183,6 +7188,31 @@ async function provisionWorktree(args) {
 ${detail}` : "")
     );
   }
+}
+
+// src/git/base-branch.ts
+async function remoteHeads(root, remote) {
+  const { stdout } = await execOrThrow("git", ["ls-remote", "--heads", remote], { cwd: root });
+  const names = stdout.split("\n").map((line) => /\trefs\/heads\/(.+)$/.exec(line.trim())?.[1]);
+  return new Set(names.filter((name) => name !== void 0));
+}
+async function resolveBaseBranch(root, configured, remote = "origin") {
+  const heads = await remoteHeads(root, remote);
+  if (configured !== void 0) {
+    if (!heads.has(configured)) {
+      throw new Error(`git.baseBranch '${configured}' does not exist on ${remote}; fix git.baseBranch or push it`);
+    }
+    return configured;
+  }
+  if (heads.has("develop")) {
+    return "develop";
+  }
+  const { stdout } = await execOrThrow("git", ["ls-remote", "--symref", remote, "HEAD"], { cwd: root });
+  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(stdout)?.[1];
+  if (branch === void 0 || !heads.has(branch)) {
+    throw new Error(`cannot resolve ${remote}'s default branch; set git.baseBranch`);
+  }
+  return branch;
 }
 
 // src/ci/inject-gate-env.ts
@@ -8356,7 +8386,7 @@ var FeatureStore = class {
     const invalid = {};
     for (const [role, path3] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile3(path3, "utf8"))))]);
+        parts.push([role, AgentResultSchema.parse(JSON.parse(unwrapJson(await readFile3(path3, "utf8"))))]);
       } catch (error) {
         if (isEnoent(error)) {
           missing.push(role);
@@ -8437,9 +8467,6 @@ function renderLedger(run5, live = {}) {
     ),
     ""
   ].join("\n");
-}
-function unwrap(text) {
-  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
 }
 
 // src/cli/subcommands/target-settings.ts
@@ -8992,8 +9019,8 @@ var HELP2 = `factory scaffold \u2014 prepare a repo for Factory v2
 Usage:
   factory scaffold [--repo <owner/name>] [--provision] [--waive mutation|coverage] [--force-managed]
 
-Writes the committed gate contract and CI workflows for git.baseBranch (default:
-develop). Requires stable strict branch protection with the configured required
+Writes the committed gate contract and CI workflows for the base branch: git.baseBranch,
+else develop when origin has it, else origin's default branch. Requires stable strict branch protection with the configured required
 checks. --provision creates or strengthens protection; it never downgrades it.
 Runs do not change protection. One PRD produces one feature branch and one PR.
 
@@ -9267,13 +9294,7 @@ async function preflightManagedFiles(opts, lock2, contract2) {
       continue;
     }
     const destText = await readFile7(dest, "utf8");
-    const transform = managedTransform(
-      entry.rel,
-      contract2,
-      facts,
-      opts.config.quality.gateEnv,
-      opts.config.git.baseBranch
-    );
+    const transform = managedTransform(entry.rel, contract2, facts, opts.config.quality.gateEnv, opts.baseBranch);
     const text = await readFile7(src, "utf8");
     const rendered = transform ? transform(text) : text;
     if (destText === rendered) {
@@ -9434,7 +9455,7 @@ async function runScaffold(opts) {
         gates.contract,
         facts,
         opts.config.quality.gateEnv,
-        opts.config.git.baseBranch
+        opts.baseBranch
       );
       await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock2, transform);
     }
@@ -9471,7 +9492,7 @@ async function runScaffold(opts) {
   } else {
     lists.present.push(settingsRel);
   }
-  const branch = opts.config.git.baseBranch;
+  const branch = opts.baseBranch;
   const required = effectiveProfiles(opts.config.git, requiredCheckExtras(gates.contract)).run;
   let state = await probeProtection({ ghClient: opts.ghClient, owner: opts.owner, repo: opts.repo, branch });
   if (opts.provision) {
@@ -9528,12 +9549,14 @@ async function run2(argv) {
   }
   const { owner, repo } = await resolveScaffoldRepo(args);
   const dataDir = resolveDataDir();
+  const config = loadConfig();
   const report = await runScaffold({
     targetRoot: process.cwd(),
     templatesDir: resolveTemplatesDir(),
     owner,
     repo,
-    config: loadConfig(),
+    config,
+    baseBranch: await resolveBaseBranch(process.cwd(), config.git.baseBranch),
     ghClient: new DefaultGhClient(),
     // Bake the resolved data dir into the target permission rules.
     dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
@@ -9558,10 +9581,10 @@ var scaffoldCommand = {
 import { join as join14 } from "node:path";
 
 // src/spec/snapshot.ts
-async function repositorySnapshot(root, config) {
+async function repositorySnapshot(root, baseBranch) {
   const git = async (args) => (await execOrThrow("git", args, { cwd: root })).stdout.trim();
-  await git(["fetch", "origin", config.git.baseBranch]);
-  const base_sha = await git(["rev-parse", `origin/${config.git.baseBranch}`]);
+  await git(["fetch", "origin", baseBranch]);
+  const base_sha = await git(["rev-parse", `origin/${baseBranch}`]);
   const paths = (await git(["ls-tree", "-r", "--name-only", base_sha])).split("\n");
   const selected = paths.filter(
     (path3) => [
@@ -9761,6 +9784,16 @@ function curveValue(position, curve) {
   }
   const idx = clamp(position - 1, 0, curve.length - 1);
   return at(curve, idx);
+}
+function secondsToNextStep(resetsAtEpoch, windowSeconds, step, nowEpoch2) {
+  const elapsed = nowEpoch2 - (resetsAtEpoch - windowSeconds);
+  return step - (elapsed % step + step) % step;
+}
+function secondsToNextWindowHour(resetsAtEpoch, nowEpoch2) {
+  return secondsToNextStep(resetsAtEpoch, FIVE_HOUR_WINDOW_SECONDS, SECONDS_PER_HOUR, nowEpoch2);
+}
+function secondsToNextWindowDay(resetsAtEpoch, nowEpoch2) {
+  return secondsToNextStep(resetsAtEpoch, SEVEN_DAY_WINDOW_SECONDS, SECONDS_PER_DAY, nowEpoch2);
 }
 
 // src/quota/pacer.ts
@@ -10310,7 +10343,7 @@ async function gateSpec(deps, repo, issue) {
   const raw = await readFile10(generatedPath, "utf8");
   let generated;
   try {
-    generated = parseGenerateResult(JSON.parse(raw));
+    generated = parseGenerateResult(JSON.parse(unwrapJson(raw)));
   } catch (error) {
     if (!(error instanceof external_exports.ZodError || error instanceof SyntaxError)) {
       throw error;
@@ -10399,8 +10432,8 @@ ${raw}`, slug: "repair", tasks: [] },
 }
 async function storeSpec(deps, repo, issue) {
   const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.scratchRoot, repo, issue);
-  const generated = parseGenerateResult(await readJsonFile(generatedPath));
-  const verdict = parseReviewVerdict(await readJsonFile(verdictPath));
+  const generated = parseGenerateResult(await readAgentJsonFile(generatedPath));
+  const verdict = parseReviewVerdict(await readAgentJsonFile(verdictPath));
   if (deps.snapshot) {
     const expected = await readJsonFile(
       join13(specBuildDir(deps.scratchRoot, repo, issue), "review-input-digest.json")
@@ -10503,7 +10536,7 @@ function wireDeps() {
   return {
     store: new SpecStore({ dataDir: featureDataDir }),
     featureDataDir,
-    snapshot: () => repositorySnapshot(process.cwd(), config),
+    snapshot: async () => repositorySnapshot(process.cwd(), await resolveBaseBranch(process.cwd(), config.git.baseBranch)),
     gh: new RealGhClient({ bodyMaxBytes: config.spec.prdBodyMaxBytes }),
     config,
     usage: new StatuslineUsageSignal({ dataDir }),
@@ -10975,9 +11008,9 @@ var FeatureEngine = class {
         const quota = run5.ignore_quota ? void 0 : await this.runtime.quota(run5);
         if (quota !== void 0) {
           run5.status = "waiting";
-          run5.stop_reason = { kind: "quota", message: quota };
+          run5.stop_reason = { kind: "quota", message: quota.reason };
           await this.store.write(run5);
-          return this.wait(run5, quota);
+          return this.wait(run5, quota.reason, quota.seconds);
         }
         run5.status = "running";
         delete run5.stop_reason;
@@ -10988,7 +11021,7 @@ var FeatureEngine = class {
             return action;
           }
         }
-        return this.wait(run5, "checkpoint saved; advance again");
+        return this.wait(run5, "checkpoint saved; advance again", 0);
       } catch (error) {
         if (error instanceof ResultRejected) {
           return this.rejected(run5, error);
@@ -12907,12 +12940,19 @@ var LocalFeatureRuntime = class {
   async databaseChanged(run5, base) {
     return (await this.checked("git", ["diff", "--name-only", `${base}...HEAD`], run5.worktree)).split("\n").some(isDbPath);
   }
-  async quota(run5) {
+  async quota(run5, nowEpoch2 = Date.now() / 1e3) {
     if (run5.ignore_quota) {
       return void 0;
     }
-    const decision = evaluate(await this.usage.read(), this.config, Date.now() / 1e3);
-    return decision.kind === "proceed" ? void 0 : decision.reason;
+    const decision = evaluate(await this.usage.read(), this.config, nowEpoch2);
+    if (decision.kind === "proceed") {
+      return void 0;
+    }
+    if (decision.kind === "unavailable-halt") {
+      return { reason: decision.reason, seconds: 60 };
+    }
+    const boundary = decision.kind === "pause-5h" ? secondsToNextWindowHour(decision.resetsAtEpoch, nowEpoch2) : secondsToNextWindowDay(decision.resetsAtEpoch, nowEpoch2);
+    return { reason: decision.reason, seconds: Math.min(3600, Math.max(60, Math.ceil(boundary))) };
   }
   async reconcileBase(run5) {
     await this.checked("git", ["fetch", run5.remote, run5.base_branch], run5.worktree, true);
@@ -13107,7 +13147,7 @@ Spec ${run5.spec_digest}.`
 };
 
 // src/feature/preflight.ts
-async function assertFeatureEnvironment(spec, repo, config, gh = new DefaultGhClient()) {
+async function assertFeatureEnvironment(spec, repo, config, baseBranch, gh = new DefaultGhClient()) {
   const raw = spec.contracts[GATE_CONTRACT_REL];
   if (raw === void 0) {
     throw new Error("base commit has no gate contract; run factory scaffold, commit it, and regenerate the spec");
@@ -13117,12 +13157,8 @@ async function assertFeatureEnvironment(spec, repo, config, gh = new DefaultGhCl
   if (owner === void 0 || owner === "" || name === void 0 || name === "") {
     throw new Error("repository must be owner/name");
   }
-  const protection = await gh.repoProtection(owner, name, config.git.baseBranch);
-  requireProtectionOrRefuse(
-    protection,
-    effectiveProfiles(config.git, requiredCheckExtras(contract2)).run,
-    config.git.baseBranch
-  );
+  const protection = await gh.repoProtection(owner, name, baseBranch);
+  requireProtectionOrRefuse(protection, effectiveProfiles(config.git, requiredCheckExtras(contract2)).run, baseBranch);
 }
 
 // src/feature/cli.ts
@@ -13198,6 +13234,7 @@ function featureCommand(name) {
           explicit: optionalString(args.flag("repo"))
         });
         const runId = optionalString(args.flag("run-id")) ?? randomUUID2();
+        const baseBranch = await resolveBaseBranch(root, config.git.baseBranch);
         if (name === "debug") {
           const base = await runtime.checked("git", ["rev-parse", args.requireFlag("base")], root);
           const head = await runtime.head(root);
@@ -13243,7 +13280,7 @@ function featureCommand(name) {
             repo,
             root,
             spec: spec2,
-            baseBranch: config.git.baseBranch,
+            baseBranch,
             remote: "origin",
             shipMode: "no-ship",
             debug: true,
@@ -13266,18 +13303,18 @@ function featureCommand(name) {
           JSON.parse(await readFile12(join17(specDir(specData, repo, manifest.spec_id), "feature.json"), "utf8"))
         );
         const currentPrd = await new RealGhClient().fetchPrd(issue, { repo });
-        const snapshot = await repositorySnapshot(root, config);
+        const snapshot = await repositorySnapshot(root, baseBranch);
         if (digest(currentPrd) !== digest(spec.prd) || snapshot.base_sha !== spec.base_sha || digest(snapshot.contracts) !== digest(spec.contracts)) {
           throw new Error("PRD or base changed after spec review; regenerate against the current repository");
         }
-        await assertFeatureEnvironment(spec, repo, config);
+        await assertFeatureEnvironment(spec, repo, config, baseBranch);
         emitJson(
           await engine.create({
             runId,
             repo,
             root,
             spec,
-            baseBranch: config.git.baseBranch,
+            baseBranch,
             remote: "origin",
             shipMode: shipMode(args),
             e2e: args.has("e2e"),

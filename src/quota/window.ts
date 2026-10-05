@@ -99,3 +99,18 @@ function curveValue(position: number, curve: readonly number[]): number {
     const idx = clamp(position - 1, 0, curve.length - 1)
     return at(curve, idx)
 }
+
+function secondsToNextStep(resetsAtEpoch: number, windowSeconds: number, step: number, nowEpoch: number): number {
+    const elapsed = nowEpoch - (resetsAtEpoch - windowSeconds)
+    return step - (((elapsed % step) + step) % step)
+}
+
+/** Seconds until the 5h window's next window-hour boundary (when its curve cap rises). */
+export function secondsToNextWindowHour(resetsAtEpoch: number, nowEpoch: number): number {
+    return secondsToNextStep(resetsAtEpoch, FIVE_HOUR_WINDOW_SECONDS, SECONDS_PER_HOUR, nowEpoch)
+}
+
+/** Seconds until the 7d window's next window-day boundary. */
+export function secondsToNextWindowDay(resetsAtEpoch: number, nowEpoch: number): number {
+    return secondsToNextStep(resetsAtEpoch, SEVEN_DAY_WINDOW_SECONDS, SECONDS_PER_DAY, nowEpoch)
+}

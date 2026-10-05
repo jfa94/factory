@@ -9,6 +9,7 @@ import {EXIT} from '../shared/exit-codes.js'
 import {loadConfig, resolveDataDir} from '../config/index.js'
 import {StatuslineUsageSignal} from '../quota/index.js'
 import {DefaultGitClient, resolveRepo} from '../git/index.js'
+import {resolveBaseBranch} from '../git/base-branch.js'
 import {SpecStore} from '../spec/store.js'
 import {RealGhClient} from '../spec/gh.js'
 import {specDir} from '../spec/paths.js'
@@ -109,6 +110,7 @@ export function featureCommand(name: string): Subcommand {
                     explicit: optionalString(args.flag('repo')),
                 })
                 const runId = optionalString(args.flag('run-id')) ?? randomUUID()
+                const baseBranch = await resolveBaseBranch(root, config.git.baseBranch)
                 if (name === 'debug') {
                     const base = await runtime.checked('git', ['rev-parse', args.requireFlag('base')], root)
                     const head = await runtime.head(root)
@@ -156,7 +158,7 @@ export function featureCommand(name: string): Subcommand {
                         repo,
                         root,
                         spec,
-                        baseBranch: config.git.baseBranch,
+                        baseBranch,
                         remote: 'origin',
                         shipMode: 'no-ship',
                         debug: true,
@@ -179,7 +181,7 @@ export function featureCommand(name: string): Subcommand {
                     JSON.parse(await readFile(join(specDir(specData, repo, manifest.spec_id), 'feature.json'), 'utf8'))
                 )
                 const currentPrd = await new RealGhClient().fetchPrd(issue, {repo})
-                const snapshot = await repositorySnapshot(root, config)
+                const snapshot = await repositorySnapshot(root, baseBranch)
                 if (
                     digest(currentPrd) !== digest(spec.prd) ||
                     snapshot.base_sha !== spec.base_sha ||
@@ -187,14 +189,14 @@ export function featureCommand(name: string): Subcommand {
                 ) {
                     throw new Error('PRD or base changed after spec review; regenerate against the current repository')
                 }
-                await assertFeatureEnvironment(spec, repo, config)
+                await assertFeatureEnvironment(spec, repo, config, baseBranch)
                 emitJson(
                     await engine.create({
                         runId,
                         repo,
                         root,
                         spec,
-                        baseBranch: config.git.baseBranch,
+                        baseBranch,
                         remote: 'origin',
                         shipMode: shipMode(args),
                         e2e: args.has('e2e'),

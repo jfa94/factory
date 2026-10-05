@@ -6,6 +6,8 @@ import {
     dailyThresholdFor,
     FIVE_HOUR_WINDOW_SECONDS,
     SEVEN_DAY_WINDOW_SECONDS,
+    secondsToNextWindowHour,
+    secondsToNextWindowDay,
 } from './window.js'
 
 const HOURLY = [20, 40, 60, 80, 90]
@@ -104,5 +106,19 @@ describe('D24 threshold curves — index by position with clamped bounds', () =>
 
     it('an empty curve is a loud config defect, not a silent open gate', () => {
         expect(() => hourlyThresholdFor(1, [])).toThrow(/empty/)
+    })
+})
+
+describe('seconds to the next window boundary', () => {
+    const resets = 1_000_000
+    it('counts down to the next window-hour', () => {
+        const start = resets - FIVE_HOUR_WINDOW_SECONDS
+        expect(secondsToNextWindowHour(resets, start)).toBe(3600)
+        expect(secondsToNextWindowHour(resets, start + 600)).toBe(3000)
+        expect(secondsToNextWindowHour(resets, start + 3600 + 3599)).toBe(1)
+    })
+    it('counts down to the next window-day', () => {
+        const start = resets - SEVEN_DAY_WINDOW_SECONDS
+        expect(secondsToNextWindowDay(resets, start + 86_400 + 400)).toBe(86_000)
     })
 })

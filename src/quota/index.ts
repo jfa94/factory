@@ -20,7 +20,12 @@ export {
 export type {UsageSignal, UsageReading, WindowUsage, UnavailableReason, StatuslineUsageOptions} from './usage-source.js'
 
 // Window math (position/threshold functions are quota-internal — pacer consumes them directly)
-export {FIVE_HOUR_WINDOW_SECONDS, SEVEN_DAY_WINDOW_SECONDS} from './window.js'
+export {
+    FIVE_HOUR_WINDOW_SECONDS,
+    SEVEN_DAY_WINDOW_SECONDS,
+    secondsToNextWindowHour,
+    secondsToNextWindowDay,
+} from './window.js'
 
 // Pacer
 export {evaluate} from './pacer.js'

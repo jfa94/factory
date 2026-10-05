@@ -8,6 +8,7 @@ export async function assertFeatureEnvironment(
     spec: Pick<FeatureSpec, 'contracts'>,
     repo: string,
     config: Config,
+    baseBranch: string,
     gh: Pick<GhClient, 'repoProtection'> = new DefaultGhClient()
 ): Promise<void> {
     const raw = spec.contracts[GATE_CONTRACT_REL]
@@ -19,10 +20,6 @@ export async function assertFeatureEnvironment(
     if (owner === undefined || owner === '' || name === undefined || name === '') {
         throw new Error('repository must be owner/name')
     }
-    const protection = await gh.repoProtection(owner, name, config.git.baseBranch)
-    requireProtectionOrRefuse(
-        protection,
-        effectiveProfiles(config.git, requiredCheckExtras(contract)).run,
-        config.git.baseBranch
-    )
+    const protection = await gh.repoProtection(owner, name, baseBranch)
+    requireProtectionOrRefuse(protection, effectiveProfiles(config.git, requiredCheckExtras(contract)).run, baseBranch)
 }

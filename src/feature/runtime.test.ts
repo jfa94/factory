@@ -287,6 +287,28 @@ describe('feature runtime external evidence', () => {
         expect(await f.runtime.quota(run)).toBeDefined()
         expect(f.usage.read).toHaveBeenCalledOnce()
     })
+    it.each([
+        // [5h elapsed in window, 7d utilization, expected seconds]
+        [600, 0, 3000], // next window-hour boundary
+        [3590, 0, 60], // clamped up to 60
+        [600, 100, 3600], // 7d breach: next window-day is a day away, clamped to 3600
+    ])('waits until the next quota window boundary (elapsed %i, 7d %i%%)', async (elapsed, weekly, seconds) => {
+        const f = setup()
+        const now = 1_000_000
+        f.usage.read.mockResolvedValue({
+            kind: 'available',
+            fiveHour: {utilizationPct: 100, resetsAtEpoch: now + 18_000 - elapsed},
+            sevenDay: {utilizationPct: weekly, resetsAtEpoch: now + 86_400},
+            capturedAt: now,
+        })
+        expect(await f.runtime.quota(run, now)).toMatchObject({seconds})
+    })
+    it('polls unavailable quota evidence every 60 seconds', async () => {
+        expect(await setup().runtime.quota(run)).toEqual({
+            reason: 'usage unavailable: usage-cache-missing',
+            seconds: 60,
+        })
+    })
     it('validates spec repair against the unchanged PRD', async () => {
         const f = setup()
         await expect(f.runtime.validateRepair(run, {...run.spec, tasks: []})).rejects.toThrow()

@@ -151,11 +151,10 @@ export const SPEC_DEFAULTS: Readonly<SpecConfig> = Object.freeze(SpecSchema.pars
 export const GitSchema = z
     .object({
         /**
-         * The durable base branch staging forks from and rolls up into. NEVER
-         * `main` (Decision 12/16 — the factory never touches main; promotion to main
-         * is human-owned and out of scope).
+         * The feature PR's base branch. Unset resolves at use (decision 8, see
+         * `git/base-branch.ts`): `develop` if the remote has it, else the remote HEAD.
          */
-        baseBranch: z.string().min(1).default('develop'),
+        baseBranch: z.string().min(1).optional(),
         /**
          * Required status-check contexts of develop's protection profile, asserted
          * by scaffold and run preflight and provisioned with `--provision`.

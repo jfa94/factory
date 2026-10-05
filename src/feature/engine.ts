@@ -152,9 +152,9 @@ export class FeatureEngine {
                 const quota = run.ignore_quota ? undefined : await this.runtime.quota(run)
                 if (quota !== undefined) {
                     run.status = 'waiting'
-                    run.stop_reason = {kind: 'quota', message: quota}
+                    run.stop_reason = {kind: 'quota', message: quota.reason}
                     await this.store.write(run)
-                    return this.wait(run, quota)
+                    return this.wait(run, quota.reason, quota.seconds)
                 }
                 run.status = 'running'
                 delete run.stop_reason
@@ -165,7 +165,7 @@ export class FeatureEngine {
                         return action
                     }
                 }
-                return this.wait(run, 'checkpoint saved; advance again')
+                return this.wait(run, 'checkpoint saved; advance again', 0)
             } catch (error) {
                 if (error instanceof ResultRejected) {
                     return this.rejected(run, error)

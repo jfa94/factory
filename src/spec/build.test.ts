@@ -369,6 +369,27 @@ describe('gateSpec', () => {
         await expect(storeSpec(v2, REPO, ISSUE)).rejects.toThrow('changed')
     })
 
+    it('gates and stores a fenced generator reply and a fenced verdict with an identical digest', async () => {
+        const v2 = {...deps(), snapshot: () => Promise.resolve({base_sha: 'a'.repeat(40), contracts: {}})}
+        await resolveSpec(v2, REPO, ISSUE)
+        const generated = {
+            ...PASS_GENERATED,
+            tasks: [
+                {
+                    ...PASS_TASK,
+                    slice_id: 'login',
+                    requirement_ids: extractPrdRequirements(PRD_BODY).map((_, index) => `R${index + 1}`),
+                },
+            ],
+        }
+        const dir = specBuildDir(dataDir, REPO, ISSUE)
+        const fenced = (value: unknown) => `Here is the result:\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n`
+        await writeFile(join(dir, 'generated.json'), fenced(generated), 'utf8')
+        expect(await gateSpec(v2, REPO, ISSUE)).toMatchObject({kind: 'review'})
+        await writeFile(join(dir, 'verdict.json'), fenced(PASS_VERDICT), 'utf8')
+        expect(await storeSpec(v2, REPO, ISSUE)).toMatchObject({kind: 'stored'})
+    })
+
     it('emits revise(source=gate) when a deterministic gate blocks', async () => {
         await resolveSpec(deps(), REPO, ISSUE) // writes prd.json
         await writeScratch('generated.json', FAIL_GENERATED)

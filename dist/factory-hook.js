@@ -1830,6 +1830,9 @@ function parseJson(text, sourcePath) {
     throw new JsonParseError(`invalid JSON${where}: ${cause.message}`, sourcePath, cause);
   }
 }
+function unwrapJson(text) {
+  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+}
 
 // src/shared/secret-patterns.ts
 var SECRET_CONTENT_PATTERNS = [
@@ -6533,11 +6536,10 @@ var SpecSchema = external_exports.object({
 var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var GitSchema = external_exports.object({
   /**
-   * The durable base branch staging forks from and rolls up into. NEVER
-   * `main` (Decision 12/16 — the factory never touches main; promotion to main
-   * is human-owned and out of scope).
+   * The feature PR's base branch. Unset resolves at use (decision 8, see
+   * `git/base-branch.ts`): `develop` if the remote has it, else the remote HEAD.
    */
-  baseBranch: external_exports.string().min(1).default("develop"),
+  baseBranch: external_exports.string().min(1).optional(),
   /**
    * Required status-check contexts of develop's protection profile, asserted
    * by scaffold and run preflight and provisioned with `--provision`.
@@ -6630,6 +6632,13 @@ function inferPluginRoot() {
     log4.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
   }
+}
+function resolvePluginRoot(env = process.env) {
+  const fromEnv = env.CLAUDE_PLUGIN_ROOT;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) {
+    return resolve2(fromEnv);
+  }
+  return inferPluginRoot();
 }
 function resolveDataDir(opts = {}) {
   if (opts.dataDir != null && opts.dataDir.length > 0) {
@@ -7143,20 +7152,7 @@ async function runSecretGuard(_argv = [], deps = {}) {
 }
 
 // src/hooks/session-start.ts
-var FACTORY_HARNESS_REMINDER = `<FACTORY_HARNESS_REMINDER>
-You are the factory pipeline runner. Iron Laws:
-1. Never decide a transition \u2014 the only next action is what the last envelope said.
-2. Spawn exactly what the manifest says; collect output verbatim.
-3. Fail loud \u2014 an unknown envelope kind or unexpected error means STOP and surface it.
-Re-load skills/pipeline-runner/SKILL.md before taking any pipeline action.
-</FACTORY_HARNESS_REMINDER>`;
-function runSessionStart(_argv = [], deps = {}) {
-  emitSessionStartContext(FACTORY_HARNESS_REMINDER, deps.emit);
-  return EXIT.OK;
-}
-
-// src/hooks/feature-guards.ts
-import { relative, resolve as resolve4, sep as sep4 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/feature/store.ts
 import { access, mkdir as mkdir3, readFile, readdir, rename as rename2 } from "node:fs/promises";
@@ -7550,7 +7546,7 @@ var FeatureStore = class {
     const invalid = {};
     for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
       try {
-        parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, "utf8"))))]);
+        parts.push([role, AgentResultSchema.parse(JSON.parse(unwrapJson(await readFile(path, "utf8"))))]);
       } catch (error) {
         if (isEnoent(error)) {
           missing.push(role);
@@ -7632,9 +7628,9 @@ function renderLedger(run, live = {}) {
     ""
   ].join("\n");
 }
-function unwrap(text) {
-  return text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-}
+
+// src/hooks/feature-guards.ts
+import { relative, resolve as resolve4, sep as sep4 } from "node:path";
 
 // src/verifier/deterministic/scope.ts
 function isTestPath(file) {
@@ -7779,6 +7775,38 @@ async function runFeatureStop(_argv = []) {
   }
 }
 
+// src/hooks/session-start.ts
+function sessionReminder(cwd, runs, pluginRoot) {
+  const matches = runs.filter((run) => !terminal(run) && (inside(run.root, cwd) || inside(run.worktree, cwd)));
+  if (matches.length === 0) {
+    return void 0;
+  }
+  const skill = join4(pluginRoot, "skills", "pipeline-runner", "SKILL.md");
+  return [
+    "<FACTORY_RUN_REMINDER>",
+    ...matches.map((run) => `Factory run ${run.run_id} is ${run.status}. Next: ${nextCommand(run)}`),
+    `Before any pipeline action, re-read ${skill} and follow it.`,
+    "</FACTORY_RUN_REMINDER>"
+  ].join("\n");
+}
+async function runSessionStart(_argv = [], deps = {}) {
+  try {
+    const cwd = deps.cwd ?? (await readHookInput())?.cwd ?? process.cwd();
+    const runs = deps.runs ? await deps.runs() : await new FeatureStore(resolveDataDir()).list();
+    const reminder = sessionReminder(cwd, runs, deps.pluginRoot ?? resolvePluginRoot());
+    if (reminder !== void 0) {
+      emitSessionStartContext(reminder, deps.emit);
+    }
+    return EXIT.OK;
+  } catch (error) {
+    process.stderr.write(
+      `Factory session reminder failed: ${error instanceof Error ? error.message : String(error)}
+`
+    );
+    return EXIT.ERROR;
+  }
+}
+
 // src/hooks/main.ts
 var hookRegistry = {
   "feature-guards": { describe: "PreToolUse: v2 producer scope and publication ownership", run: runFeatureGuard },
@@ -7799,7 +7827,7 @@ var hookRegistry = {
     run: (argv) => runSecretGuard(argv)
   },
   "session-start": {
-    describe: "SessionStart (compact): re-inject the runner Iron Laws + a pointer to reload the pipeline-runner skill",
+    describe: "SessionStart (compact): inside a live run, re-inject its id, status, next command and the runner skill path",
     run: (argv) => runSessionStart(argv)
   }
 };

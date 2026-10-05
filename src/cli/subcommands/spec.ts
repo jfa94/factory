@@ -9,6 +9,7 @@
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
 import {join} from 'node:path'
 import {repositorySnapshot} from '../../spec/snapshot.js'
+import {resolveBaseBranch} from '../../git/base-branch.js'
 import {parseArgs, UsageError, optionalString} from '../args.js'
 import {emitJson, emitLine, emitError, emitHelp} from '../io.js'
 import {loadConfig, resolveDataDir} from '../../config/index.js'
@@ -68,7 +69,8 @@ function wireDeps(): SpecBuildDeps {
     return {
         store: new SpecStore({dataDir: featureDataDir}),
         featureDataDir,
-        snapshot: () => repositorySnapshot(process.cwd(), config),
+        snapshot: async () =>
+            repositorySnapshot(process.cwd(), await resolveBaseBranch(process.cwd(), config.git.baseBranch)),
         gh: new RealGhClient({bodyMaxBytes: config.spec.prdBodyMaxBytes}),
         config,
         usage: new StatuslineUsageSignal({dataDir}),

@@ -15,8 +15,9 @@ arguments:
 Prepare a project to be run by the factory pipeline. The pipeline **refuses to start**
 against an unscaffolded or unprotected repo, so run this before any `/factory:run` in a new
 repo. All the work is done by one deterministic CLI call — `factory scaffold` — which copies
-the committed CI + gate-config templates, and probes branch protection on `develop` (the
-integration base).
+the committed CI + gate-config templates, and probes branch protection on the base branch (the
+integration base: `git.baseBranch`, else `develop` when origin has it, else origin's
+default branch).
 
 ## Step 1 — Confirm the checkout
 
@@ -63,8 +64,8 @@ This is idempotent. It:
   the factory statusline belongs only to the autonomous relaunch (`factory autonomy ensure`).
   Re-running is safe: existing keys (including your own statusLine) are preserved and entries
   are never duplicated;
-- probes branch protection on `develop` and **refuses loudly if it is missing**.
-  (`develop` is a precondition — scaffold does not create it. The feature branch
+- probes branch protection on the base branch and **refuses loudly if it is missing**.
+  (The base branch is a precondition — scaffold does not create it. The feature branch
   is created when the new run first advances.)
 
 Protection is stable and strict in v2: all `git.developRequiredStatusChecks` and
@@ -82,11 +83,11 @@ content).
 
 ## Step 3 — Handle a protection refusal
 
-If scaffold refuses because `develop` is unprotected, the run cannot start safely
+If scaffold refuses because the base branch is unprotected, the run cannot start safely
 (the feature PR must not merge red, Δ A/L). Offer the user
 two options:
 
-- **Provision it** (enables strict protection on `develop`): re-run with `--provision`.
+- **Provision it** (enables strict protection on the base branch): re-run with `--provision`.
 
     ```bash
     factory scaffold --provision        # --repo auto-derived from origin
@@ -107,7 +108,7 @@ Report:
 - Files created by scaffold vs. already present, plus any outdated files auto-refreshed
   (`files_updated`) and any stale managed files removed (`files_removed`). Remind the user
   to COMMIT `.factory/scaffold.lock` alongside the seeds.
-- Protection on `develop`: enabled / strict-up-to-date / required checks / whether just
+- Protection on the base branch: enabled / strict-up-to-date / required checks / whether just
   provisioned. The healthy at-rest shape remains strict with all required checks.
 
 Then remind the user:

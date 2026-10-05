@@ -15,11 +15,11 @@ import {deriveTddVerdict, classifyCommit} from '../verifier/deterministic/tdd-cl
 import type {GateId} from '../verifier/deterministic/gate-id.js'
 import {isTddExempt} from '../verifier/deterministic/tdd-exempt.js'
 import {isDbPath} from '../verifier/deterministic/db-detect.js'
-import {evaluate, type UsageSignal} from '../quota/index.js'
+import {evaluate, secondsToNextWindowDay, secondsToNextWindowHour, type UsageSignal} from '../quota/index.js'
 import {safeRepoPath} from '../spec/execution.js'
 import {runSpecGates} from '../spec/gates.js'
 import {provisionWorktree} from '../git/provision.js'
-import {TransientFailure, type FeatureRuntime, type CheckResult, type DeliveryResult} from './ports.js'
+import {TransientFailure, type FeatureRuntime, type CheckResult, type DeliveryResult, type QuotaWait} from './ports.js'
 import type {FeatureRun, Stage, Claim, FeatureSpec} from './schema.js'
 
 const taggedTestsOnly = (commit: CommitInfo): boolean => commit.tagged && classifyCommit(commit.files) === 'test-only'
@@ -297,12 +297,23 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             .split('\n')
             .some(isDbPath)
     }
-    async quota(run: FeatureRun): Promise<string | undefined> {
+    async quota(run: FeatureRun, nowEpoch = Date.now() / 1000): Promise<QuotaWait | undefined> {
         if (run.ignore_quota) {
             return undefined
         }
-        const decision = evaluate(await this.usage.read(), this.config, Date.now() / 1000)
-        return decision.kind === 'proceed' ? undefined : decision.reason
+        const decision = evaluate(await this.usage.read(), this.config, nowEpoch)
+        if (decision.kind === 'proceed') {
+            return undefined
+        }
+        if (decision.kind === 'unavailable-halt') {
+            return {reason: decision.reason, seconds: 60}
+        }
+        // Thresholds only change at the next window step, so polling sooner is wasted.
+        const boundary =
+            decision.kind === 'pause-5h'
+                ? secondsToNextWindowHour(decision.resetsAtEpoch, nowEpoch)
+                : secondsToNextWindowDay(decision.resetsAtEpoch, nowEpoch)
+        return {reason: decision.reason, seconds: Math.min(3600, Math.max(60, Math.ceil(boundary)))}
     }
 
     async reconcileBase(run: FeatureRun): Promise<'unchanged' | 'merged' | 'conflict'> {

@@ -56,7 +56,7 @@
                         "type": "command",
                         "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js session-start",
                         "timeout": 5,
-                        "statusMessage": "Re-injecting runner Iron Laws after compaction"
+                        "statusMessage": "Re-injecting the active Factory run after compaction"
                     }
                 ]
             }

@@ -21,7 +21,7 @@ import {
 } from './hook-io.js'
 import {EXIT, type ExitCode} from '../shared/exit-codes.js'
 
-function inside(root: string, path: string): boolean {
+export function inside(root: string, path: string): boolean {
     const rel = relative(canonicalizePath(root), canonicalizePath(path))
     return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith(sep))
 }

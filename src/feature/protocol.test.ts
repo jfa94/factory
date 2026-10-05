@@ -135,7 +135,7 @@ const claim = {
 describe('feature evidence and recovery protocol', () => {
     it('keeps an explicit stop sticky across quota recovery and permits cancellation', async () => {
         const f = await setup()
-        vi.mocked(f.runtime.quota).mockResolvedValue('weekly quota')
+        vi.mocked(f.runtime.quota).mockResolvedValue({reason: 'weekly quota', seconds: 60})
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait'})
         await f.engine.stop('run')
         vi.mocked(f.runtime.quota).mockResolvedValue(undefined)
@@ -144,6 +144,19 @@ describe('feature evidence and recovery protocol', () => {
         await f.engine.resume('run', {cancel: true})
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'cancelled'})
         await expect(f.engine.resume('run')).rejects.toThrow('fresh run')
+    })
+    it('waits the runtime-computed quota boundary and re-advances a saved checkpoint immediately', async () => {
+        const f = await setup()
+        vi.mocked(f.runtime.quota).mockResolvedValueOnce({reason: '5h quota over curve', seconds: 1234})
+        expect(await f.engine.advance('run', 'driver')).toEqual({
+            kind: 'wait',
+            run_id: 'run',
+            reason: '5h quota over curve',
+            retry_after_seconds: 1234,
+        })
+        // ponytail: twelve no-action steps are unreachable with the fake runtime, so stub the step.
+        vi.spyOn(f.engine as unknown as {step: () => Promise<undefined>}, 'step').mockResolvedValue(undefined)
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait', retry_after_seconds: 0})
     })
     it('reads a pre-batching state.json that has no confirmed_claims field', async () => {
         const f = await setup()

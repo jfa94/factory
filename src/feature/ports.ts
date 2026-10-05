@@ -30,6 +30,10 @@ export interface DeliveryResult {
     head: string
     reason?: string
 }
+export interface QuotaWait {
+    reason: string
+    seconds: number
+}
 export interface FeatureRuntime {
     readonly ciWaitMinutes: number
     now(): string
@@ -48,7 +52,8 @@ export interface FeatureRuntime {
     featureBase(run: FeatureRun): Promise<string>
     citation(worktree: string, claim: Claim): Promise<boolean>
     databaseChanged(run: FeatureRun, base: string): Promise<boolean>
-    quota(run: FeatureRun): Promise<string | undefined>
+    /** A quota breach and the seconds until its next window boundary, clamped to [60, 3600]. */
+    quota(run: FeatureRun): Promise<QuotaWait | undefined>
     reconcileBase(run: FeatureRun): Promise<'unchanged' | 'merged' | 'conflict'>
     noChanges(run: FeatureRun): Promise<boolean>
     mergedDelivery(run: FeatureRun): Promise<DeliveryResult | undefined>

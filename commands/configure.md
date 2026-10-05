@@ -94,11 +94,11 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 
 ### Git (`git.*`)
 
-| Key                           | Default                                  | Meaning                                                              |
-| ----------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
-| `baseBranch`                  | develop                                  | Branch the feature branch forks from and its PR targets (never main) |
-| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks scaffold and run preflight require on develop                 |
-| `rollupCiWaitMinutes`         | 30                                       | Max wait for the feature PR's CI before parking the run              |
+| Key                           | Default                                  | Meaning                                                                                                                                 |
+| ----------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseBranch`                  | unset                                    | Feature base and PR target; unset uses `develop` if origin has it, else origin's default branch. An explicit value must exist on origin |
+| `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks scaffold and run preflight require on the base branch                                                                            |
+| `rollupCiWaitMinutes`         | 30                                       | Max wait for the feature PR's CI before parking the run                                                                                 |
 
 > Retired (locked decision 5 — human gates removed): `humanReviewLevel`,
 > `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`, the

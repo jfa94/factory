@@ -3,7 +3,6 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {describe, expect, it} from 'vitest'
 import {execOrThrow} from '../shared/exec.js'
-import {defaultConfig} from '../config/schema.js'
 import {repositorySnapshot} from './snapshot.js'
 
 describe('committed repository contract snapshot', () => {
@@ -29,7 +28,7 @@ describe('committed repository contract snapshot', () => {
             await git('push', '-u', 'origin', 'develop')
             const base = await git('rev-parse', 'HEAD')
             await writeFile(join(root, 'AGENTS.md'), 'Uncommitted changed instructions\n')
-            expect(await repositorySnapshot(root, defaultConfig())).toEqual({
+            expect(await repositorySnapshot(root, 'develop')).toEqual({
                 base_sha: base,
                 contracts: {'AGENTS.md': 'Committed instructions', 'docs/contracts/value.md': 'Value contract'},
             })

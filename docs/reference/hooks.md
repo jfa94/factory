@@ -8,7 +8,15 @@ from the feature/review worktree path or owning session. Owned workers cannot wr
 engine state, result journals, locks or durable specs, or publish PRs directly.
 Independent review snapshots are read-only; test writers may edit test paths only.
 
-`SessionStart` on compaction reminds the runner to reload its protocol. `Stop`
+A run whose `state.json` is unreadable, invalid or another version is skipped with
+a warning on stderr. It does not lock other runs or sessions. Feature-guards deny
+tool use only inside that run's own feature and review worktrees, until its state
+is repaired.
+
+`SessionStart` on compaction checks whether the session's cwd is inside a non-terminal
+run's root or feature worktree. If so, it injects the run id, its status, the exact
+next command, and the absolute path of `skills/pipeline-runner/SKILL.md` under
+`$CLAUDE_PLUGIN_ROOT`. Elsewhere it emits nothing. `Stop`
 reports persisted state and blocks once, only when the owning session's in-flight
 attempt has a staged result file for every role that the engine has not consumed
 (`next-action` was never called). The block names the exact command; a re-entry
@@ -31,14 +39,14 @@ exits `2`.
 
 ## The guards
 
-| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                      |
-| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches (`main`, `master`, `develop`, `production`, `release`, `prod`). In autonomous mode it also denies nested shells and hook bypasses.                                                                |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                        |
-| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`). |
-| `feature-guards`    | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | v2 path and session ownership: owned workers cannot write engine state, result journals, locks or durable specs, or publish PRs; review snapshots are read-only; test writers may edit test paths only.                                           |
-| `feature-stop`      | Stop                                        | Observational Stop hook: reports persisted state and blocks once only for staged, unconsumed results (see [Current v2 wiring](#current-v2-wiring)).                                                                                               |
-| `session-start`     | SessionStart (`compact`)                    | Re-inject the runner's Iron Laws + a pointer to reload `skills/pipeline-runner/SKILL.md`, so a compacted session never loses the protocol. Reads no state (the reminder is static).                                                               |
+| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches (`main`, `master`, `develop`, `production`, `release`, `prod`). In autonomous mode it also denies nested shells and hook bypasses.                                                                                |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                        |
+| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                 |
+| `feature-guards`    | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | v2 path and session ownership: owned workers cannot write engine state, result journals, locks or durable specs, or publish PRs; review snapshots are read-only; test writers may edit test paths only. A run with unreadable state locks only its own worktrees. |
+| `feature-stop`      | Stop                                        | Observational Stop hook: reports persisted state and blocks once only for staged, unconsumed results (see [Current v2 wiring](#current-v2-wiring)).                                                                                                               |
+| `session-start`     | SessionStart (`compact`)                    | Inside a non-terminal run's root or worktree, re-inject the run id, status, next command and absolute runner-skill path. Emits nothing elsewhere.                                                                                                                 |
 
 ## `hooks.json` wiring
 

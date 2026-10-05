@@ -21,14 +21,16 @@ const protectedBranch: ProtectionApiResult = {
 describe('feature creation environment', () => {
     it('reads stable strict protection without a mutation capability', async () => {
         const repoProtection = vi.fn().mockResolvedValue(protectedBranch)
-        await assertFeatureEnvironment(spec(contract), 'owner/repo', config, {repoProtection})
-        expect(repoProtection).toHaveBeenCalledExactlyOnceWith('owner', 'repo', config.git.baseBranch)
+        await assertFeatureEnvironment(spec(contract), 'owner/repo', config, 'develop', {repoProtection})
+        expect(repoProtection).toHaveBeenCalledExactlyOnceWith('owner', 'repo', 'develop')
     })
     it.each([undefined, '{}', 'invalid JSON'])(
         'rejects a missing or invalid committed gate contract: %s',
         async (raw) => {
             const repoProtection = vi.fn()
-            await expect(assertFeatureEnvironment(spec(raw), 'owner/repo', config, {repoProtection})).rejects.toThrow()
+            await expect(
+                assertFeatureEnvironment(spec(raw), 'owner/repo', config, 'develop', {repoProtection})
+            ).rejects.toThrow()
             expect(repoProtection).not.toHaveBeenCalled()
         }
     )
@@ -36,7 +38,7 @@ describe('feature creation environment', () => {
         'refuses insufficient protection: %j',
         async (change) => {
             await expect(
-                assertFeatureEnvironment(spec(contract), 'owner/repo', config, {
+                assertFeatureEnvironment(spec(contract), 'owner/repo', config, 'develop', {
                     repoProtection: vi.fn().mockResolvedValue({...protectedBranch, ...change}),
                 })
             ).rejects.toThrow('insufficient')
@@ -44,7 +46,7 @@ describe('feature creation environment', () => {
     )
     it('surfaces an unavailable protection API', async () => {
         await expect(
-            assertFeatureEnvironment(spec(contract), 'owner/repo', config, {
+            assertFeatureEnvironment(spec(contract), 'owner/repo', config, 'develop', {
                 repoProtection: vi.fn().mockRejectedValue(new Error('GitHub unavailable')),
             })
         ).rejects.toThrow('GitHub unavailable')

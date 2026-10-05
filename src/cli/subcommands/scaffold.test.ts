@@ -32,7 +32,7 @@ import {featureRunFixture} from '../../feature/test-fixtures.js'
 import type {ProtectionApiResult} from '../../git/index.js'
 
 const cfg = defaultConfig()
-const BASE = cfg.git.baseBranch // "develop"
+const BASE = 'develop'
 const execFileAsync = promisify(execFile)
 
 /** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
@@ -113,7 +113,8 @@ describe('runScaffold', () => {
             templatesDir,
             owner: 'acme',
             repo: 'widgets',
-            config: {...cfg, git: {...cfg.git, baseBranch: 'main'}},
+            config: cfg,
+            baseBranch: 'main',
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {main: PROTECTED}}),
             provision: false,
@@ -133,6 +134,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -225,6 +227,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -255,6 +258,7 @@ describe('runScaffold', () => {
                     owner: 'acme',
                     repo: 'widgets',
                     config: cfg,
+                    baseBranch: BASE,
                     dataDirRules: DATA_DIR_RULES,
                     ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
                     provision: false,
@@ -274,6 +278,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -292,6 +297,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -311,6 +317,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -349,6 +356,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -379,6 +387,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -417,6 +426,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
             provision: false,
@@ -439,6 +449,7 @@ describe('runScaffold', () => {
                 owner: 'acme',
                 repo: 'widgets',
                 config: cfg,
+                baseBranch: BASE,
                 dataDirRules: DATA_DIR_RULES,
                 ghClient: new FakeGhClient(), // no protection seeded → disabled
                 provision: false,
@@ -453,6 +464,7 @@ describe('runScaffold', () => {
             owner: 'acme',
             repo: 'widgets',
             config: cfg,
+            baseBranch: BASE,
             dataDirRules: DATA_DIR_RULES,
             ghClient: gh,
             provision: false,
@@ -529,6 +541,7 @@ describe('runScaffold', () => {
         owner: 'acme',
         repo: 'widgets',
         config,
+        baseBranch: BASE,
         dataDirRules: DATA_DIR_RULES,
         ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
         provision: false,

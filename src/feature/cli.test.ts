@@ -28,6 +28,7 @@ vi.mock('../spec/gh.js', () => ({
         fetchPrd = fake.prd
     },
 }))
+vi.mock('../git/base-branch.js', () => ({resolveBaseBranch: () => Promise.resolve('develop')}))
 vi.mock('../spec/snapshot.js', () => ({repositorySnapshot: fake.snapshot}))
 vi.mock('./preflight.js', () => ({assertFeatureEnvironment: fake.preflight}))
 vi.mock('./runtime.js', () => ({

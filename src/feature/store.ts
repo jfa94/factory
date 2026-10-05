@@ -5,6 +5,7 @@ import {ZodError} from 'zod'
 import {atomicWriteFile} from '../shared/atomic-write.js'
 import {withFileLock, DEFAULT_FILE_LOCK_TUNING} from '../shared/file-lock.js'
 import {isEnoent} from '../shared/fs-errors.js'
+import {unwrapJson} from '../shared/json.js'
 import {
     AgentResultSchema,
     FeatureRunSchema,
@@ -193,7 +194,7 @@ export class FeatureStore {
         const invalid: Record<string, string> = {}
         for (const [role, path] of Object.entries(this.stagedPaths(id, attempt))) {
             try {
-                parts.push([role, AgentResultSchema.parse(JSON.parse(unwrap(await readFile(path, 'utf8'))))])
+                parts.push([role, AgentResultSchema.parse(JSON.parse(unwrapJson(await readFile(path, 'utf8'))))])
             } catch (error) {
                 if (isEnoent(error)) {
                     missing.push(role)
@@ -287,9 +288,4 @@ export function renderLedger(run: FeatureRun, live: {now?: string; staged?: stri
         ),
         '',
     ].join('\n')
-}
-
-/** Agents wrap their JSON in a fence or prose despite instructions; the file stays verbatim, only the parse looks past the wrapper. */
-function unwrap(text: string): string {
-    return text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
 }
