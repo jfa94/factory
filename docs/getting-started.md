@@ -1,12 +1,8 @@
 # Getting Started
 
-> Historical v1 reference. Its execution and recovery instructions do not apply
-> to v2. Start with [the current architecture](architecture/overview.md) and the
-> current CLI/runner protocol linked there.
-
 This tutorial gets you from a fresh clone to a working build of the Dark Factory
-engine, and walks the deterministic CLI through a run so you can see the Model-A
-split first-hand. By the end you will have the test suite green, both bundles
+engine, and shows where the deterministic CLI and the in-session runner meet, so you can
+see the Model-A split first-hand. By the end you will have the test suite green, both bundles
 built, and a feel for how the `factory` CLI reports and writes state.
 
 This is a **contributor** tutorial — it teaches the engine. To _operate_ the
@@ -36,8 +32,7 @@ and builds is:
 pnpm run verify
 ```
 
-You should see the test suite pass (over a hundred test files, well over a
-thousand tests) and two bundles written to `dist/`. This command is the contract
+You should see the test suite pass and two bundles written to `dist/`. This command is the contract
 the CI gate enforces; if it is green, your checkout is healthy.
 
 > Note: `npx tsc` is shadowed in this repo. Always use `npm run typecheck` for a
@@ -65,10 +60,10 @@ Run the CLI's help to see every subcommand:
 node dist/factory.js --help
 ```
 
-The subcommands are the engine's entire public surface. Each is a **reporter**
-(read-only; prints a JSON envelope), part of **the orchestrator** (`next-task` / `next-action` — the
-single control-flow seam), or a **writer** (one state mutation). For the complete
-contract, see [reference/cli.md](./reference/cli.md).
+The subcommands are the engine's entire public surface. `next-action` is the one
+seam the runner calls; the rest create, inspect, stop or resume runs, build specs,
+or prepare a repository. For the complete contract, see
+[reference/cli.md](./reference/cli.md).
 
 ## 5. See the resolved config
 
@@ -80,28 +75,24 @@ node dist/factory.js config-defaults
 ```
 
 This is the all-defaults config (`ConfigSchema.parse({})` under the hood). Every
-gate threshold, the producer-model dial, the quota curves, and the git branch
-contract are here. See [reference/configuration.md](./reference/configuration.md).
+gate threshold, the quota curves and the git branch contract are here. See [reference/configuration.md](./reference/configuration.md).
 
 ## 6. Understand the run loop without running it
 
-You now have the engine. The control loop lives in the CLI behind one seam (the
-orchestrator); what lives in markdown is the **runner** — the thin loop that spawns the
-agents each envelope names — because only a session can call the `Agent` tool.
-That is the Model-A split. Read these two files in order:
+The control loop lives in the CLI behind one seam, `factory next-action`. What lives
+in Markdown is the **runner**, the thin loop that spawns the agents each action
+names, because only a session can call the `Agent` tool. That is the Model-A split.
+Read these files in order:
 
-1. `commands/run.md` — the `/factory:run` entry point (the spine).
-2. `skills/pipeline-runner/SKILL.md` — the runner's full event loop: the
-   Iron Laws, the orchestrator surface (`next-task` / `next-action`), the `agent_type`
-   each spawn envelope carries (the runner spawns it verbatim — no spawn matrix), and the
-   five phases (preconditions → spec → create → drive/the-loop → report).
+1. `commands/run.md`: the `/factory:run` entry point.
+2. `skills/pipeline-runner/SKILL.md`: the runner loop. It calls
+   `factory next-action --run <id>`, and for an `execute` action spawns each named
+   role with the prompt it was given, writes the reply verbatim to that role's
+   staged path, and calls again. `wait`, `park` and `terminal` tell it to sleep,
+   stop or report.
+3. `src/feature/engine.ts`: the transitions behind the seam.
 
-As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE
-seam — the orchestrator. The runner's inner per-task loop runs `factory next-action --run <id>
---task <id>`, reads the JSON `NextAction`, spawns exactly the agents its
-`request` names, then records their raw output back with `factory next-action --results`
-(the run-level `factory next-task` picks which task to advance). The orchestrator tells the runner
-the next step; the runner never invents it.
+The runner never invents a step; the engine decides every transition.
 
 ## 7. Run the unit tests for one module
 

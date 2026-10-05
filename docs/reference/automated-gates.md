@@ -13,6 +13,43 @@ canonical order:
 test → tdd → coverage → mutation → sast → type → lint → build
 ```
 
+## Gates by stage
+
+The feature engine (`src/feature/runtime.ts`, `checks`) chooses the gate set from
+the stage. Base refs are the task base, the slice base, or the merge-base of `HEAD`
+with `origin/<base branch>`.
+
+| Stage           | Gates                                                           | Test scope | Base ref                    |
+| --------------- | --------------------------------------------------------------- | ---------- | --------------------------- |
+| `tests`         | `test`                                                          | diff       | task base                   |
+| `task-check`    | `test`, `type`, `lint`, plus the unsquashed TDD verdict         | full suite | task base                   |
+| `slice-check`   | `test`, `type`, `lint`, `build`, `coverage`, `mutation`, `sast` | full suite | slice base                  |
+| `feature-check` | as `slice-check`, plus Playwright when the run has `--e2e`      | full suite | merge-base with base branch |
+
+Each check must execute exactly one test command; executed-test counts are part
+of the evidence. The `tdd` gate id is not run as a gate strategy by the feature
+engine; ordering is checked directly at `task-check` (see
+[The TDD check](#the-tdd-check)).
+
+### RED at the tests stage
+
+The tests stage expects failing tests. It records one of three RED kinds:
+
+| RED kind                  | Condition                                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assertion`               | At least one test executed and an assertion failed.                                                                                                           |
+| `missing-declared-module` | Vitest failed to load a test because an import is missing, and the missing file is declared by the task and absent at the task base.                          |
+| `delegated-to-ci`         | Every changed test file is one vitest cannot run (pgTAP, Go, and similar). Their pass/fail is left to the PR's CI; the files are listed in the check details. |
+
+Any RED kind also requires every commit since the task base to be a tagged
+test-only commit. Exempt tasks skip this requirement.
+
+### Playwright at feature-check
+
+With `--e2e`, feature-check runs `pnpm exec playwright test --reporter=json` in the
+feature worktree. It passes only when the command exits 0 and the report shows
+`expected > 0`, `unexpected = 0` and `skipped = 0`. Truncated output is an error.
+
 ## How a gate sweep works
 
 For each enabled gate, the runner runs its strategy. A strategy returns one of:
@@ -75,22 +112,21 @@ file(s)); 1 non-vitest file(s) not executed`). Non-runnable files are left to
   non-JS green-ness is delegated to the reviewer panel and the repo's own CI.
 - **No test files in the diff:** the run is un-scoped (full suite).
 
-Evidence is memoized by the worktree's git tree-SHA, so an identical-content
-re-run skips re-executing the tool — but the verdict is still re-derived, so a
-cache hit never bypasses re-derivation.
+Diff scoping applies only at the tests stage. Every other stage runs the full
+suite (see [Gates by stage](#gates-by-stage)). A contracted test command always
+runs as-is.
 
 ## CI-parity gate env (`quality.gateEnv`)
 
-Every gate command (`build`, `test`, `type`, `lint`, `mutation`, `security`) runs in a
-**fresh task worktree** with no `.env.local`. The `quality.gateEnv` name→value map is
-merged over `process.env` into each gate's spawn env (`defaultGateTools(gateEnv)`,
-wired from config in `src/cli/wiring.ts`). Use it to mirror the repo's CI build-step env
-so the gate measures the code, not a missing-env crash — e.g. a Next.js static prerender
-that needs `NEXT_PUBLIC_*` defined would otherwise fail the `build` gate on a missing-env
-crash unrelated to task quality. It is **CI-parity placeholders, not a secret store**. Populate it
-with `factory configure --set quality.gateEnv.<KEY>=<value>`. The same map is the single source of
-truth in the other direction too: `factory scaffold` renders it into the managed `quality-gate.yml`
-it writes, so the local gate and the repo's GitHub CI build with identical env. See
+`quality.gateEnv` is a name→value map of **CI-parity placeholders, not a secret
+store**. Populate it with `factory configure --set quality.gateEnv.<KEY>=<value>`.
+`factory scaffold` renders it into the managed `quality-gate.yml` as an `env:` block,
+so the repo's GitHub CI builds with those values (for example `NEXT_PUBLIC_*` names a
+static prerender needs).
+
+The gate tools accept the map (`defaultGateTools(gateEnv)`), but the v2 feature
+runtime constructs them without it, so local gate commands run with the session's
+`process.env` only. See
 [configuration.md](./configuration.md#gateenv--ci-parity-placeholders).
 
 ## Which gates CI mirrors (the render partition, S2)
@@ -103,15 +139,13 @@ pins that split explicitly so local-green can never silently diverge from CI-gre
 - `CI_RENDERED_GATES` = `type`, `lint`, `test`, `build`, `mutation` — rendered as CI
   steps (mutation via its own begin/end region, the other four as plain `- run:`
   steps). CI mirrors these so a task that passes the local gate also passes the repo's
-  own CI on the shipped commit. **Mutation is the exception on the base-ref axis**:
-  its region runs only on PRs targeting `develop` (the rollup), not on task PRs into
-  `staging-*` — see [CI runs mutation on the develop rollup only](#ci-runs-mutation-on-the-develop-rollup-only-decision-75).
-- `LOCAL_ONLY_GATES` = `tdd`, `coverage`, `sast` — enforced by the local runner but
+  own CI on the shipped commit. See [Mutation in CI](#mutation-in-ci).
+- `LOCAL_ONLY_GATES` = `tdd`, `coverage`, `sast` — enforced locally but
   **not** rendered into CI:
-    - `tdd` needs the pre-squash task branch (commit ordering); CI only ever sees the
-      squashed merge, so the check cannot run there.
-    - `coverage` reads a per-tree-SHA local store keyed off the task worktree — no CI
-      analogue.
+    - `tdd` needs the unsquashed task history (commit ordering); CI only ever sees
+      the squashed merge, so the check cannot run there.
+    - `coverage` compares a head and a base measurement taken in local worktrees —
+      no CI analogue.
     - `sast` is deliberately local for now (a plain command gate, so a future CI step
       is possible — a classification choice, not a hard constraint).
 
@@ -160,68 +194,32 @@ reverted as drift — declare the step in the contract instead. See
 
 ### Per-repo required checks (`requiredChecks`, `requireMutationAtRest`)
 
-Factory config is **global-only**, so a per-repo branch-protection requirement has no
-home there — it lives in the committed contract instead (Decision 46 philosophy). Two
-optional top-level fields in `.factory/gates.json` tune the develop protection profiles
-the engine PUTs to GitHub (`effectiveProfiles`, `src/git/protection.ts`), **additive-only**
-— a contract can add required contexts, never remove a config-required one:
+Factory config is **global-only**, so a per-repo branch-protection requirement lives
+in the committed contract instead. Optional top-level fields in `.factory/gates.json`
+extend the required status checks computed by `effectiveProfiles`
+(`src/git/protection.ts`). They are **additive-only**: a contract can add required
+contexts, never remove a config-required one.
 
-- **`requiredChecks?: string[]`** — extra required CI contexts merged into **both**
-  develop profiles (the strict run profile and the at-rest baseline). Example: outsidey
-  declares `["pgTAP"]`, goodbyespy `["CI"]`. `"Mutation Testing"` is **rejected** here —
-  it is owned by the profiles; use `requireMutationAtRest` instead.
-- **`requireMutationAtRest?: boolean`** — keep `"Mutation Testing"` required on develop's
-  **baseline** profile (at rest, between runs) instead of the default run-profile-only.
-  A no-op if the run profile dropped the context entirely (a contract cannot resurrect a
-  check the config removed).
+- **`requiredChecks?: string[]`**: extra required CI contexts merged into the
+  required list (`git.developRequiredStatusChecks`). Example: `["pgTAP"]`.
+  `"Mutation Testing"` is **rejected** here because the config owns it.
+- **`requireMutationAtRest?: boolean`**: affects only the baseline profile.
+  v2 reads only the run profile, so this field currently has no effect.
 
-Both degrade safely: an absent or invalid contract yields no extras (a loud warn on
-invalid), so the de-escalation paths (finalize / supersede / `cancel --cleanup`) never
-fail on a broken contract (`loadRequiredCheckExtras`,
-`src/verifier/deterministic/gate-contract.ts`). The extras apply at every protection PUT
-site: scaffold provisioning, run-start escalate/supersede, resume re-escalate,
-`cancel --cleanup`, and finalize de-escalate. See
-[`git` configuration](configuration.md#git) for the profile knobs the extras merge into.
-
-## Gates in force (S3)
-
-The gates the merge gate will actually enforce for a run are **derived from the
-repo's committed `.factory/gates.json` contract**, never stored on run state
-(derive-don't-store). `enumerateGatesInForce(contract)`
-(`src/verifier/deterministic/gate-contract.ts`) is a pure helper returning:
-
-- `contracted` — the gate ids whose contract entry is `contracted: true`.
-- `skipped` — each `contracted: false` gate id with its committed `reason` (the
-  waiver).
-- `warnings` — one line per **floor** gate that is not contracted (see below).
-
-**`DEFAULT_GATES`** — `test`, `tdd`, `type` — is the universal floor every stack
-resolver contracts unconditionally. `build` is additionally a floor gate for every
-stack **except deno** (deno waives build by stack — `deno check` covers compilation,
-there is no emit step — so a normal deno contract never false-warns).
-
-If a committed contract leaves a floor gate `contracted: false`, an operator
-hand-edited the contract to drop it — the one misconfiguration TCB write-protection
-cannot catch (it guards the file's _writability_, not its _content_). So:
-
-- **At `run create`**, each such dropped floor gate is warned loudly on stderr
-  (`run create: default-set gate '<id>' is not contracted: … — the merge gate will
-not enforce it`). The created/superseded JSON envelope also carries `gates`
-  (the full `GatesInForce` shape).
-- **At finalize**, the run report re-derives the same enumeration from the committed
-  contract and renders a **Gates in force** markdown section (Enforced / Not
-  contracted / warnings). If the contract is absent or invalid at finalize, the
-  section renders that fact **loudly** rather than omitting it.
+The resulting list is used in two places, both against the resolved base branch:
+`factory scaffold` strengthens protection to it, and `run create` / `debug create`
+preflight refuses to start when protection does not satisfy it. See
+[`git` configuration](configuration.md#git).
 
 ## The gates
 
 | Gate       | Checks                                                                                                                                                                                                                                         | Fail-closed when                                                                                                                                                                |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `test`     | The vitest-runnable changed test files pass (diff-scoped). Pure non-JS/non-runnable test sets (pgTAP, Go, `.d.ts`…) are **skipped** (not applicable — execution-only gate, `tdd` owns existence).                                              | Runnable tests fail or cannot run.                                                                                                                                              |
-| `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                                                                                                                                                 | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                                                                   |
+| `tdd`      | Tests precede implementation on the unsquashed task history (test-before-impl commit ordering).                                                                                                                                                | An impl commit lands with no preceding failing-test commit.                                                                                                                     |
 | `coverage` | Measures head (task worktree) and base (ephemeral detached worktree) with vitest's json-summary coverage reporter; no metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Either measurement fails (command error, summary missing/invalid), the base ref is unresolvable, or no coverage command is derivable from a non-vitest test command. See below. |
 | `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`. Scope = mutable `.ts` under the contracted `gates.mutation.roots` (default `["src"]`).                                   | Score below target, or no score is derivable from a present report (non-empty scope).                                                                                           |
-| `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                                                                                                                                              | Findings present (unless `quality.securityAllowFailures`).                                                                                                                      |
+| `sast`     | `quality.securityCommand` (allowlisted runners only) exits 0. Skipped when unset.                                                                                                                                                              | Findings present (unless `quality.securityAllowFailures`).                                                                                                                      |
 | `type`     | The project type-check passes.                                                                                                                                                                                                                 | Type errors.                                                                                                                                                                    |
 | `lint`     | The linter passes.                                                                                                                                                                                                                             | Lint errors.                                                                                                                                                                    |
 | `build`    | The project builds.                                                                                                                                                                                                                            | Build fails.                                                                                                                                                                    |
@@ -246,11 +244,8 @@ symlink, removed afterwards).
    gate loud: contract `gates.coverage.command` or waive coverage.
 3. Neither — the built-in `vitest run` + coverage flags.
 
-**Measurements persist per tree SHA** at `runs/<run-id>/coverage/<treeSha>.json`
-(a perf cache only — never a correctness fallback; verdicts are re-derived every
-sweep). Because keys are content-addressed, the post-squash staging tree equals
-the shipped head tree, so later tasks in the run are served from the store instead
-of re-running the suite.
+The strategy accepts an optional per-tree-SHA measurement cache, but the v2 feature
+runtime does not supply one, so both sides are measured on every sweep.
 
 **Fail-closed rules:** any non-measured answer — command failed, summary missing,
 summary invalid — FAILS the gate naming which side broke (`head` or `base <sha>`)
@@ -273,37 +268,26 @@ counts as command-failed even when the base-vs-head delta is fine. Remedy:
 contract a `gates.coverage.command` that disables thresholds for the measurement
 run.
 
-## The TDD gate in detail
+## The TDD check
 
-The TDD gate is the harness-layer enforcement of test-driven development. It is
-pinned to the **pre-squash** branch tip (`base..HEAD` before squash-merge) and
-classifies the commit ordering: a test-before-impl ordering passes; an
-impl-before-test ordering blocks the task.
+Test-driven ordering is checked on the **unsquashed** task history
+(`task base..HEAD` in the feature worktree). The feature engine calls
+`deriveTddVerdict` over the commits tagged with the task id at `task-check`; a
+failing verdict fails the check.
 
-- **Memoized by tip SHA**: a re-invocation on the same tip is served from memo.
-- **Squash no-op**: a single commit introducing _both_ test and impl files is the
-  squashed shape — unverifiable for ordering, so the gate is a pass (not a false
-  violation). A single impl-only commit is still a violation.
 - **Commit-tag attribution**: the classifier (`tdd-classify.ts`) reads each commit's
   `[task-id]` tag to attribute it. An implementation commit with no tag is flagged
-  `impl-commit-untagged` and blocks the task. This also covers the task→staging
-  **re-sync merge**: when `resyncTaskBranchOntoStaging` (`src/git/worktree.ts`) does a
-  genuine non-fast-forward merge of `origin/staging-<run-id>` into the task branch, the
-  merge commit must carry the tag or it trips this check. The caller (`resyncShipRetry`,
-  `src/orchestrator/orchestrator.ts`) supplies a tagged message —
-  `chore(sync): merge staging into task branch [<taskId>]` — threaded through
-  `ResyncTaskBranchArgs.message` → `MergeOptions.message` → `git merge -m <message>`
-  (a fast-forward re-sync creates no commit, so the message is a harmless no-op there).
-- **Exemptions**: `tdd_exempt: true` on a task in the spec's `tasks.json` (per
-  task), or `package.json.factory.tddExempt` (globally). Read from those sources,
-  **never** from `state.json` (derive-don't-store). For exotic test runners (Go,
-  Ruby, Deno…), contract the test gate's `command` in the repo's committed
-  `.factory/gates.json` (Decision 46) rather than bypassing enforcement.
-- **Tests-phase admission**: before a non-exempt test-writer `DONE` can advance,
-  commits since its spawn checkpoint must include a task-tagged test/docs-only
-  commit and no implementation-class commit. Failure spends the normal rung and
-  restarts from clean preflight while unpublished; a terminal-rung or post-PR
-  failure preserves history and stops loudly.
+  `impl-commit-untagged` and blocks the task.
+- **Tests-stage admission**: a RED result, or a tests-stage `already-satisfied`,
+  is accepted only when every commit since the task base is a tagged test-only
+  commit. A tests-stage `already-satisfied` that fails this parks the run as a
+  producer failure. When a task is accepted as already satisfied, the ordering
+  check is skipped because there is no implementation commit to order.
+- **Exemptions**: `tdd_exempt: true` on the task in the frozen spec, or
+  `factory.tddExempt` in `package.json` as it existed at the spec's base commit.
+  Producer edits to `package.json` during the run cannot grant an exemption. For
+  test runners vitest cannot execute, contract the test gate's `command` in the
+  repo's committed `.factory/gates.json` rather than bypassing enforcement.
 
 ## The mutation gate in detail
 
@@ -358,18 +342,15 @@ mutation` to opt out; `--waive mutation` wins even when Stryker is installed.
   The seed also renders **after** the gate contract (pass 2a) so its `mutate` globs
   come from the contracted roots.
 
-### CI runs mutation on the develop rollup only (Decision 75)
+### Mutation in CI
 
-The scaffolded quality-gate workflow's mutation region is guarded
-`if: github.base_ref == 'develop'` — it runs only on the **rollup PR** (into
-`develop`, the merge point mutation actually gates). Task PRs into `staging-*`
-skip it: the local per-task gate already enforced mutation pre-merge and
-`stagingRequiredStatusChecks` defaults `[]`, so the CI jobs were pure burn. The
-`mutation-testing` aggregator reports **green on the skip path** so the universal
-"Mutation Testing" check name stays satisfiable on every PR. Every quality-gate
-job now carries a `timeout-minutes` bound.
+The scaffolded `quality-gate.yml` triggers on `pull_request` into the resolved
+base branch (`branches: [<base branch>]`). Its mutation jobs carry no base-ref
+condition, so mutation runs on every such PR, including the factory's feature PR.
+The `Mutation Testing` aggregator job reports the matrix outcome under that single
+check name. Every quality-gate job carries a `timeout-minutes` bound.
 
-The rollup verdict is **hunk-scoped and cold**. The managed helper reads zero-context
+The PR verdict is **hunk-scoped and cold**. The managed helper reads zero-context
 diff hunks, mutates added files in full, pads modified and deletion-seam ranges by two
 lines, merges adjacent ranges, and stable-hash splits the patterns eight ways. PR jobs
 do not restore incremental files: replayed results would make `thresholds.break`
@@ -377,46 +358,37 @@ depend on cache history rather than only the PR.
 
 The second MANAGED workflow keeps the historical filename
 `.github/workflows/mutation-nightly.yml`, but is displayed as **Mutation Full
-(Manual)** and has only `workflow_dispatch`. It checks out `develop`, computes the
+(Manual)** and has only `workflow_dispatch`. It checks out the base branch, computes the
 full surface with the same helper/exclusions/quarantine rules, and processes each
 shard sequentially in eight-file chunks. A 330-minute soft cap leaves publication
 headroom under the 360-minute job timeout; at least one chunk always runs. One
 incremental file is reused per shard, and partial progress saves even when Stryker's
 threshold exits non-zero. Cache restores use the stable OS/shard prefix, while saves
-include the checked-out `develop` SHA, `run_id`, and `run_attempt`, avoiding immutable
+include the checked-out base-branch SHA, `run_id`, and `run_attempt`, avoiding immutable
 key reservation collisions. The seed `.stryker.config.json` mirrors the helper's
 tests/declarations/type-only/types/data/barrel/Next-metadata exclusions so a CLI
 `--mutate` override cannot reintroduce a zero-mutant shard.
 
-> > > > > > > origin/main
-
 ## Beyond the deterministic gates
 
-The deterministic gates are only the first layer of the merge gate. The merge gate
-also records in **holdout validation** (a withheld answer-key, validated
-independently) and the **risk-invariant review panel** (a four-reviewer floor,
-unanimous approval required, with verify-then-fix confirmation of each blocking
-finding). The overall merge gate is the subject of
-[../explanation/verifier.md](../explanation/verifier.md).
+The deterministic gates are the first layer. Review is the second; the
+[architecture overview](../architecture/overview.md#verification-and-repairs)
+describes the flow and [the verifier](../explanation/verifier.md) explains why.
 
-A fifth **content-conditional** reviewer, `database-design-reviewer`, is appended to
-the panel only when the task diff touches relational-schema files — migrations,
-`*.sql`, or ORM schema (`touchesDatabase`, `src/verifier/judgment/db-detect.ts`;
-[Decision 51](../explanation/decisions.md)). It is strictly additive: the four-lens
-floor always runs, and a DB-touching task gets floor + specialist. The trigger is diff
-_content_, not risk tier, so it does not weaken risk-invariance.
+| Stage            | Roles                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `task-review`    | `quality-reviewer`                                                                                  |
+| `slice-review`   | `quality-reviewer`, `implementation-reviewer`, `silent-failure-hunter`, `systemic-failure-reviewer` |
+| `feature-review` | as `slice-review`                                                                                   |
+| `confirm`        | `finding-verifier`, two claims per attempt                                                          |
+| `acceptance`     | `acceptance-evaluator`                                                                              |
 
-The expected panel roster is enforced at the record seam: an all-approve **subset** of
-it can no longer clear the gate. `enforcePanelRoster` (`src/orchestrator/record.ts`)
-takes the re-derived roster (`panelRolesFor` — the `PANEL_ROLES` floor plus the
-conditional specialist), synthesizes a `verdict:"error"` review for every roster entry
-missing from the supplied `--results`, and demotes any unknown reviewer name to `error`
-— either failing the unanimity conjunction loudly. The cross-vendor reviewer is an
-**executor of a roster role** (e.g. quality-reviewer via Codex), never an extra reviewer
-name, so it stays additive to the roster — supplying it never changes the required
-roles. Its
-_availability_ is policy-gated separately: `review.requireCrossVendor: "block"` (default
-`warn`) fails the gate when no cross-vendor reviewer ran, by demoting the quality-reviewer
-to `verdict:"error"` ([Decision 44](../explanation/decisions.md#decision-44--verifier-upgrades-grep-rescue-claim-only-verification-real-cross-vendor)).
-(`/factory:debug`'s whole-scope `runPanel` is deliberately outside this
-check — it is not a task merge gate.)
+`database-design-reviewer` is added to a slice or feature panel when a file in the
+review range matches a database path (`isDbPath`,
+`src/verifier/deterministic/db-detect.ts`): migration directories, `drizzle/`,
+`schema.prisma`, or any `*.sql` file.
+
+Every panel role must return a `claims` array (empty when clean). A claim's quote
+must appear within two lines of the cited line in the review snapshot; an invalid
+citation rejects that reviewer's result. Claims then go to independent
+confirmation, and only confirmed claims become repair feedback.

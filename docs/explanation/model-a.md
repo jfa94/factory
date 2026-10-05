@@ -1,135 +1,79 @@
 # Model A: The Deterministic / LLM Split
 
-The single most consequential design choice in the factory is where the line
-between deterministic code and LLM judgment falls. Model A is the answer the
-Node + TypeScript rewrite settled on: a hard seam with the **brain in code** and
-the **hands in the LLM**.
+The most consequential design choice in the factory is where the line between
+deterministic code and LLM judgment falls. Model A puts the **brain in code** and
+the **hands in the LLM**, with one seam between them.
 
 ## The problem
 
-Autonomous coding requires two very different kinds of work:
+Autonomous delivery needs two different kinds of work:
 
-1. **Judgment** — generating a spec from a PRD, writing code, reviewing code.
-   These genuinely need an LLM.
-2. **Bookkeeping** — deciding the next phase, classifying a failure, running a
-   gate, computing a verdict, writing state, opening a PR. These need to be
-   _exactly right, every time_.
+1. **Judgment**: writing a spec from a PRD, writing tests and code, reviewing code,
+   judging acceptance. These need an LLM.
+2. **Bookkeeping**: choosing the next stage, running a gate, deciding whether a
+   result is valid, counting repair passes, writing state, opening a PR. These must
+   be exactly right every time.
 
-An agent following prose instructions does so unreliably. If the bookkeeping is
-expressed as agent instructions, a meaningful fraction of runs will skip a gate,
-mis-classify a failure, or write inconsistent state — and do so _silently_. That
-is unacceptable for an unattended pipeline whose whole value proposition is trust.
+An agent following prose instructions does so unreliably. If bookkeeping lived in
+agent instructions, some runs would skip a gate, miscount a budget or write
+inconsistent state, and do it silently. For an unattended pipeline whose value is
+trust, that is unacceptable.
 
-## The Model-A answer
+## The split
 
-Split the system in two and put a hard seam between them — **one engine, one
-seam, one thin runner**:
+- **The CLI is the brain.** `factory` (`src/feature/`) is a deterministic, tested
+  engine. It owns every transition, gate, repair budget, delivery step and state
+  write. It never spawns an agent.
+- **One seam.** `factory next-action` returns exactly one action: `execute`,
+  `wait`, `park` or `terminal`. All transition logic sits behind it.
+- **The runner is the hands.** The in-session runner
+  (`skills/pipeline-runner/SKILL.md`) calls `next-action`, spawns exactly the roles
+  an `execute` names with the prompts it was given, writes each agent's reply
+  verbatim to the staged path, and calls again. It decides nothing.
 
-- **The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
-  is a deterministic, tested TypeScript engine. It owns every piece of
-  bookkeeping: all run-state writes, the spec gates, the deterministic verifier
-  gates, failure classification, the producer escalation ladder, the
-  risk-invariant merge gate, PR creation — _and the pipeline loop itself_. It is
-  the _only_ thing that writes state. **It never spawns an agent** — it has no
-  `Agent` tool.
-- **The CLI exposes exactly ONE seam — the orchestrator.** `factory next-task` is the
-  run-level orchestrator (which task is ready); `factory next-action` is the task-level orchestrator (run
-  one task's deterministic steps until it needs agents, emitting a spawn request).
-  Invoked again as `factory next-action --results`, the orchestrator records the agents' raw output
-  back into exactly ONE state step. Every transition decision lives behind this
-  seam, in code.
-- **A runner is the hands — and nothing more.** A runner steps the seam: call
-  `next-task`, spawn exactly the `Agent()`s the resulting `next-action` request names, feed
-  their raw output back via `next-action --results`, repeat. A runner carries **no
-  pipeline logic of its own** — it never decides a transition, re-runs a gate,
-  classifies a failure, or writes state by prose. It is a dumb loop around the
-  orchestrator.
+The runner runs in the invoking Claude Code session, the only place that can spawn
+`Agent()`s. There is no headless `claude -p` or API-token path.
 
-ONE runner steps the seam (Decision 42): the in-session parallel event loop
-(`skills/pipeline-runner/SKILL.md`), running in the invoking Claude Code session
-— the only place that can spawn `Agent()`s directly. Every `factory` CLI call
-runs foreground in that session (one-driver-per-task by construction); the
-agents of up to `maxParallelTasks` ready tasks run in the background, and the
-runner multiplexes their completions back through `next-action --results`.
+## Why this boundary
 
-It is **subscription-only** — there is no headless `claude -p` / API-token path
-anywhere. The runner's entire job is the glue: step → spawn what the request names
-→ feed the raw results back → follow the step the orchestrator returned.
+- **Runner as a sub-agent.** A sub-agent cannot spawn further sub-agents, so a
+  runner inside one would deadlock the first time it needed a producer or
+  reviewer. The runner must be the main session.
+- **Pure-script runner.** A Node process cannot invoke the `Agent` tool, so the
+  engine cannot also be the spawner.
+- **Pure-agent orchestration.** This is the unreliability problem above.
 
-## Why this particular boundary
-
-A few alternatives were rejected:
-
-- **Runner-as-sub-agent.** Claude Code exposes the `Agent` tool only to the
-  top-level session; a sub-agent cannot spawn further sub-agents. An
-  runner-as-agent would deadlock the first time it needed to dispatch a
-  producer or reviewer. So the session runner must run in the main session.
-- **Pure-script runner.** A shell/Node process cannot invoke the `Agent`
-  tool at all. So the engine cannot also be the thing that spawns agents — the
-  runner exists precisely because it can launch `Agent()`s while the
-  engine (the orchestrator) cannot.
-- **Pure-agent orchestration.** This is exactly the unreliability problem above —
-  100%-reliable bookkeeping cannot be left to ~70%-reliable prose-following. A
-  runner that "decides" anything would re-introduce it; the runner only steps.
-
-Model A is the only split that respects both constraints: the agent-spawning must
-live in the runner session, and the bookkeeping —
-every decision — must live behind the orchestrator in code. The seam is the `factory`
-CLI's JSON contract.
+Model A respects both constraints: spawning lives in the session, and every
+decision lives behind the seam in code.
 
 ## What the seam buys
 
-- **Testability.** Every transition, gate, classification, and ladder step is a
-  pure function with unit tests (over a thousand of them). The non-deterministic
-  parts are pushed to the edges (the agent prompts), where they belong.
-- **Loud failure.** An unknown envelope kind, an unexpected non-zero CLI exit, a
-  missing field, or a deadlock is a hard stop, not a silent fall-through. The Iron
-  Laws in the runner skill exist precisely to forbid the "I'll just advance"
-  rationalizations that would skip a gate.
-- **Forgery resistance.** Because the CLI derives verdicts from ground truth and
-  stores none (see [derive-dont-store.md](./derive-dont-store.md)), an agent cannot
-  fake a passing gate by writing to state — there is no field to write.
-- **One loop, runner-agnostic.** Because the orchestrator (`src/orchestrator/orchestrator.ts` +
-  `next.ts` + `record.ts`) is the _single_ implementation of the loop, any runner
-  inherits identical control flow for free. The event loop stays thin; a future
-  out-of-session scheduler would just be a second runner over the same unchanged
-  seam.
-- **Zero prompt-assembly in the runner.** The last decisions the runner still made
-  on its own — assembling a producer's prompt, composing the Codex cross-vendor
-  reviewer prompt, and choosing the finding-verifier's agent-type/model/isolation —
-  are now carried by envelope fields the engine composes (`AgentSpec.prompt`,
-  `cross_vendor.prompt`, `verifier_spec`; see
-  [engine-vocabulary](../reference/engine-vocabulary.md#spawn-payload) and
-  [verifier.md](./verifier.md)). The runner spawns them verbatim. (Panel-reviewer
-  prompts remain the one thing the runner builds inline, from the committed
-  `agents/<role>.md` + `skills/review-protocol/SKILL.md` — static plugin surface, not
-  per-run engine output.)
-- **Self-healing inside a live session.** Three failure modes that used to strand a
-  session now recover without a human: a mid-run **compaction** that drops the runner
-  skill from context is re-seeded by the `SessionStart` re-injection hook (once wired —
-  see [hooks.md](../reference/hooks.md#sessionstart-wiring-is-pending)), a
-  **silently-dead agent** whose spawn never returns is flagged by an engine-side stall
-  TTL (`config.stallTtlMinutes`) in the `work` envelope's `stale` list so the runner
-  abandons and re-drives it, and a **hung-but-alive agent** past the hard wall clock
-  (`config.hungSpawnMinutes`) is flagged in the `hung` list so the runner kills and
-  re-drives it — bounded by the engine's re-drive budget (Decision 66).
+- **Testability.** Transitions, gates and budgets are code with unit tests. The
+  non-deterministic parts stay at the edges, in agent briefs.
+- **Loud failure.** An unknown action, a non-zero CLI exit or a missing field stops
+  the runner; it never "just advances".
+- **Evidence the agent cannot forge.** Agents write only their own staged result.
+  Identity comes from the staged path, engine state is write-protected, and
+  verdicts come from executed gates and independent reviewers.
+- **No prompt assembly in the runner.** The engine writes a per-role brief file and
+  hands the runner a two-line prompt naming it. The runner pastes it verbatim.
+- **Self-correcting results.** An invalid result is moved aside and the role is
+  re-issued with the reason, up to twice, instead of stalling or being "fixed" by
+  the runner.
+- **Restart from disk.** Every attempt is persisted before dispatch, and any later
+  driver can consume its staged results. A crashed or compacted session loses no
+  work. After compaction, the `SessionStart` hook reminds the session of the
+  active run, its next command and the runner skill path (see
+  [hooks.md](../reference/hooks.md)).
 
 ## The cost
 
-The runner must faithfully obey the orchestrator's envelopes — spawn exactly
-what a request names and feed results back verbatim — but it carries no pipeline
-logic, so it cannot _diverge_ on a transition: there is one loop, in code, and
-the runner only steps it. The discipline that remains is at the spawn boundary
-(the runner skill's Iron Laws), not in a duplicated loop. This is the
-payoff of collapsing the earlier in-process runner and the single-step CLI writers
-into the orchestrator: the spawn-path record and a crash-resume record now run the identical
-code (`src/orchestrator/record.ts`), so they cannot drift.
+The runner must obey the actions faithfully: spawn what an action names, write
+replies verbatim, and keep calling. That discipline lives in the runner skill. It
+cannot diverge on a transition because it makes none.
 
 ## See also
 
-- [System Overview](../architecture/overview.md) — the container view and the run
-  lifecycle.
-- [Derive, don't store](./derive-dont-store.md) — the property that makes the seam
-  forgery-resistant.
-- `skills/pipeline-runner/SKILL.md` — the runner's Iron Laws and
-  control loop.
+- [Architecture overview](../architecture/overview.md)
+- [CLI reference](../reference/cli.md)
+- [The verifier](./verifier.md)

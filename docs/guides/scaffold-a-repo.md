@@ -1,10 +1,7 @@
 # How to Scaffold a Target Repo
 
-> Historical v1 reference. Its execution and recovery instructions do not apply
-> to v2. Start with [the current architecture](../architecture/overview.md) and the
-> current CLI/runner protocol linked there.
-
-Run this once per repository before any pipeline run. The factory refuses to start
+Run this once per repository before any pipeline run, and again after changing the
+base branch, required checks or `quality.gateEnv`. The factory refuses to start
 against an unscaffolded or unprotected repo. `gh` is a hard dependency (the
 protection probe and, with `--provision`, the protection write shell out to it).
 
@@ -21,6 +18,10 @@ Or call the CLI directly:
 ```bash
 factory scaffold [--repo <owner/name>]
 ```
+
+Scaffold targets the resolved base branch: `git.baseBranch` when set (it must exist
+on `origin`), else `develop` when `origin` has it, else `origin`'s default branch.
+The base branch must already exist; scaffold does not create it.
 
 `--repo` is **optional**: when omitted it is auto-derived from the repo's `origin`
 remote. Pass it only to override; an explicit value that disagrees with `origin`
@@ -47,7 +48,8 @@ This is idempotent. It:
   roots (add explicit roots or pass `--waive mutation`). See
   [Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots).
   The `quality-gate.yml` is
-  **rendered per-repo from the gate contract** (Decision 53): the package-manager
+  **rendered per-repo from the gate contract** (Decision 53) and triggers on pull
+  requests into the base branch: the package-manager
   setup (lockfile-detected pnpm vs npm) and each gate step come from the contract, so
   CI runs the same checks the local merge gate enforces. npm-stack repos must commit
   a Node runtime declaration; scaffold selects `.node-version`, then `.nvmrc`, then
@@ -57,9 +59,8 @@ This is idempotent. It:
   scaffold also refuses `volta.node`, `volta.extends`, or `devEngines.runtime`
   fields that setup-node would prefer over `engines.node`. This render is **npm-stack
   only** — a `deno`/`custom` repo skips the CI net with a loud log and relies on the
-  local `GateRunner`. The configured `quality.gateEnv` is **injected** into the
-  rendered build step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`),
-  so one config drives both the factory's local merge gate and this repo's GitHub CI.
+  local gates. The configured `quality.gateEnv` is **injected** into the
+  rendered build step (set via `factory configure --set quality.gateEnv.<KEY>=<value>`).
   An empty `gateEnv` leaves the build step's marker untouched, and a re-scaffold is
   byte-identical (drift is measured against the rendered file).
 
@@ -93,34 +94,26 @@ This is idempotent. It:
       `additionalDirectories` — see below.
     - `.claude/settings.local.json` (**gitignored**, per-machine): the
       `permissions.additionalDirectories` entry so the built-in file tools reach the
-      out-of-tree plugin data dir (`runs/`, `specs/`) without tripping the
+      out-of-tree plugin data dir without tripping the
       working-directory-boundary prompt. ALWAYS absolute — `~/` does not expand in
       `additionalDirectories` — which is exactly why it can't live in the committed
       file (it would leak `$HOME`/username and be wrong on another machine or CI).
       Written prune-then-add: a stale factory-managed entry (a literal
       `${CLAUDE_PLUGIN_DATA}` placeholder, a tilde form, or a previously-baked path
-      that moved) is stripped and replaced on the next `factory scaffold` (which runs
-      idempotently on every `/factory:run` preflight, so this self-heals with no
-      separate migration step); the user's own entries are kept.
+      that moved) is stripped and replaced on the next `factory scaffold`; the user's
+      own entries are kept.
 
     Neither file ever ships the literal `${CLAUDE_PLUGIN_DATA}` placeholder — env-var
     interpolation in permission rules is unsupported and the var is hijackable by
     co-installed plugins, so a placeholder rule would match nothing; both bake the
     CLI-resolved canonical data dir instead. See [Decision 17](../explanation/decisions.md#decision-17-coarse-bash-allow-with-hook-enforced-defense-in-depth);
 
-- probes branch protection on `develop` (the integration base) and **refuses loudly
-  if it is missing**. Protection is two-profile
-  ([Decision 74](../explanation/decisions.md#decision-74--run-scoped-develop-protection-two-profile-lifecycle),
-  default `git.developProtection: "run-scoped"`): at rest develop carries only the
-  **baseline** — `git.developBaselineStatusChecks` (derived default:
-  `developRequiredStatusChecks` minus Mutation Testing → Quality + Security Scan) for
-  non-admin PRs, admins bypass, no strict up-to-date — so you can push develop
-  directly between runs. `run create` escalates to the strict profile; every
-  run-terminal path drops it back.
+- probes branch protection on the base branch and **refuses loudly** unless it is
+  enabled, has strict "require branches to be up to date", and requires every
+  check in `git.developRequiredStatusChecks` plus the contract's `requiredChecks`.
 
-Scaffold does **not** create or protect a shared `staging` branch. Each run cuts its
-own private `staging-<run-id>` integration branch from `develop` at
-[`run create`](../reference/cli.md#run-create) (Decision 33).
+Scaffold does not create any other branch. Each run creates its own feature branch
+`factory/<issue>-<run-id>` from the base branch at `run create`.
 
 It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`
 (outdated files auto-refreshed — both managed files and seed configs only while
@@ -214,40 +207,26 @@ reads as project-owned until re-adopted.
 
 ## 3. Handle a protection refusal
 
-If scaffold refuses because `develop` is unprotected, you have two options.
+If scaffold refuses because protection on the base branch is missing or weaker than
+required, you have two options.
 
-**Provision it** (writes the mode's at-rest protection on `develop` — run-scoped:
-baseline; permanent: strict):
+**Provision it:**
 
 ```bash
 factory scaffold --repo <owner/name> --provision
 ```
 
-**Or protect it manually** in the repo settings — at minimum the baseline required
-status checks (in `permanent` mode also strict "require branches to be up to date") —
-then re-run `factory scaffold --repo <owner/name>` to re-verify.
+When the branch has no protection, this writes strict protection with the required
+checks. When protection exists but is not strict or lacks a required check, it
+strengthens only the required status checks and keeps the existing check app
+bindings and unrelated review, admin and restriction settings. Sufficient
+protection is left untouched. Protection is never downgraded.
 
-Do not proceed against an unprotected repo: the serial-writer's correctness
-depends on required-up-to-date protection while a run is active.
+**Or protect it manually** in the repo settings (strict "require branches to be up
+to date" plus every required check), then re-run `factory scaffold` to re-verify.
 
-### Migrating a repo off the old permanent strict profile
-
-Repos scaffolded before Decision 74 carry the strict profile permanently (blocking
-direct pushes to develop). The one-shot fix is simply:
-
-```bash
-factory scaffold --provision        # downgrades develop to the baseline
-```
-
-(Refused while a run is active on the repo.) Alternatively, the first run that
-reaches a terminal state after upgrading the plugin self-heals it, or write it by
-hand:
-
-```bash
-gh api -X PUT repos/<owner>/<repo>/branches/develop/protection --input - <<'JSON'
-{"required_status_checks":{"strict":false,"contexts":["Quality","Security Scan"]},"enforce_admins":false,"required_pull_request_reviews":null,"restrictions":null,"allow_deletions":true}
-JSON
-```
+No run changes branch protection, and `run create` repeats the same protection
+check before starting.
 
 ## 4. Tune the branch contract (optional)
 
@@ -255,7 +234,7 @@ The branches and required checks are configurable. To change them before
 scaffolding:
 
 ```bash
-factory configure --set git.baseBranch=develop
+factory configure --set git.baseBranch=main
 factory configure --set 'git.developRequiredStatusChecks=["Quality","Mutation Testing","Security Scan"]'
 ```
 

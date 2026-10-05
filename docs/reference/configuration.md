@@ -1,9 +1,5 @@
 # Configuration Schema
 
-> Historical v1 reference. Its execution and recovery instructions do not apply
-> to v2. Start with [the current architecture](../architecture/overview.md) and the
-> current CLI/runner protocol linked there.
-
 All configuration lives in one Zod schema, `src/config/schema.ts`, where every
 field carries a default. `ConfigSchema.parse({})` yields a complete, typed config,
 so a missing config file is equivalent to all-defaults. Inspect and edit the
@@ -58,26 +54,21 @@ commands is explained in
 
 Quality-gate thresholds.
 
-| Key                              | Type                  | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------- | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mutationScoreTarget`            | number 0–100          | `80`    | Target mutation score (%) for the mutation gate.                                                                                                                                                                                                                                                                                                                                                                              |
-| `coverageRegressionTolerancePct` | number ≥0             | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                                                                                                                                                                                                                                                                                                                                        |
-| `securityCommand`                | string (optional)     | —       | Custom SAST/security command; else the built-in semgrep run.                                                                                                                                                                                                                                                                                                                                                                  |
-| `securityAllowFailures`          | boolean               | `false` | Treat security findings as non-blocking.                                                                                                                                                                                                                                                                                                                                                                                      |
-| `securityRedactFindings`         | boolean               | `true`  | Redact secrets from the persisted findings artifact.                                                                                                                                                                                                                                                                                                                                                                          |
-| `setupCommand`                   | string (optional)     | —       | Per-worktree env-prep command run once in the new task worktree, BEFORE the test/type/build gates. When unset, a lockfile is auto-detected (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `yarn.lock` → `yarn install --frozen-lockfile`, `package-lock.json`/`npm-shrinkwrap.json` → `npm ci`); no lockfile is a no-op. Set this for non-JS repos or custom setups. Fails the run LOUD at preflight on non-zero exit. |
-| `gateEnv`                        | record<string,string> | `{}`    | Name→value env vars injected into **every** deterministic gate command (`build`/`test`/`type`/`lint`/`mutation`/`security`), merged over `process.env`. Mirrors the repo's CI build-step env so the gate measures the code, not a missing-env crash. **Placeholders only — not a secret store.** See [the gate-env note](#gateenv--ci-parity-placeholders) below.                                                             |
+| Key                              | Type                  | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mutationScoreTarget`            | number 0–100          | `80`    | Target mutation score (%) for the mutation gate.                                                                                                                                                                                                                                                                                                                                                         |
+| `coverageRegressionTolerancePct` | number ≥0             | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                                                                                                                                                                                                                                                                                                                   |
+| `securityCommand`                | string (optional)     | —       | SAST command for the `sast` gate, validated against a token and runner allowlist. Unset: the gate is skipped and scaffold records it as uncontracted.                                                                                                                                                                                                                                                    |
+| `securityAllowFailures`          | boolean               | `false` | Treat security findings as non-blocking.                                                                                                                                                                                                                                                                                                                                                                 |
+| `securityRedactFindings`         | boolean               | `true`  | Redact secrets from the scanner output recorded in gate evidence.                                                                                                                                                                                                                                                                                                                                        |
+| `setupCommand`                   | string (optional)     | —       | Provisioning command run in each new feature worktree and review snapshot before any gate. When unset, a lockfile is auto-detected (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `yarn.lock` → `yarn install --frozen-lockfile`, `package-lock.json`/`npm-shrinkwrap.json` → `npm ci`); no lockfile is a no-op. A failure is treated as transient: retried, then the run parks as `environment`. |
+| `gateEnv`                        | record<string,string> | `{}`    | Name→value env vars rendered into the managed `quality-gate.yml`. **Placeholders only — not a secret store.** See [the gate-env note](#gateenv--ci-parity-placeholders).                                                                                                                                                                                                                                 |
 
 ### `gateEnv` — CI-parity placeholders
 
-The deterministic gates run in a **fresh task worktree** with no `.env.local` and no
-build-time env injection. A repo whose CI supplies placeholder env vars for the same
-build step — e.g. a Next.js static prerender that needs `NEXT_PUBLIC_*` defined — would
-otherwise fail the `build` gate on a missing-env crash, a **false-negative floor**
-unrelated to task quality. `quality.gateEnv` closes that gap: its name→value map is
-merged over `process.env` into the spawn env of every gate command
-(`defaultGateTools(gateEnv)`, `src/verifier/deterministic/tools.ts`, wired from config in
-`src/feature/runtime.ts`).
+A repo whose CI supplies placeholder env vars for a build step (for example a
+Next.js static prerender that needs `NEXT_PUBLIC_*` defined) declares them here.
+`factory scaffold` renders the map into the managed `quality-gate.yml`.
 
 **Setting values.** Mirror your CI build-step env by setting each leaf individually:
 
@@ -91,17 +82,17 @@ The schema requires **string** values whose keys are valid POSIX env names
 with a usable name. A purely numeric value is JSON-coerced to a number at the `--set` boundary
 and rejected, so quote it as JSON: `--set quality.gateEnv.PORT='"54321"'`.
 
-**One config, both gates.** `quality.gateEnv` is the single source of truth for build-env parity in
-**both** directions: the local merge gate merges it over `process.env` for every gate command, and
-`factory scaffold` injects it into the managed `quality-gate.yml` it renders — `injectGateEnvIntoWorkflow`
-(`src/ci/inject-gate-env.ts`) replaces the `# factory:gate-env` marker following the rendered build
-step with a real `env:` block built from the resolved map. So editing `quality.gateEnv` (then
-re-scaffolding) keeps the local gate and the repo's GitHub CI in lockstep; an empty map leaves the
-marker untouched, and a re-scaffold is byte-identical (idempotent).
+**Rendering.** `injectGateEnvIntoWorkflow` (`src/ci/inject-gate-env.ts`) replaces
+the `# factory:gate-env` marker following the rendered build step with an `env:`
+block built from the resolved map. Re-run `factory scaffold` after editing the map.
+An empty map leaves the marker untouched, and a re-scaffold is byte-identical.
+
+The gate tools can merge the map over `process.env` (`defaultGateTools(gateEnv)`),
+but the v2 feature runtime constructs them without it, so local gate commands do
+not receive these values.
 
 This is **CI parity, not secrets**: these placeholders sit in the sparse config overlay in
-plaintext. Never put a real credential here — they exist only so the merge gate
-exercises the same build CI does.
+plaintext and in the committed workflow. Never put a real credential here.
 
 ## `quota`
 
@@ -136,11 +127,12 @@ is deliberately **not** a config key: it is an _unconditional_ pin, hard consts 
 
 Branch and protection contract.
 
-| Key                           | Type     | Default                                            | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------------- | -------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `baseBranch`                  | string   | unset                                              | The integration base: the feature branch forks from it and its PR targets it. Scaffold protects this branch. Unset resolves per command (never saved): `develop` when origin has it, else origin's default branch. An explicit value must exist on origin.                                                                                                                                                                                                            |
-| `developRequiredStatusChecks` | string[] | `["Quality", "Mutation Testing", "Security Scan"]` | Status checks scaffold and run preflight require on `develop` (provisioned with scaffold `--provision`). Defaults to the three contexts the rendered quality-gate workflow always reports (Decision 53), so the feature PR cannot merge red. A repo's committed `.factory/gates.json` can add extra contexts via `requiredChecks` (additive-only) — see [per-repo required checks](automated-gates.md#per-repo-required-checks-requiredchecks-requiremutationatrest). |
-| `rollupCiWaitMinutes`         | int >0   | `30`                                               | Outer bound (minutes) the engine waits for the feature PR's required CI and merge before parking the run (`ci`). Sized above the slowest expected quality-gate run (mutation on a cold cache); work is preserved and resume rechecks. Replaces the former hard-coded ~20-min bound ([Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots)).                                               |
+| Key                           | Type                | Default                                            | Meaning                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseBranch`                  | string              | unset                                              | The integration base: the feature branch forks from it, its PR targets it, and scaffold protects it. Unset resolves per command and is never saved: `develop` when origin has it, else origin's default branch. An explicit value must exist on origin.                                                                                                                                             |
+| `developRequiredStatusChecks` | string[]            | `["Quality", "Mutation Testing", "Security Scan"]` | Status checks required on the resolved base branch. Scaffold `--provision` strengthens protection to this list; `run create` and `debug create` refuse when protection does not satisfy it. A repo's `.factory/gates.json` can add contexts via `requiredChecks` (additive-only); see [per-repo required checks](automated-gates.md#per-repo-required-checks-requiredchecks-requiremutationatrest). |
+| `developBaselineStatusChecks` | string[] (optional) | the required list minus `"Mutation Testing"`       | At-rest baseline profile computed by `effectiveProfiles`. v2 reads only the required list, so this key has no effect.                                                                                                                                                                                                                                                                               |
+| `rollupCiWaitMinutes`         | int >0              | `30`                                               | How long (minutes) the engine waits for the feature PR's required checks and merge before parking the run as `ci`. Work is preserved and resume rechecks.                                                                                                                                                                                                                                           |
 
 ## Retired keys
 
@@ -153,10 +145,10 @@ These schema keys were removed because they were **never actually consumed**. Zo
 strips an unknown key silently, so `loadConfig` warns loudly (once per process per
 file) when a raw overlay still carries one:
 
-| Retired key         | Why it is gone                                                                                                                                                     | Replacement                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| `git.stagingBranch` | Every consumer read the schema default, never a set value — there is no shared staging branch. The real branch is per-run `staging-<run-id>` (`runStagingBranch`). | none needed (the prefix is a constant)               |
-| `e2e.testDir`       | A `superRefine` already rejected every non-default value, so the knob could only ever hold `e2e`. Both the template and the TCB write-guard hardcode that path.    | the literal `e2e` path in the template and TCB guard |
+| Retired key         | Why it is gone                                                                                                                                                  | Replacement                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `git.stagingBranch` | v2 has no staging branch; each run uses one feature branch `factory/<issue>-<run-id>`.                                                                          | none                                                 |
+| `e2e.testDir`       | A `superRefine` already rejected every non-default value, so the knob could only ever hold `e2e`. Both the template and the TCB write-guard hardcode that path. | the literal `e2e` path in the template and TCB guard |
 
 Keys retired with v1 execution are ignored silently when an existing overlay still
 carries them: `quality.holdoutPercent`, `quality.holdoutPassRate`,

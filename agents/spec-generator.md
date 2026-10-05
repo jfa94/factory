@@ -152,6 +152,16 @@ command to obey.
           requirement whose outcome needs it gone, and follows the TDD / `tdd_exempt` rules.
         </traceability-rules>
 
+        <refactor-rules>
+        A refactor/migration-shaped PRD (primarily moving, replacing or deleting existing behavior)
+        additionally requires — the spec-reviewer blocks on each missing element:
+        - **Characterization before change**: characterization-test tasks precede the change tasks
+          they protect in `depends_on` order.
+        - **Rollback notes**: every high-tier task's description names its rollback (flag off,
+          revert the change, keep the old path behind the façade).
+        - **Cleanup is a task**: a final task removes flags, old paths and dead adapters.
+        </refactor-rules>
+
     Tasks from later phases MUST list earlier-phase tasks in `depends_on` so the factory executes
     them in order (Iron Law #2 — acyclic DAG).
 
@@ -171,6 +181,8 @@ command to obey.
     - Vertical slices — first tasks are a tracer bullet, nothing is a bare horizontal layer.
     - Traceability both ways — no orphans, no uncovered PRD requirements.
     - Risk tiers are individually judged, not a blanket default.
+    - Refactor-shaped PRD: characterization tasks precede the changes they protect, high-tier
+      tasks name a rollback, and a final cleanup task exists.
 10. **Revision (the feedback loop re-invokes you).** Your prompt context carries the prior spec
     (`prior_spec_md` + `prior_tasks`) and a `review_feedback` list of blockers (gate blockers or
     sub-threshold reviewer findings). Apply the MINIMAL edits that clear every blocker; preserve

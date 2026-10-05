@@ -6,6 +6,12 @@ Inspect the persisted reason and attempt before acting:
 factory state --run <id> --ledger
 ```
 
+Some failures do not need you. A transient git, `gh` or worktree provisioning
+failure leaves the run `waiting` and is retried every 60 seconds; only the fifth
+consecutive failure parks it as `environment`. An invalid agent result is
+re-issued to that role with the reason, at most twice; a third rejection parks the
+run as `producer`. See [result validation](../reference/state-model.md#result-validation).
+
 For an explicit stop or a resolved environment/CI problem:
 
 ```sh

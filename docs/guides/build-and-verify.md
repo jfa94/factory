@@ -49,7 +49,7 @@ Vitest takes a path filter, so scope to the module you are changing:
 
 ```bash
 npx vitest src/verifier/deterministic
-npx vitest src/cli/subcommands/run.test.ts
+npx vitest src/feature/engine.test.ts
 ```
 
 Tests must be independent (no shared mutable state). For functions with broad

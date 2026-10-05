@@ -1,8 +1,7 @@
 # Glossary
 
-> Historical v1 reference. Its execution and recovery instructions do not apply
-> to v2. Start with [the current architecture](architecture/overview.md) and the
-> current CLI/runner protocol linked there.
+> Entries with status `orphaned` name v1 concepts whose code was removed; it is
+> preserved at the git tag `archive/v1-engine`. They are kept for domain-expert review.
 
 ```yaml
 context: root
@@ -79,7 +78,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - Counter-example: four of five Tasks merge but the fifth repeatedly fails — the Run is _failed/halted_, not complete.
 - **relationships**: owns many Tasks; serves one PRD; governed by the Circuit Breaker.
 - **synonyms**: —
-- **code anchor**: `src/core/state/manager.ts`
+- **code anchor**: `src/feature/schema.ts:FeatureRunSchema`
 
 ### Task
 
@@ -96,7 +95,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
     - Counter-example: two Tasks that each claim to merge the same pull request — a Task owns one and only one.
 - **relationships**: belongs to a Run; depends on other Tasks; carries a Risk Tier; subject to Automated Gates, Holdout Validation, and Review.
 - **synonyms**: —
-- **code anchor**: `src/core/state/schema.ts:TaskState`
+- **code anchor**: `src/feature/schema.ts:FeatureTaskSchema`
 
 ## Run continuation & recovery
 
@@ -134,7 +133,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Adoption
 
 - **type**: Operation (on a Run)
-- **status**: draft
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: Recording into a Run's state the outcomes GitHub can already prove — autonomously and forward-only. When a Task's pull request has merged but the Run's record missed it, adoption records that Task delivered; it likewise rebinds or clears a stale pull-request pointer, re-pushes a branch that still exists locally, and reopens a terminal Run whose final merge actually landed. Adoption only ever moves a Run's record forward to match reality; it never resets work, force-pushes, closes a pull request, or discards anything — those remain Rescue's consent-gated territory. Because it runs before any reset, work that has already merged is recorded delivered before recovery could clobber it.
 - **invariants**:
     - Forward-only: adoption records only outcomes GitHub already shows; anything destructive or ambiguous (a pull request closed without merging, a branch gone everywhere) is surfaced for a person, never adopted.
@@ -198,7 +197,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Claim-Only Projection
 
 - **type**: Value Object
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The strict subset of a review finding that the independent finding-verifier is permitted to see. It carries the reviewer's one-sentence checkable claim and the citation locating it in the code, and nothing else. Its purpose is to let the verifier re-derive the finding from the code alone, so that a confirmation is evidence rather than agreement.
 - **invariants**:
     - **Admissibility rule.** A field is admissible into the verifier's prompt if and only if the verifier can check it against the code. The claim is the proposition under test; the cited file, line, and quote say where to look. The line is a coordinate — it directs attention and asserts nothing.
@@ -216,7 +215,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Review Miss
 
 - **type**: Domain Event (a defect that outlived the merge gate)
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A defect found in shipped factory-produced code after it merged — the one thing the quality panel exists to prevent, observed happening. A Miss is the outer quality loop's only human-authored input: the engine can prove a Task passed Review, but only a person can report that a passed Task shipped a bug. Each Miss names the Task it traces to and, optionally, the reviewer lens that _should_ have caught it, so misses attribute back to the panel and answer "which lens earns its tokens" (Decision 61).
 - **invariants**:
     - A Miss is recorded, never derived — a shipped bug is history no state or git re-derivation can recover, so it is one of the three sanctioned stored-event exceptions to derive-don't-store (beside the self-heal and human-touch ledgers).
@@ -262,7 +261,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Holdout Validation
 
 - **type**: Policy
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A guard against work that is tailored to the visible target rather than genuinely correct. A subset of the acceptance criteria is withheld from the Implementer and verified independently after the fact; passing only the criteria it could see is not enough.
 - **invariants**:
     - The withheld criteria are never revealed to the actor producing the work.
@@ -279,7 +278,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### E2E Phase
 
 - **type**: Process
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A Run-level stage, opted into via `--e2e`, that authors and runs browser journeys against the integrated staging app once every Task is terminal, so a feature can be checked end-to-end rather than only unit-by-unit. It runs immediately before documentation.
 - **invariants**:
     - Only runs on a Run that opted in at creation; the choice cannot change on Resume.
@@ -294,7 +293,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### E2E Assessment
 
 - **type**: Process
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A once-per-Run stage that fires before any Task on an `--e2e` Run: it forecasts which committed browser journeys this Run's Tasks will touch, prepares whatever the repository still needs to run journeys at all (boot command, base URL, seed/login machinery), and refuses to let the Run start if the app cannot even be booted. Its forecast is what later tells the E2E Adjudication which failures were expected.
 - **invariants**:
     - Runs at most once per Run, and always before the first Task.
@@ -310,7 +309,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### E2E Adjudication
 
 - **type**: Process
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The ruling that happens when a Critical (Persisted) E2E Spec from an earlier Run fails and no manifest links it to this Run's Tasks: was the old behavior broken (a regression — the Run fails, in plain language), or did this Run deliberately change the behavior the spec asserts (an intentional change — the spec is updated to the new behavior, re-proven, and the journeys run again)? It exists so a stale committed journey cannot wedge a Run the user has no way to repair.
 - **invariants**:
     - An intentional-change ruling must cite the Task or criterion language that authorizes the new behavior; an uncited ruling is rejected.
@@ -341,7 +340,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Critical (Persisted) E2E Spec
 
 - **type**: Value Object
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A browser journey the E2E Author judged load-bearing enough to keep permanently — committed into the target repository rather than discarded at the end of the Run. Where a spec is stored is what marks it Critical; nothing else does.
 - **invariants**:
     - Lives inside the repository's committed E2E test directory, never anywhere ephemeral.
@@ -357,7 +356,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Throwaway E2E Spec
 
 - **type**: Value Object
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A browser journey the E2E Author writes for a single Task's user-facing behavior, kept only for the duration of the current Run and discarded once it ends.
 - **invariants**:
     - Never committed to the target repository.
@@ -372,7 +371,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Fail-first Proof
 
 - **type**: Policy
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A check that a Critical (Persisted) E2E Spec actually proves something, run before the spec is ever committed — the end-to-end analogue of the TDD Gate's red-then-green discipline, standing in for the human review an autonomously-written assertion never gets. The spec must fail against the codebase as it stood before the feature existed and pass against it with the feature integrated.
 - **invariants**:
     - A spec that already passes before the feature exists is rejected as proving nothing.
@@ -387,7 +386,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### E2E Reopen Loop
 
 - **type**: Process
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The mechanism by which a failing E2E journey sends its Task back to the start of the implementation work, carrying feedback about what went wrong, rather than leaving the Run to fail outright. The failing spec is traced back to the Task(s) it covers, and that Task is reopened.
 - **invariants**:
     - A failing journey can only be traced back to a Task it was explicitly linked to when authored; an untraceable failure cannot be silently ignored.
@@ -402,7 +401,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### E2E Runner
 
 - **type**: Policy
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The mechanism that actually executes browser journeys and reports which passed, failed, or were flaky (failed, then passed on a retry). A flaky result is reported but never treated as a real failure.
 - **invariants**:
     - Never falls back to a network-fetched tool if the expected local one is missing — a missing tool is reported as a failure, not silently worked around.
@@ -434,7 +433,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Circuit Breaker
 
 - **type**: Policy
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: A safety rule that halts a Run when persisting looks futile or unsafe — for example after too many consecutive failures — so that a malfunctioning Run stops itself rather than burning effort or causing harm while unattended.
 - **invariants**:
     - Once tripped, the Run halts and cannot be considered complete.
@@ -453,7 +452,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Orchestrator
 
 - **type**: Role
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The single actor that decides how a Run proceeds from start to finish — choosing which Task to advance next, walking each Task through its quality obligations, and deciding what must happen when something lands off the expected path (for example, when an automatic merge cannot complete and someone must understand why and resolve it). It decides and emits the work to be done; a thin **runner** merely carries those decisions out, spawning the agents each one names. The Orchestrator coordinates; it does not write tests, write implementation, or judge quality itself.
 - **invariants**:
     - Exactly one Orchestrator decides a given Run.
@@ -498,7 +497,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Needs-Context Failure
 
 - **type**: Value Object
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The terminal classification of a Task whose producer asked a question the repository and Spec could not answer — twice. The first ask is re-posed to the same producer with the question injected; only a second consecutive ask fails the Task, preserving the question so a human can answer it and resume the work through Rescue.
 - **invariants**:
     - The unanswered question is always persisted with the failure; it is never dropped.
@@ -513,7 +512,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 ### Blocked-Dependency Failure
 
 - **type**: Value Object
-- **status**: accepted
+- **status**: orphaned (code removed at 9595c7c6)
 - **definition**: The classification of a Task that never ran because a Task it depends on failed — a cascade victim, not a defect of its own. Distinct from an environmental blocker: once the failed dependency is repaired, the victim is retryable exactly as it was.
 - **invariants**:
     - Applies only to Tasks that never started; a Task that ran and failed carries its own classification.

@@ -5,30 +5,27 @@ exit-code enum (`src/shared/exit-codes.ts`). The thin entry points
 (`src/bin/factory.ts`, `src/bin/factory-hook.ts`) are the only places
 `process.exit` is called.
 
-| Code | Name       | Meaning                                                                                                                                                                                                                                                                                                            |
-| ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `0`  | `OK`       | Success.                                                                                                                                                                                                                                                                                                           |
-| `1`  | `ERROR`    | Generic failure: an uncaught error, a classified fail, a gate/verify failure.                                                                                                                                                                                                                                      |
-| `2`  | `USAGE`    | Usage error: unknown subcommand/hook, bad flags, a missing required argument.                                                                                                                                                                                                                                      |
-| `3`  | `CONFLICT` | An active run already exists and no resolution was selected — `factory run` refuses to silently reuse or clobber it (Decision 35: resume / supersede / cancel). Also the **weekly-quota hard stop** (`kind:"pause"`): a 7d-parked run blocks every new-run attempt for its spec unless `--ignore-quota` is passed. |
+| Code | Name       | Meaning                                                                                                                         |
+| ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | `OK`       | Success, including every `next-action` result (execute, wait, park, terminal).                                                  |
+| `1`  | `ERROR`    | An uncaught error, or a command-specific failure listed below.                                                                  |
+| `2`  | `USAGE`    | Unknown subcommand, unknown or bad flag, missing required argument, retired command, or a run driven from the wrong repository. |
+| `3`  | `CONFLICT` | Defined in the enum; no v2 command returns it.                                                                                  |
 
-## Design rules
+## Command-specific `ERROR` results
 
-- **No human-escalation code.** Human-review gates are retired (Decision 5/19).
-  There is deliberately no exit-42 / `NEEDS_DISCUSSION` code. A reviewer impasse is
-  a classified loud fail, which surfaces as `ERROR` plus a structured report —
-  never a special "ask a human" exit status.
-- **Fail loud, never silently succeed.** An unknown or unhandled result throws at
-  the call site rather than mapping to a silent `OK`. The phase machine maps its
-  `PhaseResult` union onto these codes; an unmapped variant throws.
-- **Adding a code is a design change.** The mapping in the phase machine and the
-  runners must be updated in lockstep.
+| Command                      | Returns `ERROR` when                                                       |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `factory spec <action>`      | The envelope is `unspecifiable` or `spec-defect` (regeneration exhausted). |
+| `factory autonomy status`    | The session is not autonomous.                                             |
+| `factory autonomy preflight` | The session is not autonomous (the relaunch command is printed).           |
 
 ## How a subcommand maps to a code
 
-Each subcommand wraps its work: a `UsageError` (bad flags, missing required arg)
-returns `USAGE`; any other thrown error propagates and the entry maps it to
-`ERROR`; a clean run returns `OK`. A classified fail is a normal, expected outcome
-that the runner reads from the JSON envelope — the CLI still exits `OK` for
-the _act_ of recording the fail (the failure is in the run outcome, not the CLI
-invocation), while an unexpected, unhandled condition exits `ERROR`.
+Each subcommand wraps its work: a `UsageError` returns `USAGE`; any other thrown
+error propagates and the entry maps it to `ERROR`; a clean run returns `OK`.
+A parked or failed run is a normal outcome that the runner reads from the JSON
+action; the CLI still exits `OK` for the act of reporting it.
+
+There is no human-escalation exit code. A run that needs a person parks with a
+reason and is resumed with `factory resume`.

@@ -2,6 +2,14 @@
 
 This document explains key architectural choices and their rationale.
 
+> **v2 annotation (2026-10-05, Scribe).** The v1 execution engine
+> (`src/orchestrator`, `src/core`, `src/producer`, `src/rescue`, `src/scoring`,
+> `src/debug` and the judgment, holdout and e2e verifiers) was deleted on branch
+> `v2/reliability-remediation` and is preserved at the git tag `archive/v1-engine`.
+> Decisions below that cite those modules, staging branches, rescue commands or the
+> `develop` default record v1 history. The current design is
+> [the architecture overview](../architecture/overview.md).
+
 > **Cutover annotation (2026-06-10, Scribe).** This ledger (D1–D27) is preserved
 > verbatim as the historical design record. The project has since completed a
 > big-bang rewrite from the original bash implementation to a Node + TypeScript
