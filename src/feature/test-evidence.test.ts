@@ -60,6 +60,19 @@ describe('test execution evidence', () => {
             ],
         })
     })
+    it('parses the Vitest 4 form, whose importer is relative to the Vitest root', () => {
+        // Captured from asset-generator's Vitest 4.1.10 / Vite 8.1.4 (canary #5).
+        expect(testEvidence(captured('vitest4-load-failures'))).toEqual({
+            executed: 0,
+            assertionFailure: false,
+            loadFailures: [
+                {specifier: './lib/missing.js', importer: 'src/a.test.ts'},
+                {specifier: './lib/nothere', importer: 'src/b.test.ts'},
+                {specifier: './inner-missing.js', importer: 'src/lib/exists.ts'},
+                {specifier: 'not-a-package', importer: 'src/e.test.ts'},
+            ],
+        })
+    })
     it('reports no load failures when another failed suite is not a recognized load failure', () => {
         expect(testEvidence(captured('vitest-load-and-syntax'))).toEqual({executed: 0, assertionFailure: false})
     })
@@ -80,6 +93,10 @@ describe('declared module resolution (decision 2)', () => {
     ])('resolves %s to the declared %s', (specifier, path) => {
         expect(declaredModule(failure(specifier), root, files)).toBe(path)
     })
+    it('resolves a root-relative importer (Vitest 4) like an absolute one', () => {
+        expect(declaredModule(failure('./lib/missing.js', 'src/a.test.ts'), root, files)).toBe('src/lib/missing.ts')
+        expect(declaredModule(failure('./x.js', '../outside/a.test.ts'), root, ['../outside/x.js'])).toBeUndefined()
+    })
     it('resolves against the importing file, including a parent directory', () => {
         expect(declaredModule(failure('../src/feature', `${root}/tests/c.test.ts`), root, files)).toBe(
             'src/feature/index.ts'
@@ -91,7 +108,6 @@ describe('declared module resolution (decision 2)', () => {
         ['declared test file', failure('./a.test.ts')],
         ['escapes the root', failure('../../outside.js')],
         ['the root itself', failure('../', `${root}/src/a.test.ts`)],
-        ['relative importer', failure('./lib/missing.js', 'src/a.test.ts')],
         ['unlisted extension', failure('./lib/missing.json')],
     ])('refuses a %s', (_name, row) => {
         expect(declaredModule(row, root, files)).toBeUndefined()

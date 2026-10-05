@@ -12622,10 +12622,13 @@ function defaultGateTools(gateEnv = {}) {
 // src/feature/test-evidence.ts
 import { stripVTControlCharacters } from "node:util";
 import { dirname as dirname7, isAbsolute, relative as relative2, resolve as resolve2 } from "node:path";
-var LOAD_FAILURE = /^Error: Cannot find (?:module|package) '([^']+)' imported from '([^']+)'$/gm;
+var LOAD_FAILURE = /^Error: (?:Cannot find (?:module|package) '([^']+)' imported from '([^']+)'|Failed to resolve import "([^"]+)" from "([^"]+)"\. Does the file exist\?)$/gm;
 function loadFailures(output) {
   const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1];
-  const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({ specifier: m[1] ?? "", importer: m[2] ?? "" }));
+  const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({
+    specifier: m[1] ?? m[3] ?? "",
+    importer: m[2] ?? m[4] ?? ""
+  }));
   return rows.length > 0 && rows.length === Number(failed) ? rows : void 0;
 }
 function testEvidence(proc) {
@@ -12667,10 +12670,11 @@ ${proc.stderr}`);
 }
 var EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 function declaredModule(failure, root, files) {
-  if (!/^\.\.?\//.test(failure.specifier) || !isAbsolute(failure.importer)) {
+  if (!/^\.\.?\//.test(failure.specifier) || failure.importer === "") {
     return void 0;
   }
-  const target = relative2(root, resolve2(dirname7(failure.importer), failure.specifier));
+  const importer = resolve2(root, failure.importer);
+  const target = relative2(root, resolve2(dirname7(importer), failure.specifier));
   if (target === "" || target.startsWith("..") || isAbsolute(target)) {
     return void 0;
   }

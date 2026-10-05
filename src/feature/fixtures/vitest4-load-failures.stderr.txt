@@ -1,0 +1,77 @@
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/a.test.ts [ src/a.test.ts ]
+Error: Failed to resolve import "./lib/missing.js" from "src/a.test.ts". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /private/tmp/vlf4/src/a.test.ts:2:20
+  1  |  import { it, expect } from "vitest";
+  2  |  import { thing } from "./lib/missing.js";
+     |                         ^
+  3  |  it("a", () => {
+  4  |  	expect(thing()).toBe(1);
+ ❯ TransformPluginContext._formatLog node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30366:39
+ ❯ TransformPluginContext.error node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30363:14
+ ❯ normalizeUrl node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27393:18
+ ❯ node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27456:30
+ ❯ TransformPluginContext.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27424:4
+ ❯ EnvironmentPluginContainer.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30151:14
+ ❯ loadAndTransform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:20098:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/b.test.ts [ src/b.test.ts ]
+Error: Failed to resolve import "./lib/nothere" from "src/b.test.ts". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /private/tmp/vlf4/src/b.test.ts:2:20
+  1  |  import { it, expect } from "vitest";
+  2  |  import { other } from "./lib/nothere";
+     |                         ^
+  3  |  it("b", () => {
+  4  |  	expect(other).toBe(1);
+ ❯ TransformPluginContext._formatLog node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30366:39
+ ❯ TransformPluginContext.error node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30363:14
+ ❯ normalizeUrl node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27393:18
+ ❯ node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27456:30
+ ❯ TransformPluginContext.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27424:4
+ ❯ EnvironmentPluginContainer.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30151:14
+ ❯ loadAndTransform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:20098:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/d.test.ts [ src/d.test.ts ]
+Error: Failed to resolve import "./inner-missing.js" from "src/lib/exists.ts". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /private/tmp/vlf4/src/lib/exists.ts:1:21
+  1  |  export { y as x } from "./inner-missing.js";
+     |                          ^
+  2  |  
+ ❯ TransformPluginContext._formatLog node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30366:39
+ ❯ TransformPluginContext.error node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30363:14
+ ❯ normalizeUrl node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27393:18
+ ❯ node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27456:30
+ ❯ TransformPluginContext.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27424:4
+ ❯ EnvironmentPluginContainer.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30151:14
+ ❯ loadAndTransform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:20098:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/e.test.ts [ src/e.test.ts ]
+Error: Failed to resolve import "not-a-package" from "src/e.test.ts". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /private/tmp/vlf4/src/e.test.ts:2:16
+  1  |  import { it, expect } from "vitest";
+  2  |  import { z } from "not-a-package";
+     |                     ^
+  3  |  it("e", () => {
+  4  |  	expect(z).toBe(1);
+ ❯ TransformPluginContext._formatLog node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30366:39
+ ❯ TransformPluginContext.error node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30363:14
+ ❯ normalizeUrl node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27393:18
+ ❯ node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27456:30
+ ❯ TransformPluginContext.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:27424:4
+ ❯ EnvironmentPluginContainer.transform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:30151:14
+ ❯ loadAndTransform node_modules/.pnpm/vite@8.1.4_@types+node@26.1.1_esbuild@0.28.1_jiti@2.7.0_tsx@4.23.1/node_modules/vite/dist/node/chunks/node.js:20098:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+

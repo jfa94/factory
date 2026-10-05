@@ -1,0 +1,13 @@
+
+ RUN  v4.1.10 /private/tmp/vlf4
+
+ ❯ src/a.test.ts (0 test)
+ ❯ src/b.test.ts (0 test)
+ ❯ src/e.test.ts (0 test)
+ ❯ src/d.test.ts (0 test)
+
+ Test Files  4 failed (4)
+      Tests  no tests
+   Start at  23:48:55
+   Duration  356ms (transform 75ms, setup 0ms, import 0ms, tests 0ms, environment 630ms)
+

@@ -16,13 +16,17 @@ export interface TestEvidence {
     loadFailures?: LoadFailure[]
 }
 
-// The only form observed from Vitest 3 for a suite that cannot load (direct or transitive
-// import); bare specifiers say "package". Fixtures: test-evidence.test.ts.
-const LOAD_FAILURE = /^Error: Cannot find (?:module|package) '([^']+)' imported from '([^']+)'$/gm
+// The forms observed for a suite that cannot load (direct or transitive import): Vitest 3 names
+// an absolute importer; Vitest 4 (Vite 8) one relative to the Vitest root. Fixtures: test-evidence.test.ts.
+const LOAD_FAILURE =
+    /^Error: (?:Cannot find (?:module|package) '([^']+)' imported from '([^']+)'|Failed to resolve import "([^"]+)" from "([^"]+)"\. Does the file exist\?)$/gm
 
 function loadFailures(output: string): LoadFailure[] | undefined {
     const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1]
-    const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({specifier: m[1] ?? '', importer: m[2] ?? ''}))
+    const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({
+        specifier: m[1] ?? m[3] ?? '',
+        importer: m[2] ?? m[4] ?? '',
+    }))
     return rows.length > 0 && rows.length === Number(failed) ? rows : undefined
 }
 
@@ -85,10 +89,12 @@ const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
  * file inside `root` (any listed extension, or `/index.<ext>`), or undefined when it names none.
  */
 export function declaredModule(failure: LoadFailure, root: string, files: readonly string[]): string | undefined {
-    if (!/^\.\.?\//.test(failure.specifier) || !isAbsolute(failure.importer)) {
+    if (!/^\.\.?\//.test(failure.specifier) || failure.importer === '') {
         return undefined
     }
-    const target = relative(root, resolve(dirname(failure.importer), failure.specifier))
+    // ponytail: a relative importer is taken as relative to `root`; wrong if Vitest's root is a subdirectory.
+    const importer = resolve(root, failure.importer)
+    const target = relative(root, resolve(dirname(importer), failure.specifier))
     if (target === '' || target.startsWith('..') || isAbsolute(target)) {
         return undefined
     }
