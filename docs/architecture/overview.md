@@ -37,9 +37,11 @@ Production specs live under `$CLAUDE_PLUGIN_DATA/v2/specs/`. Each `feature.json`
 freezes the PRD, base commit, repository contracts and task graph. The base branch
 is `git.baseBranch` when set, and it must exist on origin. When unset it is `develop`
 if origin has it, else origin's default branch. The resolved name is recorded on
-the run and never written back to config. Spec generator and reviewer replies may
-arrive wrapped in a fence or prose; the parser reads the JSON object inside and the
-file stays verbatim. Run creation
+the run and never written back to config. The spec generator and reviewer read an
+engine-written brief and write their own JSON result file; the runner never copies
+it, and a missing result spends one bounded regeneration. A result may arrive
+wrapped in a fence or prose; the parser reads the JSON object inside and the file
+stays verbatim. Run creation
 revalidates live PRD/base inputs. Every requirement has an ID and coverage mapping.
 Tasks have exact safe paths, explicit shared-file dependencies and contiguous
 slice membership. There is no file-count ceiling.

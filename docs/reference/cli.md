@@ -55,6 +55,29 @@ Scratch files live in the OS temp dir under
 `factory-spec-build/<repo>/<issue>/`. Stored specs live under
 `<dataDir>/v2/specs/<repo-key>/<spec-id>/`.
 
+### Spec envelopes
+
+`resolve`, `gate` and `store` each print one envelope. The `generate`, `revise`
+and `review` kinds carry a `spawn` object:
+
+| Field        | Meaning                                                              |
+| ------------ | -------------------------------------------------------------------- |
+| `role`       | `spec-generator` (generate, revise) or `spec-reviewer` (review).     |
+| `agent_type` | Agent to dispatch.                                                   |
+| `model`      | Pinned model.                                                        |
+| `effort`     | Pinned effort.                                                       |
+| `brief_path` | `<role>.brief.md` in the scratch dir: context JSON and result rules. |
+| `prompt`     | Two-line prompt naming the brief; the runner pastes it verbatim.     |
+
+`spawn` carries no context; the brief holds it. Before emitting the envelope
+the engine writes the brief and deletes any stale result file. The agent writes
+its own JSON result: `generated_path` (`generated.json`) for generate and revise,
+`verdict_path` (`verdict.json`) for review. The runner never copies results.
+
+A missing `generated.json` at `gate` yields a `revise` envelope; a missing
+`verdict.json` at `store` re-emits `review`. Each consumes one iteration of
+`spec.maxRegenIterations`, the same counter invalid output and blocked reviews use.
+
 PRD extraction preserves wrapped list items and `R1.`-style requirements through
 the next item, paragraph or heading. Fenced examples are excluded from extraction.
 The complete PRD remains visible to generation, review and acceptance.

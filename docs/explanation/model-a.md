@@ -57,6 +57,8 @@ decision lives behind the seam in code.
   verdicts come from executed gates and independent reviewers.
 - **No prompt assembly in the runner.** The engine writes a per-role brief file and
   hands the runner a two-line prompt naming it. The runner pastes it verbatim.
+  Spec envelopes work the same way, and spec agents write their own result file,
+  so the runner never relays a large reply.
 - **Self-correcting results.** An invalid result is moved aside and the role is
   re-issued with the reason, up to twice, instead of stalling or being "fixed" by
   the runner.
