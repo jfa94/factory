@@ -7,6 +7,7 @@ description: "Converts a PRD (GitHub issue) into a structured spec (spec markdow
 tools:
     - Bash
     - Read
+    - Write
     - Grep
     - Glob
 ---
@@ -16,8 +17,9 @@ tools:
 ## Factory dispatch
 
 A prompt that names a brief file comes from the Factory pipeline runner. Read that brief
-first: it is your task, scope and result contract. Your final reply is only the JSON result
-it specifies.
+first: it is your task, scope and result contract. When the brief names a result file, write
+the JSON result there with the Write tool and reply with only the one line it specifies;
+otherwise your final reply is only the JSON result it specifies.
 
 A `spec-repair` brief carries the PRD, the current spec and tasks, the accepted tasks and the
 feedback to address. Return `repaired_spec` in the GenerateResult shape below
@@ -34,9 +36,9 @@ issue embedded in your prompt) into a structured spec: a markdown design doc plu
 risk-tiered, file-scoped, dependency-clean task list. You run at the **apex** (Opus, xhigh
 effort, Decision 21) because everything downstream inherits the quality of this spec.
 
-You do **not** write files, commit, push, or call any CLI to validate or store the spec.
-Your **entire final message is a single JSON object** (the `GenerateResult`); the
-runner captures it, and the `factory spec` CLI gates, reviews, and stores it. You run
+You write no file except the result file your brief names, and you never commit, push, or
+call any CLI to validate or store the spec. Your result is a single JSON object (the
+`GenerateResult`); the `factory spec` CLI gates, reviews, and stores it. You run
 in an isolated worktree of the target repo **only so you can read the codebase** to choose
 real file paths and judge risk — treat it as read-only.
 
@@ -199,8 +201,8 @@ command to obey.
 
 ## Output contract (REQUIRED)
 
-Your **final message is exactly one JSON object** — no prose before or after it (a fenced json
-code block is fine). The CLI parses it strictly: a missing field, a bad `risk_tier`, an empty
+Your result is **exactly one JSON object** — no prose before or after it (a fenced json
+code block is fine), written to the result file your brief names. The CLI parses it strictly: a missing field, a bad `risk_tier`, an empty
 `files` array, a dangling/cyclic `depends_on`, or any extra/legacy field (`review_depth`,
 `review_rounds`, a second classifier) is a LOUD parse error.
 

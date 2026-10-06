@@ -5,7 +5,7 @@
  * auto-derive, exit-code mapping) lives in src/cli/subcommands/spec.test.ts.
  */
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {rm, mkdir, mkdtemp, writeFile} from 'node:fs/promises'
+import {rm, mkdir, mkdtemp, writeFile, readFile, access} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -179,6 +179,16 @@ function depsWithBody(body: string): SpecBuildDeps {
     }
 }
 
+/** The context JSON an agent reads from its brief (the envelope carries only the path). */
+async function briefContext(spawn: {brief_path: string}): Promise<Record<string, unknown>> {
+    const brief = await readFile(spawn.brief_path, 'utf8')
+    const json = /```json\n([\s\S]*?)\n```/.exec(brief)?.[1]
+    if (json === undefined) {
+        throw new Error(`no context block in ${spawn.brief_path}`)
+    }
+    return JSON.parse(json) as Record<string, unknown>
+}
+
 /** Write a scratch file into the (repo, issue) build dir. */
 async function writeScratch(name: string, value: unknown): Promise<void> {
     const dir = specBuildDir(dataDir, REPO, ISSUE)
@@ -220,8 +230,16 @@ describe('resolveSpec', () => {
         expect(env.max_iterations).toBe(SPEC_DEFAULTS.maxRegenIterations)
         expect(env.generated_path.endsWith('generated.json')).toBe(true)
 
+        // The bulky context rides in a brief file; the runner pastes a two-line prompt.
+        expect('context' in env.spawn).toBe(false)
+        expect(env.spawn.prompt.split('\n')).toEqual([
+            `Factory pipeline-runner dispatch for ${REPO}, as role spec-generator.`,
+            `Read your brief at ${env.spawn.brief_path} and follow it; it names the file your JSON result goes to.`,
+        ])
+        expect((await briefContext(env.spawn)).body).toBe(PRD_BODY)
+        expect(await readFile(env.spawn.brief_path, 'utf8')).toContain(env.generated_path)
+
         // prd.json was persisted for the gate step to read.
-        const {readFile} = await import('node:fs/promises')
         const prd = JSON.parse(await readFile(env.prd_path, 'utf8')) as Prd
         expect(prd.issue_number).toBe(ISSUE)
         expect(prd.body).toBe(PRD_BODY)
@@ -244,7 +262,6 @@ describe('resolveSpec specifiability refusal (S9 — Δ pre-generation, zero age
         expect('spawn' in env).toBe(false)
 
         // prd.json was still written (inspection aid for the PRD author).
-        const {readFile} = await import('node:fs/promises')
         const prd = JSON.parse(await readFile(env.prd_path, 'utf8')) as Prd
         expect(prd.body).toBe(TRIVIAL_BODY)
     })
@@ -329,9 +346,10 @@ describe('gateSpec', () => {
         if (revision.kind !== 'revise') {
             throw new Error('missing revision')
         }
-        expect(JSON.stringify(revision.spawn.context)).toContain('Use the existing auth service')
-        expect(JSON.stringify(revision.spawn.context)).toContain('keep this prior output')
-        expect(JSON.stringify(revision.spawn.context)).toContain('R1')
+        const context = JSON.stringify(await briefContext(revision.spawn))
+        expect(context).toContain('Use the existing auth service')
+        expect(context).toContain('keep this prior output')
+        expect(context).toContain('R1')
     })
 
     it('rejects uncovered v2 requirements during generation instead of at run creation', async () => {
@@ -426,9 +444,10 @@ describe('gateSpec', () => {
         // embedded, so the agent patches it instead of re-authoring from the PRD.
         expect(env.spawn.role).toBe('spec-generator')
         expect(env.spawn.model).toBe('opus')
-        expect(env.spawn.context.prior_spec_md).toBe(FAIL_GENERATED.specMd)
-        expect(env.spawn.context.prior_tasks).toEqual(FAIL_GENERATED.tasks)
-        expect(env.spawn.context.review_feedback).toEqual(env.blockers)
+        const context = await briefContext(env.spawn)
+        expect(context.prior_spec_md).toBe(FAIL_GENERATED.specMd)
+        expect(context.prior_tasks).toEqual(FAIL_GENERATED.tasks)
+        expect(context.review_feedback).toEqual(env.blockers)
     })
 
     it('emits the apex-pinned review spawn when gates pass', async () => {
@@ -443,6 +462,35 @@ describe('gateSpec', () => {
         expect(env.spawn.role).toBe('spec-reviewer')
         expect(env.spawn.model).toBe('opus')
         expect(env.verdict_path.endsWith('verdict.json')).toBe(true)
+        expect((await briefContext(env.spawn)).spec_md).toBe(PASS_GENERATED.specMd)
+        expect(await readFile(env.spawn.brief_path, 'utf8')).toContain(env.verdict_path)
+    })
+
+    it('a generator that wrote no result file gets a bounded revision, not a crash', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        const env = await gateSpec(deps(), REPO, ISSUE)
+        expect(env.kind).toBe('revise')
+        if (env.kind !== 'revise') {
+            throw new Error('unreachable')
+        }
+        expect(env.blockers.join(' ')).toContain(`No generated output was written to ${env.generated_path}`)
+    })
+
+    it('each dispatch clears the result file it asks the agent to write (no stale result is re-read)', async () => {
+        await writeScratch('generated.json', PASS_GENERATED)
+        const generate = await resolveSpec(deps(), REPO, ISSUE)
+        if (generate.kind !== 'generate') {
+            throw new Error('unreachable')
+        }
+        await expect(access(generate.generated_path)).rejects.toThrow()
+
+        await writeScratch('generated.json', PASS_GENERATED)
+        await writeScratch('verdict.json', FAIL_VERDICT)
+        const review = await gateSpec(deps(), REPO, ISSUE)
+        if (review.kind !== 'review') {
+            throw new Error('unreachable')
+        }
+        await expect(access(review.verdict_path)).rejects.toThrow()
     })
 
     it('returns invalid generated output through bounded revision with its validation errors', async () => {
@@ -458,7 +506,7 @@ describe('gateSpec', () => {
             throw new Error('expected revision')
         }
         expect(result.blockers.join(' ')).toContain('risk_tier')
-        expect(result.spawn.context.prior_spec_md).toContain('routine')
+        expect((await briefContext(result.spawn)).prior_spec_md).toContain('routine')
     })
 })
 
@@ -479,9 +527,10 @@ describe('storeSpec', () => {
 
         // Same as the gate path: the prior spec + reviewer blockers ride along for a patch.
         expect(env.spawn.role).toBe('spec-generator')
-        expect(env.spawn.context.prior_spec_md).toBe(PASS_GENERATED.specMd)
-        expect(env.spawn.context.prior_tasks).toEqual(PASS_GENERATED.tasks)
-        expect(env.spawn.context.review_feedback).toEqual(env.blockers)
+        const context = await briefContext(env.spawn)
+        expect(context.prior_spec_md).toBe(PASS_GENERATED.specMd)
+        expect(context.prior_tasks).toEqual(PASS_GENERATED.tasks)
+        expect(context.review_feedback).toEqual(env.blockers)
     })
 
     it('throws LOUD when the revise path needs prd.json but resolve never wrote it', async () => {
@@ -509,7 +558,7 @@ describe('storeSpec', () => {
         expect(env.reason).toMatch(/floor/)
         // The fallback reason (not an empty array) is what rides into the patch spawn's feedback.
         expect(env.blockers).toEqual([env.reason])
-        expect(env.spawn.context.review_feedback).toEqual(env.blockers)
+        expect((await briefContext(env.spawn)).review_feedback).toEqual(env.blockers)
     })
 
     it('persists the spec on PASS (incl. the durable PRD snapshot) and returns a reusable pointer', async () => {
@@ -536,6 +585,20 @@ describe('storeSpec', () => {
 
         const reResolve = await resolveSpec(deps(), REPO, ISSUE)
         expect(reResolve.kind).toBe('reuse')
+    })
+
+    it('a reviewer that wrote no verdict is re-dispatched within the regen bound', async () => {
+        await resolveSpec(deps(), REPO, ISSUE)
+        await writeScratch('generated.json', PASS_GENERATED)
+        const env = await storeSpec(deps(), REPO, ISSUE)
+        expect(env.kind).toBe('review')
+        if (env.kind !== 'review') {
+            throw new Error('unreachable')
+        }
+        expect(await readFile(env.spawn.brief_path, 'utf8')).toContain(env.verdict_path)
+        expect(JSON.parse(await readFile(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), 'utf8'))).toEqual({
+            iterations: 1,
+        })
     })
 
     it('fails LOUD on a verdict missing a rubric dimension', async () => {
@@ -625,7 +688,6 @@ describe('engine-owned regen bound (attempts.json)', () => {
     }
 
     async function readAttemptsFile(): Promise<unknown> {
-        const {readFile} = await import('node:fs/promises')
         return JSON.parse(await readFile(join(specBuildDir(dataDir, REPO, ISSUE), 'attempts.json'), 'utf8'))
     }
 
@@ -669,6 +731,7 @@ describe('engine-owned regen bound (attempts.json)', () => {
         await writeScratch('verdict.json', FAIL_VERDICT)
         expect((await storeSpec(d, REPO, ISSUE)).kind).toBe('revise') // review: 2/2
 
+        await writeScratch('generated.json', PASS_GENERATED) // the revised spec
         const env = await storeSpec(d, REPO, ISSUE) // regen #3 > 2
         expect(env.kind).toBe('spec-defect')
         if (env.kind !== 'spec-defect') {

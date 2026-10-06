@@ -10204,8 +10204,8 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/build.ts
-import { join as join13 } from "node:path";
-import { readFile as readFile10 } from "node:fs/promises";
+import { dirname as dirname7, join as join13 } from "node:path";
+import { readFile as readFile10, rm as rm3 } from "node:fs/promises";
 var PRD_FILE2 = "prd.json";
 var GENERATED_FILE = "generated.json";
 var VERDICT_FILE = "verdict.json";
@@ -10224,6 +10224,45 @@ async function withRepositoryContext(spawn2, deps, repo, issue, prd2) {
       repository_snapshot: snapshot,
       requirements: extractPrdRequirements(prd2.body).map((text, index) => ({ id: `R${index + 1}`, text }))
     }
+  };
+}
+var BRIEF_TASK = {
+  generate: "Generate the spec for this PRD.",
+  revise: "Revise the prior spec (`prior_spec_md`, `prior_tasks`) so it clears every `review_feedback` item. Patch it; do not re-author it.",
+  review: "Review the generated spec against the PRD (generation review)."
+};
+async function dispatch(spawn2, repo, task, resultPath) {
+  const { context, ...pin } = spawn2;
+  const briefPath = join13(dirname7(resultPath), `${spawn2.role}.brief.md`);
+  const shape = spawn2.role === "spec-reviewer" ? "ReviewVerdict" : "GenerateResult";
+  await rm3(resultPath, { force: true });
+  await atomicWriteFile(
+    briefPath,
+    [
+      `# Factory spec brief: ${spawn2.role}`,
+      "",
+      `Repository \`${repo}\`. ${BRIEF_TASK[task]}`,
+      "",
+      "## Context",
+      "",
+      "```json",
+      stringifyJson(context).trimEnd(),
+      "```",
+      "",
+      "## Result",
+      "",
+      `Use the Write tool to write your ${shape} JSON object, and nothing else, to \`${resultPath}\`,`,
+      `replacing any file there. Then reply with only \`wrote ${resultPath}\`.`,
+      ""
+    ].join("\n")
+  );
+  return {
+    ...pin,
+    brief_path: briefPath,
+    prompt: [
+      `Factory pipeline-runner dispatch for ${repo}, as role ${spawn2.role}.`,
+      `Read your brief at ${briefPath} and follow it; it names the file your JSON result goes to.`
+    ].join("\n")
   };
 }
 function scratchPaths(scratchRoot, repo, issue) {
@@ -10316,24 +10355,45 @@ async function resolveSpec(deps, repo, issue, { regenerate = false, ignoreQuota 
     kind: "generate",
     repo,
     issue,
-    spawn: await withRepositoryContext(buildGenerateSpawn(prd2), deps, repo, issue, prd2),
+    spawn: await dispatch(
+      await withRepositoryContext(buildGenerateSpawn(prd2), deps, repo, issue, prd2),
+      repo,
+      "generate",
+      generatedPath
+    ),
     prd_path: prdPath,
     generated_path: generatedPath,
     max_iterations: deps.config.spec.maxRegenIterations
   };
 }
+var MissingOutputError = class extends Error {
+};
+async function readResult(path3) {
+  try {
+    return await readFile10(path3, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return void 0;
+    }
+    throw error;
+  }
+}
 async function gateSpec(deps, repo, issue) {
   const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.scratchRoot, repo, issue);
   const prd2 = await readJsonFile(prdPath);
-  const raw = await readFile10(generatedPath, "utf8");
+  const raw = await readResult(generatedPath);
   let generated;
   try {
+    if (raw === void 0) {
+      throw new MissingOutputError(`No generated output was written to ${generatedPath}`);
+    }
     generated = parseGenerateResult(JSON.parse(unwrapJson(raw)));
   } catch (error) {
-    if (!(error instanceof external_exports.ZodError || error instanceof SyntaxError)) {
+    if (!(error instanceof external_exports.ZodError || error instanceof SyntaxError || error instanceof MissingOutputError)) {
       throw error;
     }
-    const blockers = [`Invalid generated output: ${error.message}`];
+    const reason = error instanceof MissingOutputError ? error.message : `Invalid generated output: ${error.message}`;
+    const blockers = [reason];
     const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "gate", blockers });
     if (defect) {
       return defect;
@@ -10343,19 +10403,28 @@ async function gateSpec(deps, repo, issue) {
       repo,
       issue,
       source: "gate",
-      reason: `Invalid generated output: ${error.message}`,
+      reason,
       blockers,
-      spawn: await withRepositoryContext(
-        buildReviseSpawn(
-          prd2,
-          { specMd: `Invalid prior JSON (repair its structure):
-${raw}`, slug: "repair", tasks: [] },
-          blockers
+      spawn: await dispatch(
+        await withRepositoryContext(
+          buildReviseSpawn(
+            prd2,
+            {
+              specMd: raw === void 0 ? "No prior output was written; generate the spec from the PRD." : `Invalid prior JSON (repair its structure):
+${raw}`,
+              slug: "repair",
+              tasks: []
+            },
+            blockers
+          ),
+          deps,
+          repo,
+          issue,
+          prd2
         ),
-        deps,
         repo,
-        issue,
-        prd2
+        "revise",
+        generatedPath
       ),
       generated_path: generatedPath
     };
@@ -10392,12 +10461,11 @@ ${raw}`, slug: "repair", tasks: [] },
       reason: "deterministic spec gates blocked the spec",
       blockers: gates.blockers,
       // review_feedback derives from these same blockers — single source, no divergence.
-      spawn: await withRepositoryContext(
-        buildReviseSpawn(prd2, generated, gates.blockers),
-        deps,
+      spawn: await dispatch(
+        await withRepositoryContext(buildReviseSpawn(prd2, generated, gates.blockers), deps, repo, issue, prd2),
         repo,
-        issue,
-        prd2
+        "revise",
+        generatedPath
       ),
       generated_path: generatedPath
     };
@@ -10410,7 +10478,12 @@ ${raw}`, slug: "repair", tasks: [] },
     kind: "review",
     repo,
     issue,
-    spawn: await withRepositoryContext(buildReviewSpawn(prd2, generated), deps, repo, issue, prd2),
+    spawn: await dispatch(
+      await withRepositoryContext(buildReviewSpawn(prd2, generated), deps, repo, issue, prd2),
+      repo,
+      "review",
+      verdictPath
+    ),
     generated_path: generatedPath,
     verdict_path: verdictPath
   };
@@ -10418,6 +10491,27 @@ ${raw}`, slug: "repair", tasks: [] },
 async function storeSpec(deps, repo, issue) {
   const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.scratchRoot, repo, issue);
   const generated = parseGenerateResult(await readAgentJsonFile(generatedPath));
+  if (await readResult(verdictPath) === void 0) {
+    const blockers = [`No review verdict was written to ${verdictPath}`];
+    const defect = await consumeRegenOrDefect(deps, repo, issue, { source: "review", blockers });
+    if (defect) {
+      return defect;
+    }
+    const prd3 = await readJsonFile(prdPath);
+    return {
+      kind: "review",
+      repo,
+      issue,
+      spawn: await dispatch(
+        await withRepositoryContext(buildReviewSpawn(prd3, generated), deps, repo, issue, prd3),
+        repo,
+        "review",
+        verdictPath
+      ),
+      generated_path: generatedPath,
+      verdict_path: verdictPath
+    };
+  }
   const verdict = parseReviewVerdict(await readAgentJsonFile(verdictPath));
   if (deps.snapshot) {
     const expected = await readJsonFile(
@@ -10445,7 +10539,12 @@ async function storeSpec(deps, repo, issue) {
       source: "review",
       reason: decision.reason,
       blockers,
-      spawn: await withRepositoryContext(buildReviseSpawn(prd3, generated, blockers), deps, repo, issue, prd3),
+      spawn: await dispatch(
+        await withRepositoryContext(buildReviseSpawn(prd3, generated, blockers), deps, repo, issue, prd3),
+        repo,
+        "revise",
+        generatedPath
+      ),
       generated_path: generatedPath
     };
   }
@@ -12244,7 +12343,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { access as access4, mkdtemp, readFile as readFile11, rm as rm3, symlink, unlink as unlink3 } from "node:fs/promises";
+import { access as access4, mkdtemp, readFile as readFile11, rm as rm4, symlink, unlink as unlink3 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
 import path2 from "node:path";
 function toProc(r) {
@@ -12429,7 +12528,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
   static SUMMARY_PATH = path2.join("coverage", "coverage-summary.json");
   async measure(cmd, opts) {
     const summaryPath = path2.join(opts.cwd, _DefaultCoverageTool.SUMMARY_PATH);
-    await rm3(summaryPath, { force: true });
+    await rm4(summaryPath, { force: true });
     let result;
     if (cmd.kind === "vitest") {
       result = await runTool(this.resolve, "vitest", cmd.args, opts, this.env);
@@ -12479,7 +12578,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
         cwd: opts.cwd
       }).catch(() => {
       });
-      await rm3(scratch, { recursive: true, force: true }).catch(() => {
+      await rm4(scratch, { recursive: true, force: true }).catch(() => {
       });
       await exec("git", ["-C", opts.cwd, "worktree", "prune"], { cwd: opts.cwd }).catch(() => {
       });
@@ -12628,7 +12727,7 @@ function defaultGateTools(gateEnv = {}) {
 
 // src/feature/test-evidence.ts
 import { stripVTControlCharacters } from "node:util";
-import { dirname as dirname7, isAbsolute, relative as relative2, resolve as resolve2 } from "node:path";
+import { dirname as dirname8, isAbsolute, relative as relative2, resolve as resolve2 } from "node:path";
 var LOAD_FAILURE = /^Error: (?:Cannot find (?:module|package) '([^']+)' imported from '([^']+)'|Failed to resolve import "([^"]+)" from "([^"]+)"\. Does the file exist\?)$/gm;
 function loadFailures(output) {
   const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1];
@@ -12681,7 +12780,7 @@ function declaredModule(failure, root, files) {
     return void 0;
   }
   const importer = resolve2(root, failure.importer);
-  const target = relative2(root, resolve2(dirname7(importer), failure.specifier));
+  const target = relative2(root, resolve2(dirname8(importer), failure.specifier));
   if (target === "" || target.startsWith("..") || isAbsolute(target)) {
     return void 0;
   }
@@ -13837,7 +13936,7 @@ function printHelp() {
   ];
   process.stdout.write(lines.join("\n") + "\n");
 }
-async function dispatch(argv) {
+async function dispatch2(argv) {
   const [name, ...rest] = argv;
   if (name === void 0 || name === "--help" || name === "-h") {
     printHelp();
@@ -13853,7 +13952,7 @@ async function dispatch(argv) {
 }
 
 // src/bin/factory.ts
-dispatch(process.argv.slice(2)).then((code) => process.exit(code)).catch((err) => {
+dispatch2(process.argv.slice(2)).then((code) => process.exit(code)).catch((err) => {
   const detail = err instanceof Error ? err.stack ?? err.message : String(err);
   process.stderr.write(detail + "\n");
   process.exit(EXIT.ERROR);

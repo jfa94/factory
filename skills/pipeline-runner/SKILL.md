@@ -30,11 +30,14 @@ and repository contracts. Do not import a task suite or reuse v1 artifacts.
 
 Drive the returned envelopes:
 
-- `generate` or `revise`: dispatch the named generator with the complete
-  `spawn.context`. Save its GenerateResult JSON verbatim to `generated_path`,
-  then call `factory spec gate --issue <n>`.
-- `review`: dispatch a fresh spec reviewer with the complete context. Save its
-  ReviewVerdict JSON to `verdict_path`, then call `factory spec store --issue <n>`.
+- `generate` or `revise`: dispatch `spawn.agent_type` with `spawn.prompt` pasted
+  verbatim as the Agent prompt. The brief it names holds the context, and the agent
+  writes its own result to `generated_path`. When it returns, call
+  `factory spec gate --issue <n>`.
+- `review`: dispatch a fresh `spawn.agent_type` the same way; it writes
+  `verdict_path`. Then call `factory spec store --issue <n>`.
+- Never copy, retype or repair a spec result file yourself; a missing or invalid
+  result is the engine's to judge.
 - `stored`: proceed to creation.
 - `pause`: report the reason and stop. There is no running feature to resume yet.
 - `unspecifiable` or `spec-defect`: report the blockers and stop.
