@@ -20,13 +20,25 @@ side:
 
 1. **Primary pin — the inline autonomous settings.** In autonomous mode (the
    sanctioned run path), `factory autonomy ensure` bakes
-   `env.CLAUDE_PLUGIN_DATA = <canonical dir>` into the settings JSON the session
-   relaunches with (`claude --settings '<json>'`,
-   `src/cli/subcommands/autonomy.ts`), so the var is correct from process start
-   and no redirect fires. Caveat (2026-08-17 spike, Claude Code 2.1.233): a
-   sibling plugin's own `env` export can still shadow a `--settings` env value
-   in the session env — which is exactly why layer 2 exists and why engine
-   envelopes carry literal paths rather than relying on the var.
+   both `env.CLAUDE_PLUGIN_DATA` and `env.FACTORY_DATA_DIR` (set to the
+   `<canonical dir>`) into the settings JSON the session relaunches with
+   (`caffeinate -di claude --settings '<json>'` on macOS,
+   `claude --settings '<json>'` elsewhere; `src/cli/subcommands/autonomy.ts`), so the dir is correct
+   from process start and no redirect fires. Caveat (2026-08-17 spike, Claude
+   Code 2.1.233): a sibling plugin's own `env` export can still shadow a
+   `--settings` env value in the session env — which is exactly why layer 2
+   exists and why engine envelopes carry literal paths rather than relying on
+   the var.
+
+    `FACTORY_DATA_DIR` exists because `CLAUDE_PLUGIN_DATA` is not the same in
+    every process of one session. Under `--plugin-dir`, Claude Code hands plugin
+    processes (such as the statusline) their own per-plugin value
+    (`…/factory-inline`), while factory CLI calls from the Bash tool resolve
+    `factory-<marketplace-id>`. The statusline would then write the usage cache
+    into a different dir than quota pacing reads it from. `FACTORY_DATA_DIR` is a
+    factory-only name that nothing else rewrites, and `resolveDataDir()` checks it
+    before `CLAUDE_PLUGIN_DATA`, so every factory process agrees on one dir.
+
 2. **Backstop — the `CLAUDE_PLUGIN_ROOT` self-correct.** When a session was
    _not_ launched through the inline autonomous settings (a foreign value leaked in),
    `resolveDataDir()` re-derives the canonical dir from `CLAUDE_PLUGIN_ROOT`

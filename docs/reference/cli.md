@@ -150,6 +150,11 @@ combined with `--set` or `--unset`. Keys are listed in
 | `status`    | Exit 0 when `FACTORY_AUTONOMOUS_MODE=1`, else 1. `--json` for machine output.                   |
 | `preflight` | Exit 0 when autonomous; otherwise print the relaunch command and exit 1.                        |
 
+The relaunch command is `caffeinate -di claude --settings '<json>'` on macOS and
+`claude --settings '<json>'` elsewhere. The inline settings `env` sets
+`FACTORY_AUTONOMOUS_MODE`, `CLAUDE_PLUGIN_DATA` and `FACTORY_DATA_DIR` (see
+[data dir](./configuration.md#data-dir-claude_plugin_data)).
+
 `ensure` and `preflight` accept `--user-settings <path>`. The v2 `run create` and
 `resume` paths do not check autonomous mode; it is read by the branch-protection
 and write-protection hooks.

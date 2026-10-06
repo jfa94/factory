@@ -86,6 +86,12 @@ This is idempotent. It:
     repeated scaffolds stay byte-stable;
 
 - guarantees the `.gitignore` entries that keep factory state un-committed;
+- when it writes the CI net, guarantees `.prettierignore` entries for the files it
+  renders (`.github/scripts/`, `.github/workflows/quality-gate.yml`,
+  `.github/workflows/mutation-nightly.yml`, `.factory/`), so the target's formatter
+  keeps them byte-identical to their templates. The seeded `eslint.config.mjs`
+  likewise ignores `.claude/**` (agent worktrees), `.stryker-tmp/**` (mutation
+  sandboxes) and `.github/scripts/**` (the generated bundle);
 - emits / idempotently merges TWO target settings files, split by what is safe to
   commit:
     - `.claude/settings.json` (**committed**): the factory allow-list +

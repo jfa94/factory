@@ -25,6 +25,18 @@ Run/spec state lives OUTSIDE the target repo, under the data dir resolved by
 `CLAUDE_PLUGIN_DATA` env var; if it is unset, state-using commands loud-fail with
 a message pointing at the `factory-<your-marketplace-id>` form.
 
+Resolution order:
+
+| Order | Source               | Behaviour                                                                                                 |
+| ----- | -------------------- | --------------------------------------------------------------------------------------------------------- |
+| 1     | Explicit override    | A non-empty `dataDir` option passed to `resolveDataDir()` is used as-is (resolved to an absolute path).   |
+| 2     | `FACTORY_DATA_DIR`   | When non-empty, used as-is (resolved to an absolute path). No foreign-plugin canonicalization is applied. |
+| 3     | `CLAUDE_PLUGIN_DATA` | Subject to the foreign-plugin canonicalization below; loud failure when unset (see above).                |
+
+`factory autonomy ensure` bakes both `FACTORY_DATA_DIR` and `CLAUDE_PLUGIN_DATA`
+(the canonical dir) into the autonomous settings `env`. An empty
+`FACTORY_DATA_DIR` is treated as unset.
+
 ### The foreign-plugin leak (benign, self-corrected)
 
 Another plugin (e.g. `codex`) can set `CLAUDE_PLUGIN_DATA` to **its own** data dir
