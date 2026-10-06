@@ -7,7 +7,17 @@
 // (e.g. add `typescript-eslint` for TS-aware rules) as needed.
 export default [
     {
-        ignores: ['dist/**', 'build/**', 'coverage/**', 'node_modules/**', 'reports/**'],
+        // .claude/ holds agent worktrees, .stryker-tmp/ mutation sandboxes, .github/scripts/ a generated bundle.
+        ignores: [
+            'dist/**',
+            'build/**',
+            'coverage/**',
+            'node_modules/**',
+            'reports/**',
+            '.claude/**',
+            '.stryker-tmp/**',
+            '.github/scripts/**',
+        ],
     },
     {
         files: ['**/*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],

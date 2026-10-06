@@ -88,7 +88,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "FILE=$(cat | jq -r '.tool_input.file_path'); npx prettier --write \"$FILE\" 2>/dev/null; echo '{\"suppressOutput\": true}'",
+                        "command": "FILE=$(cat | jq -r '.tool_input.file_path'); DIR=$(dirname \"$FILE\"); (cd \"$(git -C \"$DIR\" rev-parse --show-toplevel 2>/dev/null || echo \"$DIR\")\" && npx prettier --write \"$FILE\") >/dev/null 2>&1; echo '{\"suppressOutput\": true}'",
                         "timeout": 15,
                         "statusMessage": "Auto-formatting with prettier"
                     }

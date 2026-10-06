@@ -207,6 +207,10 @@ export function resolveDataDir(opts: DataDirOptions = {}): string {
     }
 
     const env = opts.env ?? process.env
+    // Pinned by the autonomous settings; unlike CLAUDE_PLUGIN_DATA, no plugin or loader rewrites it.
+    if (env.FACTORY_DATA_DIR != null && env.FACTORY_DATA_DIR.length > 0) {
+        return resolve(env.FACTORY_DATA_DIR)
+    }
     const home = opts.home ?? homedir()
     const pluginRoot = opts.pluginRoot ?? inferPluginRoot()
     const current = env.CLAUDE_PLUGIN_DATA

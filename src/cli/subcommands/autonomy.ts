@@ -195,6 +195,8 @@ export function materializeMergedSettings(input: MaterializeInput): Record<strin
     const templateEnv = isObject(template.env) ? template.env : {}
     const env: Record<string, unknown> = {...templateEnv}
     env.CLAUDE_PLUGIN_DATA = dataDir
+    // Claude Code hands plugin processes its own CLAUDE_PLUGIN_DATA (e.g. factory-inline under --plugin-dir).
+    env.FACTORY_DATA_DIR = dataDir
 
     // statusLine chaining: if the user has their OWN statusLine that is NOT the
     // factory writer, preserve it via FACTORY_ORIGINAL_STATUSLINE (tilde-expanded)
@@ -267,11 +269,14 @@ export function renderPosixCommand(spec: RelaunchSpec): string {
 }
 
 /** Build the relaunch spec for a materialized settings object. */
-export function buildRelaunchSpec(settings: Record<string, unknown>): RelaunchSpec {
-    return {
-        executable: 'claude',
-        argv: ['--settings', JSON.stringify(settings)],
+export function buildRelaunchSpec(settings: Record<string, unknown>, platform = process.platform): RelaunchSpec {
+    const claude = ['claude', '--settings', JSON.stringify(settings)] as const
+    // macOS display sleep hangs headless browsers mid-run; caffeinate holds it off while claude lives.
+    if (platform === 'darwin') {
+        return {executable: 'caffeinate', argv: ['-di', ...claude]}
     }
+    const [executable, ...argv] = claude
+    return {executable, argv}
 }
 
 /** Options for {@link runAutonomyEnsure}; all paths injectable for tests. */

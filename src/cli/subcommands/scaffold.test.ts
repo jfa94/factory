@@ -168,6 +168,14 @@ describe('runScaffold', () => {
         expect(existsSync(join(root, '.prettierignore'))).toBe(true)
         const prettierignore = await readFile(join(root, '.prettierignore'), 'utf8')
         expect(prettierignore).toMatch(/\.github\/scripts\//)
+        // Every file scaffold renders keeps the plugin's style, not the target's.
+        for (const managed of [
+            '.github/workflows/quality-gate.yml',
+            '.github/workflows/mutation-nightly.yml',
+            '.factory/',
+        ]) {
+            expect(prettierignore.split('\n')).toContain(managed)
+        }
 
         // The seeded e2e spec must not disable a rule for a plugin scaffold never
         // installs/configures (bug #1, `playwright/no-skipped-test`).
@@ -175,6 +183,15 @@ describe('runScaffold', () => {
         expect(e2eSpec).not.toContain('playwright/no-skipped-test')
         await expect(
             execFileAsync(join(process.cwd(), 'node_modules', '.bin', 'eslint'), ['e2e/example.spec.ts'], {cwd: root})
+        ).resolves.toMatchObject({stderr: ''})
+
+        // Feature/review worktrees and Stryker sandboxes hold copies of the repo; linting them is noise.
+        for (const nested of ['.claude/worktrees/feature-x', '.stryker-tmp/sandbox-1']) {
+            await mkdir(join(root, nested), {recursive: true})
+            await writeFile(join(root, nested, 'bad.js'), 'let unused = (\n', 'utf8')
+        }
+        await expect(
+            execFileAsync(join(process.cwd(), 'node_modules', '.bin', 'eslint'), ['.'], {cwd: root})
         ).resolves.toMatchObject({stderr: ''})
 
         // Decision 40 D11: no e2e job in CI — it would gate CI merges on infra CI

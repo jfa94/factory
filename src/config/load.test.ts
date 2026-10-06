@@ -26,6 +26,13 @@ describe('resolveDataDir', () => {
         expect(out).toBe(dd)
     })
 
+    it('prefers FACTORY_DATA_DIR over any CLAUDE_PLUGIN_DATA (the autonomy pin)', () => {
+        const pinned = join(home, '.claude', 'plugins', 'data', 'factory-jfa94')
+        const inline = join(home, '.claude', 'plugins', 'data', 'factory-inline')
+        expect(resolveDataDir({env: {FACTORY_DATA_DIR: pinned, CLAUDE_PLUGIN_DATA: inline}, home})).toBe(pinned)
+        expect(resolveDataDir({env: {FACTORY_DATA_DIR: '', CLAUDE_PLUGIN_DATA: inline}, home})).toBe(inline)
+    })
+
     it('throws loudly when CLAUDE_PLUGIN_DATA is unset and no override', () => {
         expect(() => resolveDataDir({env: {}, home})).toThrow(/CLAUDE_PLUGIN_DATA must be set/)
     })

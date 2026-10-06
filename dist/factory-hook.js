@@ -6629,6 +6629,9 @@ function resolveDataDir(opts = {}) {
     return resolve2(opts.dataDir);
   }
   const env = opts.env ?? process.env;
+  if (env.FACTORY_DATA_DIR != null && env.FACTORY_DATA_DIR.length > 0) {
+    return resolve2(env.FACTORY_DATA_DIR);
+  }
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;

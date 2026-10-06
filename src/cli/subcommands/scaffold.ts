@@ -566,6 +566,10 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
 const PRETTIERIGNORE_ENTRIES = [
     '# factory plugin: generated bundle (esbuild output, not hand-formatted)',
     '.github/scripts/',
+    '# factory plugin: rendered by `factory scaffold`, kept byte-identical to its template',
+    QUALITY_GATE_REL,
+    MUTATION_NIGHTLY_REL,
+    '.factory/',
 ]
 
 /** Append any missing {@link PRETTIERIGNORE_ENTRIES} to the target `.prettierignore`. */

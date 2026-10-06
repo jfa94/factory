@@ -92,6 +92,8 @@ describe('materializeMergedSettings', () => {
         })
         const env = out.env as Record<string, string>
         expect(env.CLAUDE_PLUGIN_DATA).toBe(DATA_DIR)
+        // Plugin processes see a per-plugin CLAUDE_PLUGIN_DATA; this factory-only pin wins everywhere.
+        expect(env.FACTORY_DATA_DIR).toBe(DATA_DIR)
         expect(env.FACTORY_AUTONOMOUS_MODE).toBe('1') // template env preserved
     })
 
@@ -173,7 +175,7 @@ describe('materializeMergedSettings', () => {
         })
         expect(out.model).toBeUndefined()
         const env = out.env as Record<string, string>
-        expect(Object.keys(env).sort()).toEqual(['CLAUDE_PLUGIN_DATA', 'FACTORY_AUTONOMOUS_MODE'])
+        expect(Object.keys(env).sort()).toEqual(['CLAUDE_PLUGIN_DATA', 'FACTORY_AUTONOMOUS_MODE', 'FACTORY_DATA_DIR'])
         const allow = (out.permissions as {allow: string[]}).allow
         expect(allow).toEqual(['Bash(*)', `Read(${DATA_DIR}/**)`])
     })
@@ -242,14 +244,22 @@ describe('renderPosixCommand', () => {
 describe('buildRelaunchSpec', () => {
     it('is claude --settings <json> with the settings as exactly ONE argv element', () => {
         const settings = {env: {FACTORY_AUTONOMOUS_MODE: '1'}, permissions: {allow: ['Bash(*)']}}
-        const spec = buildRelaunchSpec(settings)
+        const spec = buildRelaunchSpec(settings, 'linux')
         expect(spec.executable).toBe('claude')
         // No native session worktree: the engine owns the feature worktree.
         expect(spec.argv).toHaveLength(2)
         expect(spec.argv[0]).toBe('--settings')
-        expect(JSON.parse(at([...spec.argv], 1))).toEqual(settings)
+        expect(JSON.parse(spec.argv.at(-1) ?? '')).toEqual(settings)
         // No permission-mode flag of any kind (spike gate: inline-settings fallback branch).
         expect(spec.argv.join(' ')).not.toContain('--permission-mode')
+    })
+
+    it('on macOS keeps the display and system awake for the session (display sleep stalls headless runs)', () => {
+        const settings = {env: {FACTORY_AUTONOMOUS_MODE: '1'}}
+        const spec = buildRelaunchSpec(settings, 'darwin')
+        expect(spec.executable).toBe('caffeinate')
+        expect(spec.argv.slice(0, 3)).toEqual(['-di', 'claude', '--settings'])
+        expect(JSON.parse(spec.argv.at(-1) ?? '')).toEqual(settings)
     })
 })
 
@@ -273,7 +283,7 @@ describe('runAutonomyEnsure', () => {
 
     /** The settings JSON carried as the one --settings argv element. */
     const settingsOf = (spec: RelaunchSpec): Record<string, unknown> =>
-        JSON.parse(at([...spec.argv], 1)) as Record<string, unknown>
+        JSON.parse(spec.argv.at(-1) ?? '') as Record<string, unknown>
 
     it('builds the settings in memory, writes NOTHING to disk, and prints the inline relaunch command', async () => {
         const result = await runAutonomyEnsure({
@@ -317,7 +327,7 @@ describe('runAutonomyEnsure', () => {
         const roundTripped = JSON.parse(stdout) as string[]
         // node consumes its own `--` end-of-options marker: what's left is the spec argv
         expect(roundTripped).toEqual([...result.spec.argv])
-        expect(JSON.parse(at(roundTripped, 1))).toEqual(settingsOf(result.spec))
+        expect(JSON.parse(roundTripped.at(-1) ?? '')).toEqual(settingsOf(result.spec))
     })
 
     it("reads the user's settings.json when present and chains its statusLine", async () => {
@@ -494,7 +504,7 @@ describe('runAutonomyPreflight', () => {
         })
         expect(result.state).toBe('relaunch')
         if (result.state === 'relaunch') {
-            const settings = JSON.parse(at([...result.spec.argv], 1)) as {env: Record<string, string>}
+            const settings = JSON.parse(result.spec.argv.at(-1) ?? '') as {env: Record<string, string>}
             expect(settings.env.FACTORY_ORIGINAL_STATUSLINE).toBe(`${HOME}/mine.sh`)
         }
     })
@@ -558,6 +568,39 @@ describe('the real templates/settings.autonomous.json', () => {
         const deadWrite = (e: string): boolean => /^Write\(.+\)$/.test(e)
         expect(template.permissions.allow.filter(deadWrite)).toEqual([])
         expect(template.permissions.deny.filter(deadWrite)).toEqual([])
+    })
+
+    it('formats from the edited file repository, so a session-root .gitignore cannot hide worktree files', async () => {
+        // Prettier honours the cwd's .gitignore; the session root ignores .claude/worktrees/.
+        const templatePath = fileURLToPath(new URL('../../../templates/settings.autonomous.json', import.meta.url))
+        const template = JSON.parse(await readFile(templatePath, 'utf8')) as {
+            hooks: {PostToolUse: {hooks: {command: string}[]}[]}
+        }
+        const command = at(at(template.hooks.PostToolUse, 0).hooks, 0).command
+        const root = await mkdtemp(join(tmpdir(), 'fmt-hook-'))
+        try {
+            const worktree = join(root, '.claude', 'worktrees', 'feature-x')
+            await mkdir(join(worktree, 'src'), {recursive: true})
+            execFileSync('git', ['init', '-q', root])
+            execFileSync('git', ['init', '-q', worktree])
+            const bin = join(root, 'bin')
+            await mkdir(bin)
+            await writeFile(join(bin, 'npx'), `#!/bin/sh\npwd -P > "${join(root, 'cwd.txt')}"\n`, {mode: 0o755})
+            const file = join(worktree, 'src', 'a.ts')
+            const stdout = execFileSync('sh', ['-c', command], {
+                cwd: root,
+                input: JSON.stringify({tool_input: {file_path: file}}),
+                env: {...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`},
+                encoding: 'utf8',
+            })
+            expect(JSON.parse(stdout)).toEqual({suppressOutput: true})
+            const real = execFileSync('git', ['-C', worktree, 'rev-parse', '--show-toplevel'], {
+                encoding: 'utf8',
+            }).trim()
+            expect((await readFile(join(root, 'cwd.txt'), 'utf8')).trim()).toBe(real)
+        } finally {
+            await rm(root, {recursive: true, force: true})
+        }
     })
 
     it('still denies node -e / python -c (kept over-broad on purpose — see Decision doc)', async () => {

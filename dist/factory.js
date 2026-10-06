@@ -6248,6 +6248,9 @@ function resolveDataDir(opts = {}) {
     return resolve(opts.dataDir);
   }
   const env = opts.env ?? process.env;
+  if (env.FACTORY_DATA_DIR != null && env.FACTORY_DATA_DIR.length > 0) {
+    return resolve(env.FACTORY_DATA_DIR);
+  }
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
@@ -9227,7 +9230,11 @@ async function ensureGitignore(root, lists) {
 }
 var PRETTIERIGNORE_ENTRIES = [
   "# factory plugin: generated bundle (esbuild output, not hand-formatted)",
-  ".github/scripts/"
+  ".github/scripts/",
+  "# factory plugin: rendered by `factory scaffold`, kept byte-identical to its template",
+  QUALITY_GATE_REL,
+  MUTATION_NIGHTLY_REL,
+  ".factory/"
 ];
 async function ensurePrettierignore(root, lists) {
   await ensureIgnoreFile(root, ".prettierignore", PRETTIERIGNORE_ENTRIES, lists);
@@ -13504,6 +13511,7 @@ function materializeMergedSettings(input) {
   const templateEnv = isObject2(template.env) ? template.env : {};
   const env = { ...templateEnv };
   env.CLAUDE_PLUGIN_DATA = dataDir;
+  env.FACTORY_DATA_DIR = dataDir;
   const ourPath = factoryBinPath(pluginRoot);
   const chained = (() => {
     if (input.userStatusLine === void 0) {
@@ -13541,11 +13549,13 @@ function renderPosixCommand(spec) {
   const quote = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
   return [spec.executable, ...spec.argv].map(quote).join(" ");
 }
-function buildRelaunchSpec(settings) {
-  return {
-    executable: "claude",
-    argv: ["--settings", JSON.stringify(settings)]
-  };
+function buildRelaunchSpec(settings, platform = process.platform) {
+  const claude = ["claude", "--settings", JSON.stringify(settings)];
+  if (platform === "darwin") {
+    return { executable: "caffeinate", argv: ["-di", ...claude] };
+  }
+  const [executable, ...argv] = claude;
+  return { executable, argv };
 }
 async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
