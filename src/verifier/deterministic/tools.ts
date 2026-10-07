@@ -139,7 +139,7 @@ export interface CommandRunner {
 export type StrykerReport =
     | {readonly report: 'absent'}
     | {readonly report: 'unparseable'}
-    | {readonly report: 'present'; readonly mutationScore: number | null}
+    | {readonly report: 'present'; readonly mutationScore: number | null; readonly survivors?: readonly string[]}
     /** A previous report could not be removed, so stryker was not run: no fresh score is possible. */
     | {readonly report: 'stale'; readonly error: string}
 
@@ -473,8 +473,37 @@ export class DefaultStrykerTool implements StrykerTool {
             return {proc, report: {report: 'unparseable'}}
         }
         const score = extractMutationScore(parsed)
-        return {proc, report: {report: 'present', mutationScore: score}}
+        return {proc, report: {report: 'present', mutationScore: score, survivors: mutationSurvivors(parsed)}}
     }
+}
+
+/** Undetected (survived / no-coverage) mutants as `file:line mutator -> replacement`, in report order. */
+export function mutationSurvivors(report: unknown): string[] {
+    const files = (report as {files?: unknown} | null)?.files
+    if (typeof files !== 'object' || files === null) {
+        return []
+    }
+    interface Mutant {
+        status?: unknown
+        mutatorName?: unknown
+        replacement?: unknown
+        location?: {start?: {line?: unknown}}
+    }
+    const out: string[] = []
+    for (const [file, entry] of Object.entries(files as Record<string, unknown>)) {
+        const mutants = (entry as {mutants?: unknown}).mutants
+        for (const mutant of Array.isArray(mutants) ? (mutants as Mutant[]) : []) {
+            if (typeof mutant.status !== 'string' || !UNDETECTED_STATUSES.has(mutant.status.toLowerCase())) {
+                continue
+            }
+            const line = mutant.location?.start?.line
+            const where = typeof line === 'number' ? `${file}:${String(line)}` : file
+            const name = typeof mutant.mutatorName === 'string' ? mutant.mutatorName : 'mutant'
+            const replacement = typeof mutant.replacement === 'string' ? ` -> ${mutant.replacement}` : ''
+            out.push(`${where} ${name}${replacement}`)
+        }
+    }
+    return out
 }
 
 /**

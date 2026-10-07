@@ -53,6 +53,16 @@ export const STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES
 /** Worktree-relative path the stryker binary resolves to after `npm install`. */
 export const STRYKER_BIN = 'node_modules/.bin/stryker'
 
+/** Names the mutants a repair must kill; capped so the feedback stays readable. */
+function undetected(survivors: readonly string[]): string {
+    if (survivors.length === 0) {
+        return ''
+    }
+    const more =
+        survivors.length > 20 ? `; +${String(survivors.length - 20)} more (reports/mutation/mutation.json)` : ''
+    return `; undetected mutants: ${survivors.slice(0, 20).join('; ')}${more}`
+}
+
 export const mutationStrategy: GateStrategy<GateTools> = {
     id: 'mutation',
     async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
@@ -98,7 +108,11 @@ export const mutationStrategy: GateStrategy<GateTools> = {
             const score = report.mutationScore
             return scorePasses(score, target)
                 ? ran('mutation', true, `mutation score ${score} >= ${target} (scope ${scope.length})`)
-                : ran('mutation', false, `score-below-target: ${score} < ${target}`)
+                : ran(
+                      'mutation',
+                      false,
+                      `score-below-target: ${score} < ${target}${undetected(report.survivors ?? [])}`
+                  )
         }
         // No derivable score. A non-zero exit means stryker crashed BEFORE producing one.
         if (result.proc.code !== 0) {

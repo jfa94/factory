@@ -31,6 +31,7 @@ import {
     defaultGateTools,
     defaultLocalBinResolver,
     extractMutationScore,
+    mutationSurvivors,
     parseCoverageSummary,
     resolveLocalBin,
     type LocalBinResolver,
@@ -41,6 +42,36 @@ const execMock = vi.mocked(exec)
 function res(stdout: string, code = 0, truncated = false): ExecResult {
     return {stdout, stderr: '', code, signal: null, truncated}
 }
+
+describe('mutationSurvivors', () => {
+    it('lists undetected mutants as file:line mutator -> replacement, in report order', () => {
+        const report = {
+            files: {
+                'src/a.ts': {
+                    mutants: [
+                        {status: 'Killed', mutatorName: 'X', replacement: 'x', location: {start: {line: 1}}},
+                        {
+                            status: 'Survived',
+                            mutatorName: 'EqualityOperator',
+                            replacement: 'left <= right',
+                            location: {start: {line: 17}},
+                        },
+                        {status: 'NoCoverage', mutatorName: 'BlockStatement', location: {start: {line: 30}}},
+                    ],
+                },
+            },
+        }
+        expect(mutationSurvivors(report)).toEqual([
+            'src/a.ts:17 EqualityOperator -> left <= right',
+            'src/a.ts:30 BlockStatement',
+        ])
+    })
+
+    it('returns [] for a report without files', () => {
+        expect(mutationSurvivors({})).toEqual([])
+        expect(mutationSurvivors(null)).toEqual([])
+    })
+})
 
 describe('extractMutationScore', () => {
     it('returns the finite metrics.mutationScore', () => {
@@ -380,7 +411,7 @@ describe('Stryker report freshness', () => {
             return res('', 1)
         })
         const result = await new DefaultStrykerTool(() => Promise.resolve('/fake/stryker')).run(['new.ts'], {cwd})
-        expect(result.report).toEqual({report: 'present', mutationScore: 82})
+        expect(result.report).toEqual({report: 'present', mutationScore: 82, survivors: []})
     })
 })
 

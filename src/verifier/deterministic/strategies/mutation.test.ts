@@ -75,6 +75,23 @@ describe('mutationStrategy (Δ O)', () => {
         expect(ev.detail).toContain('score-below-target')
     })
 
+    it('a below-target failure names the surviving mutants so a repair can target them', async () => {
+        const result = strykerResult({code: 0, score: 50})
+        const survivors = Array.from({length: 22}, (_, i) => `src/a.ts:${String(i + 1)} ConditionalExpression -> true`)
+        const tools = makeFakeTools({
+            git: probe(['src/a.ts']),
+            stryker: new FakeStryker({...result, report: {report: 'present', mutationScore: 50, survivors}}),
+        })
+        const ev = ((await mutationStrategy.run(ctx(tools))) as GateRan).evidence
+        expect(ev.detail).toContain(
+            'score-below-target: 50 < 80; undetected mutants: src/a.ts:1 ConditionalExpression -> true;'
+        )
+        expect(ev.detail).toContain(
+            'src/a.ts:20 ConditionalExpression -> true; +2 more (reports/mutation/mutation.json)'
+        )
+        expect(ev.detail).not.toContain('src/a.ts:21 ')
+    })
+
     it('T4b3: 80.0 vs target 80 → pass', async () => {
         const tools = makeFakeTools({
             git: probe(['src/foo.ts']),
