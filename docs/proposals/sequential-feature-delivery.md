@@ -126,3 +126,7 @@ The clean-canary criterion remains open.
 `main` ends ready for review. Starting a live run confirms push, PR and merge into
 `develop`, so the runner no longer asks. A main-only canary therefore ends at
 `ready-for-review`, not an observed merge.
+Canary #7 (issue #12, 2026-10-07, `2.0.0-rc.8`) passed every condition except
+compaction: PR #13 ended `ready-for-review`, with zero manual recovers and zero
+`environment` parks, no refused briefs and its snapshots cleaned. The runner never
+compacted, so the next canary forces one, targets `develop` and must observe the merge.

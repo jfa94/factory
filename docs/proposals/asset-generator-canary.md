@@ -393,3 +393,22 @@ Not a clean pass, for one root cause plus one policy interaction:
 - **Merge confirmation.** The engine tried to merge while Mutation Testing was
   pending, and branch policy refused. The runner then asked before merging, because
   the operator's global rule needs explicit confirmation to merge outside dotfiles.
+
+## Issue #12: never-merge-main canary (2026-10-07)
+
+Run `0e13065e` on `2.0.0-rc.8` delivered issue #12 as PR #13 and ended
+`ready-for-review` without a merge, as the never-merge-main policy requires. Branch
+protection was unchanged. The run had three tasks in two slices.
+
+- Zero environment parks, zero rejected results, no refused or ignored briefs.
+- The planned `run stop` during the first test-writer parked as `operator`. The
+  runner did not resume on its own; after the operator's go-ahead,
+  `resume --recover` consumed the staged result.
+- One slice repair: the mutation score was 77.3 against a target of 80. The single
+  repair pass fixed it, but the feedback named no surviving mutants. Fixed in
+  `7e43d100`: the gate now lists them.
+- Two quota waits, one of them before delivery. Delivery dispatches no agent, so
+  `cdf6120d` stops it waiting on quota; work it hands back still checks quota.
+- No review snapshot of this run remains.
+- The runner session did not compact: it used 160k of a 1M-token context. The
+  compaction leg of the criterion is still unexercised.
