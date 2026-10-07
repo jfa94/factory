@@ -150,16 +150,23 @@ export class FeatureEngine {
                         return this.parked(run)
                     }
                 }
-                const quota = run.ignore_quota ? undefined : await this.runtime.quota(run)
-                if (quota !== undefined) {
-                    run.status = 'waiting'
-                    run.stop_reason = {kind: 'quota', message: quota.reason}
-                    await this.store.write(run)
-                    return this.wait(run, quota.reason, quota.seconds)
-                }
-                run.status = 'running'
-                delete run.stop_reason
+                // Delivery spends no agent tokens, so quota is checked only once work leaves it.
+                let quotaChecked = run.ignore_quota
                 for (let step = 0; step < 12; step++) {
+                    if (!quotaChecked && run.stage !== 'deliver') {
+                        quotaChecked = true
+                        const quota = await this.runtime.quota(run)
+                        if (quota !== undefined) {
+                            run.status = 'waiting'
+                            run.stop_reason = {kind: 'quota', message: quota.reason}
+                            await this.store.write(run)
+                            return this.wait(run, quota.reason, quota.seconds)
+                        }
+                    }
+                    if (step === 0) {
+                        run.status = 'running'
+                        delete run.stop_reason
+                    }
                     const action = await this.step(run, driver)
                     await this.store.write(run)
                     if (action) {

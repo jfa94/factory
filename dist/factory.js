@@ -11090,16 +11090,22 @@ var FeatureEngine = class {
             return this.parked(run5);
           }
         }
-        const quota = run5.ignore_quota ? void 0 : await this.runtime.quota(run5);
-        if (quota !== void 0) {
-          run5.status = "waiting";
-          run5.stop_reason = { kind: "quota", message: quota.reason };
-          await this.store.write(run5);
-          return this.wait(run5, quota.reason, quota.seconds);
-        }
-        run5.status = "running";
-        delete run5.stop_reason;
+        let quotaChecked = run5.ignore_quota;
         for (let step = 0; step < 12; step++) {
+          if (!quotaChecked && run5.stage !== "deliver") {
+            quotaChecked = true;
+            const quota = await this.runtime.quota(run5);
+            if (quota !== void 0) {
+              run5.status = "waiting";
+              run5.stop_reason = { kind: "quota", message: quota.reason };
+              await this.store.write(run5);
+              return this.wait(run5, quota.reason, quota.seconds);
+            }
+          }
+          if (step === 0) {
+            run5.status = "running";
+            delete run5.stop_reason;
+          }
           const action = await this.step(run5, driver);
           await this.store.write(run5);
           if (action) {
@@ -12134,6 +12140,13 @@ function scorePasses(score, target) {
 }
 var STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES;
 var STRYKER_BIN = "node_modules/.bin/stryker";
+function undetected(survivors) {
+  if (survivors.length === 0) {
+    return "";
+  }
+  const more = survivors.length > 20 ? `; +${String(survivors.length - 20)} more (reports/mutation/mutation.json)` : "";
+  return `; undetected mutants: ${survivors.slice(0, 20).join("; ")}${more}`;
+}
 var mutationStrategy = {
   id: "mutation",
   async run(ctx) {
@@ -12164,7 +12177,11 @@ var mutationStrategy = {
     }
     if (report.report === "present" && report.mutationScore !== null) {
       const score = report.mutationScore;
-      return scorePasses(score, target) ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`) : ran("mutation", false, `score-below-target: ${score} < ${target}`);
+      return scorePasses(score, target) ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`) : ran(
+        "mutation",
+        false,
+        `score-below-target: ${score} < ${target}${undetected(report.survivors ?? [])}`
+      );
     }
     if (result.proc.code !== 0) {
       const output = excerpt(result.proc.stderr || result.proc.stdout, "tail");
@@ -12473,9 +12490,30 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
       return { proc, report: { report: "unparseable" } };
     }
     const score = extractMutationScore(parsed);
-    return { proc, report: { report: "present", mutationScore: score } };
+    return { proc, report: { report: "present", mutationScore: score, survivors: mutationSurvivors(parsed) } };
   }
 };
+function mutationSurvivors(report) {
+  const files = report?.files;
+  if (typeof files !== "object" || files === null) {
+    return [];
+  }
+  const out = [];
+  for (const [file, entry] of Object.entries(files)) {
+    const mutants = entry.mutants;
+    for (const mutant of Array.isArray(mutants) ? mutants : []) {
+      if (typeof mutant.status !== "string" || !UNDETECTED_STATUSES.has(mutant.status.toLowerCase())) {
+        continue;
+      }
+      const line = mutant.location?.start?.line;
+      const where = typeof line === "number" ? `${file}:${String(line)}` : file;
+      const name = typeof mutant.mutatorName === "string" ? mutant.mutatorName : "mutant";
+      const replacement = typeof mutant.replacement === "string" ? ` -> ${mutant.replacement}` : "";
+      out.push(`${where} ${name}${replacement}`);
+    }
+  }
+  return out;
+}
 function extractMutationScore(report) {
   if (typeof report !== "object" || report === null) {
     return null;

@@ -158,6 +158,20 @@ describe('feature evidence and recovery protocol', () => {
         vi.spyOn(f.engine as unknown as {step: () => Promise<undefined>}, 'step').mockResolvedValue(undefined)
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait', retry_after_seconds: 0})
     })
+    it('delivers a verified feature without waiting on quota: delivery dispatches no agent', async () => {
+        const f = await setup('deliver')
+        const run = await f.store.read('run')
+        await f.store.write({...run, verified_feature: {head_sha: sha, spec_digest: run.spec_digest}})
+        vi.mocked(f.runtime.quota).mockResolvedValue({reason: '5h quota over curve', seconds: 1234})
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'completed'})
+    })
+    it('rechecks quota before work that leaves the deliver stage', async () => {
+        const f = await setup('deliver')
+        vi.mocked(f.runtime.quota).mockResolvedValue({reason: '5h quota over curve', seconds: 1234})
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'wait', retry_after_seconds: 1234})
+        expect((await f.store.read('run')).stage).toBe('feature-check')
+        expect(f.runtime.checks).not.toHaveBeenCalled()
+    })
     it('reads a pre-batching state.json that has no confirmed_claims field', async () => {
         const f = await setup()
         const path = join(f.input.root, 'runs-v2', 'run', 'state.json')
