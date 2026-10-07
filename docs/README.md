@@ -1,4 +1,4 @@
-<!-- last-documented: 563ef3217d3e6141ead155a2c827b15483fe494c -->
+<!-- last-documented: 9de7e8bbf1ef6eb47641843888d9cefb4e0c4db1 -->
 
 # Dark Factory Plugin
 

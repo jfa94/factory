@@ -60,15 +60,15 @@ of another version cannot be read; `state --list` skips it with a warning.
 
 ## Statuses and stop reasons
 
-| Status             | Terminal | Meaning                                                          |
-| ------------------ | -------- | ---------------------------------------------------------------- |
-| `running`          | no       | Advancing.                                                       |
-| `waiting`          | no       | Waiting on quota or a transient failure; `next-action` rechecks. |
-| `awaiting-merge`   | no       | PR open; waiting for required checks and merge.                  |
-| `parked`           | no       | Stopped until `factory resume`.                                  |
-| `ready-for-review` | yes      | No-ship, debug or `main`-based live delivery finished.           |
-| `completed`        | yes      | Merge observed, or verified no-change.                           |
-| `cancelled`        | yes      | Cancelled; branch and work preserved.                            |
+| Status             | Terminal | Meaning                                                                               |
+| ------------------ | -------- | ------------------------------------------------------------------------------------- |
+| `running`          | no       | Advancing.                                                                            |
+| `waiting`          | no       | Waiting on quota (never in `deliver`) or a transient failure; `next-action` rechecks. |
+| `awaiting-merge`   | no       | PR open; waiting for required checks and merge.                                       |
+| `parked`           | no       | Stopped until `factory resume`.                                                       |
+| `ready-for-review` | yes      | No-ship, debug or `main`-based live delivery finished.                                |
+| `completed`        | yes      | Merge observed, or verified no-change.                                                |
+| `cancelled`        | yes      | Cancelled; branch and work preserved.                                                 |
 
 `stop_reason.kind` is one of `operator`, `quota`, `ci`, `environment`, `producer`,
 `spec`, `context`, `authorization`.

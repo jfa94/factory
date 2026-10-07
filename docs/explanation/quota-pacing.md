@@ -41,6 +41,16 @@ returns `wait` with that delay. The runner calls again when it expires. The 3600
 second ceiling means a long 7-day wait is re-evaluated at least hourly, so a usage
 change (for example a manual reset) is noticed without operator action.
 
+## Delivery is not quota-gated
+
+The quota check runs lazily inside `advance()` (`src/feature/engine.ts`): at most
+once per call, and only when the run's stage is not `deliver`. Delivery pushes,
+opens the PR and observes CI and the merge, but dispatches no agent and spends no
+tokens, so it continues under quota pressure. Once delivery routes work back out
+of `deliver` (for example a CI-failure repair), the next step checks quota before
+any agent is dispatched. Before this, a run that had already passed final
+acceptance could sit waiting on quota with nothing left that needed it.
+
 An earlier design suspended a run on a 7-day breach and required a human
 relaunch. Waiting in place removes that stall: the run continues on its own once
 the curve allows it, and an explicit stop remains the only way to park a run

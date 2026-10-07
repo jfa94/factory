@@ -327,6 +327,15 @@ mutation` to opt out; `--waive mutation` wins even when Stryker is installed.
   present-but-score-less report on a green exit (`no-score`); no report (`no-report`);
   unparseable report (`unparseable-report`); a truncated report **throws** rather
   than risk mis-parsing a clipped payload.
+- **Below-target feedback names the undetected mutants.** A `score-below-target`
+  detail appends `undetected mutants:` followed by each `Survived` or `NoCoverage`
+  mutant from the report, in report order, formatted
+  `file:line mutator -> replacement` (`mutationSurvivors`,
+  `src/verifier/deterministic/tools.ts`). The line is omitted when absent, the mutator
+  name falls back to `mutant`, and the replacement is omitted when absent. At most 20
+  are listed; the remainder is summarised as
+  `+N more (reports/mutation/mutation.json)`. Example:
+  `score-below-target: 60 < 80; undetected mutants: src/a.ts:12 ConditionalExpression -> true`.
 - **The Stryker config is shadow-proof.** TCB write-protection covers **every**
   basename Stryker's discovery can load (the full `{'',.'} × {.conf,.config} ×
 {json,js,mjs,cjs}` set), not just the scaffolded `.stryker.config.json`. An

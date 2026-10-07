@@ -114,6 +114,9 @@ is retried as transient; a repeated failure is repaired as before. The gate pass
 only on a clean full run, and contract-command test gates are not rerun. A clean
 call resets the count. Quota waits last until the next
 usage-window boundary, clamped to 60 to 3600 seconds; unreadable usage is rechecked every 60 seconds.
+Quota is checked only when work is outside the `deliver` stage. Delivery dispatches
+no agent and never waits on quota, while a CI-failure repair that leaves delivery is
+checked first.
 Explicit recovery consumes a corrected result or retires the attempt and schedules
 replacement evidence without discarding work.
 
