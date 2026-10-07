@@ -91,7 +91,7 @@ satisfy the required checks). It prints the created run, including `run_id`.
 
 | Flag             | Effect                                                                    |
 | ---------------- | ------------------------------------------------------------------------- |
-| (none)           | Ship mode `live`: open the PR and complete only after an observed merge.  |
+| (none)           | Ship mode `live`: open the PR and complete only after an observed merge. Base `main`: end `ready-for-review` (never merged). |
 | `--no-ship`      | End `ready-for-review` with an open PR.                                   |
 | `--local`        | Park as `authorization` after full verification, before any remote write. |
 | `--e2e`          | Add the `e2e-author` stage and Playwright evidence at feature-check.      |

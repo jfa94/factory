@@ -122,3 +122,7 @@ was not clean: load-induced test timeouts parked a baseline as `environment`
 (fixed in `45753a82`, `2.0.0-rc.7`: flaky tests rerun and wait), and the runner
 asked before merging because of the operator's global merge-confirmation rule.
 The clean-canary criterion remains open.
+`2.0.0-rc.8` (`563ef321`): Factory never merges into `main`; a live run based on
+`main` ends ready for review. Starting a live run confirms push, PR and merge into
+`develop`, so the runner no longer asks. A main-only canary therefore ends at
+`ready-for-review`, not an observed merge.

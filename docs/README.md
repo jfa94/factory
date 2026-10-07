@@ -1,4 +1,4 @@
-<!-- last-documented: 45753a82a4dbdf68181b66819320795545ccd9fc -->
+<!-- last-documented: 563ef3217d3e6141ead155a2c827b15483fe494c -->
 
 # Dark Factory Plugin
 
@@ -25,6 +25,7 @@ checks and reviews already passed.
    every PRD requirement and acceptance criterion at the end.
 4. **Deliver.** The run opens one PR. With `--no-ship` it stops at a PR ready for
    review; otherwise it completes only after observing the reviewed HEAD merged.
+   Factory never merges into `main`; a run based on `main` stops ready for review.
 
 ## Design philosophy
 

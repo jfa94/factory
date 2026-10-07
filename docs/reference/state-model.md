@@ -66,7 +66,7 @@ of another version cannot be read; `state --list` skips it with a warning.
 | `waiting`          | no       | Waiting on quota or a transient failure; `next-action` rechecks. |
 | `awaiting-merge`   | no       | PR open; waiting for required checks and merge.                  |
 | `parked`           | no       | Stopped until `factory resume`.                                  |
-| `ready-for-review` | yes      | No-ship or debug delivery finished.                              |
+| `ready-for-review` | yes      | No-ship, debug or `main`-based live delivery finished.           |
 | `completed`        | yes      | Merge observed, or verified no-change.                           |
 | `cancelled`        | yes      | Cancelled; branch and work preserved.                            |
 

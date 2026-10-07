@@ -29,7 +29,9 @@ The runner follows execute, wait, park and terminal envelopes from
 available at each execution boundary; waiting does not spend a repair pass.
 
 `--no-ship` ends with the feature PR ready for review. Live execution completes only
-after observing the reviewed HEAD merged. No-change completion requires independent
+after observing the reviewed HEAD merged. Starting a live run is the confirmation to
+push, open the PR and merge into `develop`; the runner does not ask again. A run
+based on `main` is never merged and ends ready for review. No-change completion requires independent
 acceptance evidence and creates no empty PR. `--e2e` adds test authoring and an
 executed Playwright suite before final acceptance. Ship and quota policy persist.
 

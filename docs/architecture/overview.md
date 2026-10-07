@@ -120,8 +120,9 @@ replacement evidence without discarding work.
 ## Delivery and protection
 
 The engine recovers PR identity by branch, pushes normally and observes the exact
-reviewed HEAD. Live runs complete only after an observed merge. No-ship and debug
-runs end ready for review. Local runs park after full verification and before any
+reviewed HEAD. Live runs complete only after an observed merge. Factory never
+merges into `main`: a live run based on `main` ends ready for review, as do no-ship
+and debug runs. Local runs park after full verification and before any
 remote write until resume authorizes live or no-ship delivery. A verified empty feature completes without an empty PR.
 Merge observation precedes no-change detection, including after interrupted delivery.
 
