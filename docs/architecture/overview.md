@@ -106,8 +106,13 @@ match both, including after an interruption between Git integration and the stat
 write. An invalid staged result is set aside and re-issued with the reason, at most
 twice, then parked. Its files are retained, and repair passes are not spent.
 Transient failures are waited out and retried, up to five in a row, before the run
-parks. These include git fetch and push, gh PR and check reads, and worktree
-installs. A clean call resets the count. Quota waits last until the next
+parks. These include git fetch and push, gh PR and check reads, worktree
+installs and flaky tests. A Vitest test-gate failure with executed tests on an
+expected-green tree (any check stage except a RED tests stage; the pre-test
+baseline counts) reruns only the failing test files. If they pass, the whole check
+is retried as transient; a repeated failure is repaired as before. The gate passes
+only on a clean full run, and contract-command test gates are not rerun. A clean
+call resets the count. Quota waits last until the next
 usage-window boundary, clamped to 60 to 3600 seconds; unreadable usage is rechecked every 60 seconds.
 Explicit recovery consumes a corrected result or retires the attempt and schedules
 replacement evidence without discarding work.

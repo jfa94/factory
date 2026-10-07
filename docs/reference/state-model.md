@@ -155,9 +155,17 @@ checkpoint (`accepted_sha`), so commits made before the repair are judged with t
 restarted task instead of forming its baseline.
 
 Transient failures (git fetch and push, `gh` PR and check calls, worktree
-provisioning) set `status: waiting` with an `environment` stop reason and return a
+provisioning, and flaky tests) set `status: waiting` with an `environment` stop reason and return a
 60-second wait. The fifth consecutive failure parks the run. A clean call resets
 the count.
+
+A flaky test is a native Vitest test-gate failure, with executed tests, on an
+expected-green tree (any check stage except `tests`, or the `tests` baseline while
+HEAD equals `task_base_sha`) whose failing files (Vitest `FAIL  <file>` rows) pass
+when rerun alone. The wait reason is
+`flaky tests: <files> failed, then passed on rerun`, and the whole check is retried.
+A failure that repeats on rerun spends a repair pass. Contract-command test gates
+are not rerun.
 
 ## Recovery
 

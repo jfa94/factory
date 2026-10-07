@@ -360,3 +360,36 @@ Not a clean pass:
   `.claude/` and `.stryker-tmp/` from the target's tests and lint, and does not
   format the files it manages.
 - The acceptance evaluator left a 579 MB scratch copy in `/tmp`.
+
+## Issue #10: spec brief canary (2026-10-06)
+
+The first attempt on `2.0.0-rc.5` stopped at the spec stage before any run existed.
+The runner trimmed the contracts out of the context it pasted, and it could not copy
+the 56 KB generator reply. Spec agents now read a brief file and write their own
+result (`96a701c7`, `2.0.0-rc.6`).
+
+Run `9c76ab17` on `2.0.0-rc.6` delivered issue #10 as PR #11, squash-merged
+(`ba26727`), status `completed`, branch protection unchanged. The run had nine
+tasks in two slices, 34 attempts and 134 audit rows.
+
+- Spec generation and review passed first time through the brief hand-off. No agent
+  refused or ignored a brief.
+- The planned `run stop` / `resume --recover` consumed the staged result.
+- No review snapshot of this run remains.
+
+Not a clean pass, for one root cause plus one policy interaction:
+
+- **Load-induced test timeouts.** The machine sat at load 10-12, and Playwright
+  render and docs-example tests ran 84-345 s against 60 s limits. Effects:
+    - Task `cl-007` spent both repair passes on unrelated timeouts.
+    - The implementer's correct "nothing to fix" was rejected.
+    - The next pre-test baseline parked as `environment`, although the same tree had
+      passed the full suite 37 minutes earlier.
+
+    The run was resumed manually. Fixed in `45753a82`: a test failure on an
+    expected-green tree whose failing files pass on a rerun is a transient wait, not a
+    repair or a park.
+
+- **Merge confirmation.** The engine tried to merge while Mutation Testing was
+  pending, and branch policy refused. The runner then asked before merging, because
+  the operator's global rule needs explicit confirmation to merge outside dotfiles.

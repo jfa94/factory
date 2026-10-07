@@ -117,3 +117,8 @@ refused briefs, but not cleanly: one environment park (display sleep) and three
 defects fixed during the run (Vitest 4 load failures, auto-merge, unreported
 required checks). See the [canary ledger](asset-generator-canary.md). The
 criterion stays open until a run passes with no environment park and no live fixes.
+Canary #6 (issue #10, 2026-10-06, `2.0.0-rc.6`) delivered and merged (PR #11) but
+was not clean: load-induced test timeouts parked a baseline as `environment`
+(fixed in `45753a82`, `2.0.0-rc.7`: flaky tests rerun and wait), and the runner
+asked before merging because of the operator's global merge-confirmation rule.
+The clean-canary criterion remains open.
