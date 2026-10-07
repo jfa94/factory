@@ -13215,7 +13215,7 @@ Spec ${run5.spec_digest}.`
     if (pr.state === "MERGED") {
       return { kind: "merged", number: pr.number, url: pr.url, head };
     }
-    if (run5.ship_mode === "no-ship" || run5.debug) {
+    if (run5.ship_mode === "no-ship" || run5.debug || run5.base_branch === "main") {
       return { kind: "review", number: pr.number, url: pr.url, head };
     }
     const checkResult = await this.command(

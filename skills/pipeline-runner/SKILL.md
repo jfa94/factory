@@ -140,5 +140,9 @@ the run. Rejected agent results do not spend repair passes either. Spec repair
 must preserve the PRD, frozen contracts and accepted task prefix. Accepted work is
 repaired forward.
 
-GitHub writes remain subject to the user's authorization. Do not bypass a required
-approval. A local terminal status never authorizes unrelated repository writes.
+Starting a live run (no `--no-ship` or `--local`, or `resume --ship live`) is the
+user's confirmation to push the feature branch, open its PR and merge it into
+`develop`; do not ask again. Factory never merges into `main`: a run based on
+`main` ends ready for review. Other GitHub writes remain subject to the user's
+authorization. Do not bypass a required approval. A local terminal status never
+authorizes unrelated repository writes.

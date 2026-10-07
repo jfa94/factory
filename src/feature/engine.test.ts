@@ -348,6 +348,35 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(await git(run.worktree, 'rev-parse', `origin/${run.branch}`)).toBe(head)
     })
 
+    it('never merges into main: a live run stops at a PR ready for review', async () => {
+        const f = await fixture('live')
+        await f.engine.advance('run', 'driver')
+        const run = {...(await f.store.read('run')), base_branch: 'main'}
+        const head = await f.runtime.head(run.worktree)
+        const calls: string[] = []
+        const runtime = new LocalFeatureRuntime(
+            defaultConfig(),
+            {read: () => Promise.reject(new Error('quota unused'))},
+            async (name, args, cwd) => {
+                if (name !== 'gh') {
+                    return exec(name, args, {cwd})
+                }
+                calls.push(args.slice(0, 2).join(' '))
+                const pr = {number: 7, url: 'https://example.invalid/pr/7', state: 'OPEN', headRefOid: head}
+                return {
+                    stdout: JSON.stringify([{...pr, baseRefName: 'main'}]),
+                    stderr: '',
+                    code: 0,
+                    signal: null,
+                    truncated: false,
+                }
+            }
+        )
+        expect(await runtime.deliver(run)).toMatchObject({kind: 'review', number: 7})
+        expect(calls).not.toContain('pr merge')
+        expect(calls).not.toContain('pr checks')
+    })
+
     it('refreshes an existing PR after a repair push and waits for delayed HEAD propagation', async () => {
         const f = await fixture()
         await f.engine.advance('run', 'driver')

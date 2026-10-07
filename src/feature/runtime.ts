@@ -452,7 +452,8 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         if (pr.state === 'MERGED') {
             return {kind: 'merged', number: pr.number, url: pr.url, head}
         }
-        if (run.ship_mode === 'no-ship' || run.debug) {
+        // Operator policy: Factory never merges into main; a live run there ends ready for review.
+        if (run.ship_mode === 'no-ship' || run.debug || run.base_branch === 'main') {
             return {kind: 'review', number: pr.number, url: pr.url, head}
         }
         const checkResult = await this.command(
