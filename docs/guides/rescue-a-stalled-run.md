@@ -7,8 +7,9 @@ factory state --run <id> --ledger
 ```
 
 Some failures do not need you. A transient git, `gh` or worktree provisioning
-failure, or a test failure that passes when its files rerun, leaves the run `waiting` and is retried every 60 seconds; only the fifth
-consecutive failure parks it as `environment`. An invalid agent result is
+failure, or a test failure that passes when its files rerun, leaves the run `waiting` and is retried with exponential backoff (60, 120, 240,
+then 480 seconds, about 15 minutes in total); only the fifth consecutive failure
+parks it as `environment`. An invalid agent result is
 re-issued to that role with the reason, at most twice; a third rejection parks the
 run as `producer`. An agent reporting `blocked` is re-issued the same way; a third
 `blocked` parks the run as `environment`. A `needs-context` question is first sent

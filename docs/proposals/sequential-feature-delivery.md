@@ -130,6 +130,9 @@ Canary #7 (issue #12, 2026-10-07, `2.0.0-rc.8`) passed every condition except
 compaction: PR #13 ended `ready-for-review`, with zero manual recovers and zero
 `environment` parks, no refused briefs and its snapshots cleaned. The runner never
 compacted, so the next canary forces one, targets `develop` and must observe the merge.
+Canary #8 (issue #14, 2026-10-07, `2.0.0-rc.9`) exercised compaction and an observed
+`develop` merge, but was not clean: one `environment` park from a GitHub push outage
+that outlasted the old 60-second retry window; `6babea3a` widens the window.
 `2.0.0-rc.9` (`7e43d100`, `cdf6120d`): a below-target mutation gate names the
 undetected mutants (`file:line mutator -> replacement`, at most 20) so repair can
 target them, and delivery no longer waits on quota. Quota is checked only once work

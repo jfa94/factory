@@ -156,7 +156,8 @@ restarted task instead of forming its baseline.
 
 Transient failures (git fetch and push, `gh` PR and check calls, worktree
 provisioning, and flaky tests) set `status: waiting` with an `environment` stop reason and return a
-60-second wait. The fifth consecutive failure parks the run. A clean call resets
+wait of `60 * 2^(n-1)` seconds for the nth consecutive failure (60, 120, 240, 480;
+about 15 minutes in total). The fifth consecutive failure parks the run. A clean call resets
 the count.
 
 A flaky test is a native Vitest test-gate failure, with executed tests, on an

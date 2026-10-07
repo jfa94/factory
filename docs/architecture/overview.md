@@ -105,8 +105,8 @@ Final acceptance persists the verified feature HEAD and spec digest. Delivery mu
 match both, including after an interruption between Git integration and the state
 write. An invalid staged result is set aside and re-issued with the reason, at most
 twice, then parked. Its files are retained, and repair passes are not spent.
-Transient failures are waited out and retried, up to five in a row, before the run
-parks. These include git fetch and push, gh PR and check reads, worktree
+Transient failures are waited out with exponential backoff (60, 120, 240, then 480
+seconds) and retried, up to five in a row, before the run parks. These include git fetch and push, gh PR and check reads, worktree
 installs and flaky tests. A Vitest test-gate failure with executed tests on an
 expected-green tree (any check stage except a RED tests stage; the pre-test
 baseline counts) reruns only the failing test files. If they pass, the whole check

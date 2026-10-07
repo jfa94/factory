@@ -412,3 +412,29 @@ protection was unchanged. The run had three tasks in two slices.
 - No review snapshot of this run remains.
 - The runner session did not compact: it used 160k of a 1M-token context. The
   compaction leg of the criterion is still unexercised.
+
+## Issue #14: develop-merge and compaction canary (2026-10-07)
+
+Run `f9257ec7` on `2.0.0-rc.9` delivered issue #14 ("Filter ad formats by aspect
+ratio", three tasks in two slices) as PR #16. The PR merged into `develop`: the
+merge was observed at 2026-10-07T17:14Z, with outcome `merged` and status
+`completed`. Branch protection on `main` and `develop` was unchanged, and no review
+snapshot of this run remains.
+
+- Audit: 14 attempts and 14 results, zero rejected results, zero repair passes.
+  Three RED observations were recorded; the feature-boundary mutation score was
+  81.94.
+- The runner session auto-compacted twice, once during task 3's review and once at
+  the resume. Both times it resumed correctly with the skill restored, so the
+  compaction leg is now exercised.
+- Not clean: during delivery, `git push` got GitHub HTTP 500 five times in a row
+  between 16:54:36Z and 16:59:18Z, and the run parked as `environment`. An
+  identical manual push at about 17:05Z succeeded, and githubstatus showed
+  operational, so this was a short GitHub-side outage. After the operator told the
+  runner to resume, it pushed, opened the PR and merged. Follow-up: `6babea3a`
+  backs transient retries off exponentially (60/120/240/480 s, about 15 minutes).
+- Setup: the first launch was cancelled before spec generation. The checkout was
+  on `main` while the resolved base was `develop`; scaffold rewrote `main`'s
+  workflows, and the runner correctly asked how to land them. The scaffold
+  contract was landed on `develop` through PR #15 and the run was relaunched from a
+  `develop` checkout. Lesson: launch from a checkout of the base branch.
