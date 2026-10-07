@@ -11124,7 +11124,11 @@ var FeatureEngine = class {
           run5.stop_reason = { kind: "environment", message };
           this.audit(run5, "transient failure", { count: failures + 1, message });
           await this.store.write(run5);
-          return this.wait(run5, `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`);
+          return this.wait(
+            run5,
+            `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`,
+            60 * 2 ** failures
+          );
         }
         this.park(run5, "environment", message);
         await this.store.write(run5);

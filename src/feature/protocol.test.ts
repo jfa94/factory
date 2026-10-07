@@ -742,22 +742,23 @@ describe('feature evidence and recovery protocol', () => {
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'execute', attempt: {stage: 'docs'}})
         expect((await f.store.read('run')).rejections).toBeUndefined()
     })
-    it('waits on transient failures, resets the count after a clean call, and parks on the fifth in a row', async () => {
+    it('backs off on transient failures, resets the count after a clean call, and parks on the fifth in a row', async () => {
         const f = await setup('deliver')
         const run = await f.store.read('run')
         run.verified_feature = {head_sha: sha, spec_digest: run.spec_digest}
         await f.store.write(run)
         vi.mocked(f.runtime.reconcileBase).mockRejectedValue(new TransientFailure('git fetch failed: timeout'))
-        for (let k = 1; k <= 4; k++) {
+        // Canary #8: a ~5-minute GitHub push outage outlasted flat 60 s retries.
+        for (const [k, seconds] of [60, 120, 240, 480].entries()) {
             expect(await f.engine.advance('run', 'driver')).toEqual({
                 kind: 'wait',
                 run_id: 'run',
-                reason: `transient failure ${k}/5: git fetch failed: timeout`,
-                retry_after_seconds: 60,
+                reason: `transient failure ${k + 1}/5: git fetch failed: timeout`,
+                retry_after_seconds: seconds,
             })
             expect(await f.store.read('run')).toMatchObject({
                 status: 'waiting',
-                transient_failures: k,
+                transient_failures: k + 1,
                 stop_reason: {kind: 'environment'},
             })
         }

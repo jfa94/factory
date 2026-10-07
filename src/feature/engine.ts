@@ -185,7 +185,12 @@ export class FeatureEngine {
                     run.stop_reason = {kind: 'environment', message}
                     this.audit(run, 'transient failure', {count: failures + 1, message})
                     await this.store.write(run)
-                    return this.wait(run, `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`)
+                    // Exponential backoff: the retries span ~15 minutes, outlasting short GitHub outages.
+                    return this.wait(
+                        run,
+                        `transient failure ${failures + 1}/${TRANSIENT_LIMIT}: ${message}`,
+                        60 * 2 ** failures
+                    )
                 }
                 this.park(run, 'environment', message)
                 await this.store.write(run)
