@@ -12729,6 +12729,11 @@ function defaultGateTools(gateEnv = {}) {
 import { stripVTControlCharacters } from "node:util";
 import { dirname as dirname8, isAbsolute, relative as relative2, resolve as resolve2 } from "node:path";
 var LOAD_FAILURE = /^Error: (?:Cannot find (?:module|package) '([^']+)' imported from '([^']+)'|Failed to resolve import "([^"]+)" from "([^"]+)"\. Does the file exist\?)$/gm;
+function failedTestFiles(proc) {
+  const output = stripVTControlCharacters(`${proc.stdout}
+${proc.stderr}`);
+  return [...new Set([...output.matchAll(/^\s*FAIL\s+(\S+)/gm)].map((match) => match[1] ?? ""))];
+}
 function loadFailures(output) {
   const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1];
   const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({
@@ -12952,6 +12957,7 @@ var LocalFeatureRuntime = class {
       full
     };
     const outputs = [];
+    const vitestRuns = [];
     const testResult = await new GateRunner().run({
       ...context,
       // task-check runs the whole suite so an unrelated regression is repaired here, not parked later.
@@ -12962,6 +12968,7 @@ var LocalFeatureRuntime = class {
         vitest: {
           run: async (files, options) => {
             const output = await tools.vitest.run(files, options);
+            vitestRuns.push(output);
             outputs.push(output);
             return output;
           }
@@ -12980,6 +12987,14 @@ var LocalFeatureRuntime = class {
       throw new Error("test gate did not execute exactly one test command");
     }
     const tests = delegated ? { executed: 0, assertionFailure: false } : testEvidence(at(outputs, 0));
+    const expectGreen = stage !== "tests" || await this.head(run5.worktree) === run5.task_base_sha;
+    if (vitestRuns.length === 1 && expectGreen && tests.executed > 0 && !deriveAllGatesVerdict(testResult.evidence).passed) {
+      const files = failedTestFiles(at(outputs, 0));
+      const rerun = files.length > 0 ? await tools.vitest.run(files, { cwd: run5.worktree }) : void 0;
+      if (rerun?.code === 0 && testEvidence(rerun).executed > 0) {
+        throw new TransientFailure(`flaky tests: ${files.join(", ")} failed, then passed on rerun`);
+      }
+    }
     const result = await new GateRunner().run({
       ...context,
       tools,

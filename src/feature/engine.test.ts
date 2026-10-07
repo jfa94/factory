@@ -11,6 +11,7 @@ import {defaultConfig} from '../config/schema.js'
 import {FeatureStore} from './store.js'
 import {FeatureEngine} from './engine.js'
 import {LocalFeatureRuntime} from './runtime.js'
+import {TransientFailure} from './ports.js'
 import {validateFeatureSpec, type FeatureAction, type FeatureResult} from './schema.js'
 import {readBrief} from './test-fixtures.js'
 
@@ -400,31 +401,52 @@ describe('sequential feature execution with real Git', {timeout: 30_000}, () => 
         expect(lists).toBe(4)
     })
 
-    it('executes the native Vitest gate and counts its real test evidence', async () => {
-        const f = await fixture()
-        await symlink(
-            fileURLToPath(new URL('../../node_modules', import.meta.url)),
-            join(f.root, 'node_modules'),
-            'dir'
-        )
-        const contract = JSON.parse(await readFile(join(f.root, '.factory/gates.json'), 'utf8')) as {
-            gates: Record<string, unknown>
+    /** A test that fails on its first run and passes on every later one. */
+    const flakyOnce = async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'flaky-'))
+        dirs.push(dir)
+        const marker = JSON.stringify(join(dir, 'ran'))
+        return {
+            'value.test.js':
+                `import {test, expect} from 'vitest'\nimport {existsSync, writeFileSync} from 'node:fs'\n` +
+                `test('flaky once', () => {\n  const first = !existsSync(${marker})\n` +
+                `  writeFileSync(${marker}, '')\n  expect(first).toBe(false)\n})\n`,
         }
-        contract.gates.test = {contracted: true}
-        await writeFile(join(f.root, '.factory/gates.json'), JSON.stringify(contract))
-        await writeFile(
-            join(f.root, 'value.test.js'),
-            "import {test, expect} from 'vitest'\nimport {value} from './value.js'\ntest('value is nonnegative', () => expect(value).toBeGreaterThanOrEqual(0))\n"
-        )
-        await git(f.root, 'add', '.factory/gates.json', 'value.test.js')
-        await git(f.root, 'commit', '-m', 'configure native test runner')
-        const run = await f.store.read('run')
-        run.accepted_sha = await git(f.root, 'rev-parse', 'HEAD')
-        await f.store.write(run)
+    }
+    const atTests = async (extra: Record<string, string> = {}) => {
+        const f = await fixture()
+        await nativeVitest(f, extra)
         await f.engine.advance('run', 'driver')
-        const checks = await f.runtime.checks(await f.store.read('run'), 'task-check')
+        return {f, run: await f.store.read('run')}
+    }
+
+    it('executes the native Vitest gate and counts its real test evidence', async () => {
+        const {f, run} = await atTests()
+        const checks = await f.runtime.checks(run, 'task-check')
         expect(checks.passed).toBe(true)
         expect(checks.details.join('\n')).toContain('"executed_tests":1')
+    })
+
+    it('treats a check failure that passes when its failing files rerun as transient', async () => {
+        const {f, run} = await atTests(await flakyOnce())
+        await expect(f.runtime.checks(run, 'task-check')).rejects.toThrow(TransientFailure)
+        await expect(f.runtime.checks(run, 'task-check')).resolves.toMatchObject({passed: true})
+    })
+
+    it('treats a flaky pre-test baseline as transient', async () => {
+        const {f, run} = await atTests(await flakyOnce())
+        await expect(f.runtime.checks(run, 'tests')).rejects.toThrow('value.test.js failed, then passed on rerun')
+    })
+
+    it('keeps a failure that repeats on rerun, and never reruns a RED tests stage', async () => {
+        const failing = await atTests({
+            'value.test.js':
+                "import {test, expect} from 'vitest'\nimport {value} from './value.js'\ntest('value is one', () => expect(value).toBe(1))\n",
+        })
+        expect((await failing.f.runtime.checks(failing.run, 'task-check')).passed).toBe(false)
+        const red = await atTests(await flakyOnce())
+        await commit(red.run.worktree, {'red.txt': 'test commit\n'}, 'test: red')
+        expect((await red.f.runtime.checks(red.run, 'tests')).passed).toBe(false)
     })
 
     it('requires executed, unskipped e2e evidence at the feature boundary', async () => {

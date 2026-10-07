@@ -8,7 +8,7 @@ import {isEnoent} from '../shared/fs-errors.js'
 import type {Config} from '../config/schema.js'
 import {GateRunner} from '../verifier/deterministic/gate-runner.js'
 import {defaultGateTools, type CommitInfo, type ProcResult} from '../verifier/deterministic/tools.js'
-import {missingDeclaredModules, testEvidence, type TestEvidence} from './test-evidence.js'
+import {failedTestFiles, missingDeclaredModules, testEvidence, type TestEvidence} from './test-evidence.js'
 import {diffScopedTestFiles} from '../verifier/deterministic/scope.js'
 import {isVitestRunnable} from '../verifier/deterministic/strategies/test.js'
 import {deriveTddVerdict, classifyCommit} from '../verifier/deterministic/tdd-classify.js'
@@ -155,6 +155,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             full,
         }
         const outputs: ProcResult[] = []
+        const vitestRuns: ProcResult[] = []
         const testResult = await new GateRunner().run({
             ...context,
             // task-check runs the whole suite so an unrelated regression is repaired here, not parked later.
@@ -165,6 +166,7 @@ export class LocalFeatureRuntime implements FeatureRuntime {
                 vitest: {
                     run: async (files, options) => {
                         const output = await tools.vitest.run(files, options)
+                        vitestRuns.push(output)
                         outputs.push(output)
                         return output
                     },
@@ -187,6 +189,21 @@ export class LocalFeatureRuntime implements FeatureRuntime {
             throw new Error('test gate did not execute exactly one test command')
         }
         const tests: TestEvidence = delegated ? {executed: 0, assertionFailure: false} : testEvidence(at(outputs, 0))
+        // A failure on an expected-green tree that passes when only its failing files rerun is load or
+        // ordering noise: retry the whole check later rather than spend a repair pass or park.
+        const expectGreen = stage !== 'tests' || (await this.head(run.worktree)) === run.task_base_sha
+        if (
+            vitestRuns.length === 1 &&
+            expectGreen &&
+            tests.executed > 0 &&
+            !deriveAllGatesVerdict(testResult.evidence).passed
+        ) {
+            const files = failedTestFiles(at(outputs, 0))
+            const rerun = files.length > 0 ? await tools.vitest.run(files, {cwd: run.worktree}) : undefined
+            if (rerun?.code === 0 && testEvidence(rerun).executed > 0) {
+                throw new TransientFailure(`flaky tests: ${files.join(', ')} failed, then passed on rerun`)
+            }
+        }
         const result = await new GateRunner().run({
             ...context,
             tools,

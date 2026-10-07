@@ -2,7 +2,13 @@ import {readFileSync} from 'node:fs'
 import fc from 'fast-check'
 import {describe, expect, it} from 'vitest'
 import {isTestPath} from '../verifier/deterministic/scope.js'
-import {declaredModule, missingDeclaredModules, testEvidence, type LoadFailure} from './test-evidence.js'
+import {
+    declaredModule,
+    failedTestFiles,
+    missingDeclaredModules,
+    testEvidence,
+    type LoadFailure,
+} from './test-evidence.js'
 const proc = (stdout: string, code = 0) => ({stdout, stderr: '', code, truncated: false})
 // Captured from this repo's Vitest 3.2.6 in /private/tmp/vlf.N7av (decision 2).
 const captured = (name: string) => ({
@@ -147,5 +153,21 @@ describe('declared module resolution (decision 2)', () => {
                 }
             )
         )
+    })
+})
+
+describe('failed test files', () => {
+    it('names each failing file once, from assertion and load failures', () => {
+        expect(failedTestFiles(captured('vitest-assertion-failure'))).toEqual(['src/a.test.ts'])
+        expect(failedTestFiles(captured('vitest4-load-failures'))).toEqual([
+            'src/a.test.ts',
+            'src/b.test.ts',
+            'src/d.test.ts',
+            'src/e.test.ts',
+        ])
+    })
+
+    it('names nothing for a passing run', () => {
+        expect(failedTestFiles(proc(' ✓ src/b.test.ts (1 test) 1ms\n Tests  1 passed (1)\n'))).toEqual([])
     })
 })

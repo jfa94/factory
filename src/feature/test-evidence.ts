@@ -21,6 +21,12 @@ export interface TestEvidence {
 const LOAD_FAILURE =
     /^Error: (?:Cannot find (?:module|package) '([^']+)' imported from '([^']+)'|Failed to resolve import "([^"]+)" from "([^"]+)"\. Does the file exist\?)$/gm
 
+/** The test files a Vitest run reports as failed (its `FAIL  <file>` rows), once each in report order. */
+export function failedTestFiles(proc: ProcResult): string[] {
+    const output = stripVTControlCharacters(`${proc.stdout}\n${proc.stderr}`)
+    return [...new Set([...output.matchAll(/^\s*FAIL\s+(\S+)/gm)].map((match) => match[1] ?? ''))]
+}
+
 function loadFailures(output: string): LoadFailure[] | undefined {
     const failed = /^\s*Test Files\s+(\d+) failed/m.exec(output)?.[1]
     const rows = [...output.matchAll(LOAD_FAILURE)].map((m) => ({
