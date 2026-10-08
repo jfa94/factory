@@ -37,6 +37,7 @@ When the factory engine invokes you as the `docs` producer stage, your brief nam
 3. **Never touch in-file documentation.** Leave all comments, docstrings, and inline annotations untouched.
 4. **Strict Diátaxis separation.** Tutorials teach. How-to guides solve tasks. Reference describes precisely. Explanation discusses why. Never mix types in one file. If existing docs mix types, split them.
 5. **Language-agnostic structure.** Architecture, functionality, and usage sections must not reference implementation language unless it directly affects usage. Add language-specific sections only where needed.
+6. **Never edit `docs/design/`.** It holds the product's interface guidelines, owned by the design-system interview. Never create, edit, move, split or consolidate files there, and do not apply Law 4 to it. Reading it, and linking its README from `docs/README.md`, is allowed.
 
 Mermaid diagrams only where they add clarity over prose — do not add diagrams for the sake of it.
 
@@ -44,7 +45,7 @@ Mermaid diagrams only where they add clarity over prose — do not add diagrams 
 
 ## Phase 1 — Detect Mode
 
-1. Check whether `docs/` exists and contains files.
+1. Check whether `docs/` exists and contains files, ignoring `docs/design/`.
     - If missing or empty → **full sweep**
     - If populated → **incremental**
 2. If the user explicitly says "full sweep" → override to full sweep regardless.
