@@ -438,3 +438,24 @@ snapshot of this run remains.
   workflows, and the runner correctly asked how to land them. The scaffold
   contract was landed on `develop` through PR #15 and the run was relaunched from a
   `develop` checkout. Lesson: launch from a checkout of the base branch.
+
+## Issue #17: clean canary (2026-10-08)
+
+Run `bd3c1d5a` on `2.0.0-rc.11` delivered issue #17 ("Filter copy limits by
+field", three tasks in two slices) as PR #18. The PR merged into `develop` at
+2026-10-08T11:59:47Z, observed by the engine (outcome `merged`, status
+`completed`), and the engine closed issue #17 with "Delivered by #18, merged into
+develop." The run took 1h24m from creation to merge. Branch protection on `main`
+and `develop` was unchanged, and no review snapshot of this run remains.
+
+- Audit: 17 attempts and 17 results, zero rejected results, zero transient
+  failures, zero parks. Three RED observations; the full suite ran 1408 tests.
+- One repair pass: the feature review confirmed that a `[fld-003]` commit edited
+  `commands.md`, `README.md` and `components.md`, which the spec kept out of scope.
+  The repair restored all three to base, and the scoped re-review passed with no
+  claims.
+- One quota wait before acceptance (41% of the 5-hour window against a 40% cap)
+  ended on its own at the next boundary.
+- The runner auto-compacted twice, during task 3's review and during acceptance,
+  and continued correctly both times.
+- No stop/resume leg; canary #7 exercised it cleanly on `2.0.0-rc.8`.

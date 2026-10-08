@@ -107,11 +107,13 @@ traps. Ten decisions address these across five phases:
       feature range and snapshot removal (decisions 2, 5, 6, 7).
 - [x] Base-branch resolution, quota boundary waits, a run-scoped compaction reminder
       and fenced spec output parsing (decision 8).
-- [ ] Canary on `jfa94/asset-generator` (main-only), with quota active, one
+- [x] Canary on `jfa94/asset-generator` (main-only), with quota active, one
       stop/resume and one compaction. Pass: zero manual recovers, zero `environment`
       parks, no refused or ignored briefs, and snapshots cleaned up.
+      Passed by canary #9 (issue #17, `2.0.0-rc.11`); stop/resume was last
+      exercised cleanly by canary #7 (`2.0.0-rc.8`) and not repeated.
 
-This remediation is **not release-ready** until that canary passes. Canary #5
+This remediation was **not release-ready** until that canary passed. Canary #5
 (issue #7, 2026-10-05) delivered and merged with zero manual recovers and no
 refused briefs, but not cleanly: one environment park (display sleep) and three
 defects fixed during the run (Vitest 4 load failures, auto-merge, unreported
@@ -141,3 +143,7 @@ leaves `deliver`, for example on a CI-failure repair.
 240, then 480 seconds). `2.0.0-rc.11` (`2d927b83`): after an observed merge the
 engine closes the PRD issue, since `develop` merges never auto-closed it; a failed
 close is audited, not parked.
+Canary #9 (issue #17, 2026-10-08, `2.0.0-rc.11`) passed: PR #18 merged into
+`develop` and was observed, with zero manual recovers, zero `environment` parks,
+zero rejected results, two runner compactions, snapshots cleaned and no live fixes.
+The engine closed issue #17 itself. See the [canary ledger](asset-generator-canary.md).
