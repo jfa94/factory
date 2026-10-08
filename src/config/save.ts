@@ -116,6 +116,7 @@ export function setAtPath(obj: Record<string, unknown>, path: string[], value: C
         if (existing === undefined || existing === null || typeof existing !== 'object' || Array.isArray(existing)) {
             cursor[key] = {}
         }
+        // nosemgrep: prototype-pollution-loop -- segment() rejects __proto__/constructor/prototype
         cursor = cursor[key] as Record<string, unknown>
     }
     cursor[segment(path, path.length - 1)] = value
@@ -164,6 +165,7 @@ export function getAtPath(config: Config, path: string[]): unknown {
         if (!(key in (cursor as Record<string, unknown>))) {
             throw new Error(`configure: unknown config key '${path.join('.')}'`)
         }
+        // nosemgrep: prototype-pollution-loop -- read-only walk; nothing is assigned through cursor
         cursor = (cursor as Record<string, unknown>)[key]
     }
     return cursor
