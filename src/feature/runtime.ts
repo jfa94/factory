@@ -506,6 +506,22 @@ export class LocalFeatureRuntime implements FeatureRuntime {
         return {kind: updated.state === 'MERGED' ? 'merged' : 'pending', number: updated.number, url: updated.url, head}
     }
 
+    async closeIssue(run: FeatureRun, pr: number): Promise<void> {
+        await this.checked(
+            'gh',
+            [
+                'issue',
+                'close',
+                String(run.spec.prd.issue_number),
+                '--repo',
+                run.repo,
+                '--comment',
+                `Delivered by #${pr}, merged into ${run.base_branch}.`,
+            ],
+            run.worktree
+        )
+    }
+
     async mergedDelivery(run: FeatureRun): Promise<DeliveryResult | undefined> {
         const prs = z
             .array(PrSchema)

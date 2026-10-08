@@ -444,6 +444,18 @@ export class FeatureEngine {
     private wait(run: FeatureRun, reason: string, seconds = 60): FeatureAction {
         return {kind: 'wait', run_id: run.run_id, reason, retry_after_seconds: seconds}
     }
+    private async closeIssue(run: FeatureRun, pr: number): Promise<void> {
+        if (run.debug) {
+            return
+        }
+        try {
+            await this.runtime.closeIssue(run, pr)
+        } catch (error) {
+            // ponytail: the merge already landed; an open issue is cosmetic, so audit instead of parking.
+            this.audit(run, 'issue close failed', {message: error instanceof Error ? error.message : String(error)})
+        }
+    }
+
     private terminal(run: FeatureRun): FeatureAction {
         return {kind: 'terminal', run_id: run.run_id, status: run.status, delivery: run.delivery}
     }
@@ -961,6 +973,7 @@ export class FeatureEngine {
                 run.status = 'completed'
                 run.delivery = {pr_number: merged.number, url: merged.url, head_sha: merged.head, outcome: 'merged'}
                 this.audit(run, 'merge confirmed', merged)
+                await this.closeIssue(run, merged.number)
                 return this.terminal(run)
             }
             const reconciliation = await this.runtime.reconcileBase(run)
@@ -1001,6 +1014,9 @@ export class FeatureEngine {
             if (result.kind === 'merged' || result.kind === 'review') {
                 run.status = result.kind === 'merged' ? 'completed' : 'ready-for-review'
                 run.delivery.outcome = result.kind === 'merged' ? 'merged' : 'review'
+                if (result.kind === 'merged') {
+                    await this.closeIssue(run, result.number)
+                }
                 return this.terminal(run)
             }
             if (result.kind === 'failed') {

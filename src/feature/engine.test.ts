@@ -93,6 +93,7 @@ async function fixture(mode: 'live' | 'no-ship' | 'local' = 'no-ship', exempt = 
     })
     const deliveries: string[] = []
     runtime.mergedDelivery = () => Promise.resolve(undefined)
+    runtime.closeIssue = () => Promise.resolve()
     runtime.deliver = async (run) => {
         const head = await runtime.head(run.worktree)
         await git(run.worktree, 'push', '-u', 'origin', `HEAD:refs/heads/${run.branch}`)

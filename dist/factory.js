@@ -11364,6 +11364,16 @@ var FeatureEngine = class {
   wait(run5, reason, seconds = 60) {
     return { kind: "wait", run_id: run5.run_id, reason, retry_after_seconds: seconds };
   }
+  async closeIssue(run5, pr) {
+    if (run5.debug) {
+      return;
+    }
+    try {
+      await this.runtime.closeIssue(run5, pr);
+    } catch (error) {
+      this.audit(run5, "issue close failed", { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
   terminal(run5) {
     return { kind: "terminal", run_id: run5.run_id, status: run5.status, delivery: run5.delivery };
   }
@@ -11815,6 +11825,7 @@ var FeatureEngine = class {
         run5.status = "completed";
         run5.delivery = { pr_number: merged.number, url: merged.url, head_sha: merged.head, outcome: "merged" };
         this.audit(run5, "merge confirmed", merged);
+        await this.closeIssue(run5, merged.number);
         return this.terminal(run5);
       }
       const reconciliation = await this.runtime.reconcileBase(run5);
@@ -11854,6 +11865,9 @@ var FeatureEngine = class {
       if (result.kind === "merged" || result.kind === "review") {
         run5.status = result.kind === "merged" ? "completed" : "ready-for-review";
         run5.delivery.outcome = result.kind === "merged" ? "merged" : "review";
+        if (result.kind === "merged") {
+          await this.closeIssue(run5, result.number);
+        }
         return this.terminal(run5);
       }
       if (result.kind === "failed") {
@@ -13303,6 +13317,21 @@ Spec ${run5.spec_digest}.`
       throw new Error("PR changed during merge request");
     }
     return { kind: updated.state === "MERGED" ? "merged" : "pending", number: updated.number, url: updated.url, head };
+  }
+  async closeIssue(run5, pr) {
+    await this.checked(
+      "gh",
+      [
+        "issue",
+        "close",
+        String(run5.spec.prd.issue_number),
+        "--repo",
+        run5.repo,
+        "--comment",
+        `Delivered by #${pr}, merged into ${run5.base_branch}.`
+      ],
+      run5.worktree
+    );
   }
   async mergedDelivery(run5) {
     const prs = external_exports.array(PrSchema).parse(

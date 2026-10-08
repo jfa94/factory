@@ -172,6 +172,16 @@ describe('feature runtime external evidence', () => {
         expect(await f.runtime.mergedDelivery(run)).toMatchObject({kind: 'merged', head: sha})
         expect(f.command.mock.calls.some(([, args]) => args[0] === 'push')).toBe(false)
     })
+    it('closes the PRD issue with a comment naming the merged PR and base', async () => {
+        const f = setup()
+        f.command.mockImplementation(() => reply(''))
+        await f.runtime.closeIssue(run, 7)
+        expect(f.command).toHaveBeenCalledWith(
+            'gh',
+            ['issue', 'close', '1', '--repo', 'owner/repo', '--comment', 'Delivered by #7, merged into develop.'],
+            expect.anything()
+        )
+    })
     it('rejects a merged PR at another HEAD and treats no merged PR as absent', async () => {
         const f = setup()
         f.command.mockImplementation((name) => reply(name === 'gh' ? '[]' : sha))

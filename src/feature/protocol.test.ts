@@ -75,6 +75,7 @@ async function setup(stage?: Stage) {
         reconcileBase: vi.fn().mockResolvedValue('unchanged'),
         noChanges: vi.fn().mockResolvedValue(false),
         mergedDelivery: vi.fn().mockResolvedValue(undefined),
+        closeIssue: vi.fn().mockResolvedValue(undefined),
         deliver: vi.fn().mockResolvedValue({kind: 'merged', number: 1, url: 'https://example.invalid/1', head: sha}),
         validateRepair: vi.fn().mockResolvedValue(undefined),
     } satisfies FeatureRuntime
@@ -164,6 +165,35 @@ describe('feature evidence and recovery protocol', () => {
         await f.store.write({...run, verified_feature: {head_sha: sha, spec_digest: run.spec_digest}})
         vi.mocked(f.runtime.quota).mockResolvedValue({reason: '5h quota over curve', seconds: 1234})
         expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'completed'})
+    })
+    it('closes the PRD issue after an observed merge; a close failure is audited, not parked', async () => {
+        const f = await setup('deliver')
+        const run = await f.store.read('run')
+        await f.store.write({...run, verified_feature: {head_sha: sha, spec_digest: run.spec_digest}})
+        vi.mocked(f.runtime.closeIssue).mockRejectedValueOnce(new Error('gh: HTTP 502'))
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'completed'})
+        expect(f.runtime.closeIssue).toHaveBeenCalledWith(expect.objectContaining({run_id: 'run'}), 1)
+        const audit = (await f.store.read('run')).audit
+        expect(audit.find((row) => row.event === 'issue close failed')).toMatchObject({
+            details: {message: 'gh: HTTP 502'},
+        })
+    })
+    it('closes the PRD issue when a merge is observed at deliver entry, and never for a review delivery', async () => {
+        const f = await setup('deliver')
+        vi.mocked(f.runtime.mergedDelivery).mockResolvedValueOnce({
+            kind: 'merged',
+            number: 4,
+            url: 'https://example.invalid/4',
+            head: sha,
+        })
+        expect(await f.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'completed'})
+        expect(f.runtime.closeIssue).toHaveBeenCalledWith(expect.objectContaining({run_id: 'run'}), 4)
+        const g = await setup('deliver')
+        const run = await g.store.read('run')
+        await g.store.write({...run, verified_feature: {head_sha: sha, spec_digest: run.spec_digest}})
+        vi.mocked(g.runtime.deliver).mockResolvedValueOnce({kind: 'review', number: 1, url: 'u', head: sha})
+        expect(await g.engine.advance('run', 'driver')).toMatchObject({kind: 'terminal', status: 'ready-for-review'})
+        expect(g.runtime.closeIssue).not.toHaveBeenCalled()
     })
     it('rechecks quota before work that leaves the deliver stage', async () => {
         const f = await setup('deliver')

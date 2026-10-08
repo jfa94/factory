@@ -58,5 +58,7 @@ export interface FeatureRuntime {
     noChanges(run: FeatureRun): Promise<boolean>
     mergedDelivery(run: FeatureRun): Promise<DeliveryResult | undefined>
     deliver(run: FeatureRun): Promise<DeliveryResult>
+    /** Closes the PRD issue; GitHub auto-closes only on default-branch merges. */
+    closeIssue(run: FeatureRun, pr: number): Promise<void>
     validateRepair(run: FeatureRun, spec: FeatureSpec): Promise<void>
 }
