@@ -82,10 +82,21 @@ function coerceValue(raw: string): ConfigValue {
     }
 }
 
-/** Split + validate a dotted key path (no empty segments). */
+const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** The path segment at `i`; prototype segments throw so no write can reach Object.prototype. */
+function segment(path: string[], i: number): string {
+    const key = at(path, i)
+    if (PROTOTYPE_KEYS.has(key)) {
+        throw new Error(`configure: invalid key path '${path.join('.')}'`)
+    }
+    return key
+}
+
+/** Split + validate a dotted key path (no empty or prototype segments). */
 export function splitPath(dotted: string): string[] {
     const path = dotted.split('.')
-    if (path.length === 0 || path.some((s) => s.length === 0)) {
+    if (path.length === 0 || path.some((s) => s.length === 0 || PROTOTYPE_KEYS.has(s))) {
         throw new Error(`configure: invalid key path '${dotted}'`)
     }
     return path
@@ -100,14 +111,14 @@ export function setAtPath(obj: Record<string, unknown>, path: string[], value: C
     const next = structuredClone(obj)
     let cursor: Record<string, unknown> = next
     for (let i = 0; i < path.length - 1; i++) {
-        const key = at(path, i)
+        const key = segment(path, i)
         const existing = cursor[key]
         if (existing === undefined || existing === null || typeof existing !== 'object' || Array.isArray(existing)) {
             cursor[key] = {}
         }
         cursor = cursor[key] as Record<string, unknown>
     }
-    cursor[at(path, path.length - 1)] = value
+    cursor[segment(path, path.length - 1)] = value
     return next
 }
 
@@ -121,7 +132,7 @@ export function unsetAtPath(obj: Record<string, unknown>, path: string[]): Recor
     const parents: {container: Record<string, unknown>; key: string}[] = []
     let cursor: Record<string, unknown> = next
     for (let i = 0; i < path.length - 1; i++) {
-        const key = at(path, i)
+        const key = segment(path, i)
         const child = cursor[key]
         if (child === undefined || child === null || typeof child !== 'object' || Array.isArray(child)) {
             return next // path absent — nothing to unset
@@ -129,7 +140,7 @@ export function unsetAtPath(obj: Record<string, unknown>, path: string[]): Recor
         parents.push({container: cursor, key})
         cursor = child as Record<string, unknown>
     }
-    Reflect.deleteProperty(cursor, at(path, path.length - 1))
+    Reflect.deleteProperty(cursor, segment(path, path.length - 1))
     // Prune now-empty ancestors (deepest first) to keep the overlay minimal.
     for (let i = parents.length - 1; i >= 0; i--) {
         const {container, key} = at(parents, i)

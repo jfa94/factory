@@ -6356,9 +6356,17 @@ function coerceValue(raw) {
     return raw;
   }
 }
+var PROTOTYPE_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+function segment(path3, i) {
+  const key = at(path3, i);
+  if (PROTOTYPE_KEYS.has(key)) {
+    throw new Error(`configure: invalid key path '${path3.join(".")}'`);
+  }
+  return key;
+}
 function splitPath(dotted) {
   const path3 = dotted.split(".");
-  if (path3.length === 0 || path3.some((s) => s.length === 0)) {
+  if (path3.length === 0 || path3.some((s) => s.length === 0 || PROTOTYPE_KEYS.has(s))) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
   return path3;
@@ -6367,14 +6375,14 @@ function setAtPath(obj, path3, value) {
   const next = structuredClone(obj);
   let cursor = next;
   for (let i = 0; i < path3.length - 1; i++) {
-    const key = at(path3, i);
+    const key = segment(path3, i);
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[at(path3, path3.length - 1)] = value;
+  cursor[segment(path3, path3.length - 1)] = value;
   return next;
 }
 function unsetAtPath(obj, path3) {
@@ -6382,7 +6390,7 @@ function unsetAtPath(obj, path3) {
   const parents = [];
   let cursor = next;
   for (let i = 0; i < path3.length - 1; i++) {
-    const key = at(path3, i);
+    const key = segment(path3, i);
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6390,7 +6398,7 @@ function unsetAtPath(obj, path3) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  Reflect.deleteProperty(cursor, at(path3, path3.length - 1));
+  Reflect.deleteProperty(cursor, segment(path3, path3.length - 1));
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = at(parents, i);
     const child = container[key];

@@ -176,6 +176,18 @@ describe('factory configure', () => {
         expect(existsSync(join(dataDir, 'config.json'))).toBe(false)
     })
 
+    it.each(['__proto__.polluted=1', 'gateEnv.constructor.prototype.polluted=1', 'a.prototype=1'])(
+        '--set rejects a prototype key path (%s) without polluting Object.prototype',
+        async (token) => {
+            await expect(configureCommand.run(['--set', token])).rejects.toThrow(/invalid key path/)
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+        }
+    )
+    it('--unset and --get reject a prototype key path', async () => {
+        await expect(configureCommand.run(['--unset', '__proto__.x'])).rejects.toThrow(/invalid key path/)
+        await expect(configureCommand.run(['--get', 'constructor'])).rejects.toThrow(/invalid key path/)
+    })
+
     it('--help returns OK', async () => {
         expect(await configureCommand.run(['--help'])).toBe(EXIT.OK)
         expect(stdout.join('')).toMatch(/factory configure/)
