@@ -128,6 +128,10 @@ merges into `main`: a live run based on `main` ends ready for review, as do no-s
 and debug runs. Local runs park after full verification and before any
 remote write until resume authorizes live or no-ship delivery. A verified empty feature completes without an empty PR.
 Merge observation precedes no-change detection, including after interrupted delivery.
+After an observed merge, the engine closes the PRD issue with a comment naming the
+PR and base, because GitHub auto-closes issues only on default-branch merges. A
+failed close is audited (`issue close failed`) and does not park the run; debug
+runs and ready-for-review deliveries leave the issue open.
 
 Scaffolding requires a stable strict branch profile. Existing sufficient protection
 is untouched. Strengthening updates only required status checks and preserves

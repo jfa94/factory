@@ -67,7 +67,7 @@ of another version cannot be read; `state --list` skips it with a warning.
 | `awaiting-merge`   | no       | PR open; waiting for required checks and merge.                                       |
 | `parked`           | no       | Stopped until `factory resume`.                                                       |
 | `ready-for-review` | yes      | No-ship, debug or `main`-based live delivery finished.                                |
-| `completed`        | yes      | Merge observed, or verified no-change.                                                |
+| `completed`        | yes      | Merge observed (PRD issue closed), or verified no-change.                             |
 | `cancelled`        | yes      | Cancelled; branch and work preserved.                                                 |
 
 `stop_reason.kind` is one of `operator`, `quota`, `ci`, `environment`, `producer`,

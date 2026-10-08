@@ -137,3 +137,7 @@ that outlasted the old 60-second retry window; `6babea3a` widens the window.
 undetected mutants (`file:line mutator -> replacement`, at most 20) so repair can
 target them, and delivery no longer waits on quota. Quota is checked only once work
 leaves `deliver`, for example on a CI-failure repair.
+`2.0.0-rc.10` (`6babea3a`): transient retries back off exponentially (60, 120,
+240, then 480 seconds). `2.0.0-rc.11` (`2d927b83`): after an observed merge the
+engine closes the PRD issue, since `develop` merges never auto-closed it; a failed
+close is audited, not parked.
