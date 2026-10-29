@@ -118,7 +118,7 @@ describe('managed mutation scope helper', () => {
   })
 
   test('non-canonical exclude entries fail loudly', () => {
-    for (const entry of ['./src/a.ts', 'src/a.ts ', 'src/lib/']) {
+    for (const entry of ['./src/a.ts', 'src/a.ts ', 'src/lib/', 'src/legacy', 'src/generated/client', 'src/**/*.gen.ts', 'src/a?.ts']) {
       assert.throws(() => loadExcluded(() => JSON.stringify([entry])), /mutation-exclude\.json.*entry/)
     }
   })

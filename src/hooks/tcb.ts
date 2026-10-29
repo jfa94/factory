@@ -13,6 +13,8 @@
  *   - `.github/workflows/**`        — CI / quality-gate machinery (Δ W). An
  *                                     implementer that edits the gate workflow can
  *                                     make every gate pass.
+ *   - `.github/scripts/**`          — CI helper scripts the workflows execute from
+ *                                     the PR head (e.g. the mutation shard helper).
  *   - gate/CI config at the repo root — `.stryker.config.json` (mutation),
  *                                     `.dependency-cruiser.cjs` (arch), and the
  *                                     scaffold templates that seed them.
@@ -133,6 +135,14 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
         category: 'ci-workflows',
         describe: '.github/workflows/** (CI / quality-gate machinery)',
         test: (p) => hasAdjacentComponents(p, '.github', 'workflows'),
+    })
+
+    // 1a. CI helper scripts: `.github/scripts/**`. Workflows run them from the PR head, so
+    //     editing one (e.g. the mutation shard helper) changes what CI gates. Anchored like 1.
+    rules.push({
+        category: 'ci-scripts',
+        describe: '.github/scripts/** (CI helper scripts the managed workflows run)',
+        test: (p) => hasAdjacentComponents(p, '.github', 'scripts'),
     })
 
     // 1b. In-repo reviewable spec copy: any `docs/factory/**` path (F-specloc).

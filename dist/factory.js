@@ -7460,7 +7460,7 @@ function renderMutationNightly(template, opts) {
   if (!opts.contract.gates.mutation.contracted) {
     return null;
   }
-  let lines = renderBaseBranch(template, opts.baseBranch).split("\n");
+  let lines = renderBranches(template, [opts.baseBranch]).split("\n");
   lines = replaceMarker(lines, "# factory:mutation-setup", mutationSetupBlock(opts));
   lines = applyMutationRoots(lines, opts.contract);
   if (opts.packageManager === "npm") {
@@ -7478,15 +7478,15 @@ function renderQualityGate(template, opts) {
     );
   }
   const branches = [.../* @__PURE__ */ new Set([opts.baseBranch, ...opts.extraBranches ?? []])];
-  let lines = template.replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(", ")).split("\n");
+  let lines = renderBranches(template, branches).split("\n");
   lines = replaceMarker(lines, "# factory:setup", setupBlock(opts));
   lines = replaceMarker(lines, "# factory:gates", gatesBlock(opts));
   lines = renderMutationRegion(lines, opts);
   return lines.join("\n");
 }
 var BASE_BRANCH_PLACEHOLDER = "__FACTORY_BASE_BRANCH__";
-function renderBaseBranch(template, branch) {
-  return template.replaceAll(BASE_BRANCH_PLACEHOLDER, JSON.stringify(branch));
+function renderBranches(template, branches) {
+  return template.replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(", "));
 }
 
 // src/ci/node-runtime.ts

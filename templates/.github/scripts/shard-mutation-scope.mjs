@@ -70,7 +70,7 @@ function loadExcluded(readText = readUtf8) {
     throw new Error(`mutation scope: ${EXCLUDE_FILE} must be a JSON array of path strings`);
   }
   const bad = parsed.find(
-    (entry) => entry !== entry.trim() || entry.includes("\\") || entry.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+    (entry) => entry !== entry.trim() || entry.includes("\\") || !/\.tsx?$/.test(entry) || /[*?]/.test(entry) || entry.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
   );
   if (bad !== void 0) {
     throw new Error(

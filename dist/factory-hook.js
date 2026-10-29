@@ -6732,6 +6732,11 @@ function buildTcbRules(ctx = {}) {
     test: (p) => hasAdjacentComponents(p, ".github", "workflows")
   });
   rules.push({
+    category: "ci-scripts",
+    describe: ".github/scripts/** (CI helper scripts the managed workflows run)",
+    test: (p) => hasAdjacentComponents(p, ".github", "scripts")
+  });
+  rules.push({
     category: "docs-factory",
     describe: "docs/factory/** (in-repo reviewable spec copy \u2014 F-specloc)",
     test: (p) => hasAdjacentComponents(p, "docs", "factory")

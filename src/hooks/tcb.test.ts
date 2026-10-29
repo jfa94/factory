@@ -204,6 +204,19 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         expect(isTcbProtected(p)?.rule.category).toBe('mutation-exclude')
     })
 
+    it('D75: ADVERSARIAL — a producer write to .github/scripts/** is DENIED', () => {
+        // CI runs the PR-head shard helper; editing it could empty the mutation scope.
+        const p = join(repoRoot, '.github', 'scripts', 'shard-mutation-scope.mjs')
+        mkdirSync(join(repoRoot, '.github', 'scripts'), {recursive: true})
+        writeFileSync(p, '')
+        expect(isTcbProtected(p, ctx())?.rule.category).toBe('ci-scripts')
+        expect(isTcbProtected(p)?.rule.category).toBe('ci-scripts')
+    })
+
+    it('D75: a benign my.github/scripts path is NOT protected (component-anchored)', () => {
+        expect(isTcbProtected(join(repoRoot, 'my.github', 'scripts', 'x.mjs'), ctx())).toBeNull()
+    })
+
     it('D46: a sibling file under .factory/ is NOT protected (scoped exactly to gates.json + scaffold.lock)', () => {
         const p = join(repoRoot, '.factory', 'notes.md')
         mkdirSync(join(repoRoot, '.factory'), {recursive: true})
@@ -261,6 +274,7 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         const categories = new Set(buildTcbRules(ctx()).map((r) => r.category))
         // Every protected category is present so a new one is covered automatically.
         expect(categories).toContain('ci-workflows')
+        expect(categories).toContain('ci-scripts')
         expect(categories).toContain('gate-config')
         expect(categories).toContain('hooks')
         expect(categories).toContain('data-runs')

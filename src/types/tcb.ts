@@ -17,6 +17,7 @@
  */
 export type TcbCategory =
     | 'ci-workflows'
+    | 'ci-scripts'
     | 'gate-config'
     | 'gate-contract'
     | 'scaffold-lock'

@@ -3586,12 +3586,20 @@ deltas are now first-class:
    string array). An absent file means no exclusions. A malformed or unreadable file
    fails loudly. Both workflows call this one script, so PR and nightly scope stay identical.
    Entries must be canonical repo-relative file paths, because matching is exact; a
-   non-canonical entry fails loudly instead of silently excluding nothing. Extra
+   non-canonical entry fails loudly instead of silently excluding nothing. An entry must
+   end in `.ts` or `.tsx` and contain no `*` or `?`, so directory and glob entries are
+   rejected; bracketed Next.js paths stay valid. Extra
    branches accept GitHub globs but reject `!` negation and whitespace. The
    quality-gate concurrency group is keyed by head and base branch, so PRs from one
    head into two targets do not cancel each other.
    The TCB hook denies producer writes to the exclude file, as it does for
-   `gates.json`, so a run cannot exempt its own code. The engine's local mutation
+   `gates.json`, so a run cannot exempt its own code. It also denies
+   `.github/scripts/**` (`ci-scripts`): CI runs the shard helper from the PR head, so
+   editing it would bypass the exclude-file rule. Producer-added Stryker disable comments
+   are left to the quality-reviewer rubric, not an engine gate. File-wide or unjustified
+   disables block. A justified single-line disable for a genuinely equivalent mutant is
+   allowed, because the hunk-scoped `break: 80` verdict would otherwise leave no way out
+   of one unkillable mutant in a small diff. The engine's local mutation
    gate stays `.ts`-only and ignores the exclude file; aligning it is a follow-up.
 
 ---

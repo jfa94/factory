@@ -152,21 +152,31 @@ describe('loadExcluded — optional repo exclude list', () => {
     it('reads a JSON array of repo-relative paths', () => {
         const read = (path: string): string => {
             expect(path).toBe('.factory/mutation-exclude.json')
-            return '["src/a.tsx", "src/b.ts"]'
+            return '["src/a.tsx", "src/b.ts", "app/[id]/page.tsx"]'
         }
-        expect(loadExcluded(read)).toEqual(new Set(['src/a.tsx', 'src/b.ts']))
+        expect(loadExcluded(read)).toEqual(new Set(['src/a.tsx', 'src/b.ts', 'app/[id]/page.tsx']))
     })
 
     it.each(['{"a":1}', '[1]', 'not json'])('fails loudly on a malformed file: %s', (text) => {
         expect(() => loadExcluded(() => text)).toThrow('.factory/mutation-exclude.json')
     })
 
-    it.each(['./src/a.ts', ' src/a.ts', 'src/a.ts ', 'src\\a.ts', '/src/a.ts', 'src/../a.ts', 'src/lib/', ''])(
-        'fails loudly on a non-canonical entry %j (it would never match a path)',
-        (entry) => {
-            expect(() => loadExcluded(() => JSON.stringify([entry]))).toThrow(/mutation-exclude\.json.*entry/)
-        }
-    )
+    it.each([
+        './src/a.ts',
+        ' src/a.ts',
+        'src/a.ts ',
+        'src\\a.ts',
+        '/src/a.ts',
+        'src/../a.ts',
+        'src/lib/',
+        '',
+        'src/legacy',
+        'src/generated/client',
+        'src/**/*.gen.ts',
+        'src/a?.ts',
+    ])('fails loudly on a non-canonical entry %j (it would never match a path)', (entry) => {
+        expect(() => loadExcluded(() => JSON.stringify([entry]))).toThrow(/mutation-exclude\.json.*entry/)
+    })
 
     it('fails loudly when the file exists but cannot be read', () => {
         const read = (): string => {

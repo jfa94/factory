@@ -69,6 +69,8 @@ export function loadExcluded(readText: ReadText = readUtf8): Set<string> {
         (entry: string) =>
             entry !== entry.trim() ||
             entry.includes('\\') ||
+            !/\.tsx?$/.test(entry) ||
+            /[*?]/.test(entry) ||
             entry.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
     )
     if (bad !== undefined) {
