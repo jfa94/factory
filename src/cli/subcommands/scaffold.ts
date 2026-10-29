@@ -582,11 +582,16 @@ function managedTransform(
     rel: string,
     contract: GateContract,
     facts: WorkflowFacts,
-    gateEnv: Config['quality']['gateEnv'],
+    config: Config,
     baseBranch: string
 ): ((text: string) => string) | undefined {
     if (rel === QUALITY_GATE_REL) {
-        return (text) => injectGateEnvIntoWorkflow(renderQualityGate(text, {contract, ...facts, baseBranch}), gateEnv)
+        const extraBranches = config.git.qualityGateExtraBranches
+        return (text) =>
+            injectGateEnvIntoWorkflow(
+                renderQualityGate(text, {contract, ...facts, baseBranch, extraBranches}),
+                config.quality.gateEnv
+            )
     }
     if (rel === MUTATION_NIGHTLY_REL) {
         return (text) => nonNull(renderMutationNightly(text, {contract, ...facts, baseBranch}))
@@ -656,7 +661,7 @@ async function preflightManagedFiles(
             continue
         }
         const destText = await readFile(dest, 'utf8')
-        const transform = managedTransform(entry.rel, contract, facts, opts.config.quality.gateEnv, opts.baseBranch)
+        const transform = managedTransform(entry.rel, contract, facts, opts.config, opts.baseBranch)
         const text = await readFile(src, 'utf8')
         const rendered = transform ? transform(text) : text
         if (destText === rendered) {
@@ -903,13 +908,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
             if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
                 continue
             }
-            const transform = managedTransform(
-                entry.rel,
-                gates.contract,
-                facts,
-                opts.config.quality.gateEnv,
-                opts.baseBranch
-            )
+            const transform = managedTransform(entry.rel, gates.contract, facts, opts.config, opts.baseBranch)
             await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock, transform)
         }
         // Persist the CI-net hashes now, before the stale-nightly removal below can

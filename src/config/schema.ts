@@ -153,6 +153,11 @@ export const GitSchema = z
          */
         baseBranch: z.string().min(1).optional(),
         /**
+         * Extra PR target branches for the rendered quality-gate workflow only (e.g. a
+         * repo that also gates release PRs into `main`). The base branch is always included.
+         */
+        qualityGateExtraBranches: z.array(z.string().min(1)).default([]),
+        /**
          * Required status-check contexts of the resolved base branch's protection
          * profile, asserted by scaffold and run preflight and provisioned with `--provision`.
          * Defaults to the three contexts the rendered quality-gate workflow

@@ -98,6 +98,7 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 | ----------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `baseBranch`                  | unset                                    | Feature base and PR target; unset uses `develop` if origin has it, else origin's default branch. An explicit value must exist on origin |
 | `developRequiredStatusChecks` | Quality, Mutation Testing, Security Scan | Checks scaffold and run preflight require on the base branch                                                                            |
+| `qualityGateExtraBranches`    | []                                       | Extra PR targets for the rendered quality-gate workflow only, e.g. `["main"]` for release PRs; the base branch is always included     |
 | `rollupCiWaitMinutes`         | 30                                       | Max wait for the feature PR's CI before parking the run                                                                                 |
 
 > Retired (locked decision 5 — human gates removed): `humanReviewLevel`,

@@ -98,6 +98,31 @@ describe('renderQualityGate — npm stack', () => {
             expect(checkouts.map((step) => step.with?.ref)).toEqual([baseBranch, baseBranch])
         }
     )
+
+    it('adds git.qualityGateExtraBranches to the PR trigger only, not the nightly checkout', async () => {
+        const opts = {...NPM_OPTS, baseBranch: 'develop', extraBranches: ['main', 'release"x']}
+        const quality = parseDocument(renderQualityGate(template, opts)).toJS() as {
+            on: {pull_request: {branches: string[]}}
+        }
+        expect(quality.on.pull_request.branches).toEqual(['develop', 'main', 'release"x'])
+        const nightly = await readFile(join(resolveTemplatesDir(), '.github/workflows/mutation-nightly.yml'), 'utf8')
+        const full = parseDocument(renderMutationNightly(nightly, opts) ?? '').toJS() as {
+            jobs: Record<string, {steps: {uses?: string; with?: {ref?: string}}[]}>
+        }
+        const refs = Object.values(full.jobs)
+            .flatMap((job) => job.steps)
+            .filter((step) => step.uses?.startsWith('actions/checkout@') === true)
+            .map((step) => step.with?.ref)
+        expect(refs).toEqual(['develop', 'develop'])
+    })
+
+    it('de-duplicates an extra branch equal to the base', () => {
+        const opts = {...NPM_OPTS, baseBranch: 'develop', extraBranches: ['develop']}
+        const quality = parseDocument(renderQualityGate(template, opts)).toJS() as {
+            on: {pull_request: {branches: string[]}}
+        }
+        expect(quality.on.pull_request.branches).toEqual(['develop'])
+    })
     it('renders npm setup: setup-node with npm cache + npm ci; no pnpm anywhere', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).toContain('cache: npm')

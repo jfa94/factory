@@ -6158,6 +6158,11 @@ var GitSchema = external_exports.object({
    */
   baseBranch: external_exports.string().min(1).optional(),
   /**
+   * Extra PR target branches for the rendered quality-gate workflow only (e.g. a
+   * repo that also gates release PRs into `main`). The base branch is always included.
+   */
+  qualityGateExtraBranches: external_exports.array(external_exports.string().min(1)).default([]),
+  /**
    * Required status-check contexts of the resolved base branch's protection
    * profile, asserted by scaffold and run preflight and provisioned with `--provision`.
    * Defaults to the three contexts the rendered quality-gate workflow
@@ -7466,14 +7471,16 @@ function renderQualityGate(template, opts) {
       `renderQualityGate: stack '${opts.contract.stack}' is not supported \u2014 the CI quality gate renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)`
     );
   }
-  let lines = renderBaseBranch(template, opts.baseBranch).split("\n");
+  const branches = [.../* @__PURE__ */ new Set([opts.baseBranch, ...opts.extraBranches ?? []])];
+  let lines = template.replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(", ")).split("\n");
   lines = replaceMarker(lines, "# factory:setup", setupBlock(opts));
   lines = replaceMarker(lines, "# factory:gates", gatesBlock(opts));
   lines = renderMutationRegion(lines, opts);
   return lines.join("\n");
 }
+var BASE_BRANCH_PLACEHOLDER = "__FACTORY_BASE_BRANCH__";
 function renderBaseBranch(template, branch) {
-  return template.replaceAll("__FACTORY_BASE_BRANCH__", JSON.stringify(branch));
+  return template.replaceAll(BASE_BRANCH_PLACEHOLDER, JSON.stringify(branch));
 }
 
 // src/ci/node-runtime.ts
@@ -9247,9 +9254,13 @@ var PRETTIERIGNORE_ENTRIES = [
 async function ensurePrettierignore(root, lists) {
   await ensureIgnoreFile(root, ".prettierignore", PRETTIERIGNORE_ENTRIES, lists);
 }
-function managedTransform(rel, contract2, facts, gateEnv, baseBranch) {
+function managedTransform(rel, contract2, facts, config, baseBranch) {
   if (rel === QUALITY_GATE_REL) {
-    return (text) => injectGateEnvIntoWorkflow(renderQualityGate(text, { contract: contract2, ...facts, baseBranch }), gateEnv);
+    const extraBranches = config.git.qualityGateExtraBranches;
+    return (text) => injectGateEnvIntoWorkflow(
+      renderQualityGate(text, { contract: contract2, ...facts, baseBranch, extraBranches }),
+      config.quality.gateEnv
+    );
   }
   if (rel === MUTATION_NIGHTLY_REL) {
     return (text) => nonNull(renderMutationNightly(text, { contract: contract2, ...facts, baseBranch }));
@@ -9287,7 +9298,7 @@ async function preflightManagedFiles(opts, lock2, contract2) {
       continue;
     }
     const destText = await readFile7(dest, "utf8");
-    const transform = managedTransform(entry.rel, contract2, facts, opts.config.quality.gateEnv, opts.baseBranch);
+    const transform = managedTransform(entry.rel, contract2, facts, opts.config, opts.baseBranch);
     const text = await readFile7(src, "utf8");
     const rendered = transform ? transform(text) : text;
     if (destText === rendered) {
@@ -9443,13 +9454,7 @@ async function runScaffold(opts) {
       if (entry.rel === MUTATION_NIGHTLY_REL && !gates.contract.gates.mutation.contracted) {
         continue;
       }
-      const transform = managedTransform(
-        entry.rel,
-        gates.contract,
-        facts,
-        opts.config.quality.gateEnv,
-        opts.baseBranch
-      );
+      const transform = managedTransform(entry.rel, gates.contract, facts, opts.config, opts.baseBranch);
       await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, lock2, transform);
     }
     await persistLock();

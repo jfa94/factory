@@ -54,6 +54,8 @@ function ciBuiltins(run: string, pm: 'pnpm' | 'npm'): Partial<Record<GateId, str
 export interface RenderQualityGateOpts {
     /** Integration branch; also controls the manual full-mutation checkout. */
     readonly baseBranch: string
+    /** `git.qualityGateExtraBranches`: more PR targets for the quality gate only (e.g. a release branch). */
+    readonly extraBranches?: readonly string[]
     /** The repo's resolved gate contract (`.factory/gates.json`). */
     readonly contract: GateContract
     /** Lockfile-detected package manager (pnpm-lock.yaml → pnpm, else npm). */
@@ -371,13 +373,16 @@ export function renderQualityGate(template: string, opts: RenderQualityGateOpts)
                 'renders for npm-stack repos only (deno/custom repos rely on the local GateRunner)'
         )
     }
-    let lines = renderBaseBranch(template, opts.baseBranch).split('\n')
+    const branches = [...new Set([opts.baseBranch, ...(opts.extraBranches ?? [])])]
+    let lines = template.replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(', ')).split('\n')
     lines = replaceMarker(lines, '# factory:setup', setupBlock(opts))
     lines = replaceMarker(lines, '# factory:gates', gatesBlock(opts))
     lines = renderMutationRegion(lines, opts)
     return lines.join('\n')
 }
 
+const BASE_BRANCH_PLACEHOLDER = '__FACTORY_BASE_BRANCH__'
+
 function renderBaseBranch(template: string, branch: string): string {
-    return template.replaceAll('__FACTORY_BASE_BRANCH__', JSON.stringify(branch))
+    return template.replaceAll(BASE_BRANCH_PLACEHOLDER, JSON.stringify(branch))
 }
