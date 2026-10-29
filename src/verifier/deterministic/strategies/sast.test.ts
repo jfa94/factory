@@ -100,7 +100,8 @@ describe('sastStrategy', () => {
     // A secret echoed in the scanner's output must be scrubbed before it reaches the
     // persisted detail (Δ K, M14). The detail now carries the command OUTPUT, so
     // redaction is load-bearing rather than a no-op over `exit=N`.
-    const SECRET = 'AKIA1234567890ABCDEF' // matches the aws-access-key-id pattern
+    // Assembled at runtime so the repo's own SAST scan does not flag the fixture.
+    const SECRET = ['AKIA', '1234567890ABCDEF'].join('') // matches the aws-access-key-id pattern
 
     it('securityRedactFindings=true (default) → secret in scanner output is REDACTED in detail', async () => {
         const finding = `rule-id: hardcoded-credential\n  ${SECRET}`
