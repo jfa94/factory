@@ -353,7 +353,8 @@ mutation` to opt out; `--waive mutation` wins even when Stryker is installed.
 ### Mutation in CI
 
 The scaffolded `quality-gate.yml` triggers on `pull_request` into the resolved
-base branch (`branches: [<base branch>]`). Its mutation jobs carry no base-ref
+base branch plus any `git.qualityGateExtraBranches`
+(`branches: [<base branch>, <extra>...]`, duplicates collapsed). Its mutation jobs carry no base-ref
 condition, so mutation runs on every such PR, including the factory's feature PR.
 The `Mutation Testing` aggregator job reports the matrix outcome under that single
 check name. Every quality-gate job carries a `timeout-minutes` bound.
@@ -363,6 +364,15 @@ diff hunks, mutates added files in full, pads modified and deletion-seam ranges 
 lines, merges adjacent ranges, and stable-hash splits the patterns eight ways. PR jobs
 do not restore incremental files: replayed results would make `thresholds.break`
 depend on cache history rather than only the PR.
+
+The helper's scope is mutable `.ts` and `.tsx` files under the contracted mutation
+roots. Each root becomes `:(glob)<root>/**/*.ts` and `:(glob)<root>/**/*.tsx`
+pathspecs, so files directly in a root match too. The PR diff uses
+`--diff-filter=AMR`, so added, modified and renamed files are in scope. Both modes
+drop the repo-relative paths listed in the optional `.factory/mutation-exclude.json`
+(a JSON array of path strings). An absent file means no exclusions; an unreadable
+file, invalid JSON, or anything other than an array of strings fails the helper
+loudly.
 
 The second MANAGED workflow keeps the historical filename
 `.github/workflows/mutation-nightly.yml`, but is displayed as **Mutation Full

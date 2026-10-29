@@ -47,9 +47,14 @@ This is idempotent. It:
   `gates.mutation.roots`; it **refuses loudly** if mutation would contract with zero
   roots (add explicit roots or pass `--waive mutation`). See
   [Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots).
+  To keep specific files out of CI mutation without editing the managed helper,
+  commit `.factory/mutation-exclude.json` as a JSON array of repo-relative paths
+  (see [mutation scope](../reference/automated-gates.md)).
   The `quality-gate.yml` is
   **rendered per-repo from the gate contract** (Decision 53) and triggers on pull
-  requests into the base branch: the package-manager
+  requests into the base branch (plus any branches in `git.qualityGateExtraBranches`,
+  e.g. `factory configure --set 'git.qualityGateExtraBranches=["main"]'` for release
+  PRs): the package-manager
   setup (lockfile-detected pnpm vs npm) and each gate step come from the contract, so
   CI runs the same checks the local merge gate enforces. npm-stack repos must commit
   a Node runtime declaration; scaffold selects `.node-version`, then `.nvmrc`, then
