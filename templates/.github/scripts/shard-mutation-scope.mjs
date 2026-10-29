@@ -37,16 +37,39 @@ var HUNK_PADDING = 2;
 var readUtf8 = (path) => {
   return readFileSync(path, "utf8");
 };
+var EXCLUDE_FILE = ".factory/mutation-exclude.json";
 var EXCLUDED = [
-  /\.(?:test|spec|d)\.ts$/,
+  /\.(?:test|spec)\.tsx?$/,
+  /\.d\.ts$/,
   /(?:^|\/)types\//,
   /(?:^|\/)data\//,
   /(?:^|\/)index\.ts$/,
   /(?:^|\/)(?:types|[^/]+-types)\.ts$/,
   /(?:^|\/)app\/(?:robots|sitemap)\.ts$/
 ];
-function isMutablePath(path) {
-  return path.endsWith(".ts") && EXCLUDED.every((pattern) => !pattern.test(path));
+function isMutablePath(path, excluded = /* @__PURE__ */ new Set()) {
+  return /\.tsx?$/.test(path) && !excluded.has(path) && EXCLUDED.every((pattern) => !pattern.test(path));
+}
+function loadExcluded(readText = readUtf8) {
+  let text;
+  try {
+    text = readText(EXCLUDE_FILE);
+  } catch (cause) {
+    if (cause.code === "ENOENT") {
+      return /* @__PURE__ */ new Set();
+    }
+    throw new Error(`mutation scope: cannot read ${EXCLUDE_FILE}`, { cause });
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    throw new Error(`mutation scope: ${EXCLUDE_FILE} is not valid JSON`, { cause });
+  }
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error(`mutation scope: ${EXCLUDE_FILE} must be a JSON array of path strings`);
+  }
+  return new Set(parsed);
 }
 function isQuarantined(path, readText) {
   try {
@@ -112,16 +135,17 @@ function parseDiffToRanges(diffText) {
   flush();
   return patterns;
 }
-function filterMutablePatterns(patterns, readText = readUtf8) {
+function filterMutablePatterns(patterns, readText = readUtf8, excluded = /* @__PURE__ */ new Set()) {
   return patterns.filter((pattern) => {
     const path = pattern.split(":", 1)[0] ?? "";
-    return isMutablePath(path) && !isQuarantined(path, readText);
+    return isMutablePath(path, excluded) && !isQuarantined(path, readText);
   });
 }
-function parseFullFileList(fileList, readText = readUtf8) {
+function parseFullFileList(fileList, readText = readUtf8, excluded = /* @__PURE__ */ new Set()) {
   return filterMutablePatterns(
     fileList.split("\n").map((path) => path.trim()).filter(Boolean),
-    readText
+    readText,
+    excluded
   );
 }
 function defaultGit(args) {
@@ -136,18 +160,18 @@ function assertRoots(roots) {
 }
 function pathspecs(roots) {
   assertRoots(roots);
-  return roots.map((root) => `${root}/**/*.ts`);
+  return roots.flatMap((root) => [`:(glob)${root}/**/*.ts`, `:(glob)${root}/**/*.tsx`]);
 }
-function diffScope(baseRef, roots, git = defaultGit, readText) {
+function diffScope(baseRef, roots, git = defaultGit, readText, excluded) {
   if (baseRef === "") {
     throw new Error("diff mode requires a base ref");
   }
-  const diff = git(["diff", "-U0", "--diff-filter=AM", `${baseRef}...HEAD`, "--", ...pathspecs(roots)]);
-  return filterMutablePatterns(parseDiffToRanges(diff), readText);
+  const diff = git(["diff", "-U0", "--diff-filter=AMR", `${baseRef}...HEAD`, "--", ...pathspecs(roots)]);
+  return filterMutablePatterns(parseDiffToRanges(diff), readText, excluded);
 }
-function fullScope(roots, git = defaultGit, readText) {
+function fullScope(roots, git = defaultGit, readText, excluded) {
   const files = git(["ls-files", "--", ...pathspecs(roots)]);
-  return parseFullFileList(files, readText);
+  return parseFullFileList(files, readText, excluded);
 }
 function shardScope(patterns) {
   return shardByHash([...patterns], SHARD_COUNT);
@@ -159,10 +183,10 @@ function run(args) {
   const [mode, ...rest] = args;
   if (mode === "diff") {
     const [baseRef, ...roots] = rest;
-    return shardScope(diffScope(baseRef ?? "", roots));
+    return shardScope(diffScope(baseRef ?? "", roots, defaultGit, readUtf8, loadExcluded()));
   }
   if (mode === "full") {
-    return shardScope(fullScope(rest));
+    return shardScope(fullScope(rest, defaultGit, readUtf8, loadExcluded()));
   }
   return usage();
 }
@@ -176,12 +200,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
 }
 export {
+  EXCLUDE_FILE,
   HUNK_PADDING,
   SHARD_COUNT,
   diffScope,
   filterMutablePatterns,
   fullScope,
   isMutablePath,
+  loadExcluded,
   parseDiffToRanges,
   parseFullFileList,
   run,

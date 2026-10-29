@@ -5,6 +5,7 @@ import {
   diffScope,
   fullScope,
   isMutablePath,
+  loadExcluded,
   parseDiffToRanges,
   parseFullFileList,
 } from './shard-mutation-scope.mjs'
@@ -14,6 +15,8 @@ const modified = (path, hunks) =>
 
 const added = (path) =>
   [`diff --git a/${path} b/${path}`, 'new file mode 100644', 'index 0000000..2222222', '--- /dev/null', `+++ b/${path}`, '@@ -0,0 +1,10 @@'].join('\n')
+
+const globs = [':(glob)app/**/*.ts', ':(glob)app/**/*.tsx', ':(glob)utils/**/*.ts', ':(glob)utils/**/*.tsx']
 
 describe('managed mutation scope helper', () => {
   test('empty diff has no scope', () => {
@@ -46,6 +49,8 @@ describe('managed mutation scope helper', () => {
     'src/a.test.ts',
     'src/a.spec.ts',
     'src/a.d.ts',
+    'src/a.test.tsx',
+    'src/a.spec.tsx',
     'src/types/a.ts',
     'src/data/a.ts',
     'src/a/index.ts',
@@ -74,7 +79,7 @@ describe('managed mutation scope helper', () => {
       return 'app/page.ts\nutils/a.test.ts\nutils/ok.ts\n'
     }
     assert.deepEqual(fullScope(['app', 'utils'], git, () => 'export const ok = true\n'), ['app/page.ts', 'utils/ok.ts'])
-    assert.deepEqual(args, ['ls-files', '--', 'app/**/*.ts', 'utils/**/*.ts'])
+    assert.deepEqual(args, ['ls-files', '--', ...globs])
   })
 
   test('diff mode uses configured roots', () => {
@@ -87,11 +92,29 @@ describe('managed mutation scope helper', () => {
     assert.deepEqual(args, [
       'diff',
       '-U0',
-      '--diff-filter=AM',
+      '--diff-filter=AMR',
       'origin/develop...HEAD',
       '--',
-      'app/**/*.ts',
-      'utils/**/*.ts',
+      ...globs,
     ])
   })
+
+  test('.tsx components are mutable', () => {
+    assert.equal(isMutablePath('src/components/Card.tsx'), true)
+  })
+
+  test('paths in .factory/mutation-exclude.json are dropped', () => {
+    const excluded = new Set(['src/lib/exempt.ts'])
+    const diff = [added('src/lib/exempt.ts'), added('src/ok.ts')].join('\n')
+    assert.deepEqual(diffScope('origin/develop', ['src'], () => diff, () => 'export const ok = true\n', excluded), ['src/ok.ts'])
+  })
+
+  test('absent exclude file means no exclusions; malformed fails loudly', () => {
+    const missing = () => {
+      throw Object.assign(new Error('missing'), {code: 'ENOENT'})
+    }
+    assert.deepEqual(loadExcluded(missing), new Set())
+    assert.throws(() => loadExcluded(() => '{"a":1}'), /mutation-exclude\.json/)
+  })
 })
+

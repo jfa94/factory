@@ -13,7 +13,7 @@ import {fileURLToPath} from 'node:url'
 import {build, type BuildOptions} from 'esbuild'
 import {describe, expect, it} from 'vitest'
 
-import {diffScope, fullScope, isMutablePath, parseDiffToRanges} from './shard-mutation-scope.js'
+import {diffScope, fullScope, isMutablePath, loadExcluded, parseDiffToRanges} from './shard-mutation-scope.js'
 
 const repoRoot = resolve(fileURLToPath(import.meta.url), '../../..')
 
@@ -80,6 +80,8 @@ describe('mutation scope computation', () => {
         'src/a.test.ts',
         'src/a.spec.ts',
         'src/a.d.ts',
+        'src/a.test.tsx',
+        'src/a.spec.tsx',
         'src/types/a.ts',
         'src/data/a.ts',
         'src/a/index.ts',
@@ -99,20 +101,70 @@ describe('mutation scope computation', () => {
             expect(args).toEqual([
                 'diff',
                 '-U0',
-                '--diff-filter=AM',
+                '--diff-filter=AMR',
                 'origin/develop...HEAD',
                 '--',
-                'app/**/*.ts',
-                'utils/**/*.ts',
+                ':(glob)app/**/*.ts',
+                ':(glob)app/**/*.tsx',
+                ':(glob)utils/**/*.ts',
+                ':(glob)utils/**/*.tsx',
             ])
             return [added('app/quarantined.ts'), added('utils/ok.ts')].join('\n')
         }
         expect(diffScope('origin/develop', ['app', 'utils'], diffGit, read)).toEqual(['utils/ok.ts'])
 
         const fullGit = (args: readonly string[]): string => {
-            expect(args).toEqual(['ls-files', '--', 'app/**/*.ts', 'utils/**/*.ts'])
+            expect(args).toEqual([
+                'ls-files',
+                '--',
+                ':(glob)app/**/*.ts',
+                ':(glob)app/**/*.tsx',
+                ':(glob)utils/**/*.ts',
+                ':(glob)utils/**/*.tsx',
+            ])
             return 'app/quarantined.ts\napp/types.ts\nutils/ok.ts\n'
         }
         expect(fullScope(['app', 'utils'], fullGit, read)).toEqual(['utils/ok.ts'])
+    })
+
+    it('mutates .tsx components alongside .ts', () => {
+        expect(isMutablePath('src/components/Card.tsx')).toBe(true)
+        expect(parseDiffToRanges(added('src/components/Card.tsx'))).toEqual(['src/components/Card.tsx'])
+    })
+
+    it('drops paths listed in .factory/mutation-exclude.json in both modes', () => {
+        const read = (): string => 'export const ok = true\n'
+        const excluded = new Set(['src/lib/exempt.ts'])
+        const diff = [added('src/lib/exempt.ts'), added('src/ok.ts')].join('\n')
+        expect(diffScope('origin/develop', ['src'], () => diff, read, excluded)).toEqual(['src/ok.ts'])
+        expect(fullScope(['src'], () => 'src/lib/exempt.ts\nsrc/ok.ts\n', read, excluded)).toEqual(['src/ok.ts'])
+    })
+})
+
+describe('loadExcluded — optional repo exclude list', () => {
+    it('is empty when the file is absent', () => {
+        const read = (): string => {
+            throw Object.assign(new Error('missing'), {code: 'ENOENT'})
+        }
+        expect(loadExcluded(read)).toEqual(new Set())
+    })
+
+    it('reads a JSON array of repo-relative paths', () => {
+        const read = (path: string): string => {
+            expect(path).toBe('.factory/mutation-exclude.json')
+            return '["src/a.tsx", "src/b.ts"]'
+        }
+        expect(loadExcluded(read)).toEqual(new Set(['src/a.tsx', 'src/b.ts']))
+    })
+
+    it.each(['{"a":1}', '[1]', 'not json'])('fails loudly on a malformed file: %s', (text) => {
+        expect(() => loadExcluded(() => text)).toThrow('.factory/mutation-exclude.json')
+    })
+
+    it('fails loudly when the file exists but cannot be read', () => {
+        const read = (): string => {
+            throw Object.assign(new Error('denied'), {code: 'EACCES'})
+        }
+        expect(() => loadExcluded(read)).toThrow('.factory/mutation-exclude.json')
     })
 })
