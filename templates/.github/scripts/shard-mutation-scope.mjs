@@ -69,6 +69,14 @@ function loadExcluded(readText = readUtf8) {
   if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
     throw new Error(`mutation scope: ${EXCLUDE_FILE} must be a JSON array of path strings`);
   }
+  const bad = parsed.find(
+    (entry) => entry !== entry.trim() || entry.includes("\\") || entry.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  );
+  if (bad !== void 0) {
+    throw new Error(
+      `mutation scope: ${EXCLUDE_FILE} entry ${JSON.stringify(bad)} must be a repo-relative file path like src/a.ts`
+    );
+  }
   return new Set(parsed);
 }
 function isQuarantined(path, readText) {

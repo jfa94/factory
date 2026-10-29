@@ -64,6 +64,18 @@ export function loadExcluded(readText: ReadText = readUtf8): Set<string> {
     if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) {
         throw new Error(`mutation scope: ${EXCLUDE_FILE} must be a JSON array of path strings`)
     }
+    // Matching is exact, so a non-canonical entry would silently exclude nothing.
+    const bad = parsed.find(
+        (entry: string) =>
+            entry !== entry.trim() ||
+            entry.includes('\\') ||
+            entry.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
+    )
+    if (bad !== undefined) {
+        throw new Error(
+            `mutation scope: ${EXCLUDE_FILE} entry ${JSON.stringify(bad)} must be a repo-relative file path like src/a.ts`
+        )
+    }
     return new Set(parsed)
 }
 

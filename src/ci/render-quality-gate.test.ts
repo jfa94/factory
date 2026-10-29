@@ -123,6 +123,13 @@ describe('renderQualityGate — npm stack', () => {
         }
         expect(quality.on.pull_request.branches).toEqual(['develop'])
     })
+    it('keys concurrency by head AND base so PRs from one head into two targets do not cancel', () => {
+        const out = parseDocument(renderQualityGate(template, {...NPM_OPTS, extraBranches: ['main']})).toJS() as {
+            concurrency: {group: string}
+        }
+        expect(out.concurrency.group).toBe('quality-${{ github.head_ref }}-${{ github.base_ref }}')
+    })
+
     it('renders npm setup: setup-node with npm cache + npm ci; no pnpm anywhere', () => {
         const out = renderQualityGate(template, NPM_OPTS)
         expect(out).toContain('cache: npm')

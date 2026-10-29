@@ -48,8 +48,8 @@ This is idempotent. It:
   roots (add explicit roots or pass `--waive mutation`). See
   [Decision 75](../explanation/decisions.md#decision-75--mutation-ci-redesign-develop-only-warm-base-incremental-hash-shards-roots).
   To keep specific files out of CI mutation without editing the managed helper,
-  commit `.factory/mutation-exclude.json` as a JSON array of repo-relative paths
-  (see [mutation scope](../reference/automated-gates.md)).
+  commit `.factory/mutation-exclude.json` as a JSON array of exact repo-relative
+  file paths such as `src/a.ts` (see [mutation scope](../reference/automated-gates.md)).
   The `quality-gate.yml` is
   **rendered per-repo from the gate contract** (Decision 53) and triggers on pull
   requests into the base branch (plus any branches in `git.qualityGateExtraBranches`,

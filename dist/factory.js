@@ -6160,8 +6160,14 @@ var GitSchema = external_exports.object({
   /**
    * Extra PR target branches for the rendered quality-gate workflow only (e.g. a
    * repo that also gates release PRs into `main`). The base branch is always included.
+   * GitHub glob patterns (`release/*`) pass through; negation (`!x`) is rejected.
    */
-  qualityGateExtraBranches: external_exports.array(external_exports.string().min(1)).default([]),
+  qualityGateExtraBranches: external_exports.array(
+    external_exports.string().regex(
+      /^[^!\s]\S*$/,
+      "qualityGateExtraBranches: branch names must not start with ! or contain whitespace"
+    )
+  ).default([]),
   /**
    * Required status-check contexts of the resolved base branch's protection
    * profile, asserted by scaffold and run preflight and provisioned with `--provision`.

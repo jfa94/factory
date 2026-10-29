@@ -22,6 +22,14 @@ describe('ConfigSchema', () => {
         expect(() => ConfigSchema.parse({git: {rollupCiWaitMinutes: 1.5}})).toThrow()
     })
 
+    it('git.qualityGateExtraBranches accepts names and GitHub globs, rejects negation and whitespace', () => {
+        const parse = (b: string[]) => ConfigSchema.parse({git: {qualityGateExtraBranches: b}})
+        expect(parse(['main', 'release/*']).git.qualityGateExtraBranches).toEqual(['main', 'release/*'])
+        expect(() => parse(['!main'])).toThrow(/qualityGateExtraBranches/)
+        expect(() => parse([' main'])).toThrow(/qualityGateExtraBranches/)
+        expect(() => parse(['ma in'])).toThrow(/qualityGateExtraBranches/)
+    })
+
     it('stale overlay keys (pruned config fields) are stripped, not fatal', () => {
         // Regression guard: an on-disk config written by an older plugin version may
         // still carry pruned keys; ConfigSchema must strip them and keep loading.

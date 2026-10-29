@@ -155,8 +155,18 @@ export const GitSchema = z
         /**
          * Extra PR target branches for the rendered quality-gate workflow only (e.g. a
          * repo that also gates release PRs into `main`). The base branch is always included.
+         * GitHub glob patterns (`release/*`) pass through; negation (`!x`) is rejected.
          */
-        qualityGateExtraBranches: z.array(z.string().min(1)).default([]),
+        qualityGateExtraBranches: z
+            .array(
+                z
+                    .string()
+                    .regex(
+                        /^[^!\s]\S*$/,
+                        'qualityGateExtraBranches: branch names must not start with ! or contain whitespace'
+                    )
+            )
+            .default([]),
         /**
          * Required status-check contexts of the resolved base branch's protection
          * profile, asserted by scaffold and run preflight and provisioned with `--provision`.

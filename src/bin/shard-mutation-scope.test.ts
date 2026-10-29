@@ -161,6 +161,13 @@ describe('loadExcluded — optional repo exclude list', () => {
         expect(() => loadExcluded(() => text)).toThrow('.factory/mutation-exclude.json')
     })
 
+    it.each(['./src/a.ts', ' src/a.ts', 'src/a.ts ', 'src\\a.ts', '/src/a.ts', 'src/../a.ts', 'src/lib/', ''])(
+        'fails loudly on a non-canonical entry %j (it would never match a path)',
+        (entry) => {
+            expect(() => loadExcluded(() => JSON.stringify([entry]))).toThrow(/mutation-exclude\.json.*entry/)
+        }
+    )
+
     it('fails loudly when the file exists but cannot be read', () => {
         const read = (): string => {
             throw Object.assign(new Error('denied'), {code: 'EACCES'})

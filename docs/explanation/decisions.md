@@ -3585,6 +3585,11 @@ deltas are now first-class:
    repo-relative paths listed in an optional `.factory/mutation-exclude.json` (a JSON
    string array). An absent file means no exclusions. A malformed or unreadable file
    fails loudly. Both workflows call this one script, so PR and nightly scope stay identical.
+   Entries must be canonical repo-relative file paths, because matching is exact; a
+   non-canonical entry fails loudly instead of silently excluding nothing. Extra
+   branches accept GitHub globs but reject `!` negation and whitespace. The
+   quality-gate concurrency group is keyed by head and base branch, so PRs from one
+   head into two targets do not cancel each other.
    The TCB hook denies producer writes to the exclude file, as it does for
    `gates.json`, so a run cannot exempt its own code. The engine's local mutation
    gate stays `.ts`-only and ignores the exclude file; aligning it is a follow-up.

@@ -116,5 +116,11 @@ describe('managed mutation scope helper', () => {
     assert.deepEqual(loadExcluded(missing), new Set())
     assert.throws(() => loadExcluded(() => '{"a":1}'), /mutation-exclude\.json/)
   })
+
+  test('non-canonical exclude entries fail loudly', () => {
+    for (const entry of ['./src/a.ts', 'src/a.ts ', 'src/lib/']) {
+      assert.throws(() => loadExcluded(() => JSON.stringify([entry])), /mutation-exclude\.json.*entry/)
+    }
+  })
 })
 
