@@ -1,5 +1,4 @@
 import {describe, expect, it} from 'vitest'
-import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {defaultSpecBuildRoot, docsFactoryDir, repoKey, specBuildDir, specDir} from './paths.js'
 
@@ -62,7 +61,11 @@ describe('specBuildDir — transient spec-build scratch', () => {
         expect(() => specBuildDir('/tmp/root', 'acme/widgets', 0)).toThrow(/positive integer/)
         expect(() => specBuildDir('/tmp/root', 'acme/widgets', 1.5)).toThrow(/positive integer/)
     })
-    it('defaults to a namespaced OS temp root', () => {
-        expect(defaultSpecBuildRoot()).toBe(join(tmpdir(), 'factory-spec-build'))
+    it('roots production scratch under the repo .claude/worktrees/ (exempt from protected-path prompts)', () => {
+        const root = defaultSpecBuildRoot('/repo')
+        expect(root).toBe(join('/repo', '.claude', 'worktrees'))
+        expect(specBuildDir(root, 'acme/widgets', 7)).toBe(
+            join('/repo', '.claude', 'worktrees', 'spec-build', 'acme-widgets', '7')
+        )
     })
 })

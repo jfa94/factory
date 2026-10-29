@@ -7,6 +7,7 @@
  * The moved names are re-exported below for existing importers.
  */
 import {EXIT, type ExitCode} from '../../shared/exit-codes.js'
+import {execFileSync} from 'node:child_process'
 import {join} from 'node:path'
 import {repositorySnapshot} from '../../spec/snapshot.js'
 import {resolveBaseBranch} from '../../git/base-branch.js'
@@ -44,8 +45,8 @@ value that disagrees with the remote fails loud.
 The in-session runner drives the agent spawns; the ENGINE bounds the regen loop
 (scratch attempts.json; over spec.maxRegenIterations → terminal spec-defect, exit 1)
 and quota-gates resolve (pause envelope; --ignore-quota overrides). Each action emits
-ONE JSON envelope naming the next step. Scratch JSON is threaded through the OS temp
-dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict,attempts}.json
+ONE JSON envelope naming the next step. Scratch JSON is threaded through
+<repo>/.claude/worktrees/spec-build/<repo-key>/<issue>/{prd,generated,verdict,attempts}.json
 (transient pre-validation agent output, never the plugin data dir).
 
 Actions:
@@ -59,6 +60,10 @@ function parseIssue(raw: string): number {
         throw new UsageError(`--issue must be a positive integer, got '${raw}'`)
     }
     return n
+}
+
+function gitToplevel(cwd: string): string {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {cwd, encoding: 'utf8'}).trim()
 }
 
 /** Wire production deps once (own wiring — no run exists at spec time, so NOT loadCliDeps). */
@@ -75,7 +80,7 @@ function wireDeps(): SpecBuildDeps {
         config,
         usage: new StatuslineUsageSignal({dataDir}),
         now: nowEpoch,
-        scratchRoot: defaultSpecBuildRoot(),
+        scratchRoot: defaultSpecBuildRoot(gitToplevel(process.cwd())),
     }
 }
 

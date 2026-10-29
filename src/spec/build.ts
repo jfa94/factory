@@ -14,7 +14,7 @@
  * creating a cli↔debug package cycle.
  *
  * State is threaded through a TRANSIENT scratch dir, `specBuildDir(scratchRoot,repo,issue)`,
- * rooted at the OS temp dir (`defaultSpecBuildRoot()`) — NOT the plugin dataDir the
+ * rooted at `<repo>/.claude/worktrees` (`defaultSpecBuildRoot()`) — NOT the plugin dataDir the
  * durable stores use, since this holds only pre-validation agent output, never
  * durable state. It holds four files: `prd.json` (written by `resolve`),
  * `generated.json` (written by the runner after spawning the generator),
@@ -261,8 +261,8 @@ export interface SpecBuildDeps {
     /**
      * Root for the transient generate/review scratch files (NOT the plugin dataDir —
      * `store`/`config` already carry their own dataDir closure independently).
-     * Production wiring points this at {@link defaultSpecBuildRoot} (the OS temp
-     * dir); tests pass their own isolated tmp root for cleanup/collision safety.
+     * Production wiring points this at {@link defaultSpecBuildRoot} (the repo's
+     * `.claude/worktrees`); tests pass their own isolated tmp root for cleanup/collision safety.
      */
     readonly scratchRoot: string
 }

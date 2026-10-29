@@ -51,8 +51,8 @@ The resolved name is recorded on the run and is never written back to config.
 `resolve` reuses an existing spec for the issue unless `--supersede` is given.
 Generation is bounded by `spec.maxRegenIterations`; exceeding it is a terminal
 spec defect (exit 1). Resolve is quota-gated; `--ignore-quota` overrides.
-Scratch files live in the OS temp dir under
-`factory-spec-build/<repo>/<issue>/`. Stored specs live under
+Scratch files live in the target repo under
+`.claude/worktrees/spec-build/<repo-key>/<issue>/`. Stored specs live under
 `<dataDir>/v2/specs/<repo-key>/<spec-id>/`.
 
 ### Spec envelopes

@@ -2,9 +2,8 @@
  * Spec-store path layout. The durable spec store lives OUTSIDE the target repo at
  * `<dataDir>/specs/<repo-key>/<spec-id>/` (keyed by (repo, spec-id), reused across
  * runs); the in-repo reviewable mirror is `docs/factory/<spec-id>`; transient
- * spec-build scratch is rooted at the OS temp dir ({@link defaultSpecBuildRoot}).
+ * spec-build scratch is rooted at the repo's `.claude/worktrees/` ({@link defaultSpecBuildRoot}).
  */
-import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {validateId} from '../shared/ids.js'
 
@@ -57,12 +56,13 @@ export function docsFactoryDir(docsRoot: string, specId: string): string {
     return join(docsRoot, DOCS_FACTORY_DIR, specId)
 }
 
-/** Namespace subdir under the OS temp dir for spec-build scratch. */
-const SPEC_BUILD_TMP_NAMESPACE = 'factory-spec-build'
-
-/** The production root for {@link specBuildDir} — the OS temp dir, namespaced. */
-export function defaultSpecBuildRoot(): string {
-    return join(tmpdir(), SPEC_BUILD_TMP_NAMESPACE)
+/**
+ * The production root for {@link specBuildDir}: `<repoRoot>/.claude/worktrees`.
+ * Agents Write their results here; Claude Code exempts `.claude/worktrees/` from
+ * protected-path prompts, whereas the OS temp dir sits outside the session (Decision 77).
+ */
+export function defaultSpecBuildRoot(repoRoot: string): string {
+    return join(repoRoot, '.claude', 'worktrees')
 }
 
 /** `<root>/spec-build`. */

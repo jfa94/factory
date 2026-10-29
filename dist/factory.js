@@ -9576,6 +9576,7 @@ var scaffoldCommand = {
 };
 
 // src/cli/subcommands/spec.ts
+import { execFileSync } from "node:child_process";
 import { join as join14 } from "node:path";
 
 // src/spec/snapshot.ts
@@ -9602,7 +9603,6 @@ async function repositorySnapshot(root, baseBranch) {
 }
 
 // src/spec/paths.ts
-import { tmpdir } from "node:os";
 import { join as join9 } from "node:path";
 var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
@@ -9628,9 +9628,8 @@ function docsFactoryDir(docsRoot, specId) {
   validateId(specId, "spec-id");
   return join9(docsRoot, DOCS_FACTORY_DIR, specId);
 }
-var SPEC_BUILD_TMP_NAMESPACE = "factory-spec-build";
-function defaultSpecBuildRoot() {
-  return join9(tmpdir(), SPEC_BUILD_TMP_NAMESPACE);
+function defaultSpecBuildRoot(repoRoot) {
+  return join9(repoRoot, ".claude", "worktrees");
 }
 function specBuildRoot(root) {
   return join9(root, SPEC_BUILD_DIR);
@@ -10611,8 +10610,8 @@ value that disagrees with the remote fails loud.
 The in-session runner drives the agent spawns; the ENGINE bounds the regen loop
 (scratch attempts.json; over spec.maxRegenIterations \u2192 terminal spec-defect, exit 1)
 and quota-gates resolve (pause envelope; --ignore-quota overrides). Each action emits
-ONE JSON envelope naming the next step. Scratch JSON is threaded through the OS temp
-dir, factory-spec-build/<repo>/<issue>/{prd,generated,verdict,attempts}.json
+ONE JSON envelope naming the next step. Scratch JSON is threaded through
+<repo>/.claude/worktrees/spec-build/<repo-key>/<issue>/{prd,generated,verdict,attempts}.json
 (transient pre-validation agent output, never the plugin data dir).
 
 Actions:
@@ -10626,6 +10625,9 @@ function parseIssue(raw) {
   }
   return n;
 }
+function gitToplevel(cwd) {
+  return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
+}
 function wireDeps() {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
@@ -10638,7 +10640,7 @@ function wireDeps() {
     config,
     usage: new StatuslineUsageSignal({ dataDir }),
     now: nowEpoch,
-    scratchRoot: defaultSpecBuildRoot()
+    scratchRoot: defaultSpecBuildRoot(gitToplevel(process.cwd()))
   };
 }
 var ACTIONS = {
@@ -12392,7 +12394,7 @@ var GateRunner = class {
 
 // src/verifier/deterministic/tools.ts
 import { access as access4, mkdtemp, readFile as readFile11, rm as rm4, symlink, unlink as unlink3 } from "node:fs/promises";
-import { tmpdir as tmpdir2 } from "node:os";
+import { tmpdir } from "node:os";
 import path2 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -12627,7 +12629,7 @@ var DefaultCoverageTool = class _DefaultCoverageTool {
     return summary === null ? { kind: "summary-invalid" } : { kind: "measured", summary };
   }
   async measureAtBase(baseSha, cmd, opts) {
-    const scratch = await mkdtemp(path2.join(tmpdir2(), "factory-cov-base-"));
+    const scratch = await mkdtemp(path2.join(tmpdir(), "factory-cov-base-"));
     const wt = path2.join(scratch, "wt");
     try {
       const add = await exec("git", ["-C", opts.cwd, "worktree", "add", "--detach", wt, baseSha], {
