@@ -374,7 +374,9 @@ export function renderQualityGate(template: string, opts: RenderQualityGateOpts)
         )
     }
     const branches = [...new Set([opts.baseBranch, ...(opts.extraBranches ?? [])])]
-    let lines = template.replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(', ')).split('\n')
+    let lines = template
+        .replaceAll(BASE_BRANCH_PLACEHOLDER, branches.map((b) => JSON.stringify(b)).join(', '))
+        .split('\n')
     lines = replaceMarker(lines, '# factory:setup', setupBlock(opts))
     lines = replaceMarker(lines, '# factory:gates', gatesBlock(opts))
     lines = renderMutationRegion(lines, opts)

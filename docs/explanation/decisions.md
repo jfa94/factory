@@ -3566,6 +3566,26 @@ the root:
    is now `if: always() && …`: Stryker writes a valid incremental file regardless of
    the mutation score, and the score, not the cache, is what gates the merge.
 
+**Amendment (2026-10-29, v2.0.0-rc.12 — repo deltas become config, not edits).**
+outsidey hand-edited two managed files: it added `main` to the quality-gate PR
+branches for promotion CI, and patched the shard script for `.tsx`, top-level root
+files, renames and a repo exclude list. A stale 1.45.2 install overwrote both
+silently, because 1.45.2 rewrote any managed file whose bytes differed from its own
+output. Current versions refuse instead: a managed file that matches neither the
+template nor the lock hash fails with `files_conflict`, and `--force-managed`
+re-adopts the template. That guard is the answer to silent overwrites. No drift
+checker or per-file opt-out is added. A stale install can still clobber, so the cure
+for that is keeping the install current. Hand edits are still conflicts, so the two
+deltas are now first-class:
+
+1. `git.qualityGateExtraBranches` (default `[]`) adds PR targets to the quality-gate
+   trigger. The nightly still checks out only the base branch.
+2. The shard script mutates `.ts` and `.tsx`, matches root files at any depth with
+   `:(glob)<root>/**` pathspecs, keeps renamed files (`--diff-filter=AMR`), and drops
+   repo-relative paths listed in an optional `.factory/mutation-exclude.json` (a JSON
+   string array). An absent file means no exclusions. A malformed or unreadable file
+   fails loudly. Both workflows call this one script, so PR and nightly scope stay identical.
+
 ---
 
 ## Decision 76 — Prevent invalid specifications, TDD histories, and verifier associations
@@ -3601,6 +3621,34 @@ invalid test phases cannot enter immutable history unnoticed; clean recovery can
 a published branch; and verifier output cannot silently key itself under an unrelated agent
 identity. No new agent, score dimension, holdout verdict, generic evaluator retry, TDD
 exemption, or classifier weakening is introduced.
+
+---
+
+## Decision 77 — Spec-Build Scratch Lives Under the Target Repo's `.claude/worktrees/`
+
+**Date:** 2026-10-29
+
+**Context:** The spec loop threads `prd`, `generated`, `verdict` and `attempts` JSON
+through a scratch dir. It was `tmpdir()/factory-spec-build/`. Since v2 the spec agents
+Write their own results there. Under 1.45.2 the runner copied spilled tool results into
+that dir, and an unattended outsidey session had its `cp` denied three times with no
+hook message. A manual `cp` worked. The exact cause is unconfirmed. Settings allowed
+the command, and the TCB hook would have named itself. The OS temp dir is outside the
+session's working directories, and Claude Code documents `.claude/worktrees/` as
+exempt from protected-path prompts. Decision 67 moved task worktrees and results there
+for the same reason.
+
+**Decision:** `defaultSpecBuildRoot(repoRoot)` returns `<repoRoot>/.claude/worktrees`.
+The CLI passes the git toplevel of the cwd, so scratch lands in
+`.claude/worktrees/spec-build/<repo-key>/<issue>/`. `$TMPDIR` is not added to
+`additionalDirectories`, because a second and weaker mechanism is not needed. The
+feature guard claims only `feature-<id>` and `review-<id>-` names, and the TCB hook
+denies only data-dir `runs*` and `specs`, so `spec-build/` is writable.
+
+**Consequences:** Spec agents write inside the session's own repo, under a gitignored
+and prompt-exempt path. Scratch survives reboots but stays transient and discardable.
+Running `factory spec` outside a git checkout now fails at wiring, as the repository
+snapshot already required a checkout.
 
 ---
 
