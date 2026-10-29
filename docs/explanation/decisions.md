@@ -3585,6 +3585,9 @@ deltas are now first-class:
    repo-relative paths listed in an optional `.factory/mutation-exclude.json` (a JSON
    string array). An absent file means no exclusions. A malformed or unreadable file
    fails loudly. Both workflows call this one script, so PR and nightly scope stay identical.
+   The TCB hook denies producer writes to the exclude file, as it does for
+   `gates.json`, so a run cannot exempt its own code. The engine's local mutation
+   gate stays `.ts`-only and ignores the exclude file; aligning it is a follow-up.
 
 ---
 

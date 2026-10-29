@@ -20,6 +20,7 @@ export type TcbCategory =
     | 'gate-config'
     | 'gate-contract'
     | 'scaffold-lock'
+    | 'mutation-exclude'
     | 'hooks'
     | 'data-runs'
     | 'data-specs'

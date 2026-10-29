@@ -6741,6 +6741,11 @@ function buildTcbRules(ctx = {}) {
     test: (p) => hasAdjacentComponents(p, ".factory", "scaffold.lock")
   });
   rules.push({
+    category: "mutation-exclude",
+    describe: ".factory/mutation-exclude.json (CI mutation exclusions \u2014 Decision 75)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "mutation-exclude.json")
+  });
+  rules.push({
     category: "gate-config",
     describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
     test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))

@@ -51,8 +51,8 @@ jobs:
 
   # factory:mutation-begin
   # PR mutation verdict (hunk-scoped 2026-08-07):
-  #   Runs on the feature PR into the base branch (the only trigger above),
-  #     after the Quality job succeeds.
+  #   Runs on every PR the trigger above accepts (the base branch plus
+  #     git.qualityGateExtraBranches), after the Quality job succeeds.
   #   The managed helper diffs with zero context. Added files mutate in full;
   #     modified/deletion-seam hunks are padded two lines and merged, so the
   #     threshold grades code the PR changed instead of every touched file.

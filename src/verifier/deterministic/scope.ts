@@ -8,14 +8,14 @@
  *     directory matrix: *.test.<ext>, *.spec.<ext>, *_test.<ext>, *Test.<ext>,
  *     *Tests.<ext>, *_spec.rb, and tests/|test/|spec/|__tests__/ at root AND
  *     per-package).
- *   - {@link isMutableSrc} ← the mutation-gate exclusion filter
- *     (bin/pipeline-mutation-gate:91-92 + quality-gate.yml): src/**\/*.ts MINUS
+ *   - {@link isMutableSrc} ← the local mutation-gate exclusion filter
+ *     (bin/pipeline-mutation-gate:91-92): src/**\/*.ts MINUS
  *     `\.(test|spec|d)\.ts$`, `/types/`, `/data/`, `/index\.ts$`.
  *
  * Pure string functions — no I/O, deterministic. The mutation-scope COMPUTATION
  * ({@link mutationScope}) takes the already-diffed file list (the git probe owns
  * the `diff --diff-filter=AM origin/<base>...HEAD` shell-out) and applies the
- * glob + exclusion filter, mirroring CI exactly.
+ * glob + exclusion filter. CI's shard helper also takes `.tsx` and a repo exclude list.
  */
 
 /**
@@ -106,8 +106,9 @@ export function isMutableSrc(file: string, roots: readonly string[] = ['src']): 
 /**
  * Compute the blob-scoped mutation rollup scope (Δ O) from the AM-diffed file
  * list. Applies {@link isMutableSrc} to each path and returns the survivors,
- * de-duplicated and order-preserving. Mirrors CI's scope computation EXACTLY (the
- * git probe produced `changedFiles` via `diff --diff-filter=AM origin/<base>...HEAD`).
+ * de-duplicated and order-preserving (the git probe produced `changedFiles` via
+ * `diff --diff-filter=AM origin/<base>...HEAD`). Narrower than CI's shard helper:
+ * `.ts` only, no `.factory/mutation-exclude.json` (Decision 75 amendment, 2026-10-29).
  *
  * An EMPTY result means "no mutable changes" — the mutation strategy treats that
  * as a SKIP, never a pass-by-default.

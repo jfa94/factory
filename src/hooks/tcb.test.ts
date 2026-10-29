@@ -195,6 +195,15 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         expect(isTcbProtected(p)?.rule.category).toBe('scaffold-lock')
     })
 
+    it('D75: ADVERSARIAL — a producer write to .factory/mutation-exclude.json is DENIED', () => {
+        // CI drops listed paths from mutation; a producer could exempt its own code.
+        const p = join(repoRoot, '.factory', 'mutation-exclude.json')
+        mkdirSync(join(repoRoot, '.factory'), {recursive: true})
+        writeFileSync(p, '[]')
+        expect(isTcbProtected(p, ctx())?.rule.category).toBe('mutation-exclude')
+        expect(isTcbProtected(p)?.rule.category).toBe('mutation-exclude')
+    })
+
     it('D46: a sibling file under .factory/ is NOT protected (scoped exactly to gates.json + scaffold.lock)', () => {
         const p = join(repoRoot, '.factory', 'notes.md')
         mkdirSync(join(repoRoot, '.factory'), {recursive: true})
@@ -261,6 +270,7 @@ describe('tcb — hardcoded denylist (Δ W)', () => {
         expect(categories).toContain('e2e-suite')
         expect(categories).toContain('gate-contract')
         expect(categories).toContain('scaffold-lock')
+        expect(categories).toContain('mutation-exclude')
     })
 
     it('canonicalizePath collapses ./ and .. for a non-existent leaf (create case)', () => {

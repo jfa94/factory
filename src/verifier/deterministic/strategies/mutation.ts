@@ -2,7 +2,8 @@
  * WS6 — mutation gate strategy (blob-scoped rollup, Δ O).
  *
  * Ported from bin/pipeline-mutation-gate + templates/.github/workflows/
- * quality-gate.yml (scope lines 86-96). Mirrors CI exactly:
+ * quality-gate.yml. Scope is narrower than CI's shard helper (`.ts` only, no repo
+ * exclude list; Decision 75 amendment, 2026-10-29):
  *   1. Compute scope from `diff --diff-filter=AM origin/<base>...HEAD` glob
  *      `src/**\/*.ts` MINUS the exclusions (test/spec/d.ts, types/, data/, index.ts).
  *      EMPTY scope ⇒ SKIP "no-mutable-changes" (exit 0 in bash; here a GateSkip so

@@ -168,6 +168,15 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
         test: (p) => hasAdjacentComponents(p, '.factory', 'scaffold.lock'),
     })
 
+    // 1e. The CI mutation exclude list (Decision 75 amendment): paths listed in
+    //     `.factory/mutation-exclude.json` leave the PR mutation verdict, so a producer
+    //     that could edit it could exempt its own code. Same anchoring as 1c.
+    rules.push({
+        category: 'mutation-exclude',
+        describe: '.factory/mutation-exclude.json (CI mutation exclusions — Decision 75)',
+        test: (p) => hasAdjacentComponents(p, '.factory', 'mutation-exclude.json'),
+    })
+
     // 2. Gate/CI config files at the repo root (matched by basename so the rule is
     //    location-tolerant; an implementer cannot dodge it by passing an absolute
     //    path). The scaffold templates that seed these live under templates/.
