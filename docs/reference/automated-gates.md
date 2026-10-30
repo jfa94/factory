@@ -374,7 +374,8 @@ drop the repo-relative paths listed in the optional `.factory/mutation-exclude.j
 repo-relative file path such as `src/a.ts`: no leading `./` or `/`, no surrounding
 whitespace, no backslashes, no `.` or `..` segments, a `.ts` or `.tsx` ending (so no
 directories), and no `*` or `?` (no globs). Next.js names such as `app/[id]/page.tsx`
-are fine. An absent file means no exclusions. An unreadable file, invalid JSON, a value
+are fine. An absent file means no exclusions; the helper notes that on stderr (stdout
+stays the shard JSON). An unreadable file, invalid JSON, a value
 that is not an array of strings, or a non-canonical entry fails the helper loudly.
 Agents cannot write this file; the TCB hook denies it like `.factory/gates.json`, and
 denies `.github/scripts/**` so the helper that applies it cannot be edited either.

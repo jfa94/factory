@@ -252,6 +252,8 @@ describe('renderQualityGate — npm stack', () => {
         expect(out).not.toContain('# factory:mutation-begin')
         expect(out).not.toContain('# factory:mutation-end')
         expect(out).not.toContain('# factory:mutation-setup')
+        // A skipped scope only means Quality did not succeed; the trigger already filters targets.
+        expect(out).toContain('Mutation testing skipped (upstream Quality job did not succeed).')
     })
 
     it('replaces the mutation jobs with a vacuous-green Mutation Testing job when waived', () => {

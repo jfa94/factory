@@ -9237,7 +9237,23 @@ async function ensureIgnoreFile(root, filename, entries, lists) {
     return;
   }
   const current = await readFile7(path3, "utf8");
-  const missing = entries.filter((e) => !current.split("\n").includes(e));
+  const lines = current.split("\n");
+  const missing = [];
+  let header;
+  for (const entry of entries) {
+    if (entry.startsWith("#")) {
+      header = entry;
+      continue;
+    }
+    if (lines.includes(entry)) {
+      continue;
+    }
+    if (header !== void 0 && !lines.includes(header)) {
+      missing.push(header);
+    }
+    header = void 0;
+    missing.push(entry);
+  }
   if (missing.length === 0) {
     lists.present.push(rel);
     return;

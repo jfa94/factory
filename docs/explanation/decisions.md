@@ -3583,7 +3583,8 @@ deltas are now first-class:
 2. The shard script mutates `.ts` and `.tsx`, matches root files at any depth with
    `:(glob)<root>/**` pathspecs, keeps renamed files (`--diff-filter=AMR`), and drops
    repo-relative paths listed in an optional `.factory/mutation-exclude.json` (a JSON
-   string array). An absent file means no exclusions. A malformed or unreadable file
+   string array). An absent file means no exclusions, noted on stderr so a missing
+   file is visible in the CI log. A malformed or unreadable file
    fails loudly. Both workflows call this one script, so PR and nightly scope stay identical.
    Entries must be canonical repo-relative file paths, because matching is exact; a
    non-canonical entry fails loudly instead of silently excluding nothing. An entry must

@@ -142,11 +142,22 @@ describe('mutation scope computation', () => {
 })
 
 describe('loadExcluded — optional repo exclude list', () => {
-    it('is empty when the file is absent', () => {
+    it('is empty when the file is absent, and says so', () => {
         const read = (): string => {
             throw Object.assign(new Error('missing'), {code: 'ENOENT'})
         }
-        expect(loadExcluded(read)).toEqual(new Set())
+        const notes: string[] = []
+        expect(loadExcluded(read, (message) => notes.push(message))).toEqual(new Set())
+        expect(notes).toEqual(['mutation scope: .factory/mutation-exclude.json not found; applying no exclusions'])
+    })
+
+    it('stays quiet when the file is present', () => {
+        const notes: string[] = []
+        loadExcluded(
+            () => '[]',
+            (message) => notes.push(message)
+        )
+        expect(notes).toEqual([])
     })
 
     it('reads a JSON array of repo-relative paths', () => {

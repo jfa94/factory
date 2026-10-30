@@ -109,11 +109,13 @@ describe('managed mutation scope helper', () => {
     assert.deepEqual(diffScope('origin/develop', ['src'], () => diff, () => 'export const ok = true\n', excluded), ['src/ok.ts'])
   })
 
-  test('absent exclude file means no exclusions; malformed fails loudly', () => {
+  test('absent exclude file means no exclusions (noted on stderr); malformed fails loudly', () => {
     const missing = () => {
       throw Object.assign(new Error('missing'), {code: 'ENOENT'})
     }
-    assert.deepEqual(loadExcluded(missing), new Set())
+    const notes = []
+    assert.deepEqual(loadExcluded(missing, (message) => notes.push(message)), new Set())
+    assert.deepEqual(notes, ['mutation scope: .factory/mutation-exclude.json not found; applying no exclusions'])
     assert.throws(() => loadExcluded(() => '{"a":1}'), /mutation-exclude\.json/)
   })
 

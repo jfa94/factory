@@ -50,12 +50,17 @@ var EXCLUDED = [
 function isMutablePath(path, excluded = /* @__PURE__ */ new Set()) {
   return /\.tsx?$/.test(path) && !excluded.has(path) && EXCLUDED.every((pattern) => !pattern.test(path));
 }
-function loadExcluded(readText = readUtf8) {
+var noteStderr = (message) => {
+  process.stderr.write(`${message}
+`);
+};
+function loadExcluded(readText = readUtf8, note = noteStderr) {
   let text;
   try {
     text = readText(EXCLUDE_FILE);
   } catch (cause) {
     if (cause.code === "ENOENT") {
+      note(`mutation scope: ${EXCLUDE_FILE} not found; applying no exclusions`);
       return /* @__PURE__ */ new Set();
     }
     throw new Error(`mutation scope: cannot read ${EXCLUDE_FILE}`, { cause });

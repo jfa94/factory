@@ -458,6 +458,36 @@ describe('runScaffold', () => {
         expect(await readFile(join(root, '.prettierignore'), 'utf8')).toBe(prettierignore)
     })
 
+    it('never appends a .prettierignore comment header whose entries are already present', async () => {
+        const patternsOnly = [
+            '.github/scripts/',
+            '.github/workflows/quality-gate.yml',
+            '.github/workflows/mutation-nightly.yml',
+            '.factory/',
+        ]
+        // Only the second group is incomplete: its header comes back, the first group's does not.
+        await writeFile(join(root, '.prettierignore'), `${patternsOnly.slice(0, 2).join('\n')}\n`, 'utf8')
+        await runScaffold({
+            targetRoot: root,
+            templatesDir,
+            owner: 'acme',
+            repo: 'widgets',
+            config: cfg,
+            baseBranch: BASE,
+            dataDirRules: DATA_DIR_RULES,
+            ghClient: new FakeGhClient({protection: {[BASE]: PROTECTED}}),
+            provision: false,
+        })
+        const lines = (await readFile(join(root, '.prettierignore'), 'utf8')).split('\n')
+        expect(lines).not.toContain('# factory plugin: generated bundle (esbuild output, not hand-formatted)')
+        expect(lines.filter((line) => line.startsWith('#'))).toEqual([
+            '# factory plugin: rendered by `factory scaffold`, kept byte-identical to its template',
+        ])
+        for (const pattern of patternsOnly) {
+            expect(lines.filter((line) => line === pattern)).toHaveLength(1)
+        }
+    })
+
     it('REFUSES loudly when develop protection is missing and --provision is off', async () => {
         await expect(
             runScaffold({

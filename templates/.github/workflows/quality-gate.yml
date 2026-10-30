@@ -150,7 +150,7 @@ jobs:
           # Scope skipped = an upstream job (Quality) did not succeed; that job
           # already reports the failure, so the aggregator stays green.
           if [[ "$SCOPE_RESULT" == "skipped" ]]; then
-            echo "Mutation testing skipped (PR does not target develop)."
+            echo "Mutation testing skipped (upstream Quality job did not succeed)."
             exit 0
           fi
           if [[ "$SCOPE_RESULT" != "success" ]]; then

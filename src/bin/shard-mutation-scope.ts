@@ -44,13 +44,21 @@ export function isMutablePath(path: string, excluded: ReadonlySet<string> = new 
     return /\.tsx?$/.test(path) && !excluded.has(path) && EXCLUDED.every((pattern) => !pattern.test(path))
 }
 
-/** Read the repo's optional exclude list. Absent = none; unreadable or malformed fails loudly. */
-export function loadExcluded(readText: ReadText = readUtf8): Set<string> {
+const noteStderr = (message: string): void => {
+    process.stderr.write(`${message}\n`)
+}
+
+/**
+ * Read the repo's optional exclude list. Absent = none (noted on stderr; stdout stays the
+ * shard JSON); unreadable or malformed fails loudly.
+ */
+export function loadExcluded(readText: ReadText = readUtf8, note: (message: string) => void = noteStderr): Set<string> {
     let text: string
     try {
         text = readText(EXCLUDE_FILE)
     } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+            note(`mutation scope: ${EXCLUDE_FILE} not found; applying no exclusions`)
             return new Set()
         }
         throw new Error(`mutation scope: cannot read ${EXCLUDE_FILE}`, {cause})

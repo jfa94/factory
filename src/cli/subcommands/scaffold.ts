@@ -525,7 +525,10 @@ async function readWorkflowFacts(targetRoot: string): Promise<WorkflowFacts> {
     }
 }
 
-/** Append any of `entries` missing from `<root>/<filename>`, creating it if absent. */
+/**
+ * Append any of `entries` missing from `<root>/<filename>`, creating it if absent. A `#` entry
+ * heads the entries after it and is appended only alongside one of them, never on its own.
+ */
 async function ensureIgnoreFile(
     root: string,
     filename: string,
@@ -540,7 +543,23 @@ async function ensureIgnoreFile(
         return
     }
     const current = await readFile(path, 'utf8')
-    const missing = entries.filter((e) => !current.split('\n').includes(e))
+    const lines = current.split('\n')
+    const missing: string[] = []
+    let header: string | undefined
+    for (const entry of entries) {
+        if (entry.startsWith('#')) {
+            header = entry
+            continue
+        }
+        if (lines.includes(entry)) {
+            continue
+        }
+        if (header !== undefined && !lines.includes(header)) {
+            missing.push(header)
+        }
+        header = undefined
+        missing.push(entry)
+    }
     if (missing.length === 0) {
         lists.present.push(rel)
         return
