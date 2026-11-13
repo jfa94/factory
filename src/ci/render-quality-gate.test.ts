@@ -8,6 +8,7 @@
  */
 import {describe, it, expect, beforeAll} from 'vitest'
 import {readFile} from 'node:fs/promises'
+import {spawnSync} from 'node:child_process'
 import {join} from 'node:path'
 import {parseDocument} from 'yaml'
 import {
@@ -255,6 +256,27 @@ describe('renderQualityGate — npm stack', () => {
         // A skipped scope only means Quality did not succeed; the trigger already filters targets.
         expect(out).toContain('Mutation testing skipped (upstream Quality job did not succeed).')
     })
+
+    it.each([
+        ['skipped', 'skipped', 0],
+        ['success', 'success', 0],
+        ['success', 'cancelled', 1],
+        ['success', 'failure', 1],
+        ['failure', 'skipped', 1],
+        ['cancelled', 'skipped', 1],
+    ])(
+        'aggregator: scope %s + mutation %s exits %i (a cancelled or timed-out shard fails)',
+        (scope, mutation, code) => {
+            const doc = parseDocument(renderQualityGate(template, NPM_OPTS))
+            const script = doc.getIn(['jobs', 'mutation-testing', 'steps', 0, 'run'])
+            expect(typeof script).toBe('string')
+            const res = spawnSync('bash', ['-c', script as string], {
+                env: {PATH: process.env.PATH ?? '', SCOPE_RESULT: scope, MUTATION_RESULT: mutation},
+                encoding: 'utf8',
+            })
+            expect(res.status).toBe(code)
+        }
+    )
 
     it('replaces the mutation jobs with a vacuous-green Mutation Testing job when waived', () => {
         const out = renderQualityGate(template, {

@@ -357,7 +357,10 @@ base branch plus any `git.qualityGateExtraBranches`
 (`branches: [<base branch>, <extra>...]`, duplicates collapsed). Its mutation jobs carry no base-ref
 condition, so mutation runs on every such PR, including the factory's feature PR.
 The `Mutation Testing` aggregator job reports the matrix outcome under that single
-check name. Every quality-gate job carries a `timeout-minutes` bound.
+check name. A failed, cancelled or timed-out shard fails it. A skipped scope (the
+Quality job did not succeed) reports green, because Quality's own check carries the
+failure; that is only safe on a branch that also requires Quality. Every
+quality-gate job carries a `timeout-minutes` bound.
 
 The PR verdict is **hunk-scoped and cold**. The managed helper reads zero-context
 diff hunks, mutates added files in full, pads modified and deletion-seam ranges by two

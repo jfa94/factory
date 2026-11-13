@@ -17,7 +17,7 @@ jobs:
   quality:
     name: Quality
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       # factory:setup
@@ -157,9 +157,9 @@ jobs:
             echo "::error::mutation-scope did not succeed"
             exit 1
           fi
-          # Exempt cancelled (force-push supersession) and skipped (no mutable
-          # source files in this PR — e.g. docs-only or tests-only changes).
-          if [[ "$MUTATION_RESULT" != "success" && "$MUTATION_RESULT" != "cancelled" && "$MUTATION_RESULT" != "skipped" ]]; then
+          # A cancelled shard (timed out or cancelled by hand) never finished, so it
+          # fails. A superseded run's red lands on its obsolete commit, not the head.
+          if [[ "$MUTATION_RESULT" != "success" ]]; then
             echo "::error::one or more mutation shards did not succeed"
             exit 1
           fi
